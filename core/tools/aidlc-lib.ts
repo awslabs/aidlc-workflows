@@ -22437,9 +22437,45 @@ export function humanPresenceGuardDisabled(
   try {
     const state = stateContent ?? authorityStateText(projectDir);
     const fences = parseGuardsOffLine(getField(state, GUARDS_OFF_FIELD));
-    return fences.includes("human-presence");
+    if (!fences.includes("human-presence")) return false;
+    announcePresenceStoodAside(projectDir);
+    return true;
   } catch {
     return false; // unreadable state: the key holder stays on
+  }
+}
+
+let presenceStoodAsideAnnounced = false;
+
+/**
+ * "Never silently off" applied to the one guard that is a key rather than a
+ * fence: when the human's own `guard.human-presence off` switch is what let a
+ * command through, say so once and leave the row.
+ *
+ * Two deliberate narrowings. It fires only for the STATE-LINE switch, never for
+ * AIDLC_SKIP_HUMAN_PRESENCE_GUARD: the environment variable is the machine-wide
+ * layer, set once by whoever runs the machine (the test suite sets it globally),
+ * so a row per invocation there would say nothing a human chose. And it fires
+ * once per process, because a single command reads the key several times while
+ * standing aside only once.
+ *
+ * The line goes to STDERR on purpose. These tools print directive JSON on
+ * stdout, and a conductor parses that; an advisory belongs beside it, not in it.
+ */
+function announcePresenceStoodAside(projectDir: string): void {
+  if (presenceStoodAsideAnnounced) return;
+  presenceStoodAsideAnnounced = true;
+  try {
+    process.stderr.write(
+      `${guardStoodAsideLine("human-presence", "you turned this check off for this piece of work")}\n`,
+    );
+    recordGuardStoodAside(projectDir, {
+      fence: "human-presence",
+      authority: authorityFor(projectDir),
+      details: "human-presence key off for this piece of work",
+    });
+  } catch {
+    // Advisory only. Announcing a pass must never turn it back into a refusal.
   }
 }
 
@@ -22688,6 +22724,13 @@ export const GUARD_REMEDY_OPS = [
   // way out is printed beside the thing that stopped them, rather than left in a
   // reference page. Logged, and back on for the next piece of work.
   "lower-fence",
+  // The three answers to a strict plan-source-drift ask, in recommendation
+  // order. reapprove-plan reruns the fingerprint and re-presents Plan Approval;
+  // show-plan-drift lists the files that moved; stop-here leaves the plan
+  // unapproved and ends the turn. See planSourceDriftRefusal.
+  "reapprove-plan",
+  "show-plan-drift",
+  "stop-here",
 ] as const;
 export type GuardRemedyOp = (typeof GUARD_REMEDY_OPS)[number];
 
@@ -22848,6 +22891,93 @@ export function lowerFenceSentence(fence: GuardFence): string {
     `/aidlc config set ${guardFenceConfigKey(fence)} off. It is recorded, and it ` +
     "comes back on for the next piece of work."
   );
+}
+
+// --- Strict plan-source drift: an ask, not a wall ---------------------------
+//
+// Under Guard Policy strict, source that moved after the plan was approved stops
+// code generation. That is the right call in the wrong shape when it arrives as
+// prose alone: the conductor has nothing to route on, and the human has no way
+// to say "I looked, approve it again" in one move. The refusal built here keeps
+// the same human sentence on its first line and adds the typed guard-recovery
+// ask every harness skill already renders as a question. Remedies are listed in
+// recommendation order: approve again, look at what moved, stop, and last the
+// fence switch the plan-approval hook already honours.
+
+const PLAN_SOURCE_DRIFT_STAGE = "code-generation";
+
+function codeGenerationTargetArgs(unit: string | null): string[] {
+  return unit ? ["--unit", unit] : ["--stage-level"];
+}
+
+export function reapprovePlanRemedy(unit: string | null): GuardRemedy {
+  return {
+    op: "reapprove-plan",
+    action:
+      "Approve the plan again: reset the Plan Approval [Answer]: to blank, run " +
+      "the fingerprint command, record both tags in the plan, and re-present " +
+      "Plan Approval to the human.",
+    command: guardToolCommand("aidlc-testing-posture.ts", [
+      "fingerprint",
+      ...codeGenerationTargetArgs(unit),
+    ]),
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+export function showPlanDriftRemedy(unit: string | null): GuardRemedy {
+  return {
+    op: "show-plan-drift",
+    action:
+      "Show what changed: list the source files that moved since this plan was approved.",
+    command: guardToolCommand("aidlc-testing-posture.ts", [
+      "verify",
+      ...codeGenerationTargetArgs(unit),
+    ]),
+    requiresHuman: false,
+    executableNow: true,
+  };
+}
+
+export function stopHereRemedy(): GuardRemedy {
+  return {
+    op: "stop-here",
+    action: "Stop here: leave the plan unapproved, write nothing, and end the turn.",
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+/** The attempt a drift refusal records: no review in play, the source is stale. */
+export const PLAN_SOURCE_DRIFT_ATTEMPT: GuardAttemptState = {
+  recovery: "available",
+  summaryCoverage: "current",
+  reviewCoverage: "current",
+  sourceCoverage: "stale",
+};
+
+export function planSourceDriftRefusal(input: {
+  stateContent: string;
+  unit: string | null;
+  userMessage: string;
+}): GuardRefusal {
+  return {
+    code: "PLAN_SOURCE_DRIFT",
+    blockedAction: "code-generation-start",
+    stage: PLAN_SOURCE_DRIFT_STAGE,
+    ...(input.unit ? { unit: input.unit } : {}),
+    state: guardLifecycleState(input.stateContent, PLAN_SOURCE_DRIFT_STAGE, undefined),
+    invariant:
+      "Code is generated only from a plan approved against the source it will change.",
+    userMessage: input.userMessage,
+    remedies: [
+      reapprovePlanRemedy(input.unit),
+      showPlanDriftRemedy(input.unit),
+      stopHereRemedy(),
+      lowerFenceRemedy("plan-approval"),
+    ],
+  };
 }
 
 function restartStageRemedy(stage: string): GuardRemedy {
@@ -30337,12 +30467,22 @@ export type GuardSubject =
 
 export function decideGuard(
   subject: GuardSubject,
-  authority: Authority,
+  // Carried so every caller resolves it once and the audit row can name it; no
+  // row of the decision table reads it. See the drift and fence notes below.
+  _authority: Authority,
   policy: GuardPolicy,
 ): GuardDecision {
   if (subject.family === "drift") {
+    // Drift under relaxed or off is accepted where it is found (one row, one
+    // line). Under strict it is a QUESTION in every authority column: the check
+    // that finds drift runs at the boundary where the work would start, and
+    // nothing later re-derives it (`next` never evaluates plan drift), so a
+    // "hold until the next boundary" would be a wall with no asker behind it.
+    // The first draft asked only on a grant and held otherwise; the grant is a
+    // turn marker, and the turn marker was already ruled out as a decision
+    // signal above. The authority still rides on every audit row.
     if (policy !== "strict") return "stand-aside";
-    return authority.covered === "grant" ? "ask" : "hold";
+    return "ask";
   }
   // A FENCE is lowered by the policy word or by the human's own switch, and by
   // nothing else. In particular a grant does not lower one, and the reason is

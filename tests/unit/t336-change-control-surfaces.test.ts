@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-graph:validate-grid, subcommand:aidlc-orchestrate:next,
-// function:validateDirective, file:agents/aidlc-composer-agent.md,
+// function:validateDirective, file:agents/aidlc-composer-agent.md, file:skills/aidlc/SKILL.md,
 // file:knowledge/aidlc-composer-agent/composing.md
 //
 // t336 - the Guard Policy surfaces around the composer and the conductor:
@@ -191,25 +191,34 @@ describe("t336 (2) the compose dispatch and composer guidance", () => {
     if (parsed === null || typeof parsed !== "object" || !("message" in parsed) || typeof parsed.message !== "string") {
       throw new Error(`not a print directive: ${result.stdout}`);
     }
-    // The composer contract still speaks the retired spelling in this release:
-    // one changeControl value, the "Change Control:" gate row, and the
-    // --change-control creation flag (which intent-create accepts with the
-    // rename notice). These pins follow the dispatch text as shipped.
-    expect(parsed.message).toContain("ONE changeControl value (strict|relaxed");
-    expect(parsed.message).toContain('"Change Control: <changeControl> - <changeControlRationale>"');
-    expect(parsed.message).toContain("--change-control <value>");
+    // The dispatch speaks the NEW spelling: one guardPolicy value over three
+    // values, the "Guard Policy:" gate row, and the --guard-policy creation
+    // flag. An earlier revision of this test pinned the retired spelling here
+    // and so blessed a half-finished rename; the retired flag is still ACCEPTED
+    // (covered by the validator cases above), but nothing the engine tells a
+    // conductor to type may name it.
+    expect(parsed.message).toContain("ONE guardPolicy value (strict|relaxed|off");
+    expect(parsed.message).toContain('"Guard Policy: <guardPolicy> - <guardPolicyRationale>"');
+    expect(parsed.message).toContain("--guard-policy <value>");
+    expect(parsed.message).not.toContain("--change-control");
+    expect(parsed.message).not.toContain("changeControl");
   });
 
   test("the composer persona and knowledge describe the value and its defaults", () => {
     const persona = readFileSync(join(REPO_ROOT, "core", "agents", "aidlc-composer-agent.md"), "utf-8");
-    expect(persona).toContain('"changeControl": "strict | relaxed"');
-    expect(persona).toContain("`changeControl` is REQUIRED for every mode");
-    expect(persona).toContain("`change_control: <the approved value>`");
+    expect(persona).toContain('"guardPolicy": "strict | relaxed | off"');
+    expect(persona).toContain("`guardPolicy` is REQUIRED for every mode");
+    expect(persona).toContain("`guard_policy: <the approved value>`");
+    // The persona authors new scope files, so the retired key must not appear
+    // as anything but the one documented migration read.
+    expect(persona).not.toContain("`change_control:");
+    expect(persona).not.toContain("--change-control");
     const knowledge = readFileSync(
       join(REPO_ROOT, "core", "knowledge", "aidlc-composer-agent", "composing.md"),
       "utf-8",
     );
-    expect(knowledge).toContain("## Change Control");
+    expect(knowledge).toContain("## Guard Policy");
+    expect(knowledge).not.toContain("`change_control:");
     expect(knowledge).toContain(
       "strict on enterprise, security-patch,\n  and infra, relaxed everywhere else",
     );
@@ -227,6 +236,47 @@ describe("t336 (3) change_notices is a universal directive field", () => {
       expect(accepted.valid, JSON.stringify(directive)).toBe(true);
       const refused = validateDirective({ ...directive, change_notices: "one line" });
       expect(refused.valid).toBe(false);
+    }
+  });
+});
+
+describe("t336 (4) every orchestrator skill teaches the new name only", () => {
+  // The seven SKILL.md files are what a conductor reads to learn which flag to
+  // type. They are authored per harness, so a rename lands in seven places or
+  // in none: this branch found all seven still naming the retired flag while
+  // every engine reader had moved, which made the deprecation notice fire
+  // during ordinary use and taught the new name to nobody.
+  const HARNESSES = [
+    "claude",
+    "codex",
+    "copilot",
+    "cursor",
+    "kiro",
+    "kiro-ide",
+    "opencode",
+  ] as const;
+
+  test("names --guard-policy and never --change-control", () => {
+    for (const harness of HARNESSES) {
+      const skill = readFileSync(
+        join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"),
+        "utf-8",
+      );
+      expect(skill, harness).toContain("--guard-policy");
+      expect(skill, harness).not.toContain("--change-control");
+      expect(skill, harness).not.toContain("changeControl");
+      // change_notices is a directive field name, not the setting, and stays.
+      expect(skill.includes("Change Control"), harness).toBe(false);
+    }
+  });
+
+  test("the plain-chat request names all three values", () => {
+    for (const harness of HARNESSES) {
+      const skill = readFileSync(
+        join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"),
+        "utf-8",
+      );
+      expect(skill, harness).toContain("config-change --guard-policy <strict|relaxed|off>");
     }
   });
 });

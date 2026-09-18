@@ -17,7 +17,7 @@ Every stage in the graph executes — no shortcuts. Ideation, inception,
 construction, and operation all run end to end, so the artifact chain
 (intent through deployment and feedback) is complete and traceable.
 
-Change Control defaults to strict: an input that changes after a human approved or confirmed it reopens that approval, because the audit trail is the point of this scope.
+Guard Policy defaults to strict: an input that changes after a human approved or confirmed it reopens that approval, because the audit trail is the point of this scope.
 
 ## Why every stage
 

@@ -67,16 +67,23 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
+  authorityFor,
   type ClaudeCodeHookInput,
   decideFence,
+  decideGuard,
   docsRoot,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
+  type GuardRefusal,
+  guardRefusalOutput,
   guardStoodAsideLine,
   harnessDir,
   lowerFenceSentence,
+  PLAN_SOURCE_DRIFT_ATTEMPT,
+  planSourceDriftRefusal,
   recordGuardStoodAside,
+  resolveGuardPolicy,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -218,6 +225,12 @@ export interface UnitEvidence {
    * "present Plan Approval" steps alone.
    */
   reason?: string;
+  /**
+   * Set when `reason` is the strict Guard Policy verdict on source that moved
+   * after the plan was approved. The refusal then carries a typed ask, because
+   * that situation is a question for the human, not a wall (see decideGuard).
+   */
+  sourceDrift?: true;
   /**
    * The plan's terminal `## Review` appendix, when a review recorded under the
    * earlier protocol left one. The fingerprint deliberately excludes it, so it
@@ -487,6 +500,7 @@ export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvi
       receiptValid: approval.receiptValid,
       contractHash: approval.contractHash,
       ...(approval.ok ? {} : { reason: approval.reason }),
+      ...(approval.sourceDrift ? { sourceDrift: true as const } : {}),
       ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     };
   });
@@ -506,6 +520,7 @@ export function gatherApprovalEvidence(projectDir: string, units: string[]): Uni
       receiptValid: stageApproval.receiptValid,
       contractHash: stageApproval.contractHash,
       ...(stageApproval.ok ? {} : { reason: stageApproval.reason }),
+      ...(stageApproval.sourceDrift ? { sourceDrift: true as const } : {}),
       ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     },
     ...gatherUnitEvidence(projectDir, units),
@@ -1109,11 +1124,39 @@ export async function run(input: string): Promise<number> {
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
+  // Set when the source moved after the plan was approved under Guard Policy
+  // strict, whichever path found it (the dispatch evidence, the mutation
+  // evidence, or generation start): the refusal then carries a typed
+  // guard-recovery ask beside the prose, so the human answers it in one move
+  // instead of reading a wall.
+  let driftRefusal: GuardRefusal | null = null;
+  // ONE builder for the three places strict drift can surface in this hook:
+  // the dispatch evidence, the mutation evidence, and generation start. It
+  // consults the shared decision table rather than assuming, so one place
+  // decides what a changed input means. Best-effort: a failure leaves the
+  // prose refusal exactly as it was and records why.
+  const buildDriftRefusal = (unit: string | null, reason: string): GuardRefusal | null => {
+    try {
+      const stateContent = readFileSync(stateFilePath(projectDir), "utf-8");
+      const decision = decideGuard(
+        { family: "drift" },
+        authorityFor(projectDir, { hookInput: parsed, stateContent }),
+        resolveGuardPolicy(projectDir, stateContent).value,
+      );
+      if (decision !== "ask") return null;
+      return planSourceDriftRefusal({ stateContent, unit, userMessage: reason });
+    } catch (buildError) {
+      recordHookDrop(projectDir, HOOK_NAME, errorMessage(buildError));
+      return null;
+    }
+  };
   let blockedMutation: {
     target: string;
     unit: string | null;
     opaqueShell: boolean;
     detail: string | null;
+    // The strict drift sentence when that is what retired the approval.
+    driftReason: string | null;
   } | null = null;
   try {
     const statePath = stateFilePath(projectDir);
@@ -1205,6 +1248,7 @@ export async function run(input: string): Promise<number> {
           receiptValid: approval.receiptValid,
           contractHash: approval.contractHash,
           ...(approval.ok ? {} : { reason: approval.reason }),
+          ...(approval.sourceDrift ? { sourceDrift: true as const } : {}),
         };
         verdict = {
           block: !approvalEvidenceIsCurrent(evidence),
@@ -1218,6 +1262,7 @@ export async function run(input: string): Promise<number> {
             unit,
             opaqueShell: outsideRecord === undefined,
             detail: receiptDetail([evidence], verdict.mentioned),
+            driftReason: approval.sourceDrift ? approval.reason : null,
           };
         }
       }
@@ -1233,25 +1278,19 @@ export async function run(input: string): Promise<number> {
     // moved after approval: the ledger row is written there and the one human
     // line comes back to be printed on this hook's stdout.
     const changeNotices: string[] = [];
+    let driftUnit: string | null = null;
     try {
       if (guardedDispatch) {
         for (const mentioned of verdict.mentioned) {
-          changeNotices.push(
-            ...beginCodeGeneration(projectDir, {
-              unit:
-                mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
-            }),
-          );
+          driftUnit = mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned;
+          changeNotices.push(...beginCodeGeneration(projectDir, { unit: driftUnit }));
         }
       } else if (blockedMutation === null) {
         const state = readFileSync(stateFilePath(projectDir), "utf-8");
         const marker = readActiveDirectiveMarker(projectDir, state);
         if (marker?.version === 2 && marker.kind === "run-stage") {
-          changeNotices.push(
-            ...beginCodeGeneration(projectDir, {
-              unit: marker.unit?.trim() || null,
-            }),
-          );
+          driftUnit = marker.unit?.trim() || null;
+          changeNotices.push(...beginCodeGeneration(projectDir, { unit: driftUnit }));
         }
       }
     } catch (e) {
@@ -1259,6 +1298,11 @@ export async function run(input: string): Promise<number> {
         `Code Generation could not start from its protected approval receipt: ${errorMessage(e)}` +
         (e instanceof PlanApprovalSourceDriftError ? ` ${e.remedy}` : "");
       verdict = { block: true, mentioned: verdict.mentioned };
+      if (e instanceof PlanApprovalSourceDriftError) {
+        // Strict drift is a question, not a wall: the refusal below prints the
+        // typed ask as its last line.
+        driftRefusal = buildDriftRefusal(driftUnit, authorityFailure);
+      }
     }
     if (!verdict.block) {
       for (const notice of changeNotices) process.stdout.write(`${notice}\n`);
@@ -1335,7 +1379,25 @@ export async function run(input: string): Promise<number> {
     // Advisory emission only.
   }
 
-  process.stderr.write(
+  // Strict drift found by the evidence paths (the evaluator does not throw
+  // there; it returns a failed approval whose reason is the drift sentence).
+  // The dispatch path leaves it on the evidence for the mentioned target, the
+  // mutation path on the blocked mutation. Either way the refusal is an ask.
+  if (driftRefusal === null) {
+    if (blockedMutation?.driftReason) {
+      driftRefusal = buildDriftRefusal(blockedMutation.unit, blockedMutation.driftReason);
+    } else {
+      const drifted = units.find(
+        (evidence) =>
+          evidence.sourceDrift === true &&
+          verdict.mentioned.includes(evidence.unit ?? `stage:${GUARDED_STAGE}`),
+      );
+      if (drifted !== undefined) {
+        driftRefusal = buildDriftRefusal(drifted.unit, drifted.reason ?? "");
+      }
+    }
+  }
+  const prose =
     `${authorityFailure
       ? authorityBlockReason(authorityFailure)
       : blockedMutation
@@ -1349,8 +1411,22 @@ export async function run(input: string): Promise<number> {
       ? appendixBlockReason(verdict.mentioned)
       : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))} ${
       lowerFenceSentence("plan-approval")
-    }\n`,
-  );
+    }`;
+  if (driftRefusal !== null) {
+    // Same prose first line, then the guard-recovery ask as the last line: the
+    // shape every harness skill renders as a question (the review-freeze hook
+    // uses the same one). The streak record behind it is what turns a repeated
+    // refusal into a terminal ask rather than an endless retry.
+    process.stderr.write(
+      `${guardRefusalOutput(
+        projectDir,
+        { ...driftRefusal, userMessage: prose },
+        PLAN_SOURCE_DRIFT_ATTEMPT,
+      )}\n`,
+    );
+    return 2;
+  }
+  process.stderr.write(`${prose}\n`);
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 

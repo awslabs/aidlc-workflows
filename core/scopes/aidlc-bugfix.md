@@ -22,7 +22,7 @@ skips ideation entirely (there is no new product to discover), runs
 reverse-engineering to understand the current code, pulls requirements for
 the fix, then generates, tests, and deploys it.
 
-Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
+Guard Policy defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
 
 ## Why these stages, why skip those
 

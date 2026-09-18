@@ -5,7 +5,8 @@
 // function:workspaceSourceChangedPaths, function:sourceListingChangedPaths,
 // subcommand:aidlc-log:decision, subcommand:aidlc-log:answer,
 // subcommand:aidlc-testing-posture:fingerprint, subcommand:aidlc-testing-posture:begin,
-// hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED
+// hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED, function:planSourceDriftRefusal,
+// function:reapprovePlanRemedy, function:showPlanDriftRemedy, function:stopHereRemedy
 //
 // t334 - Guard Policy at the Plan Approval checkpoint. The plan binds to the
 // workspace source it was written against; when that source moves after the
@@ -19,10 +20,12 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
   auditBlockField,
   getField,
   GUARD_POLICY_FIELD,
+  hooksHealthDir,
   readAuditShardEvents,
   readPlanApprovalReceipt,
   sessionsDir,
@@ -56,6 +59,16 @@ afterAll(() => {
 }, 30000);
 
 type Spawned = { code: number; stdout: string; stderr: string };
+
+// Every hook records a swallowed error under the engine's hooks-health dir;
+// read it all so a failing assertion can say why the hook fell back.
+function hookDrops(project: string): string {
+  const dir = hooksHealthDir(project);
+  if (!existsSync(dir)) return "(no hooks-health dir)";
+  return readdirSync(dir)
+    .map((name) => `${name}:\n${readFileSync(join(dir, name), "utf-8")}`)
+    .join("\n");
+}
 
 function spawn(cmd: string[], project: string, stdin?: string): Spawned {
   const result = Bun.spawnSync(cmd, {
@@ -495,4 +508,101 @@ describe("t334 (5) the approval's content members reopen approval under every va
       expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
     }, 60000);
   }
+});
+
+describe("t334 (5) strict drift at the dispatch guard is a typed ask, not a wall", () => {
+  test("the hook refuses with the human sentence first and a guard-recovery ask last", () => {
+    const project = createProject("strict");
+    const questions = presentPlan(project);
+    startSession(project, "strict-guard");
+    expect(decide(project, questions, "strict-guard").code).toBe(0);
+    humanTurn(project, "strict-guard");
+    expect(answer(project, questions, "strict-guard").code).toBe(0);
+    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
+    // The source moves after approval.
+    writeFileSync(join(project, "src", "after.ts"), "export const after = 1;\n");
+
+    const guard = spawn(
+      [BUN, GUARD],
+      project,
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: {
+          subagent_type: "aidlc-developer-agent",
+          prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}`,
+        },
+        cwd: project,
+      }),
+    );
+    expect(guard.code, guard.stderr).toBe(2);
+    const lines = guard.stderr.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    // First line: the same words a human read before, plus the switch sentence.
+    expect(lines[0]).toContain("1 file changed since this plan was approved: src/after.ts.");
+    expect(lines[0]).toContain("approve the plan again");
+    expect(lines[0]).toContain("/aidlc config set guard.plan-approval off");
+    // Last line: the typed ask every harness skill renders as a question. A
+    // prose-only refusal means the hook never built or never wrote the ask; say
+    // so with the whole stderr and the hook's own drop record in the message.
+    const last = lines[lines.length - 1];
+    expect(
+      last.startsWith("{"),
+      `no ask on the last stderr line.\nSTDERR:\n${guard.stderr}\nSTDOUT:\n${guard.stdout}\nDROPS:\n${hookDrops(project)}`,
+    ).toBe(true);
+    const ask = JSON.parse(last) as {
+      kind: string;
+      ask_type: string;
+      response_route: string;
+      stage: string;
+      reason_codes: string[];
+      remedies: Array<{ op: string; command?: string; requiresHuman: boolean }>;
+    };
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("guard-recovery");
+    expect(ask.response_route).toBe("execute-remedy");
+    expect(ask.stage).toBe("code-generation");
+    expect(ask.reason_codes).toEqual(["PLAN_SOURCE_DRIFT"]);
+    expect(ask.remedies.map((remedy) => remedy.op)).toEqual([
+      "reapprove-plan",
+      "show-plan-drift",
+      "stop-here",
+      "lower-fence",
+    ]);
+    // Approve-again carries the fingerprint command for the stage-level target
+    // and needs the human; show carries verify and does not; stop is action-only.
+    expect(ask.remedies[0].command).toContain("aidlc-testing-posture.ts fingerprint --stage-level");
+    expect(ask.remedies[0].requiresHuman).toBe(true);
+    expect(ask.remedies[1].command).toContain("aidlc-testing-posture.ts verify --stage-level");
+    expect(ask.remedies[1].requiresHuman).toBe(false);
+    expect(ask.remedies[2].command).toBeUndefined();
+    expect(validateDirective(ask).valid, JSON.stringify(validateDirective(ask))).toBe(true);
+    // Nothing was accepted and generation did not begin: strict asked, it did not decide.
+    expect(acceptedRows(project)).toHaveLength(0);
+    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
+  }, 60000);
+
+  test("relaxed never reaches the ask: the same drift is accepted and no ask is printed", () => {
+    const project = createProject("relaxed");
+    const questions = presentPlan(project);
+    startSession(project, "relaxed-guard");
+    expect(decide(project, questions, "relaxed-guard").code).toBe(0);
+    humanTurn(project, "relaxed-guard");
+    expect(answer(project, questions, "relaxed-guard").code).toBe(0);
+    writeFileSync(join(project, "src", "after.ts"), "export const after = 1;\n");
+    const guard = spawn(
+      [BUN, GUARD],
+      project,
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: {
+          subagent_type: "aidlc-developer-agent",
+          prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}`,
+        },
+        cwd: project,
+      }),
+    );
+    expect(guard.stderr).not.toContain("\"ask_type\":\"guard-recovery\"");
+    expect(guard.stderr).not.toContain("PLAN_SOURCE_DRIFT");
+  }, 60000);
 });

@@ -221,7 +221,7 @@ MINT a grant for itself.
 | | `grant` | `instruction` | `none` |
 |---|---|---|---|
 | drift, not `strict` | stand aside | stand aside | stand aside |
-| drift, `strict` | ask | hold | hold |
+| drift, `strict` | ask | ask | ask |
 | fence, key on | hold | hold | hold |
 | fence, lowered | stand aside | stand aside | stand aside |
 
@@ -251,10 +251,20 @@ fences refuse from `PreToolUse` with exit 2 and carry `lowerFenceSentence` on
 stderr instead. Either way it is a key the person turns deliberately rather than
 one that turns itself, and once turned nothing asks again for that piece of work.
 
-Authority is therefore consumed by the DRIFT family (the two `strict` rows) and by
-the evidence trail: every `GUARD_STOOD_ASIDE` row still carries the `Authority`,
+**Strict drift asks in every column.** The check that finds drift runs at the
+boundary where the work would start (the plan-approval hook at generation start,
+the `decision` and `answer` records, the `begin` command), and nothing later
+re-derives it: `next` never evaluates plan drift. A `hold` there would be a wall
+with no asker behind it, so the strict row asks whether or not a human has spoken
+since the last directive. The first draft asked only on a grant; the grant is a
+turn marker, and a turn marker was already ruled out as a decision signal above.
+
+Authority is therefore consumed by the evidence trail alone: no row of the table
+reads it, and every `GUARD_STOOD_ASIDE` row still carries the `Authority`,
 `Grant`, and `Actor` in force, so a reader can see who was at the keyboard when a
-lowered fence let something through.
+lowered fence let something through. Whether a human recently typed changes what
+is RECORDED, never what a guard DOES; the deliberate switch and the policy word
+are the only keys.
 
 `decideFence(projectDir, fence, options)` is the whole ladder in one call:
 resolve the policy (`resolveGuardPolicy`, and an unreadable policy resolves to
@@ -784,7 +794,7 @@ This is one of the framework's flow-altering hooks and `PreToolUse` controls. Th
 
 **Per harness.** Claude, Codex, Cursor, opencode, and Copilot route native dispatch/mutation payloads to the shared hook. Kiro CLI agent-v1 registers it on the conductor and every writable worker; v3/KAS ships standalone prompt-submit and PreToolUse registrations. Kiro IDE ships v2 and legacy PreToolUse registrations. Populated arguments use the shared target-aware guard. Both Kiro adapters recognise the shell under every name the runtime uses (`execute_bash`, `execute_pwsh` on Windows, `shell`) and normalise it to `Bash` before forwarding; the Kiro IDE adapter also routes all three names through the same legacy recovery branches, and denies an unattributable mutation-capable payload only while a Code Generation workflow is active, so a no-workflow shell call (the `next` that starts the loop) is never refused. Legacy argument-less calls permit only measured `fs_write`/`str_replace` planning; unsupported writes create a protected violation. The next opaque shell attempt runs only the adapter-owned engine recovery chain, blocks the unknown original command, and restores canonical planning. Unknown tools are mutation-capable unless explicitly safe reads. Source discovery hard-excludes dependency/cache/virtualenv trees, preserves tracked files under conditional build/output names, and hashes source-like external directory targets under bounded file/byte limits.
 
-**Guard Policy: the drift half.** The workspace-source check is a governed Guard Policy read (`/aidlc --status` shows the intent's value). Under `strict` a source that moved after the plan was fingerprinted or approved refuses in the human's words (`N files changed since this plan was approved: <paths>. Look them over and approve the plan again to continue.`) and the conductor's remedy (re-run the fingerprint command, re-present the plan) travels beside it on stderr. Under `relaxed` and `off` the decision, the answer, the receipt certification, this hook's generation start, and the `begin` command each accept the drift once: one `CHANGE_ACCEPTED` row, one `change_notices` line, and the recorded source re-baselined (the `[Planned Source]` tag before the challenge is minted, the receipt's certified source after), so the same change is never reported twice. The content members of the approval (plan, unit test instructions, Testing Contract) reopen approval under all three values; Plan Approval itself, the autonomous-mode plan stop, and every human gate are never relaxed.
+**Guard Policy: the drift half.** The workspace-source check is a governed Guard Policy read (`/aidlc --status` shows the intent's value). Under `strict` a source that moved after the plan was fingerprinted or approved refuses in the human's words (`N files changed since this plan was approved: <paths>. Look them over and approve the plan again to continue.`) and the way forward travels beside it. From this hook the refusal's LAST stderr line is a typed `guard-recovery` ask (the same shape the review-freeze hook emits, rendered by every harness skill as a question) carrying four remedies in recommendation order: `reapprove-plan` (reset the Plan Approval `[Answer]:`, re-run the `fingerprint` command it names, record both tags, re-present), `show-plan-drift` (the `verify` command, whose output names the files that moved), `stop-here` (leave the plan unapproved and end the turn), and `lower-fence` for `guard.plan-approval`. The `decision`, `answer`, and `begin` commands refuse in the same words with the conductor's remedy beside them on stderr. Under `relaxed` and `off` the decision, the answer, the receipt certification, this hook's generation start, and the `begin` command each accept the drift once: one `CHANGE_ACCEPTED` row, one `change_notices` line, and the recorded source re-baselined (the `[Planned Source]` tag before the challenge is minted, the receipt's certified source after), so the same change is never reported twice. The content members of the approval (plan, unit test instructions, Testing Contract) reopen approval under all three values; Plan Approval itself, the autonomous-mode plan stop, and every human gate are never relaxed.
 
 **Guard Policy: the fence half.** Once the predicate above has decided to block, the hook calls `decideFence(projectDir, "plan-approval", { hookInput })` before it refuses. A `stand-aside` (the fence lowered by `relaxed`, `off`, `config set guard.plan-approval off`, or `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) prints one line naming the dispatch or write target, writes one `GUARD_STOOD_ASIDE` row, and exits 0. Nothing a human types in the session lowers this fence: a `hold` refuses exactly as described above and appends the one sentence naming the switch, which is the deliberate move that opens it. The approval gate itself is untouched either way.
 

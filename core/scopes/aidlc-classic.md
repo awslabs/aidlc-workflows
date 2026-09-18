@@ -19,7 +19,7 @@ Inception and Construction, with one human approval per stage. Ideation is
 skipped and Operation remains a placeholder. Stage-declared execution modes
 and support agents are unchanged.
 
-Change Control defaults to relaxed: an input that changes after a human approved or confirmed it is recorded and announced in one line, and the run continues.
+Guard Policy defaults to relaxed: an input that changes after a human approved or confirmed it is recorded and announced in one line, and the run continues.
 
 Reviews are advisory: one pass per stage whose findings reach the human at
 the approval gate, with no refute-and-repair loop; explicit autonomy keeps the

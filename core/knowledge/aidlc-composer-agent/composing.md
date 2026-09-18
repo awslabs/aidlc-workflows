@@ -61,16 +61,19 @@ caution nor default economy is acceptable.
   validated pending delta as exact `changes.skip` / `changes.add` arrays for
   the conductor's `recompose` command.
 
-## Change Control
+## Guard Policy
 
-Every proposal names ONE Change Control value with a one-line rationale. The
-value decides what happens when an input changes after the human approved or
-confirmed something: `strict` reopens that approval; `relaxed` records the
-change once, tells the human in one line, and continues. It never removes a
-gate, so it is a question of how much the team wants to be asked again, not of
-how much is checked.
+Every proposal names ONE Guard Policy value with a one-line rationale. The
+value decides two things: what happens when an input changes after the human
+approved or confirmed something, and how far the automatic checks stand aside
+for the agents. `strict` reopens that approval and holds every check; `relaxed`
+records the change once, tells the human in one line, continues, and stands the
+plan-approval and review-freeze checks aside; `off` does that and stands the
+state-transition and reviewer-scope checks aside as well. No value removes a
+gate and none of them touches human presence, so it is a question of how much
+the team wants to be asked again, not of how much is checked.
 
-- A matched stock scope carries its own default (`change_control:` in the
+- A matched stock scope carries its own default (`guard_policy:` in the
   scope file; the shipped defaults are strict on enterprise, security-patch,
   and infra, relaxed everywhere else). Adopt it and say so.
 - For a custom grid, read the entropy profile the same way the grid was read:
@@ -81,7 +84,8 @@ how much is checked.
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
   approving. A memory layer that declares strict wins over any proposal; the
-  validator and the intent-create command both refuse a relaxed value under it.
+  validator and the intent-create command both refuse a relaxed or off value
+  under it.
 
 ## Rationale quality
 

@@ -21,7 +21,7 @@ application-code construction stages, and instead runs practices-discovery,
 the NFR design pass, infrastructure-design, the CI pipeline, and the full
 deployment + observability set in operation.
 
-Change Control defaults to strict: provisioning and deployment inputs that move after approval are approved again.
+Guard Policy defaults to strict: provisioning and deployment inputs that move after approval are approved again.
 
 ## Why these stages, why skip those
 

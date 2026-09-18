@@ -51,6 +51,7 @@ import {
   guardRefusalOutput,
   guardRefusalStreakView,
   guardTerminalAskForRefusal,
+  planSourceDriftRefusal,
   isRequestChangesChoice,
   isTeamUnitOwnership,
   normalizeGuardRecoveryText,
@@ -1588,6 +1589,41 @@ describe("AttemptView projections and refusal streaks", () => {
         }),
       ).valid,
     ).toBe(true);
+  });
+
+  test("the strict plan-drift refusal builds a valid ask whose ops are all closed", () => {
+    const ops = new Set<string>(GUARD_REMEDY_OPS);
+    for (const unit of [null, "auth-service"]) {
+      const refusal = planSourceDriftRefusal({
+        stateContent: "- **Current Stage**: code-generation\n- [ ] code-generation\n",
+        unit,
+        userMessage: "1 file changed since this plan was approved: src/after.ts.",
+      });
+      expect(refusal.code).toBe("PLAN_SOURCE_DRIFT");
+      expect(refusal.stage).toBe("code-generation");
+      expect(refusal.unit).toBe(unit ?? undefined);
+      // Recommendation order is the contract the conductor renders.
+      expect(refusal.remedies.map((remedy) => remedy.op)).toEqual([
+        "reapprove-plan",
+        "show-plan-drift",
+        "stop-here",
+        "lower-fence",
+      ]);
+      for (const remedy of refusal.remedies) {
+        expect(ops.has(remedy.op), remedy.op).toBe(true);
+        expect(remedy.executableNow).toBe(true);
+      }
+      // The two commands name the target the same way the stage prose does.
+      const target = unit ? `--unit ${unit}` : "--stage-level";
+      expect(refusal.remedies[0].command).toContain(`fingerprint ${target}`);
+      expect(refusal.remedies[1].command).toContain(`verify ${target}`);
+      expect(refusal.remedies[2].command).toBeUndefined();
+      expect(refusal.remedies[3].command).toContain("--guard.plan-approval off");
+      const ask = guardRecoveryAskForRefusal(refusal);
+      expect(ask).not.toBeNull();
+      const verdict = validateDirective(ask as unknown as Record<string, unknown>);
+      expect(verdict.valid, JSON.stringify(verdict)).toBe(true);
+    }
   });
 
   test("every remedy carries a closed op and the contract rejects an unknown one", () => {

@@ -20,7 +20,7 @@ summary_confirmation: off
 straight line from requirements to code, test, and deploy without a design
 pass or reviewer dispatch.
 
-Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
+Guard Policy defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
 
 ## Why these stages, why skip those
 

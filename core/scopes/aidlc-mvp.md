@@ -21,7 +21,7 @@ team-formation, no approval-handoff) and the entire operation phase is
 skipped — an MVP proves the product, it does not yet carry production
 operations weight.
 
-Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line, and the run continues.
+Guard Policy defaults to relaxed: an input that changes after approval is recorded and announced in one line, and the run continues.
 
 ## Why these stages, why skip those
 
