@@ -656,6 +656,7 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
     "QUESTION_ANSWERED",
     "SUMMARY_CONFIRMATION_RECORDED",
     "VERIFICATION_COMMAND_RECORDED",
+    "CONSTRUCTION_POLICY_RECORDED",
   ]);
   const events = audit
     .replace(/\r\n/g, "\n")
@@ -688,7 +689,8 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
     } else if (
       event.event === "QUESTION_ANSWERED" ||
       event.event === "SUMMARY_CONFIRMATION_RECORDED" ||
-      event.event === "VERIFICATION_COMMAND_RECORDED"
+      event.event === "VERIFICATION_COMMAND_RECORDED" ||
+      event.event === "CONSTRUCTION_POLICY_RECORDED"
     ) {
       pending = false;
     }

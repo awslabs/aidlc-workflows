@@ -306,6 +306,15 @@ function humanChoice(pd: string, choice: string, session: string): void {
   expect(human.code, `${human.out}\n${human.err}`).toBe(0);
 }
 
+function checkpointChoice(pd: string, units: string[], choice: string): void {
+  const asked = tool(pd, "tools/aidlc-bolt.ts", [
+    "swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", units.join(","),
+    "--session", "t344-checkpoint", "--project-dir", pd,
+  ]);
+  expect(asked.code, `${asked.out}\n${asked.err}`).toBe(0);
+  humanChoice(pd, choice, "t344-checkpoint");
+}
+
 function writeUnitSource(pd: string, unit: string, value: number): void {
   writeFileSync(join(wt(pd, unit), "src", `${unit}.ts`), `export const ${unit} = ${value};\n`);
 }
@@ -340,9 +349,10 @@ function nativeCheckpointRevision(units: string[], grouped: boolean): string {
   expect(nextDirective(pd)).toMatchObject({
     kind: "run-stage", swarm_checkpoint: { batch: 1, units, ready: true, approved: false },
   });
-  humanChoice(pd, "Request Changes", "native-discard-revision");
+  checkpointChoice(pd, units, "Request Changes");
   const rejected = tool(pd, "tools/aidlc-bolt.ts", [
     "swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", units.join(","),
+    "--session", "t344-checkpoint",
     "--user-input", "Request Changes", "--reason", "Please revise the batch", "--project-dir", pd,
   ]);
   expect(rejected.code, `${rejected.out}\n${rejected.err}`).toBe(0);
@@ -398,9 +408,10 @@ function approveNativeCheckpoint(pd: string, units: string[]): void {
   expect(nextDirective(pd)).toMatchObject({
     kind: "run-stage", swarm_checkpoint: { batch: 1, units, ready: true, approved: false },
   });
-  humanChoice(pd, "Approve", "native-discard-checkpoint");
+  checkpointChoice(pd, units, "Approve");
   const approved = tool(pd, "tools/aidlc-bolt.ts", [
     "swarm-checkpoint", "--action", "approve", "--batch", "1", "--units", units.join(","),
+    "--session", "t344-checkpoint",
     "--user-input", "Approve", "--project-dir", pd,
   ]);
   expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);
@@ -545,9 +556,10 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
         expect(approval.ok, approval.reason).toBe(true);
       }
     }
-    appendAuditEntry("HUMAN_TURN", { Source: "t344 native checkpoint choice" }, pd);
+    checkpointChoice(pd, units, "Request Changes");
     const rejected = tool(pd, "tools/aidlc-bolt.ts", [
       "swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", units.join(","),
+      "--session", "t344-checkpoint",
       "--user-input", "Request Changes", "--reason", "Please revise alpha", "--project-dir", pd,
     ]);
     expect(rejected.code, `${rejected.out}\n${rejected.err}`).toBe(0);
@@ -564,9 +576,10 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const afterRevision = next();
     expect(afterRevision.code, afterRevision.err).toBe(0);
     expect(JSON.parse(afterRevision.out).swarm_checkpoint, afterRevision.out).toBeTruthy();
-    appendAuditEntry("HUMAN_TURN", { Source: "t344 native checkpoint approve" }, pd);
+    checkpointChoice(pd, units, "Approve");
     const approved = tool(pd, "tools/aidlc-bolt.ts", [
       "swarm-checkpoint", "--action", "approve", "--batch", "1", "--units", units.join(","),
+      "--session", "t344-checkpoint",
       "--user-input", "Approve", "--project-dir", pd,
     ]);
     expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);
@@ -599,9 +612,10 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       expect(next()).toMatchObject({
         kind: "run-stage", swarm_checkpoint: { batch: 1, units, ready: true, approved: false },
       });
-      appendAuditEntry("HUMAN_TURN", { Source: "t344 partial revision Request Changes" }, pd);
+      checkpointChoice(pd, units, "Request Changes");
       const rejected = tool(pd, "tools/aidlc-bolt.ts", [
         "swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", units.join(","),
+        "--session", "t344-checkpoint",
         "--user-input", "Request Changes", "--reason", "Please revise both units", "--project-dir", pd,
       ]);
       expect(rejected.code, `${rejected.out}\n${rejected.err}`).toBe(0);
@@ -692,9 +706,10 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       const current = evaluateCodeGenerationApproval(pd, { unit });
       expect(current.ok, current.reason).toBe(true);
     }
-    appendAuditEntry("HUMAN_TURN", { Source: "t344 partial batch checkpoint approval" }, pd);
+    checkpointChoice(pd, units, "Approve");
     const approved = tool(pd, "tools/aidlc-bolt.ts", [
       "swarm-checkpoint", "--action", "approve", "--batch", "1", "--units", units.join(","),
+      "--session", "t344-checkpoint",
       "--user-input", "Approve", "--project-dir", pd,
     ]);
     expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);

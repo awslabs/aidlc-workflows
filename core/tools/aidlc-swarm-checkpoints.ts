@@ -1,5 +1,5 @@
 /** Human review of a completed native swarm batch, independent of its driver. */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { relative } from "node:path";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { loadConstructionEvidence, type ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -15,7 +15,9 @@ import {
   findStageBySlug,
   getField,
   hasUnsafeSingleLineCharacter,
-  humanActedSinceGate,
+  consumeCheckpointApprovalChallenge,
+  requireCheckpointApprovalResponse,
+  writeCheckpointApprovalChallenge,
   intentRepos,
   isAutonomousMode,
   isNonAnswer,
@@ -245,10 +247,25 @@ export function resolveSwarmCheckpoint(
   return locked(pd, () => snapshot(pd, batch, units, stateContent, evidence).result);
 }
 
-function human(pd: string, rows: readonly AuditShardEvent[]): void {
-  if (!rows.some((row) => row.event === "HUMAN_TURN") || !humanActedSinceGate(pd)) {
-    throw new Error("Swarm checkpoint requires a fresh human turn.");
-  }
+function approvalTarget(checkpoint: SwarmCheckpoint) {
+  return { kind: "batch" as const, batch: checkpoint.batch, units: checkpoint.units, fingerprint: checkpoint.fingerprint };
+}
+
+export function askSwarmCheckpoint(pd: string, batch: number, units: string[], session: string): SwarmCheckpoint {
+  return locked(pd, (selection) => {
+    const current = snapshot(pd, batch, units);
+    if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
+    writeCheckpointApprovalChallenge(pd, {
+      version: 1, session, challengeId: randomUUID(), target: approvalTarget(current.result),
+      options: ["approve", "request changes"].map((option) => createHash("sha256").update(option).digest("hex")) as [string, string],
+    });
+    appendAuditEntryUnlocked("DECISION_RECORDED", {
+      Checkpoint: "Swarm Batch Approval", Stage: STAGE, "Batch number": String(batch),
+      Units: current.result.units.join(", "), Fingerprint: current.result.fingerprint,
+      Session: session, Options: "Approve,Request Changes",
+    }, pd, selection.intent, selection.space);
+    return current.result;
+  });
 }
 
 function fields(current: ReturnType<typeof snapshot>): Record<string, string> {
@@ -276,29 +293,31 @@ function recheck(
 }
 
 export function approveSwarmCheckpoint(
-  pd: string, batch: number, units: string[], userInput?: string,
+  pd: string, batch: number, units: string[], userInput?: string, session = "",
 ): SwarmCheckpoint {
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.result.ready) throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
-    if (current.result.approved && (userInput === undefined || userInput === "Approve")) {
-      return current.result;
-    }
-    if (current.result.human_required || userInput !== undefined) {
+    const humanRequired = current.result.human_required || userInput !== undefined;
+    if (humanRequired) {
       if (userInput !== "Approve") throw new Error('Swarm checkpoint requires the exact "Approve" choice.');
-      human(pd, current.rows);
+      requireCheckpointApprovalResponse(pd, approvalTarget(current.result), session, userInput);
+    } else if (current.result.approved) {
+      return current.result;
     }
     const after = recheck(pd, batch, units, current, selection.root);
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...fields(after),
+      ...(humanRequired ? { Session: session } : {}),
       ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
     }, pd, selection.intent, selection.space);
+    if (humanRequired) consumeCheckpointApprovalChallenge(pd, session);
     return snapshot(pd, batch, units).result;
   });
 }
 
 export function rejectSwarmCheckpoint(
-  pd: string, batch: number, units: string[], userInput: string, reason: string,
+  pd: string, batch: number, units: string[], userInput: string, reason: string, session = "",
 ): SwarmCheckpoint {
   if (userInput !== "Request Changes") throw new Error('Swarm checkpoint requires the exact "Request Changes" choice.');
   if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
@@ -308,15 +327,17 @@ export function rejectSwarmCheckpoint(
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
-    human(pd, current.rows);
+    requireCheckpointApprovalResponse(pd, approvalTarget(current.result), session, userInput);
     const after = recheck(pd, batch, units, current, selection.root, false);
     appendAuditEntries(after.result.units.map((unit) => ({
       eventType: "GATE_REJECTED",
       fields: {
         ...fields(after), Unit: unit, ...claimAttemptFields(pd, unit),
+        Session: session,
         "User Input": userInput, Reason: reason, Feedback: reason,
       },
     })), pd, selection.intent, selection.space);
+    consumeCheckpointApprovalChallenge(pd, session);
     return snapshot(pd, batch, units).result;
   });
 }

@@ -157,8 +157,9 @@ function approve(p: string, unit: string, kind: "unit" | "skeleton" = "unit") {
   const checked = invoke(["--action", "verify"]);
   expect(checked.errors).toEqual([]);
   expect(checked.verified).toBe(true);
-  appendAuditEntry("HUMAN_TURN", {}, p);
-  expect(invoke(["--action", "approve", "--user-input", "Approve"]).approved).toBe(true);
+  invoke(["--action", "ask", "--session", "t342-checkpoint"]);
+  policyHuman(p, "Approve", "t342-checkpoint");
+  expect(invoke(["--action", "approve", "--session", "t342-checkpoint", "--user-input", "Approve"]).approved).toBe(true);
 }
 
 function policyCli(p: string, tool: string, args: string[]) {

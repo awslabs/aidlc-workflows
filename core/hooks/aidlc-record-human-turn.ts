@@ -6,9 +6,9 @@
 // recorded since the last gate resolution, so a model under autopilot cannot
 // fabricate an approval with no human having acted this turn.
 //
-// Presence remains the gate signal, while the prompt payload is also inspected
-// for an exact protected Plan Approval, verification-command, or construction-policy choice. appendAuditEntry resolves the
-// active intent from the on-disk cursor. No workflow state on disk means nothing
+// Presence remains the gate signal; the prompt payload also answers the single
+// active protected challenge (plan, verification command, policy, or checkpoint).
+// appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
 // to gate, so the hook exits without writing (same self-gate as
 // aidlc-session-start.ts) - otherwise every prompt in a project that carries the
 // harness shell but never ran the framework would scaffold and grow audit
@@ -51,18 +51,21 @@
 // suppressed too should say so — it is a one-line follow-on, not a silent choice.
 import { existsSync } from "node:fs";
 import {
+  activeProtectedChallengeKind,
   consumeSharedDirectiveAsk,
   humanTurnMintAllowed,
   markHumanTurn,
   resolveProjectDirFromHook,
   stateFilePath,
+  withAuditLock,
 } from "../tools/aidlc-lib.ts";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
   recordVerificationCommandHumanResponse,
   recordConstructionPolicyHumanResponse,
+  recordCheckpointApprovalHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 
 function extractResponseText(value: unknown): string {
@@ -164,27 +167,30 @@ try {
         }
       } catch { /* presence still records without identity on legacy payloads */ }
       try {
-        appendAuditEntry("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
-        if (sessionId && humanResponseText) {
-          recordPlanApprovalHumanResponse(
-            projectDir,
-            sessionId,
-            humanResponseText,
-          );
-          recordVerificationCommandHumanResponse(
-            projectDir,
-            sessionId,
-            humanResponseText,
-          );
-          recordConstructionPolicyHumanResponse(
-            projectDir,
-            sessionId,
-            humanResponseText,
-          );
-        }
-        if (sessionId && typedPrompt) {
-          recordPlanApprovalOverrideRequest(projectDir, sessionId, typedPrompt);
-        }
+        withAuditLock(projectDir, () => {
+          appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
+          if (sessionId && humanResponseText) {
+            const kind = activeProtectedChallengeKind(projectDir, sessionId);
+            switch (kind) {
+              case "verification-command":
+                recordVerificationCommandHumanResponse(projectDir, sessionId, humanResponseText);
+                break;
+              case "construction-policy":
+                recordConstructionPolicyHumanResponse(projectDir, sessionId, humanResponseText);
+                break;
+              case "checkpoint-approval":
+                recordCheckpointApprovalHumanResponse(projectDir, sessionId, humanResponseText);
+                break;
+              default:
+                // With no active challenge, retain the legacy recovery phrase.
+                recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText);
+                break;
+            }
+          }
+          if (sessionId && typedPrompt) {
+            recordPlanApprovalOverrideRequest(projectDir, sessionId, typedPrompt);
+          }
+        });
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }

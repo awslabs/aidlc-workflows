@@ -22,7 +22,9 @@ import {
   freshReviewReceipts,
   getField,
   hasUnsafeSingleLineCharacter,
-  humanActedSinceGate,
+  consumeCheckpointApprovalChallenge,
+  requireCheckpointApprovalResponse,
+  writeCheckpointApprovalChallenge,
   isAutonomousMode,
   constructionCheckpointsApply,
   isNonAnswer,
@@ -554,12 +556,29 @@ function gateFields(projectDir: string, checkpoint: ConstructionCheckpoint): Rec
   };
 }
 
-function requireHuman(projectDir: string, rows: readonly AuditShardEvent[]): void {
-  // This new mandatory boundary does not inherit the legacy empty-ledger or
-  // environment bypass. Prompt text is not available on every harness.
-  if (!rows.some((row) => row.event === "HUMAN_TURN") || !humanActedSinceGate(projectDir)) {
-    throw new Error("Construction checkpoint requires a fresh human turn.");
-  }
+function approvalTarget(checkpoint: ConstructionCheckpoint) {
+  return { kind: "unit" as const, unit: checkpoint.unit, checkpointKind: checkpoint.kind, fingerprint: checkpoint.fingerprint };
+}
+
+export function askConstructionCheckpoint(
+  projectDir: string, unit: string, kind: ConstructionCheckpointKind, session: string,
+): ConstructionCheckpoint {
+  return locked(projectDir, () => {
+    const current = snapshot(projectDir, unit, kind);
+    if (!current.result.enabled || current.result.stages.length === 0) {
+      throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
+    }
+    writeCheckpointApprovalChallenge(projectDir, {
+      version: 1, session, challengeId: randomUUID(), target: approvalTarget(current.result),
+      options: ["approve", "request changes"].map((option) => createHash("sha256").update(option).digest("hex")) as [string, string],
+    });
+    appendAuditEntryUnlocked("DECISION_RECORDED", {
+      Checkpoint: "Construction Unit Approval", Unit: unit, Kind: kind,
+      Stage: current.result.stages.at(-1)!, Fingerprint: current.result.fingerprint,
+      Session: session, Options: "Approve,Request Changes",
+    }, projectDir);
+    return current.result;
+  });
 }
 
 export function approveConstructionCheckpoint(
@@ -567,6 +586,7 @@ export function approveConstructionCheckpoint(
   unit: string,
   kind: ConstructionCheckpointKind,
   userInput?: string,
+  session = "",
 ): ConstructionCheckpoint {
   return locked(projectDir, () => {
     const current = snapshot(projectDir, unit, kind);
@@ -574,12 +594,12 @@ export function approveConstructionCheckpoint(
     if (!current.result.verified) {
       throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
-    if (current.result.approved && (userInput === undefined || userInput === "Approve")) {
-      return current.result;
-    }
-    if (current.result.human_required || userInput !== undefined) {
+    const humanRequired = current.result.human_required || userInput !== undefined;
+    if (humanRequired) {
       if (userInput !== "Approve") throw new Error('Construction checkpoint requires the exact "Approve" choice.');
-      requireHuman(projectDir, current.rows);
+      requireCheckpointApprovalResponse(projectDir, approvalTarget(current.result), session, userInput);
+    } else if (current.result.approved) {
+      return current.result;
     }
     const rechecked = snapshot(projectDir, unit, kind);
     if (!rechecked.result.verified ||
@@ -592,8 +612,10 @@ export function approveConstructionCheckpoint(
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...gateFields(projectDir, rechecked.result),
       "Verification Id": rechecked.result.verification!.id,
+      ...(humanRequired ? { Session: session } : {}),
       ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
     }, projectDir);
+    if (humanRequired) consumeCheckpointApprovalChallenge(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);
   });
 }
@@ -604,6 +626,7 @@ export function rejectConstructionCheckpoint(
   kind: ConstructionCheckpointKind,
   userInput: string,
   reason: string,
+  session = "",
 ): ConstructionCheckpoint {
   if (userInput !== "Request Changes") throw new Error('Construction checkpoint requires the exact "Request Changes" choice.');
   if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
@@ -615,15 +638,17 @@ export function rejectConstructionCheckpoint(
     if (!current.result.enabled || current.result.stages.length === 0) {
       throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
     }
-    requireHuman(projectDir, current.rows);
+    requireCheckpointApprovalResponse(projectDir, approvalTarget(current.result), session, userInput);
     const rechecked = snapshot(projectDir, unit, kind);
     if (current.root !== rechecked.root || current.result.fingerprint !== rechecked.result.fingerprint) {
       throw new Error("Construction checkpoint evidence changed before rejection.");
     }
     appendAuditEntryUnlocked("GATE_REJECTED", {
       ...gateFields(projectDir, rechecked.result),
+      Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
     }, projectDir);
+    consumeCheckpointApprovalChallenge(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);
   });
 }

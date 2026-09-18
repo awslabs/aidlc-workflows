@@ -73,6 +73,7 @@ import {
 } from "./aidlc-lib.js";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
+  askConstructionCheckpoint,
   approveConstructionCheckpoint,
   rejectConstructionCheckpoint,
   resolveConstructionCheckpoint,
@@ -80,6 +81,7 @@ import {
   type ConstructionCheckpointKind,
 } from "./aidlc-construction-checkpoints.ts";
 import {
+  askSwarmCheckpoint,
   approveSwarmCheckpoint,
   rejectSwarmCheckpoint,
   resolveSwarmCheckpoint,
@@ -1207,6 +1209,9 @@ function handleCheckpoint(args: string[]): void {
     case "status":
       result = resolveConstructionCheckpoint(pd, flags.unit, checkpointKind);
       break;
+    case "ask":
+      result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, flags.session?.trim() ?? "");
+      break;
     case "verify":
       result = verifyConstructionCheckpoint(
         pd, flags.unit, checkpointKind,
@@ -1214,16 +1219,16 @@ function handleCheckpoint(args: string[]): void {
       break;
     case "approve":
       result = approveConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, flags["user-input"],
+        pd, flags.unit, checkpointKind, flags["user-input"], flags.session?.trim(),
       );
       break;
     case "reject":
       result = rejectConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "",
+        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", flags.session?.trim(),
       );
       break;
     default:
-      error("checkpoint --action must be status, verify, approve or reject");
+      error("checkpoint --action must be status, ask, verify, approve or reject");
   }
   console.log(JSON.stringify(result));
   if (flags.action === "verify" && !result.verified) process.exitCode = 1;
@@ -1241,14 +1246,17 @@ function handleSwarmCheckpoint(args: string[]): void {
     case "status":
       result = resolveSwarmCheckpoint(pd, batch, units);
       break;
+    case "ask":
+      result = askSwarmCheckpoint(pd, batch, units, flags.session?.trim() ?? "");
+      break;
     case "approve":
-      result = approveSwarmCheckpoint(pd, batch, units, flags["user-input"]);
+      result = approveSwarmCheckpoint(pd, batch, units, flags["user-input"], flags.session?.trim());
       break;
     case "reject":
-      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "");
+      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", flags.session?.trim());
       break;
     default:
-      error("swarm-checkpoint --action must be status, approve or reject");
+      error("swarm-checkpoint --action must be status, ask, approve or reject");
   }
   console.log(JSON.stringify(result));
 }

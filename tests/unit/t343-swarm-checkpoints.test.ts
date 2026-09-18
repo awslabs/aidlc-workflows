@@ -2,6 +2,7 @@
 // function:approvedConstructionUnits, function:unitSourceFingerprint, subcommand:aidlc-bolt:swarm-checkpoint,
 // function:readCommittedUnitSourceManifest, function:swarmUnitCheckpointRejections
 // covers: subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, audit:SWARM_UNIT_CONVERGED
+// covers: function:askSwarmCheckpoint, function:requireCheckpointApprovalResponse
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -31,6 +32,8 @@ import {
   intentRepos,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
+  readCheckpointApprovalChallenge,
+  readCheckpointApprovalResponse,
   readCommittedUnitSourceManifest,
   readUnitSourceManifest,
   reviewArtifactFingerprint,
@@ -290,8 +293,10 @@ function converge(pd: string, batch = 1, units = BATCH, kind = "bound"): void {
   }
 }
 
-function human(pd: string): void {
-  appendAuditEntry("HUMAN_TURN", { Source: "t343 prompt-submit fixture" }, pd);
+function human(pd: string, prompt = "Approve"): void {
+  const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+  expect(asked.code, asked.out).toBe(0);
+  choice(pd, "t343-checkpoint", prompt);
 }
 
 function gates(pd: string, event = "GATE_APPROVED") {
@@ -394,7 +399,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const pd = fixture();
     converge(pd);
     human(pd);
-    const first = approveSwarmCheckpoint(pd, 1, BATCH, "Approve");
+    const first = approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint");
     // Refresh verification receipts for the existing immutable merge; a second
     // source-merge receipt would correctly be rejected as duplicate authority.
     converge(pd, 1, BATCH, "unmerged");
@@ -428,7 +433,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(before.approved).toBe(false);
     expect(before.human_required).toBe(true);
     human(pd);
-    const approved = approveSwarmCheckpoint(pd, 1, BATCH, "Approve");
+    const approved = approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint");
     expect(approved.approved).toBe(true);
     expect(approved.fingerprint).toBe(before.fingerprint);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
@@ -446,7 +451,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     if (kind !== "missing") converge(pd, 1, BATCH, kind);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
     human(pd);
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve")).toThrow("not ready");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("not ready");
     expect(gates(pd)).toHaveLength(0);
   }, 30_000);
 
@@ -466,13 +471,13 @@ describe("t343 completed swarm batch checkpoints", () => {
     const pd = fixture();
     converge(pd);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("exact");
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve")).toThrow("human turn");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
     human(pd);
     for (const choice of ["approve", "Approve (Recommended)", "yes", ""]) {
-      expect(() => approveSwarmCheckpoint(pd, 1, BATCH, choice)).toThrow("exact");
+      expect(() => approveSwarmCheckpoint(pd, 1, BATCH, choice, "t343-checkpoint")).toThrow("exact");
     }
-    expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve").approved).toBe(true);
-    expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve").approved).toBe(true);
+    expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
     expect(gates(pd)).toHaveLength(1);
   }, 30_000);
 
@@ -484,7 +489,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("exact");
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).human_required).toBe(false);
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve")).toThrow("human turn");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
     expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
     expect(auditBlockField(gates(pd)[0].block, "Autonomous")).toBe("true");
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "gated" }, pd);
@@ -501,13 +506,13 @@ describe("t343 completed swarm batch checkpoints", () => {
     const pd = fixture(true);
     converge(pd);
     approveSwarmCheckpoint(pd, 1, BATCH);
-    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API")).toThrow("human turn");
-    human(pd);
-    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Reject", "Please fix the API")).toThrow("exact");
+    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow("--action ask");
+    human(pd, "Request Changes");
+    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Reject", "Please fix the API", "t343-checkpoint")).toThrow("exact");
     for (const reason of ["", " ", "DISMISSED", "first\nsecond"]) {
-      expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", reason)).toThrow("reason");
+      expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", reason, "t343-checkpoint")).toThrow("reason");
     }
-    const rejected = rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API");
+    const rejected = rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint");
     expect(rejected.approved).toBe(false);
     expect(rejected.ready).toBe(false);
     const rows = gates(pd, "GATE_REJECTED");
@@ -530,8 +535,8 @@ describe("t343 completed swarm batch checkpoints", () => {
     const later = approveSwarmCheckpoint(pd, 2, ["gamma"]);
     const aggregate = workspaceSourceFingerprint(pd);
     if (aggregate === null) throw new Error("Fixture aggregate source is unbindable");
-    human(pd);
-    rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Revise the first batch");
+    human(pd, "Request Changes");
+    rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Revise the first batch", "t343-checkpoint");
     const rejected = currentSwarmSourceMergeChain(pd, STAGE);
     expect(rejected.state).toBe("ready");
     if (rejected.state !== "ready") throw new Error(JSON.stringify(rejected));
@@ -581,8 +586,8 @@ describe("t343 completed swarm batch checkpoints", () => {
     const pd = fixture(true);
     converge(pd);
     const aggregate = workspaceSourceFingerprint(pd)!;
-    human(pd);
-    rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Revise the first batch");
+    human(pd, "Request Changes");
+    rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Revise the first batch", "t343-checkpoint");
     appendAuditEntry("GATE_REJECTED", {
       Stage: STAGE, "Prior Accepted Source Fingerprint": aggregate,
     }, pd);
@@ -730,8 +735,8 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).errors.join(" ")).toContain("claimed source differs");
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("not ready");
-    human(pd);
-    expect(rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source").approved).toBe(false);
+    human(pd, "Request Changes");
+    expect(rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint").approved).toBe(false);
   }, 30_000);
 
   test("later unrelated source and native batches do not reopen an approved batch", () => {
@@ -780,8 +785,9 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     const check = `${executable} -e "if (!require('fs').readFileSync('src/alpha.ts','utf8').includes('alpha = 1')) process.exit(1)"`;
     recordCommand(pd, check);
     expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(true);
-    human(pd);
-    expect(approveConstructionCheckpoint(pd, "alpha", "unit", "Approve").approved).toBe(true);
+    expect(tool(pd, "bolt", ["checkpoint", "--action", "ask", "--unit", "alpha", "--kind", "unit", "--session", "inline-checkpoint"]).code).toBe(0);
+    choice(pd, "inline-checkpoint", "Approve");
+    expect(approveConstructionCheckpoint(pd, "alpha", "unit", "Approve", "inline-checkpoint").approved).toBe(true);
     expect([...approvedConstructionUnits(pd, readFileSync(seededStateFile(pd), "utf-8"))]).toEqual(["alpha"]);
     expect(() => resolveSwarmCheckpoint(pd, 1, BATCH)).toThrow("exactly");
     expect(resolveSwarmCheckpoint(pd, 1, ["beta"]).ready).toBe(false);
@@ -799,5 +805,77 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     rmSync(join(other, ".git"), { recursive: true, force: true });
     expect(resolveSwarmCheckpoint(other, 1, BATCH).ready).toBe(false);
     expect(() => approveSwarmCheckpoint(other, 1, BATCH)).toThrow("not ready");
+  }, 30_000);
+});
+
+describe("t343 response-bound swarm decisions", () => {
+  const session = "swarm-consent";
+  const route = (id = session) => ["swarm-checkpoint", "--batch", "1", "--units", BATCH.join(","), "--session", id];
+
+  test("unrelated and cross-session prompts cannot approve; a consumed choice cannot replay", () => {
+    const pd = fixture();
+    converge(pd);
+    choice(pd, session, "hello");
+    const approve = (id = session) => tool(pd, "bolt", [...route(id), "--action", "approve", "--user-input", "Approve"]);
+    expect(approve().code).not.toBe(0);
+    expect(gates(pd)).toEqual([]);
+    const ask = tool(pd, "bolt", [...route(), "--action", "ask"]);
+    expect(ask.code, ask.out).toBe(0);
+    choice(pd, session, "hello");
+    expect(approve().code).not.toBe(0);
+    choice(pd, "other-session", "Approve");
+    expect(approve().code).not.toBe(0);
+    choice(pd, session, "Approve");
+    expect(approve("other-session").code).not.toBe(0);
+    expect(gates(pd)).toEqual([]);
+    const accepted = approve();
+    expect(accepted.code, accepted.out).toBe(0);
+    expect(JSON.parse(accepted.stdout).approved).toBe(true);
+    expect(readCheckpointApprovalChallenge(pd, session)).toBeNull();
+    expect(readCheckpointApprovalResponse(pd, session)).toBeNull();
+    choice(pd, session, "hello");
+    expect(approve().code).not.toBe(0);
+    expect(gates(pd)).toHaveLength(1);
+  }, 30_000);
+
+  test("changed but freshly reviewed batch evidence needs a new offered choice", () => {
+    const pd = fixture();
+    converge(pd);
+    const ask = () => {
+      const result = tool(pd, "bolt", [...route(), "--action", "ask"]);
+      expect(result.code, result.out).toBe(0);
+    };
+    ask();
+    choice(pd, session, "Approve");
+    writeFileSync(join(seededRecordDir(pd), "construction", "alpha", STAGE, artifactFilename(findStageBySlug(STAGE)!.produces![0])), "# Revised implementation evidence\n");
+    converge(pd, 1, BATCH, "unmerged");
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(true);
+    const approve = () => tool(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"]);
+    const stale = approve();
+    expect(stale.code).not.toBe(0);
+    expect(stale.out).toContain("--action ask");
+    expect(gates(pd)).toEqual([]);
+    ask();
+    choice(pd, session, "Approve");
+    const accepted = approve();
+    expect(accepted.code, accepted.out).toBe(0);
+  }, 30_000);
+
+  test("autonomous approval needs no challenge but rejection requires Request Changes", () => {
+    const pd = fixture(true);
+    converge(pd);
+    const reject = () => tool(pd, "bolt", [...route(), "--action", "reject", "--user-input", "Request Changes", "--reason", "Fix the API"]);
+    expect(reject().code).not.toBe(0);
+    expect(gates(pd, "GATE_REJECTED")).toEqual([]);
+    const approved = tool(pd, "bolt", ["swarm-checkpoint", "--batch", "1", "--units", BATCH.join(","), "--action", "approve"]);
+    expect(approved.code, approved.out).toBe(0);
+    expect(tool(pd, "bolt", [...route(), "--action", "ask"]).code).toBe(0);
+    choice(pd, session, "Approve");
+    expect(reject().code).not.toBe(0);
+    choice(pd, session, "Request Changes");
+    const rejected = reject();
+    expect(rejected.code, rejected.out).toBe(0);
+    expect(readCheckpointApprovalResponse(pd, session)).toBeNull();
+    expect(gates(pd, "GATE_REJECTED").map((row) => auditBlockField(row.block, "Unit"))).toEqual(BATCH);
   }, 30_000);
 });

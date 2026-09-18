@@ -3176,6 +3176,26 @@ export interface ConstructionPolicyRuntimeResponse {
   responseSha256: string;
 }
 
+export type CheckpointApprovalTarget =
+  | { kind: "unit"; unit: string; checkpointKind: "unit" | "skeleton"; fingerprint: string }
+  | { kind: "batch"; batch: number; units: string[]; fingerprint: string };
+
+export interface CheckpointApprovalRuntimeChallenge {
+  version: 1;
+  session: string;
+  challengeId: string;
+  target: CheckpointApprovalTarget;
+  options: [string, string];
+}
+
+export interface CheckpointApprovalRuntimeResponse {
+  version: 1;
+  session: string;
+  challengeId: string;
+  choice: "Approve" | "Request Changes";
+  responseSha256: string;
+}
+
 // `questionsSha256` is the raw questions-file digest at answer time. It is
 // provenance, not validity: `promptSha256` already binds what the human saw
 // (the prompt with answers blanked) and `choice` binds what they answered, so
@@ -3344,6 +3364,52 @@ function constructionPolicyResponsePath(projectDir: string, session: string): st
     : "";
 }
 
+function checkpointApprovalChallengePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment ? join(planApprovalRuntimeDir(projectDir), `checkpoint-approval-${segment}.json`) : "";
+}
+
+function checkpointApprovalResponsePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment ? join(planApprovalRuntimeDir(projectDir), `checkpoint-approval-response-${segment}.json`) : "";
+}
+
+const PROTECTED_CHALLENGE_PATHS = {
+  "plan-approval": [planApprovalChallengePath, planApprovalResponsePath],
+  "verification-command": [verificationCommandChallengePath, verificationCommandResponsePath],
+  "construction-policy": [constructionPolicyChallengePath, constructionPolicyResponsePath],
+  "checkpoint-approval": [checkpointApprovalChallengePath, checkpointApprovalResponsePath],
+} as const;
+export type ProtectedChallengeKind = keyof typeof PROTECTED_CHALLENGE_PATHS;
+
+/** Conflicting old runtime files fail closed rather than choosing a recipient. */
+export function activeProtectedChallengeKind(projectDir: string, session: string): ProtectedChallengeKind | null {
+  const kinds = (Object.keys(PROTECTED_CHALLENGE_PATHS) as ProtectedChallengeKind[])
+    .filter((kind) => existsSync(PROTECTED_CHALLENGE_PATHS[kind][0](projectDir, session)));
+  return kinds.length === 1 ? kinds[0] : null;
+}
+
+/** All protected questions share one session mailbox, including their replies. */
+export function mintProtectedChallenge(
+  projectDir: string, session: string, kind: ProtectedChallengeKind, write: () => void,
+): void {
+  if (!session.trim() || session !== session.trim() || !runtimeSessionSegment(session)) {
+    throw new Error("Protected challenge requires a nonblank session ID.");
+  }
+  return withAuditLock(projectDir, () => {
+    ensurePlanApprovalRuntimeDir(projectDir);
+    for (const other of Object.keys(PROTECTED_CHALLENGE_PATHS) as ProtectedChallengeKind[]) {
+      if (other === kind) continue;
+      for (const path of PROTECTED_CHALLENGE_PATHS[other]) {
+        try { unlinkSync(path(projectDir, session)); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+    }
+    return write();
+  });
+}
+
 // The receipt's file name is its identity: same target, same attempt, same
 // content resolves to the same path, so a re-issued directive finds the receipt
 // the human already gave instead of orphaning it under a new name.
@@ -3434,21 +3500,22 @@ export function writePlanApprovalChallenge(
   projectDir: string,
   challenge: PlanApprovalRuntimeChallenge,
 ): void {
-  ensurePlanApprovalRuntimeDir(projectDir);
-  const path = planApprovalChallengePath(projectDir, challenge.session);
-  if (!path) throw new Error("Plan Approval challenge requires a nonblank session");
-  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
-  try {
-    unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
-  } catch {
-    // A prior response is optional and one-shot.
-  }
+  mintProtectedChallenge(projectDir, challenge.session, "plan-approval", () => {
+    const path = planApprovalChallengePath(projectDir, challenge.session);
+    writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+    try {
+      unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  });
 }
 
 export function readPlanApprovalChallenge(
   projectDir: string,
   session: string,
 ): PlanApprovalRuntimeChallenge | null {
+  if (activeProtectedChallengeKind(projectDir, session) !== "plan-approval") return null;
   const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeChallenge>(
     planApprovalChallengePath(projectDir, session),
     "Plan Approval challenge",
@@ -3498,21 +3565,22 @@ export function writeVerificationCommandChallenge(
   projectDir: string,
   challenge: VerificationCommandRuntimeChallenge,
 ): void {
-  ensurePlanApprovalRuntimeDir(projectDir);
-  const path = verificationCommandChallengePath(projectDir, challenge.session);
-  if (!path) throw new Error("Verification command challenge requires a nonblank session");
-  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
-  try {
-    unlinkSync(verificationCommandResponsePath(projectDir, challenge.session));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
+  mintProtectedChallenge(projectDir, challenge.session, "verification-command", () => {
+    const path = verificationCommandChallengePath(projectDir, challenge.session);
+    writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+    try {
+      unlinkSync(verificationCommandResponsePath(projectDir, challenge.session));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  });
 }
 
 export function readVerificationCommandChallenge(
   projectDir: string,
   session: string,
 ): VerificationCommandRuntimeChallenge | null {
+  if (activeProtectedChallengeKind(projectDir, session) !== "verification-command") return null;
   const value = readPlanApprovalRuntimeJson<VerificationCommandRuntimeChallenge>(
     verificationCommandChallengePath(projectDir, session),
     "Verification command challenge",
@@ -3571,21 +3639,22 @@ export function writeConstructionPolicyChallenge(
   projectDir: string,
   challenge: ConstructionPolicyRuntimeChallenge,
 ): void {
-  ensurePlanApprovalRuntimeDir(projectDir);
-  const path = constructionPolicyChallengePath(projectDir, challenge.session);
-  if (!path) throw new Error("Construction policy challenge requires a nonblank session");
-  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
-  try {
-    unlinkSync(constructionPolicyResponsePath(projectDir, challenge.session));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
+  mintProtectedChallenge(projectDir, challenge.session, "construction-policy", () => {
+    const path = constructionPolicyChallengePath(projectDir, challenge.session);
+    writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+    try {
+      unlinkSync(constructionPolicyResponsePath(projectDir, challenge.session));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  });
 }
 
 export function readConstructionPolicyChallenge(
   projectDir: string,
   session: string,
 ): ConstructionPolicyRuntimeChallenge | null {
+  if (activeProtectedChallengeKind(projectDir, session) !== "construction-policy") return null;
   const value = readPlanApprovalRuntimeJson<ConstructionPolicyRuntimeChallenge>(
     constructionPolicyChallengePath(projectDir, session),
     "Construction policy challenge",
@@ -3637,6 +3706,84 @@ export function consumeConstructionPolicyChallenge(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+  }
+}
+
+export function writeCheckpointApprovalChallenge(projectDir: string, challenge: CheckpointApprovalRuntimeChallenge): void {
+  mintProtectedChallenge(projectDir, challenge.session, "checkpoint-approval", () => {
+    consumeCheckpointApprovalChallenge(projectDir, challenge.session);
+    writeFileAtomic(checkpointApprovalChallengePath(projectDir, challenge.session), `${JSON.stringify(challenge, null, 2)}\n`);
+  });
+}
+
+export function readCheckpointApprovalChallenge(projectDir: string, session: string): CheckpointApprovalRuntimeChallenge | null {
+  if (activeProtectedChallengeKind(projectDir, session) !== "checkpoint-approval") return null;
+  const value = readPlanApprovalRuntimeJson<CheckpointApprovalRuntimeChallenge>(
+    checkpointApprovalChallengePath(projectDir, session), "Checkpoint approval challenge",
+  );
+  const target = value?.target;
+  return value?.version === 1 && value.session === session &&
+    typeof value.challengeId === "string" && value.challengeId.length > 0 &&
+    target && typeof target.fingerprint === "string" && /^sha256:[a-f0-9]{64}$/.test(target.fingerprint) &&
+    (target.kind === "unit"
+      ? typeof target.unit === "string" && validateUnitName(target.unit) === null &&
+        (target.checkpointKind === "unit" || target.checkpointKind === "skeleton")
+      : target.kind === "batch" && Number.isSafeInteger(target.batch) && target.batch > 0 &&
+        Array.isArray(target.units) && target.units.length > 0 &&
+        new Set(target.units).size === target.units.length &&
+        target.units.every((unit) => typeof unit === "string" && validateUnitName(unit) === null)) &&
+    Array.isArray(value.options) && value.options.length === 2 &&
+    value.options.every((option) => typeof option === "string" && /^[a-f0-9]{64}$/.test(option))
+    ? value : null;
+}
+
+export function writeCheckpointApprovalResponse(projectDir: string, response: CheckpointApprovalRuntimeResponse): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = checkpointApprovalResponsePath(projectDir, response.session);
+  if (!path) throw new Error("Checkpoint approval response requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
+}
+
+export function readCheckpointApprovalResponse(projectDir: string, session: string): CheckpointApprovalRuntimeResponse | null {
+  const value = readPlanApprovalRuntimeJson<CheckpointApprovalRuntimeResponse>(
+    checkpointApprovalResponsePath(projectDir, session), "Checkpoint approval response",
+  );
+  return value?.version === 1 && value.session === session &&
+    typeof value.challengeId === "string" && value.challengeId.length > 0 &&
+    (value.choice === "Approve" || value.choice === "Request Changes") &&
+    typeof value.responseSha256 === "string" && /^[a-f0-9]{64}$/.test(value.responseSha256)
+    ? value : null;
+}
+
+export function consumeCheckpointApprovalChallenge(projectDir: string, session: string): void {
+  for (const path of PROTECTED_CHALLENGE_PATHS["checkpoint-approval"]) {
+    const file = path(projectDir, session);
+    if (!file) continue;
+    try { unlinkSync(file); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
+export function requireCheckpointApprovalResponse(
+  projectDir: string, target: CheckpointApprovalTarget, session: string, choice: string,
+): void {
+  const challenge = readCheckpointApprovalChallenge(projectDir, session);
+  const response = readCheckpointApprovalResponse(projectDir, session);
+  const offered = challenge?.target;
+  const matches = offered?.fingerprint === target.fingerprint &&
+    (target.kind === "unit"
+      ? offered.kind === "unit" && offered.unit === target.unit && offered.checkpointKind === target.checkpointKind
+      : offered.kind === "batch" && offered.batch === target.batch &&
+        offered.units.length === target.units.length && offered.units.every((unit, i) => unit === target.units[i]));
+  if (!challenge || !response || response.challengeId !== challenge.challengeId || response.choice !== choice || !matches) {
+    const command = target.kind === "unit"
+      ? `bolt checkpoint --action ask --unit "${target.unit}" --kind ${target.checkpointKind}`
+      : `bolt swarm-checkpoint --action ask --batch ${target.batch} --units "${target.units.join(",")}"`;
+    throw new Error(`Checkpoint requires the actual human choice for the current fingerprint and session. Re-ask with ${command} --session "<session ID>", then wait for Approve or Request Changes.`);
+  }
+  if (!humanPresenceGuardDisabled() && !humanActedSinceGate(projectDir)) {
+    throw new Error("Checkpoint approval requires a fresh human turn.");
   }
 }
 
@@ -7883,6 +8030,7 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
   "PLAN_APPROVAL_RECORDED",
 ]);
 const DOCUMENT_AUDIT_EVENTS = new Set([

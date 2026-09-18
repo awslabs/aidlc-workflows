@@ -962,9 +962,11 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval`,
           `bun ${entry} engine bolt checkpoint --unit todo-core`,
           `bun ${entry} engine bolt checkpoint --action status --unit todo-core`,
+          `bun ${entry} engine bolt checkpoint --action ask --unit todo-core --kind unit --session consent`,
           `bun ${entry} engine bolt checkpoint --action approve --unit todo-core --user-input Approve`,
           `bun ${entry} engine bolt checkpoint --action reject --unit todo-core --user-input "Request Changes"`,
           `bun ${entry} engine bolt swarm-checkpoint --action status --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action ask --batch 1 --units todo-core,auth --session consent`,
           `bun ${entry} engine bolt swarm-checkpoint --action approve --batch 1 --units todo-core,auth`,
           `bun ${entry} engine bolt swarm-checkpoint --action reject --batch 1 --units todo-core,auth`,
         ]) {
@@ -1101,9 +1103,11 @@ describe("t265b hook lifecycle", () => {
         "aidlc engine log decision --checkpoint summary-confirmation --stage code-generation --checkpoint plan-approval",
         "aidlc.exe engine testing-posture render",
         "aidlc engine bolt checkpoint --action status --unit todo-core",
+        "aidlc engine bolt checkpoint --action ask --unit todo-core --kind skeleton --session consent",
         "aidlc engine bolt checkpoint --action approve --unit todo-core",
         "aidlc engine bolt checkpoint --action reject --unit todo-core",
         "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units todo-core,auth",
+        "aidlc engine bolt swarm-checkpoint --action ask --batch 1 --units todo-core,auth --session consent",
         "aidlc engine bolt swarm-checkpoint --action approve --batch 1 --units todo-core,auth",
         "aidlc engine bolt swarm-checkpoint --action reject --batch 1 --units todo-core,auth",
       ]) {

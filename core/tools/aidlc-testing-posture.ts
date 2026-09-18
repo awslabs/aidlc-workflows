@@ -47,6 +47,7 @@ import {
   readPlanApprovalResponse,
   readPlanApprovalViolation,
   readVerificationCommandChallenge,
+  readCheckpointApprovalChallenge,
   readConstructionPolicyChallenge,
   readRegularFileNoFollowOrThrow,
   recordDir,
@@ -91,6 +92,7 @@ import {
   writePlanApprovalResponse,
   writeVerificationCommandResponse,
   writeConstructionPolicyResponse,
+  writeCheckpointApprovalResponse,
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
   type ActiveDirectiveMarker,
@@ -2266,6 +2268,7 @@ export function recordPlanApprovalHumanResponse(
   session: string,
   responseText: string,
 ): PlanApprovalHumanResponseResult {
+  return withAuditLock(projectDir, () => {
   const challenge = readPlanApprovalChallenge(projectDir, session);
   if (challenge) {
     const choice = offeredCheckpointChoice(
@@ -2304,6 +2307,7 @@ export function recordPlanApprovalHumanResponse(
     return { recorded: true };
   }
   return { recorded: false };
+  });
 }
 
 export function recordVerificationCommandHumanResponse(
@@ -2347,6 +2351,22 @@ export function recordConstructionPolicyHumanResponse(
       responseSha256: createHash("sha256")
         .update(responseText.trim(), "utf-8")
         .digest("hex"),
+    });
+    return { recorded: true };
+  });
+}
+
+export function recordCheckpointApprovalHumanResponse(
+  projectDir: string, session: string, responseText: string,
+): { recorded: boolean } {
+  return withAuditLock(projectDir, () => {
+    const challenge = readCheckpointApprovalChallenge(projectDir, session);
+    if (!challenge) return { recorded: false };
+    const choice = offeredCheckpointChoice(challenge.options, responseText, "Approve", true, true);
+    if (!choice) return { recorded: false };
+    writeCheckpointApprovalResponse(projectDir, {
+      version: 1, session, challengeId: challenge.challengeId, choice,
+      responseSha256: createHash("sha256").update(responseText.trim(), "utf-8").digest("hex"),
     });
     return { recorded: true };
   });

@@ -388,8 +388,11 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     }
     expect(gates(pd)).toBe(0); // PreToolUse never grants checkpoint authority.
     expect(() => approveSwarmCheckpoint(pd, 1, UNITS)).toThrow("exact");
-    appendAuditEntry("HUMAN_TURN", { Source: "t340 checkpoint choice" }, pd);
-    expect(approveSwarmCheckpoint(pd, 1, UNITS, "Approve").approved).toBe(true);
+    expect(tool(pd, "tools/aidlc-bolt.ts", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", UNITS.join(","), "--session", SESSION]).code).toBe(0);
+    expect(tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+      hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "Approve",
+    }).code).toBe(0);
+    expect(approveSwarmCheckpoint(pd, 1, UNITS, "Approve", SESSION).approved).toBe(true);
     const completion = next(pd);
     expect(completion.kind).toBe("run-stage");
     expect(completion.construction_policy).toMatchObject({ completion_only: true });
