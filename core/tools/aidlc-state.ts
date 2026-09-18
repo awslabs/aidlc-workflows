@@ -34,6 +34,7 @@ import {
   auditBlockField,
   authorizedVerificationCommand,
   verificationCommandDetails,
+  readVerificationCommandFile,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
   auditShardName,
@@ -931,7 +932,7 @@ function handleSet(args: string[]): void {
         setter = "set-construction-iteration <unit-major|stage-major>";
         break;
       case "Construction Verification Command":
-        setter = 'set-construction-verification-command "<cmd>"';
+        setter = 'set-construction-verification-command --command-file verification-command.txt';
         break;
     }
     if (setter) error(`${field} cannot be changed with aidlc-state.ts set. Use aidlc-state.ts ${setter}.`);
@@ -971,9 +972,14 @@ function handleSet(args: string[]): void {
 }
 
 function handleSetConstructionVerificationCommand(args: string[]): void {
-  if (args.length !== 1) error('Usage: aidlc-state.ts set-construction-verification-command "<cmd>"');
-  const command = verificationCommandDetails(args[0]);
+  const fromFile = args.length === 2 && args[0] === "--command-file";
+  if (!fromFile && (args.length !== 1 || args[0] === "--command-file")) {
+    error('Usage: aidlc-state.ts set-construction-verification-command --command-file <record-relative path> (or one positional command argument).');
+  }
   const pd = resolveProjectDir(projectDir);
+  const command = fromFile
+    ? readVerificationCommandFile(pd, args[1])
+    : verificationCommandDetails(args[0]);
   withAuditLock(pd, () => {
     const content = readStateFile(pd);
     // setOrInsertField uses a replacement string when the field exists. Quote

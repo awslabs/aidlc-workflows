@@ -16,6 +16,7 @@ import {
   attemptEventDefinitelyBefore,
   maximalAttemptEvents,
   verificationCommandDetails,
+  readVerificationCommandFile,
   verificationCommandChallengeRelativePath,
   writeVerificationCommandChallenge,
   readVerificationCommandChallenge,
@@ -213,6 +214,15 @@ function parseFlags(
     }
   }
   return { positional, flags };
+}
+
+function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
+  if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
+    error("Verification command requires exactly one of --command or --command-file. " + VERIFICATION_COMMAND_RECOVERY);
+  }
+  return flags["command-file"] !== undefined
+    ? readVerificationCommandFile(pd, flags["command-file"])
+    : verificationCommandDetails(flags.command);
 }
 
 // Whether anything sits at the path, symlink included, without following it.
@@ -426,7 +436,7 @@ function handleDecision(args: string[]): void {
       ? summaryQuestionEvidence(pd, flags, "")
       : null;
   const verificationCommand = flags.checkpoint === "verification-command"
-    ? verificationCommandDetails(flags.command ?? "") : null;
+    ? verificationCommandFromFlags(pd, flags) : null;
   if (verificationCommand && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
@@ -806,8 +816,6 @@ function handleAnswer(args: string[]): void {
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
   const verificationCheckpoint = flags.checkpoint === "verification-command";
-  const verificationCommand = verificationCheckpoint
-    ? verificationCommandDetails(flags.command ?? "") : null;
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
@@ -869,6 +877,8 @@ function handleAnswer(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
+  const verificationCommand = verificationCheckpoint
+    ? verificationCommandFromFlags(pd, flags) : null;
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const summaryEvidence = summaryCheckpoint
     ? summaryQuestionEvidence(pd, flags, flags.details)
@@ -986,10 +996,10 @@ function handleAnswer(args: string[]): void {
         !response || response.challengeId !== challenge.challengeId || response.choice !== flags.details) {
         error("Verification command requires the actual offered choice from this prompt and session: a matching challenge, Command SHA-256, and hook-recorded response for --details. " + VERIFICATION_COMMAND_RECOVERY);
       }
-      consumeVerificationCommandChallenge(pd, fields.Session);
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
       if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
+      consumeVerificationCommandChallenge(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage }));
       return;
     }

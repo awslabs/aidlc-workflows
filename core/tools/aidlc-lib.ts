@@ -8258,6 +8258,15 @@ export function verificationCommandDetails(command: string): VerificationCommand
   };
 }
 
+export function readVerificationCommandFile(projectDir: string, file: string): VerificationCommand {
+  const root = recordDir(projectDir);
+  if (!root) throw new Error("Verification command file requires an active intent record.");
+  const path = recordFileTargetOrThrow(root, file);
+  return verificationCommandDetails(
+    readRegularFileNoFollowOrThrow(path, "verification command file", 16 * 1024).toString("utf-8"),
+  );
+}
+
 export function authorizedVerificationCommand(
   projectDir: string,
   stateContent: string,
@@ -8289,11 +8298,12 @@ export function authorizedVerificationCommand(
 }
 
 export const VERIFICATION_COMMAND_RECOVERY =
+  'Write the proposed command to <record>/verification-command.txt with the harness file-write tool (never shell echo or a heredoc); never interpolate repo-derived command text into a shell line. ' +
   'Record the human choice with aidlc-log.ts decision --stage "<stage>" --checkpoint verification-command ' +
-  '--command "<cmd>" --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
-  'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --details "Approve". ' +
+  '--command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
+  'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve". ' +
   'Use the invoking SessionStart session ID. ' +
-  'Apply the receipt with aidlc-state.ts set-construction-verification-command "<cmd>".';
+  'Apply the receipt with aidlc-state.ts set-construction-verification-command --command-file verification-command.txt.';
 
 // --- Consolidated-summary confirmation evidence ---
 //

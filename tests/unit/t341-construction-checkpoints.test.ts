@@ -4,6 +4,7 @@
 // covers: function:authorizedVerificationCommand, function:verificationCommandDetails, audit:VERIFICATION_COMMAND_RECORDED, subcommand:aidlc-state:set-construction-verification-command
 // covers: function:recordVerificationCommandHumanResponse, hook:aidlc-record-human-turn
 // covers: audit:CHECKPOINT_VERIFICATION_RECORDED
+// covers: function:readVerificationCommandFile
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
@@ -30,6 +31,7 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
   readUnitSourceManifest,
+  readVerificationCommandChallenge,
   readVerificationCommandResponse,
   writeVerificationCommandResponse,
   reviewArtifactFingerprint,
@@ -47,6 +49,7 @@ import {
   seedAidlcMemory,
   seedBoltDag,
   seededRecordDir,
+  seededAuditShard,
   seededStateFile,
 } from "../harness/fixtures.ts";
 
@@ -580,6 +583,139 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
 });
 
 describe("t341 verification command consent", () => {
+  test("command files cross the shell boundary without evaluating repo-derived text", () => {
+    const dir = project();
+    const marker = join(dir, "backtick-marker");
+    const marker2 = join(dir, "substitution-marker");
+    const command = `echo \`touch ${marker}\` $(touch ${marker2}) 'q' "dq" ; | >`;
+    writeFileSync(join(seededRecordDir(dir), "verification-command.txt"), `  ${command}\n`);
+    const shellCli = (tool: string, args: string) => {
+      const result = childProcess.spawnSync(
+        `"${process.execPath}" "${join(AIDLC_SRC, `tools/aidlc-${tool}.ts`)}" ${args} --project-dir "${dir}"`,
+        { encoding: "utf-8", shell: true },
+      );
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    };
+    const identity = '--stage code-generation --checkpoint verification-command --command-file verification-command.txt --session t341-command-file';
+    shellCli("log", `decision ${identity} --decision "Use this command?" --options "Approve,Request Changes"`);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.existsSync(marker2)).toBe(false);
+    submitCommandChoice(dir, "t341-command-file", "Approve");
+    shellCli("log", `answer ${identity} --details Approve`);
+    shellCli("state", "set-construction-verification-command --command-file verification-command.txt");
+    const authorization = authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))!;
+    expect(authorization.command).toBe(command);
+    expect(authorization.sha256).toBe(createHash("sha256").update(command).digest("hex"));
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.existsSync(marker2)).toBe(false);
+  }, 30_000);
+
+  test("a trailing file newline has the same authorization as a direct command", () => {
+    const dir = project();
+    writeFileSync(join(seededRecordDir(dir), "verification-command.txt"), "bun test\n");
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command-file"];
+    const decision = cli(dir, "log", ["decision", ...identity, "--command", "bun test", "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+    expect(decision.code, decision.out).toBe(0);
+    submitCommandChoice(dir, "t341-command-file", "Approve");
+    const answer = cli(dir, "log", ["answer", ...identity, "--command-file", "verification-command.txt", "--details", "Approve"]);
+    expect(answer.code, answer.out).toBe(0);
+    const setter = cli(dir, "state", ["set-construction-verification-command", "--command-file", "verification-command.txt"]);
+    expect(setter.code, setter.out).toBe(0);
+    expect(authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))).toEqual(verificationCommandDetails("bun test"));
+  }, 30_000);
+
+  test("decision and answer require exactly one command transport; the setter rejects mixed or missing input", () => {
+    const dir = project();
+    writeFileSync(join(seededRecordDir(dir), "verification-command.txt"), "bun test\n");
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command-file"];
+    for (const transport of [[], ["--command", "bun test", "--command-file", "verification-command.txt"]]) {
+      for (const action of [["decision", "--decision", "Use this command?", "--options", "Approve,Request Changes"], ["answer", "--details", "Approve"]]) {
+        const refused = cli(dir, "log", [...action, ...identity, ...transport]);
+        expect(refused.code).not.toBe(0);
+        expect(refused.out).toContain("exactly one of --command or --command-file");
+      }
+    }
+    for (const args of [[], ["--command-file"], ["bun test", "--command-file", "verification-command.txt"]]) {
+      expect(cli(dir, "state", ["set-construction-verification-command", ...args]).code).not.toBe(0);
+    }
+    expect(readAuditShardEvents(dir).some((row) => row.event === "DECISION_RECORDED" || row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+  }, 30_000);
+
+  test("command files must stay in the record without symlinks and satisfy byte and command limits", () => {
+    const dir = project();
+    const root = seededRecordDir(dir);
+    writeFileSync(join(root, "command.txt"), "bun test\n");
+    // Below the canonical character limit but above the file byte limit.
+    writeFileSync(join(root, "oversize.txt"), "界".repeat(6000));
+    writeFileSync(join(root, "long-command.txt"), "x".repeat(8193));
+    writeFileSync(join(root, "multiline.txt"), "bun test\nbun run build");
+    mkdirSync(join(root, "commands"));
+    writeFileSync(join(root, "commands", "command.txt"), "bun test\n");
+    symlinkSync(join(root, "commands"), join(root, "redirect"), process.platform === "win32" ? "junction" : "dir");
+    symlinkSync(join(root, "command.txt"), join(root, "command-link.txt"));
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command-file"];
+    for (const file of [
+      join(root, "command.txt"),
+      "commands/../command.txt",
+      "redirect/command.txt",
+      "command-link.txt",
+      "oversize.txt",
+      "long-command.txt",
+      "multiline.txt",
+    ]) {
+      for (const [tool, args] of [
+        ["log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]],
+        ["log", ["answer", ...identity, "--details", "Approve"]],
+        ["state", ["set-construction-verification-command"]],
+      ] as const) {
+        const refused = cli(dir, tool, [...args, "--command-file", file]);
+        expect(refused.code).not.toBe(0);
+      }
+    }
+    expect(readAuditShardEvents(dir).some((row) => row.event === "DECISION_RECORDED" || row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+  }, 30_000);
+
+  // Like t137, this injects an append failure using a readable, unwritable shard.
+  // Native Windows does not enforce chmod's write denial.
+  for (const choice of ["Approve", "Request Changes"] as const) {
+    (process.platform === "win32" ? test.skip : test)(`an audit append failure preserves ${choice} for exactly one successful retry`, () => {
+      const dir = project();
+      const session = "t341-retry";
+      const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "bun test", "--session", session];
+      const decision = cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+      expect(decision.code, decision.out).toBe(0);
+      submitCommandChoice(dir, session, choice);
+      const challenge = readVerificationCommandChallenge(dir, session);
+      const response = readVerificationCommandResponse(dir, session);
+      expect(challenge).not.toBeNull();
+      expect(response?.choice).toBe(choice);
+      const shard = seededAuditShard(dir);
+      const before = readFileSync(shard, "utf-8");
+      const answer = ["answer", ...identity, "--details", choice];
+      fs.chmodSync(shard, 0o444);
+      try {
+        const failed = cli(dir, "log", answer);
+        expect(failed.code, failed.out).not.toBe(0);
+        expect(failed.out).toMatch(/EACCES|EPERM|permission denied/i);
+      } finally {
+        fs.chmodSync(shard, 0o644);
+      }
+      expect(readFileSync(shard, "utf-8")).toBe(before);
+      expect(readVerificationCommandChallenge(dir, session)).toEqual(challenge);
+      expect(readVerificationCommandResponse(dir, session)).toEqual(response);
+      const retry = cli(dir, "log", answer);
+      expect(retry.code, retry.out).toBe(0);
+      const event = choice === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
+      expect(JSON.parse(retry.out).emitted).toBe(event);
+      expect(readVerificationCommandChallenge(dir, session)).toBeNull();
+      expect(readVerificationCommandResponse(dir, session)).toBeNull();
+      expect(cli(dir, "log", answer).code).not.toBe(0);
+      const receipts = readAuditShardEvents(dir).filter((row) => row.event === event);
+      expect(receipts).toHaveLength(1);
+      expect(auditBlockField(receipts[0].block, "User Input")).toBe(choice);
+    }, 30_000);
+  }
+
   test("missing receipt, hand-written field, and mismatched command cannot execute or write proof", () => {
     const dir = project();
     const path = resolveConstructionCheckpoint(dir, "alpha", "unit").proof_path;
