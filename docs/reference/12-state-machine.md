@@ -759,9 +759,13 @@ does not start. The row's `Parked ref` names
 `refs/aidlc/parked/<slug>/<UTC-YYYYMMDDTHHMMSSZ[-N]>`, whose `/head` points to
 `Parked commit` and whose `/reviewed-source/<commit>` refs preserve the reviewed
 source evidence. `aidlc engine worktree restore --slug <slug>` recovers the
-snapshot in an isolated restored checkout; `worktree purge` explicitly removes
-parked refs. Neither command adds an audit event, and neither repurposes the
-live Bolt path or branch.
+snapshot in an isolated restored checkout by writing the parked blobs byte-exact,
+without running smudge/process filters. The checkout may show filtered paths as
+modified under their own filter. Submodule gitlinks become empty directories;
+submodule checkouts are not restored. Git's eol/`text=auto` normalization during
+parking is the explicit limit: CRLF bytes normalized at park time are not
+recoverable. `worktree purge` explicitly removes parked refs. Neither command
+adds an audit event, and neither repurposes the live Bolt path or branch.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
 

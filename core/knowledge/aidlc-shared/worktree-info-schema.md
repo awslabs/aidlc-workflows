@@ -93,6 +93,13 @@ creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
 not resume an aborted Bolt or reinstate its review authority. Parked reviewed
 source refs remain in the parked namespace, not copied back into active refs.
 
+Restore writes the parked blobs byte-exact without running smudge/process
+filters; the checkout may show those paths as modified under their own filter.
+Executable files and symbolic links retain their modes. Submodule gitlinks
+become empty directories; submodule checkouts are not restored. Git's
+eol/`text=auto` normalization during parking is the explicit limit: CRLF bytes
+normalized at park time are not recoverable.
+
 ```json
 {
   "restored": true,
@@ -100,12 +107,17 @@ source refs remain in the parked namespace, not copied back into active refs.
   "parked_ref": "refs/aidlc/parked/onboarding-wizard/20260918T123456Z",
   "worktree_path": "/Users/dev/project/.aidlc/restored/bolt-onboarding-wizard-20260918T123456Z",
   "branch": "restore/bolt-onboarding-wizard-20260918T123456Z",
-  "reviewed_source_refs": 1
+  "reviewed_source_refs": 1,
+  "materialized": 12,
+  "raw_bytes": true
 }
 ```
 
 `reviewed_source_refs` counts the retained reviewed source refs in that parked
-namespace. A namespace without `/head` is not restorable.
+namespace. `materialized` counts regular files plus symbolic links written,
+excluding submodule gitlinks; `raw_bytes: true` confirms byte-exact blob
+materialization. A namespace without `/head` is not restorable. A materialization
+failure leaves the partial checkout in place and reports its path.
 
 ### Purge parked refs
 

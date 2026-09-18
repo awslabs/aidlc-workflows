@@ -14,9 +14,9 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
@@ -3107,8 +3107,55 @@ function handleRestore(args: string[]): void {
   if (existsSync(wtPath) || runGit(["rev-parse", "--verify", `refs/heads/${branch}`], repoCwd).ok) {
     errorWithSlug(slug, `already restored at ${wtPath}`);
   }
-  const added = runGit(["worktree", "add", "-b", branch, wtPath, head.oid], repoCwd);
+  // Parked blobs are raw: ordinary checkout re-runs smudge/process filters,
+  // and a required failing filter would abort before any repair could run.
+  // Initialize the index and write every blob byte-exact; like bound checkouts,
+  // filtered paths may still report modified under their own filter.
+  const added = runGit(["worktree", "add", "--no-checkout", "-b", branch, wtPath, head.oid], repoCwd);
   if (!added.ok) errorWithSlug(slug, `git worktree add failed: ${added.stderr.trim() || `exit ${added.code}`}`);
+  let materialized = 0;
+  try {
+    const indexed = runGit(["read-tree", head.oid], wtPath);
+    if (!indexed.ok) throw new Error(`git read-tree failed: ${indexed.stderr.trim() || `exit ${indexed.code}`}`);
+    const listed = runGit(["ls-files", "-s", "-z"], wtPath);
+    if (!listed.ok) throw new Error(`git ls-files failed: ${listed.stderr.trim() || `exit ${listed.code}`}`);
+    for (const entry of listed.stdout.split("\0")) {
+      if (!entry) continue;
+      const match = /^([0-7]{6}) ([0-9a-f]{40,64}) 0\t([\s\S]+)$/.exec(entry);
+      if (!match) throw new Error("invalid parked index entry");
+      const [, mode, sha, path] = match;
+      const destination = resolve(wtPath, path);
+      if (isAbsolute(path) || path.split("/").includes("..") || !destination.startsWith(`${wtPath}${sep}`)) {
+        throw new Error(`refusing parked path outside the restore checkout: ${JSON.stringify(path)}`);
+      }
+      if (mode !== "100644" && mode !== "100755" && mode !== "120000" && mode !== "160000") {
+        throw new Error(`unsupported parked index mode ${mode} for ${JSON.stringify(path)}`);
+      }
+      if (mode === "160000") {
+        mkdirSync(destination, { recursive: true });
+        continue;
+      }
+      const blob = Bun.spawnSync(["git", "cat-file", "blob", sha], {
+        cwd: wtPath,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (blob.exitCode !== 0) {
+        throw new Error(`git cat-file failed for ${JSON.stringify(path)}: ${blob.stderr.toString().trim() || `exit ${blob.exitCode}`}`);
+      }
+      mkdirSync(dirname(destination), { recursive: true });
+      if (mode === "120000") {
+        rmSync(destination, { recursive: true, force: true });
+        symlinkSync(blob.stdout, destination);
+      } else {
+        writeFileSync(destination, blob.stdout, { flag: "wx" });
+        if (mode === "100755") chmodSync(destination, 0o755);
+      }
+      materialized++;
+    }
+  } catch (e) {
+    errorWithSlug(slug, `raw restore failed: ${errorMessage(e)}; partial checkout left in place at ${wtPath}`);
+  }
   console.log(JSON.stringify({
     restored: true,
     slug,
@@ -3116,6 +3163,8 @@ function handleRestore(args: string[]): void {
     worktree_path: wtPath,
     branch,
     reviewed_source_refs: refs.filter(({ ref }) => ref.startsWith(`${parkedRef}/reviewed-source/`)).length,
+    materialized,
+    raw_bytes: true,
   }));
 }
 

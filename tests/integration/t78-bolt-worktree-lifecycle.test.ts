@@ -71,11 +71,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -605,6 +609,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         worktree_path: restoredPath,
         branch: restoredBranch,
         reviewed_source_refs: 1,
+        materialized: expect.any(Number),
+        raw_bytes: true,
       });
       expect(auditEvents(proj)).toEqual(auditBeforeRecovery);
       expect(readFileSync(join(restoredPath, "committed.txt"), "utf-8")).toBe("unmerged Bolt commit\n");
@@ -687,6 +693,106 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(readFileSync(join(restoredPath, "notes.lossy"), "utf-8")).toBe(trackedBytes);
       expect(readFileSync(join(restoredPath, "scratch.lossy"), "utf-8")).toBe(untrackedBytes);
       expect(readFileSync(join(restoredPath, "plain.txt"), "utf-8")).toBe(plainBytes);
+    });
+
+    test("restore bypasses transforming smudge filters for lowercase and binary blobs", () => {
+      const proj = setupLifecycleProject();
+      const slug = "transforming-smudge";
+      const wt = worktreeDir(proj, slug);
+      gitInitMain(proj);
+      expect(git(proj, "config", "filter.lossy.clean", "cat").status).toBe(0);
+      expect(git(proj, "config", "filter.lossy.smudge", "tr a-z A-Z").status).toBe(0);
+      writeFileSync(join(proj, ".gitattributes"), "*.lossy filter=lossy\n");
+      writeFileSync(join(proj, "notes.lossy"), "original lowercase notes\n");
+      expect(git(proj, "add", ".gitattributes", "notes.lossy").status).toBe(0);
+      expect(git(proj, "commit", "-q", "-m", "seed smudge-filtered source").status).toBe(0);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const trackedBytes = "dirty lowercase tracked notes\n";
+      const untrackedBytes = "untracked lowercase scratch\n";
+      const binaryBytes = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+      writeFileSync(join(wt, "notes.lossy"), trackedBytes);
+      writeFileSync(join(wt, "scratch.lossy"), untrackedBytes);
+      writeFileSync(join(wt, "binary.lossy"), binaryBytes);
+
+      const aborted = runBolt(
+        proj, "abort", "--name", "Transforming Smudge Bolt", "--slug", slug,
+        "--reason", "restore without reapplying smudge", "--discard",
+      );
+      expect(aborted.status).toBe(0);
+      const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
+      const parkedFiles = git(proj, "ls-tree", "-r", "--name-only", "-z", `${parkedRef}/head`);
+      expect(parkedFiles.status).toBe(0);
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const recovery = JSON.parse(restored.out) as {
+        worktree_path: string; materialized: number; raw_bytes: boolean;
+      };
+      expect(readFileSync(join(recovery.worktree_path, "notes.lossy"), "utf-8")).toBe(trackedBytes);
+      expect(readFileSync(join(recovery.worktree_path, "scratch.lossy"), "utf-8")).toBe(untrackedBytes);
+      expect(readFileSync(join(recovery.worktree_path, "binary.lossy"))).toEqual(binaryBytes);
+      expect(recovery.materialized).toBe(parkedFiles.stdout.split("\0").filter(Boolean).length);
+      expect(recovery.raw_bytes).toBe(true);
+    });
+
+    test("restore succeeds despite a required failing smudge filter", () => {
+      const proj = setupLifecycleProject();
+      const slug = "required-smudge";
+      const wt = worktreeDir(proj, slug);
+      writeFileSync(join(proj, ".gitattributes"), "*.broken filter=broken\n");
+      writeFileSync(join(proj, "notes.broken"), "original notes\n");
+      gitInitMain(proj);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const dirtyBytes = "dirty bytes survive a required smudge failure\n";
+      writeFileSync(join(wt, "notes.broken"), dirtyBytes);
+      expect(git(proj, "config", "filter.broken.clean", "cat").status).toBe(0);
+      expect(git(proj, "config", "filter.broken.smudge", "false").status).toBe(0);
+      expect(git(proj, "config", "filter.broken.required", "true").status).toBe(0);
+
+      const aborted = runBolt(
+        proj, "abort", "--name", "Required Smudge Bolt", "--slug", slug,
+        "--reason", "recover without invoking the broken filter", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
+      const ordinaryPath = join(proj, ".aidlc", "ordinary-restore");
+      try {
+        const ordinary = git(proj, "worktree", "add", "--detach", ordinaryPath, `${parkedRef}/head`);
+        expect(ordinary.status).not.toBe(0);
+        expect(ordinary.stderr).toContain("smudge filter broken failed");
+      } finally {
+        git(proj, "worktree", "remove", "--force", ordinaryPath);
+      }
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const { worktree_path: restoredPath } = JSON.parse(restored.out) as { worktree_path: string };
+      expect(readFileSync(join(restoredPath, "notes.broken"), "utf-8")).toBe(dirtyBytes);
+    });
+
+    test("restore preserves executable files and symbolic links", () => {
+      const proj = setupLifecycleProject();
+      const slug = "file-modes";
+      const wt = worktreeDir(proj, slug);
+      mkdirSync(join(proj, "bin"));
+      writeFileSync(join(proj, "bin", "run.sh"), "#!/bin/sh\nprintf 'original\\n'\n");
+      chmodSync(join(proj, "bin", "run.sh"), 0o755);
+      symlinkSync("bin/run.sh", join(proj, "runner"));
+      gitInitMain(proj);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const scriptBytes = "#!/bin/sh\nprintf 'recovered\\n'\n";
+      writeFileSync(join(wt, "bin", "run.sh"), scriptBytes);
+      const aborted = runBolt(
+        proj, "abort", "--name", "File Modes Bolt", "--slug", slug,
+        "--reason", "retain executable and symlink modes", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const { worktree_path: restoredPath } = JSON.parse(restored.out) as { worktree_path: string };
+      expect(readFileSync(join(restoredPath, "bin", "run.sh"), "utf-8")).toBe(scriptBytes);
+      expect(lstatSync(join(restoredPath, "bin", "run.sh")).mode & 0o777).toBe(0o755);
+      expect(lstatSync(join(restoredPath, "runner")).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(join(restoredPath, "runner"))).toBe("bin/run.sh");
+      expect(readFileSync(join(restoredPath, "runner"), "utf-8")).toBe(scriptBytes);
     });
 
     test("a broken optional clean filter still parks and restores the raw bytes", () => {
