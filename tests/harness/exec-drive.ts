@@ -58,6 +58,13 @@ export interface CodexProject {
   root: string;
 }
 
+/** Select the native sandbox for fresh Windows homes without changing its permissions. */
+export function codexWindowsSandboxConfig(
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  return platform === "win32" ? ["", "[windows]", 'sandbox = "elevated"'] : [];
+}
+
 // A scratch install: dist/codex copied verbatim, git-initialized (project
 // hooks.json discovery requires a git repo), a scratch CODEX_HOME with Bedrock
 // provider + project trust + the trust pre-seed from `package.ts codex trust`
@@ -98,16 +105,17 @@ export function setupCodexProject(): CodexProject {
       `model_reasoning_effort = "low"`,
       ``,
       `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
+      `profile = ${JSON.stringify(AWS_PROFILE)}`,
+      `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
-      `[projects."${proj}"]`,
+      `[projects.${JSON.stringify(proj)}]`,
       `trust_level = "trusted"`,
       ``,
       trust.stdout,
+      ...codexWindowsSandboxConfig(),
     ].join("\n"),
     "utf-8",
   );

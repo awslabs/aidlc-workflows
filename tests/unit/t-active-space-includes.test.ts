@@ -186,6 +186,35 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
     expect(written).toEqual([]);
   });
 
+  test("every trusted Kiro worker retains native memory preload when the active space changes", () => {
+    const root = setup();
+    const conductor = JSON.parse(readFileSync(distSurface("kiro", ".kiro", "agents", "aidlc.json"), "utf8"));
+    const trusted = conductor.toolsSettings.subagent.trustedAgents as string[];
+    expect(trusted.length).toBeGreaterThan(0);
+    const originals = new Map<string, { resources: string[]; [key: string]: unknown }>();
+    for (const name of trusted) {
+      const source = distSurface("kiro", ".kiro", "agents", `${name}.json`);
+      const raw = readFileSync(source, "utf8");
+      const config = JSON.parse(raw);
+      expect(config.resources.filter((entry: string) =>
+        entry === "file://aidlc/spaces/default/memory/**/*.md")).toHaveLength(1);
+      originals.set(name, config);
+      writeFileSync(join(root, ".kiro", "agents", `${name}.json`), raw);
+    }
+    writeFileSync(join(root, "aidlc", "active-space"), "teamB\n");
+    repointHarnessIncludes(root);
+    for (const [name, original] of originals) {
+      const after = JSON.parse(readFileSync(join(root, ".kiro", "agents", `${name}.json`), "utf8"));
+      expect(after).toEqual({
+        ...original,
+        resources: original.resources.map(entry => entry === "file://aidlc/spaces/default/memory/**/*.md"
+          ? "file://aidlc/spaces/teamB/memory/**/*.md" : entry),
+      });
+      expect(after.resources).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
+      expect(after.resources).not.toContain("file://aidlc/spaces/default/memory/**/*.md");
+    }
+  });
+
   test("a malformed agent JSON is skipped, never corrupted", () => {
     const root = setup();
     const bad = join(root, ".kiro", "agents", "broken.json");

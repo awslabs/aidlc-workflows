@@ -102,7 +102,13 @@ function run(
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(BUN, [INIT, ...args], {
     cwd,
-    env: { ...process.env, ...env },
+    env: {
+      ...process.env,
+      ...env,
+      // Feed the forced-TTY fixture through its scripted-answer seam. Runtime
+      // re-probes on Windows must not depend on a previously drained stdin pipe.
+      AIDLC_TEST_CONFIG_INPUT: input,
+    },
     input,
     encoding: "utf-8",
     timeout: 60_000,

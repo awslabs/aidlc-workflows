@@ -1889,11 +1889,19 @@ function dispatcherParityGate(artifact: string): GateResult {
 }
 
 function delegateDoctorDataGate(artifact: string): GateResult {
-  const result = run(artifact, ["doctor", "--verbose"], {
-    cwd: standaloneGateCwd(),
-    env: pathlessEnv(),
-    timeoutMs: 30_000,
-  });
+  // This gate checks the built candidate's runtime data, independent of the
+  // developer's installed store. Other gates retain their own store selectors.
+  const installRoot = mkdtempSync(join(tmpdir(), "aidlc-binary-doctor-install-"));
+  let result: CommandResult;
+  try {
+    result = run(artifact, ["doctor", "--verbose"], {
+      cwd: standaloneGateCwd(),
+      env: { ...pathlessEnv(), AIDLC_INSTALL_ROOT: installRoot },
+      timeoutMs: 30_000,
+    });
+  } finally {
+    rmSync(installRoot, { recursive: true, force: true });
+  }
   const output = `${result.stdout}\n${result.stderr}`;
   // Doctor legitimately reports PATH-dependent external tools as advisory rows,
   // and the pathless gate env phrases those on Windows as
