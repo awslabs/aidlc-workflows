@@ -147,10 +147,13 @@ export function parseGuardRestartContinuationCommand(
 // direct log review refusals print an abort ask through guardRefusalOutput,
 // which records the refusal but does not publish an active directive. Requiring
 // a consumed marker here would strand that offered recovery after human approval.
-// The conductor owns the abort's human selection; the hook admits only this
-// fully specified native abort, without granting Plan Approval or exempting any
-// other Bolt subcommand or extra argument. Native restart continuations have a
-// separate marker-bound check because the orchestrator publishes their asks.
+// Conductor-prose-obtained abort consent remains the trust boundary; a mistaken
+// abort --discard parks work for aidlc engine worktree restore --slug <slug>.
+// A mechanical selection receipt remains a future candidate, not a check here.
+// The hook admits only this fully specified native abort, without granting Plan
+// Approval or exempting any other Bolt subcommand or extra argument. Native
+// restart continuations have a separate marker-bound check because the
+// orchestrator publishes their asks.
 export function isGuardRecoveryEngineInvocation(args: readonly string[]): boolean {
   if (args[0] !== "engine" || args[1] !== "bolt" || args.length !== 10) return false;
   const operation: GuardRecoveryOperation = { kind: "abort-bolt", unit: args[4], slug: args[6] };

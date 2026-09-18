@@ -570,7 +570,9 @@ function isPlanApprovalPrerequisite(args: string[]): boolean {
   if (args[0] !== "engine") return false;
   // Direct log refusals can offer this abort without publishing a selection
   // marker. Preserve the trusted source-tool recovery route in native installs:
-  // human selection remains the conductor's responsibility for abort, while
+  // conductor-prose-obtained consent remains the trust boundary for abort.
+  // A mistaken abort --discard parks work for aidlc engine worktree restore
+  // --slug <slug>; a mechanical selection receipt remains a future candidate.
   // isSelectedGuardRestartContinuation verifies the published restart choice.
   if (isGuardRecoveryEngineInvocation(args)) return true;
 
