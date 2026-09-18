@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1019,
+    "total": 1031,
     "enumeratedByClass": {
-      "function": 702,
-      "audit": 101,
+      "function": 713,
+      "audit": 102,
       "scope": 11,
       "stage": 33,
       "hook": 18,
@@ -31,8 +31,8 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 418,
-      "audit": 62,
+      "function": 420,
+      "audit": 63,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -169,6 +169,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "CONSTRUCTION_POLICY_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -921,6 +933,10 @@
         {
           "file": "tests/e2e/t134-swarm-referee.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1651,6 +1667,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t247-claim-sources-sensor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:authorizedConstructionPolicyChange",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2467,6 +2495,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:CONSTRUCTION_POLICY_CHECKPOINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CONSTRUCTION_POLICY_RECOVERY",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:constructionCheckpointGaps",
       "minMechanism": "none",
       "coveredBy": [
@@ -2486,7 +2528,21 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:constructionPolicyChallengeRelativePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:constructionSkeletonOn",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:consumeConstructionPolicyChallenge",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -5358,6 +5414,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readConstructionPolicyChallenge",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readConstructionPolicyResponse",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readCurrentSessionId",
       "minMechanism": "none",
       "coveredBy": [],
@@ -5651,6 +5721,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readVerificationCommandFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7952,6 +8034,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:validConstructionPolicyChange",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:validReviewFindingStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -8321,6 +8410,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeConstructionPolicyChallenge",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeConstructionPolicyResponse",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
