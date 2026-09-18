@@ -7,6 +7,7 @@ import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, auditBlockField, clearPlanApprovalReceipt, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
+  authorizedVerificationCommand,
   readAuditShardEvents, readPlanApprovalReceipt, readUnitSourceManifest, reviewArtifactFingerprint,
   serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
   workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
@@ -45,6 +46,21 @@ function tool(pd: string, path: string, args: string[], input?: unknown) {
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
   });
   return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
+}
+
+function recordCommand(pd: string, command: string): void {
+  const route = ["--stage", STAGE, "--checkpoint", "verification-command", "--command", command, "--session", SESSION];
+  const decision = tool(pd, "tools/aidlc-log.ts", [
+    "decision", ...route, "--decision", "Use this command?", "--options", "Approve,Request Changes",
+  ]);
+  expect(decision.code, decision.err).toBe(0);
+  expect(tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+    hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "Approve",
+  }).code).toBe(0);
+  const answer = tool(pd, "tools/aidlc-log.ts", ["answer", ...route, "--details", "Approve"]);
+  expect(answer.code, answer.err).toBe(0);
+  const applied = tool(pd, "tools/aidlc-state.ts", ["set-construction-verification-command", command]);
+  expect(applied.code, applied.err).toBe(0);
 }
 
 function publish(pd: string, kind: "invoke-swarm" | "run-stage", units = UNITS): void {
@@ -150,6 +166,7 @@ ${options.legacy ? "" : "- **Construction Checkpoints**: enabled\n- **Constructi
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
   if (options.legacy) appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
   appendAuditEntry("SESSION_STARTED", { Session: SESSION, Source: "t340 fixture" }, pd);
+  if (!options.legacy) recordCommand(pd, "git diff --check");
   publish(pd, "invoke-swarm");
   approve(pd, options.grouped ?? !options.legacy);
   return pd;
@@ -162,6 +179,7 @@ function converge(pd: string, options: {
   const listing = workspaceSourceListing(pd)!;
   const fingerprint = workspaceSourceFingerprint(pd)!;
   const commit = git(pd, ["rev-parse", "HEAD"]);
+  const command = authorizedVerificationCommand(pd, readFileSync(seededStateFile(pd), "utf-8"))!;
   let previous = sourceListingSha256(serializeSourceListing(listing));
   const start = (units: string[]) => appendAuditEntry("SWARM_STARTED", {
     Stage: STAGE, "Run floor": floor, "Batch number": "1",
@@ -188,6 +206,7 @@ function converge(pd: string, options: {
     }, pd);
     appendAuditEntry("SWARM_UNIT_CONVERGED", {
       Stage: STAGE, "Run floor": floor, "Batch number": options.batch ?? "1", "Unit name": unit,
+      "Command SHA-256": command.sha256,
       ...(options.legacy ? {} : { "Source Commit": commit, "Source Fingerprint": fingerprint }),
     }, pd);
     if (!options.legacy && !options.unmerged) appendAuditEntry("SWARM_SOURCE_MERGED", {
