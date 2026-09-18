@@ -150,9 +150,9 @@ function splitBooleanFlags(args: string[]): { booleans: Set<string>; rest: strin
 
 // Spawn a sibling tool (same project-dir) and return {ok, stdout, stderr}.
 // Used by --worktree / --merge / --discard branches to delegate to
-// state-fork / audit-fork / worktree-discard subcommands. 30s timeout
-// matches the merge-dispatch budget; on timeout, signal === "SIGTERM"
-// distinguishes the timeout case from an exit-code failure.
+// state-fork / audit-fork / worktree-discard subcommands. Default 30s timeout
+// matches the merge-dispatch budget; discard gets 5 minutes to snapshot source.
+// On timeout, signal === "SIGTERM" distinguishes it from an exit-code failure.
 function spawnSibling(
   pd: string,
   toolName:
@@ -187,7 +187,7 @@ function spawnSibling(
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     cwd: pd,
-    timeout: 30_000,
+    timeout: toolName === "aidlc-worktree.ts" && subargs[0] === "discard" ? 300_000 : 30_000,
   });
   return {
     ok: result.status === 0,
@@ -805,9 +805,9 @@ function handleFail(args: string[]): void {
 // emitted by the orchestrator when code-gen returns failure).
 //
 // Default behaviour preserves the worktree directory for inspection. With
-// --discard, calls aidlc-worktree discard --slug <slug> to tear it down
-// (audit-of-intent: WORKTREE_DISCARDED emits before tear-down inside the
-// discard subprocess; on discard failure, halt without state damage).
+// --discard, calls aidlc-worktree discard --slug <slug> to park then remove it.
+// WORKTREE_DISCARDED emits after parking and before removal; a parking failure
+// halts before audit/removal, leaving the live attempt intact.
 function handleAbort(args: string[]): void {
   const { booleans, rest } = splitBooleanFlags(args);
   const flags = parseFlags(rest);
@@ -817,6 +817,7 @@ function handleAbort(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const useDiscard = booleans.has("discard");
+  let parkedRef: string | null = null;
 
   // Discard-FIRST when --discard set, audit-AFTER. If we emitted BOLT_FAILED
   // (Reason: aborted) before discard and discard then timed out / errored,
@@ -841,6 +842,12 @@ function handleAbort(args: string[]): void {
         reason,
         `aidlc-worktree discard --slug ${flags.slug} exited ${result.status}: ${result.stderr || result.stdout || "(no output)"}`
       );
+    }
+    try {
+      const discarded = JSON.parse(result.stdout);
+      if (typeof discarded?.parked_ref === "string") parkedRef = discarded.parked_ref;
+    } catch {
+      // Older sibling versions or no-op output may not carry a parked ref.
     }
   }
 
@@ -868,6 +875,7 @@ function handleAbort(args: string[]): void {
       failed_bolt: flags.name,
       slug: flags.slug,
       discarded: useDiscard,
+      parked_ref: parkedRef,
     })
   );
 }

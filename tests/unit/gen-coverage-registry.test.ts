@@ -799,6 +799,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   const EXPECTED_NONE_TO_CLI = [
     "unit/t341-orchestrate-wait.test.ts",
     "unit/t343-intent-create-positionals.test.ts",
+    "integration/t-review-verdict-unit-state.test.ts",
+    "unit/t-runner-production-guards.test.ts",
+    "integration/t-guard-native-remedies.test.ts",
+    "integration/t-guard-recovery-production.test.ts",
     "unit/t-kiro-ide-native-recovery.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
@@ -810,6 +814,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t280-contract-design-wiring.test.ts",
     "unit/t282-state-version-doctor.test.ts",
     "unit/t283-copilot-engine-cursor.test.ts",
+    // spawns the repository's own CI validator (.github/scripts/ai-pr-review.ts)
+    "unit/t300-ai-pr-review.test.ts",
     "unit/t304-codekb-cumulative-merge.test.ts",
     "unit/t306-learnings-cid-collision-followup.test.ts",
     "unit/t324-doctor-hooks-disabled.test.ts",
@@ -948,6 +954,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t304-loopback-review-receipt-replay.test.ts",
     "integration/t307-loopback-unitmajor-replay.test.ts",
     "integration/t314-plugin-reinstall-doctor.test.ts",
+    // t341 is t314's composed-scope twin: it spawns the shipped graph/doctor
+    // tools to walk a reinstall, so its body is a deterministic spawner even
+    // though its filename segment carries no mechanism.
+    "integration/t341-composed-scope-durability.test.ts",
     "integration/t21b.test.ts",
     "integration/t31-help.test.ts",
     "integration/t325-team-unit-claims.test.ts",

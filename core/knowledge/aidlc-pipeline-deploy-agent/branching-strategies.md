@@ -43,9 +43,9 @@ When dispatched for trunk-based:
 
 ### Failure modes
 
-- **Dirty tree on merge.** Local uncommitted changes on `main`; tool errors with the git message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; user explicitly discards on abort.
+- **Dirty tree on merge.** Local uncommitted changes on `main`; tool errors with the git message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; an explicit discard on abort parks the work before removing the live checkout and branch.
 - **Conflict on squash.** Squash conflicts with concurrent `main` motion (e.g. another Bolt landed first). Tool exits non-zero with `{status: "conflict", conflict_files, detail}`. Orchestrator quotes `detail` to the user.
-- **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should run `discard` first (rare) or pick a different slug.
+- **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should park/discard first only when authorized, or pick a different slug. Recover parked work with `{{INVOKE}} engine worktree restore --slug <bolt-slug>` in the separate restored namespace.
 
 ---
 
@@ -271,11 +271,42 @@ The orchestrator's halt-and-ask quotes the `detail` field verbatim. See `aidlc-c
   "slug": "<bolt-slug>",
   "worktree_path": "/abs/path/.aidlc/worktrees/bolt-<slug>",
   "reason": "agent-discard",
+  "parked_ref": "refs/aidlc/parked/<bolt-slug>/20260518T123456Z",
+  "parked_commit": "<snapshot-commit>",
   "audit_timestamp": "2026-05-18T12:34:56Z"
 }
 ```
 
-If the worktree was already gone (idempotent path), `emitted` is `null` and `reason` is `already-discarded` — no audit event is re-emitted.
+If the checkout, branch, and reviewed source refs are already gone (idempotent path), `emitted` is `null` and `reason` is `already-discarded` — no audit event is re-emitted.
+That already-discarded response has no `parked_ref` or `parked_commit` fields.
+
+Discard snapshots tracked files and non-ignored untracked files with a temporary
+index and `commit-tree`; ignored untracked files are not backed up. Before audit
+emission, it parks `/head` and `/reviewed-source/<commit>` refs below the
+`parked_ref` namespace. Only then does it remove the live checkout and branch and
+compare-delete the original reviewed source refs. If only reviewed refs remain,
+`parked_commit` is `"-"`; there is no `/head` snapshot to restore.
+
+### Restore or purge parked work
+
+`{{INVOKE}} engine worktree restore --slug <bolt-slug> [--parked <stamp>]
+[--repo <name>] [--intent <intent>] [--space <space>]` restores the selected
+snapshot, or the latest parked `/head` when `--parked` is omitted. Stamps use UTC
+`YYYYMMDDTHHMMSSZ` with optional numeric `-N` collision suffixes; latest selection
+orders those suffixes numerically. Restore creates
+`.aidlc/restored/bolt-<slug>-<stamp>` on `restore/bolt-<slug>-<stamp>`, never
+touching the live `.aidlc/worktrees/bolt-<slug>` path or `bolt-<slug>` branch.
+It does not resume the aborted lifecycle or restore active review authority.
+Its JSON is `{restored: true, slug, parked_ref, worktree_path, branch,
+reviewed_source_refs}`; the last field counts retained parked reviewed refs,
+which are not copied into the active namespace.
+
+`{{INVOKE}} engine worktree purge --slug <bolt-slug> [--parked <stamp>]
+[--repo <name>]` compare-deletes all matching parked refs (all stamps for the
+slug unless one is selected). It refuses while any corresponding restored
+checkout exists. Its JSON is `{purged: <number-of-refs>, slug, stamps: [...]}`.
+Restore and purge add no audit events. See `aidlc-shared/worktree-info-schema.md`
+for the JSON examples and recovery contract.
 
 ---
 

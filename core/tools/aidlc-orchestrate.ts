@@ -213,6 +213,7 @@ import {
   type ActiveDirectiveMarker,
   EngineModeViolationError,
   stateFilePathForSelection,
+  stripRecommendedDecorator,
   teamUnitGateStatus,
   unitDependencyPath,
   unitParkedPath,
@@ -263,6 +264,7 @@ import {
 import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
 import {
   aidlcDispatcherInvocation,
+  aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
   isCompiledExecutable,
@@ -271,6 +273,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
+import { sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
   type GuardPreflightAction,
   type GuardPreflightResult,
@@ -315,7 +318,7 @@ interface PreparedEmission {
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
     rules_bundle?: string; directive_sha256?: string;
     ask_type?: string;
-    remedies?: Array<Pick<GuardRemedy, "op" | "action">>;
+    remedies?: Array<Pick<GuardRemedy, "op" | "action" | "operation" | "interaction">>;
   };
 }
 
@@ -476,7 +479,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
       stage: transported.stage,
       ask_type: GUARD_RECOVERY_ASK_TYPE,
       ...(typeof transported.unit === "string" ? { unit: transported.unit } : {}),
-      remedies: transported.remedies.map(({ op, action }) => ({ op, action })),
+      remedies: transported.remedies.map(({ op, action, operation, interaction }) => ({
+        op,
+        action,
+        ...(operation ? { operation } : {}),
+        ...(interaction ? { interaction } : {}),
+      })),
       state_sha256: stateDigest(askState),
     };
   }
@@ -629,7 +637,9 @@ function guardRecoveryAskMarkerIsCurrent(
     current.remedies.length === marker.remedies.length &&
     current.remedies.every((remedy, index) =>
       remedy.op === marker.remedies?.[index]?.op &&
-      remedy.action === marker.remedies[index]?.action
+      remedy.action === marker.remedies[index]?.action &&
+      remedy.interaction === marker.remedies[index]?.interaction &&
+      sameGuardOperation(remedy.operation, marker.remedies[index]?.operation)
     );
 }
 
@@ -7550,15 +7560,14 @@ function spawnState(
   projectDir: string,
   subArgs: string[],
 ): { exitCode: number; stdout: string; stderr: string } {
-  const command = IS_COMPILED
-    ? [process.execPath, "engine", "state", ...subArgs, "--project-dir", projectDir]
-    : [
-        process.execPath,
-        fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)),
-        ...subArgs,
-        "--project-dir",
-        projectDir,
-      ];
+  // In source and compiled modes, the orchestrator uses only its own process
+  // identity, never an executable supplied through the environment.
+  const command = aidlcEngineCommand(
+    "state",
+    [...subArgs, "--project-dir", projectDir],
+    fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)),
+    IS_COMPILED ? process.execPath : null,
+  );
   const result = Bun.spawnSync({
     cmd: command,
     env: engineChildEnv({
@@ -8757,14 +8766,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const rawRevisionCount = getField(stateContent, "Revision Count");
     const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
     const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
-    const approvalChoice = flags.userInput?.trim();
+    const approvalChoice = stripRecommendedDecorator(flags.userInput ?? "");
     const matchesOfferedApproval =
       approvalChoice === "Approve" ||
       (approvalChoice === "Accept as-is" && revisionCount >= 3);
     if (!matchesOfferedApproval) {
       emit(errorDirective(
         `report --result ${flags.result} for "${slug}" received reply ` +
-          `${formatReceivedReply(approvalChoice)} which did not match an offered choice at ` +
+          `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
           "the held gate. Re-present the original held gate with every offered " +
           "choice and wait for the human to choose one.",
       ));
@@ -9583,9 +9592,10 @@ if (import.meta.main) {
     main(process.argv.slice(2));
   } catch (e) {
     // Any uncaught read error (missing graph, malformed state) surfaces as a
-    // non-zero exit with the message on stderr — never a half-emitted
-    // directive on stdout.
-    console.error(`aidlc-orchestrate: ${errorMessage(e)}`);
+    // non-zero exit with JSON on stderr — never a half-emitted directive on
+    // stdout. The shape matches the compiled dispatcher when main throws
+    // in-process, so the copy and native channels agree.
+    process.stderr.write(`${JSON.stringify({ error: errorMessage(e) })}\n`);
     process.exit(1);
   }
 }

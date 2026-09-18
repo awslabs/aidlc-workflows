@@ -97,6 +97,8 @@ const SCOPE_MAPPING_PATH = join(TOOLS_DIR, "data", "scope-mapping.json");
 const SCOPE_GRID_PATH = join(TOOLS_DIR, "data", "scope-grid.json");
 const AUDIT_PATH = join(TOOLS_DIR, "aidlc-audit.ts");
 const LIB_PATH = join(TOOLS_DIR, "aidlc-lib.ts");
+const GUARD_OPERATION_PATH = join(TOOLS_DIR, "aidlc-guard-operation.ts");
+const RUNTIME_PATHS_PATH = join(TOOLS_DIR, "aidlc-runtime-paths.ts");
 const GRAPH_PATH = join(TOOLS_DIR, "aidlc-graph.ts");
 const ARTIFACT_VOCABULARY_PATH = join(
   TOOLS_DIR,
@@ -598,6 +600,7 @@ export function enumerateExportedFunctions(): Unit[] {
     /^export\s+(?:async\s+function|function|const|class)\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
   for (const [path, rel] of [
     [LIB_PATH, "dist/claude/.claude/tools/aidlc-lib.ts"],
+    [GUARD_OPERATION_PATH, "dist/claude/.claude/tools/aidlc-guard-operation.ts"],
     [GRAPH_PATH, "dist/claude/.claude/tools/aidlc-graph.ts"],
     [
       ARTIFACT_VOCABULARY_PATH,
@@ -619,6 +622,11 @@ export function enumerateExportedFunctions(): Unit[] {
     }
   }
   for (const [path, rel, names] of [
+    [
+      RUNTIME_PATHS_PATH,
+      "dist/claude/.claude/tools/aidlc-runtime-paths.ts",
+      new Set(["aidlcEngineCommand"]),
+    ],
     [
       ORCHESTRATE_PATH,
       "dist/claude/.claude/tools/aidlc-orchestrate.ts",
