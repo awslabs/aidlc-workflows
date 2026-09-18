@@ -102,7 +102,19 @@ any `verify`, complete the human decision/answer/setter flow, then call `next`.
 Show "Verified with `<verification_command>` (exit 0)" in the approval question;
 `verification_command` is the recorded command's display label.
 A `swarm_checkpoint` handles a completed batch before later batch work. After
-either action, call `next`, never approve the whole stage for one Unit or batch.
+verification, approval, or rejection, call `next`, never approve the whole stage for one Unit or batch.
+Before a human Unit/skeleton approval question, run
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+for a human batch question, run
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+Then present **Approve** / **Request Changes** and wait. The human's exact reply
+in that session, to this checkpoint question, authorizes the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Pass that same `--session` on approval/rejection and never pass
+`--user-input` the human did not choose. Consent is one-shot and bound to the
+current checkpoint fingerprint. Automatic approval (`human_required: false`)
+needs no `ask` and no `--user-input`; human rejection always needs this flow.
+
 A stage with `construction_policy.completion_only: true` and
 `human_completion_required: false` skips body, questions, reviewer, and learnings
 prompt, then reports `awaiting-approval` and `approved` without invented user

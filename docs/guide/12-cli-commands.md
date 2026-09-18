@@ -1377,8 +1377,6 @@ reviews, and receipts already exist; follow the checkpoint instead of rebuilding
 ```bash
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
-aidlc engine bolt checkpoint --action approve --unit "<Unit>" --kind <unit|skeleton> --user-input 'Approve'
-aidlc engine bolt checkpoint --action reject --unit "<Unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
 Verification runs the recorded, human-authorized `Construction Verification
@@ -1390,15 +1388,40 @@ then re-run `next`. A skeleton's command must prove the integrated slice end to
 end and check ordinary Units' working results. Approval requires a current
 verified proof. Show "Verified with `<verification_command>` (exit 0)" in the
 human approval question; `verification_command` is the command's display label.
-Supply `--user-input` only for the real human's answer; a verified ordinary Unit
-with `human_required: false` is approved without it.
+Before presenting **Approve** / **Request Changes**, open the one-shot question
+for the current Unit, kind, and fingerprint in the invoking SessionStart session:
+
+```bash
+aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
+```
+
+Wait for the human's exact **Approve** / **Request Changes** reply in that
+session, to this checkpoint question. It authorizes only the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Never pass `--user-input` the human did not choose. Run only the action
+they chose, with the same session:
+
+```bash
+# Only after the human chose Approve:
+aidlc engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Approve'
+# Only after the human chose Request Changes and supplied feedback:
+aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
+```
+
+The action consumes the response; a changed checkpoint needs a new question and
+answer. A verified ordinary Unit with `human_required: false` is approved without
+`--user-input` and needs no `ask`; human rejection always needs the flow above.
 A skeleton always requires the human. Missing or stale evidence is explained
 in `errors`: repair the named review/receipt or take human Request Changes,
-without inventing verification. Re-run `next` after each action, never report
+without inventing verification. Re-run `next` after verification, approval, or rejection, never report
 one Unit's checkpoint as approval of the whole Code Generation stage.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
 proof file cannot verify a Unit.
+
+Only one protected question (Plan Approval, verification command, Construction
+policy, or checkpoint approval) may be open per session; asking a new one
+withdraws the previous one, so ask them one at a time and wait for each answer.
 
 The version-3 proof and CLI JSON retain `command_sha256` and `command_label`, not
 raw command text, plus exit status and captured stdout/stderr byte counts and
@@ -1435,18 +1458,39 @@ another batch starts. Use exactly its batch number and Unit list:
 
 ```bash
 aidlc engine bolt swarm-checkpoint --action status --batch <N> --units "<comma-separated Units>"
-aidlc engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --user-input 'Approve'
-aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
-Guided completion waits for the human; automatic completion omits `--user-input`
-when `human_required: false`. Readiness comes from the completed batch's current
-evidence, including each Unit's native `Command SHA-256` matching the current
+Before presenting **Approve** / **Request Changes**, open the one-shot question
+for the current batch, exact Unit set, and fingerprint in the invoking SessionStart
+session:
+
+```bash
+aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"
+```
+
+Wait for the human's exact **Approve** / **Request Changes** reply in that
+session, to this checkpoint question. It authorizes only the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Never pass `--user-input` the human did not choose. Run only the action
+they chose, with the same session:
+
+```bash
+# Only after the human chose Approve:
+aidlc engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Approve'
+# Only after the human chose Request Changes and supplied feedback:
+aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
+```
+
+The action consumes the response; a changed checkpoint needs a new question and
+answer. Automatic completion omits `--user-input` and needs no `ask` when
+`human_required: false`; human rejection always needs the flow above. Readiness
+comes from the completed batch's current evidence, including each Unit's native
+`Command SHA-256` matching the current
 authorized Construction Verification Command. Batch approval binds that digest
 too: changing the authorized command invalidates prior approval, and older
 native receipts without the digest require fresh verification. Resolve `errors`
 rather than rebuilding the whole batch or inventing a pass. Re-run `next` after
-the action; a batch approval is not whole-stage
+approval or rejection; a batch approval is not whole-stage
 approval. Later completion-only stage directives settle bookkeeping without
 another body, reviewer, or human learnings/approval question.
 

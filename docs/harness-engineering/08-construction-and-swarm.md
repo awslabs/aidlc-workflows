@@ -131,11 +131,22 @@ it executes the recorded, human-authorized command, not text selected at verify
 time. Approve only current verified evidence and show "Verified with
 `<verification_command>` (exit 0)" in the approval question. A skeleton always
 needs the human; ordinary Units follow `human_required`.
-`swarm_checkpoint` similarly routes a completed batch before the next batch,
-using `bolt swarm-checkpoint --action status|approve|reject --batch <N>
---units <comma-separated Units>`. Guided approval waits for the real answer;
-automatic approval omits `--user-input`. Both return to `next`, never approve
-the whole Code Generation stage for one Unit or batch.
+`swarm_checkpoint` similarly routes a completed batch before the next batch.
+Before a human Unit/skeleton approval question, run
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+for a human batch question, run
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+Then present **Approve** / **Request Changes** and wait. The human's exact reply
+in that session, to this checkpoint question, authorizes the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Pass that same `--session` on approval/rejection and never pass
+`--user-input` the human did not choose. Consent is one-shot and bound to the
+current checkpoint fingerprint. Automatic approval (`human_required: false`)
+needs no `ask` and no `--user-input`; human rejection always needs this flow.
+Approval/rejection returns to `next`, never approves the whole Code Generation
+stage for one Unit or batch. See the
+[checkpoint commands](../guide/12-cli-commands.md#aidlc-engine-bolt-checkpoint-verify-and-approve-a-completed-unit)
+for the full action forms.
 
 Version-3 checkpoint proofs store the command's SHA-256 and display label, not
 raw command text, alongside output byte counts and digests rather than raw

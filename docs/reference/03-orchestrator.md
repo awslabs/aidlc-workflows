@@ -527,11 +527,23 @@ proof file cannot verify a Unit.
 through the team path, then `swarm_checkpoint` or `construction_checkpoint`
 through their checkpoint commands before body/reviewer/settle handling. It never
 regenerates a finished Unit because the directive says `run-stage`. Checkpoint
-actions return to `next`, not whole-stage report-approval. Missing/stale evidence
+approval/rejection returns to `next`, not whole-stage report-approval. Missing/stale evidence
 is repaired through its owning review/receipt procedure or human Request Changes;
 verification must never be invented. The
 [checkpoint commands](../guide/12-cli-commands.md#aidlc-engine-bolt-checkpoint-verify-and-approve-a-completed-unit)
 show the exact action forms.
+
+Before a human Unit/skeleton approval question, run
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+for a human batch question, run
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+Then present **Approve** / **Request Changes** and wait. The human's exact reply
+in that session, to this checkpoint question, authorizes the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Pass that same `--session` on approval/rejection and never pass
+`--user-input` the human did not choose. Consent is one-shot and bound to the
+current checkpoint fingerprint. Automatic approval (`human_required: false`)
+needs no `ask` and no `--user-input`; human rejection always needs this flow.
 
 A normal `run-stage` may also carry `construction_policy` with `iteration`,
 `execution`, `autonomy`, `offer_autonomy`, `human_completion_required`, and `completion_only`.

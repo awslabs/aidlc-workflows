@@ -331,9 +331,25 @@ then produces its event handler, notification repository, and in-app delivery
 endpoint: 3 source files and 4 test files in this example.
 
 After the required reviews and completion receipts, a real project check submits
-an event and verifies storage and in-app delivery. You approve that verified
-skeleton checkpoint. The earlier Functional Design review by itself would not
-have established that the integration worked.
+an event and verifies storage and in-app delivery. Before asking you to approve
+the verified skeleton checkpoint, the conductor opens its session-bound question:
+
+```bash
+aidlc engine bolt checkpoint --action ask --unit "notification-core" --kind skeleton --session "<session ID>"
+```
+
+It presents **Approve** / **Request Changes** and waits. You choose **Approve**;
+only that exact reply in that session, to this checkpoint question, authorizes
+approval. An unrelated reply, another session's reply, or a reply to a different
+question does not. The conductor records your actual choice with the same session,
+never passing `--user-input` you did not choose:
+
+```bash
+aidlc engine bolt checkpoint --action approve --unit "notification-core" --kind skeleton --session "<session ID>" --user-input 'Approve'
+```
+
+The earlier Functional Design review by itself would not have established that
+the integration worked, nor could its answer authorize this checkpoint.
 
 If no autonomy choice has already been recorded, the workflow offers:
 
@@ -355,7 +371,7 @@ confirmation, Plan Approval, code, checks, and reviews before the next begins:
 - **notification-email** — Delivery rules, renderer, SQS consumer, and digest cron job using the approved preference-lookup contract; 4 source files and 5 test files.
 
 The conductor may automatically approve each verified ordinary Unit checkpoint
-under your recorded grant. Plan Approval and verification command selection still
+under your recorded grant, without `ask` or `--user-input`. Plan Approval and verification command selection still
 wait for you, as does summary confirmation when
 `directive.ceremony.summary_confirmation === "on"`. Once all
 Units are approved, completion-only stage directives reconcile bookkeeping without

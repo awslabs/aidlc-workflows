@@ -200,6 +200,10 @@ check exists yet (greenfield), the human may defer selection; leave the field
 unset and explain that the first checkpoint will ask before verification. Never
 invent a placeholder or treat deferral as approval.
 
+Only one protected question (Plan Approval, verification command, Construction
+policy, or checkpoint approval) may be open per session; asking a new one
+withdraws the previous one, so ask them one at a time and wait for each answer.
+
 Use one nonblank line of at most 8192 characters with no control characters
 (including newline, CR, tab, or NUL). The tools trim leading/trailing whitespace
 before recording, hashing, and executing the command. Put multiline checks in a

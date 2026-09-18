@@ -139,30 +139,45 @@ before the batch can be approved; a changed command also retires prior approval.
 
 If `ready` is false, explain the named evidence errors and repair the missing
 source landing, verification, or review through its owning procedure. Do not
-invent verification or approval. When ready, guided/gated completion presents
-**Approve** / **Request Changes** and waits for the actual human. Automatic
-completion uses the recorded autonomous policy and omits `--user-input`:
+invent verification or approval. When ready, guided/gated completion uses the
+human question-and-answer flow below. Automatic completion uses the recorded
+autonomous policy, needs no `ask`, and omits `--user-input`.
 
 At a human batch checkpoint, run the §13 learning-selection question only when
 `directive.protocol_modules` lists `learnings`. With the module listed,
 consolidate the relevant Unit diaries into that question and persist only explicit
-human selections, then ask the batch approval as a separate question and turn.
+human selections, then open the batch approval with `ask` below as a separate question and turn.
 Automatic batches retain pending candidates for the next human checkpoint or
 final handoff only when `directive.protocol_modules` lists `learnings`. When the
 module is absent, keep no diary and ask no learning question; go straight to the
-batch approval question when a human is required. Bookkeeping settlement never
+batch approval procedure when a human is required. Bookkeeping settlement never
 repeats an already handled ritual.
+
+Before presenting **Approve** / **Request Changes**, bind the question to the
+current batch and the invoking SessionStart session:
+
+```bash
+{{INVOKE}} engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"
+```
+
+Then present the choices and wait for the human. The human's exact **Approve** /
+**Request Changes** reply in that session, to this checkpoint question, authorizes
+the matching action; an unrelated reply, another session's reply, or a reply to
+a different question does not. Never pass `--user-input` the human did not choose.
+The response is one-shot and bound to this batch, exact Unit set, and current
+fingerprint; if the checkpoint changes, obtain a new directive and ask again.
+A human Request Changes always requires this flow, even under autonomous policy.
 
 ```bash
 # Only after a real human Approve:
-{{INVOKE}} engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --user-input 'Approve'
+{{INVOKE}} engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Approve'
 # Only when human_required is false:
 {{INVOKE}} engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>"
 # Only after a real human Request Changes:
-{{INVOKE}} engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --user-input 'Request Changes' --reason '<human feedback>'
+{{INVOKE}} engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
-Re-run `next` after a batch checkpoint action. Approval advances batch routing,
+Re-run `next` after batch approval or rejection. Approval advances batch routing,
 not the whole Code Generation stage. A changed fingerprint or refused action
 requires current evidence and another directive, not a fabricated user answer.
 Plan Approval remains mandatory for every Unit regardless of how batch completion

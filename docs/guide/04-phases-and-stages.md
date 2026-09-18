@@ -249,6 +249,16 @@ The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
 proof file cannot verify a Unit.
 
+Before asking you to **Approve** or **Request Changes** at a Unit/skeleton
+checkpoint, the conductor opens the question with
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`.
+Your exact reply in that session, to this checkpoint question, authorizes only
+the matching action; an unrelated reply, another session's reply, or a reply to
+a different question does not. Approval/rejection uses the same `--session` and
+only the `--user-input` you actually chose. A changed checkpoint needs a new
+question and answer. Automatic approval (`human_required: false`) needs no `ask`
+and no `--user-input`; a human Request Changes always needs this flow.
+
 The autonomy offer is **Continue automatically** / **Review each checkpoint**:
 for eligible checkpoint workflows, skeleton-off offers it at Construction entry,
 and skeleton-on offers it after the real skeleton checkpoint. An existing choice
@@ -306,6 +316,13 @@ be committed and reproducible. In particular, commit the approved inline
 skeleton source before preparing parallel Units. This is an explicit action;
 the tool never commits automatically and checks all Units before creating any
 child. See [Swarm prepare](12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
+
+For a human batch completion decision, the conductor first runs
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`,
+then presents **Approve** / **Request Changes** and waits for your exact reply to
+that batch's question. The same session-bound consent rule applies: never use
+another question's reply or invent `--user-input`, and use the same `--session`
+for approval/rejection. Automatic batch approval needs no `ask` or `--user-input`.
 
 ```mermaid
 flowchart LR

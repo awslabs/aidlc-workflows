@@ -82,6 +82,10 @@ work rather than deriving batches or changing order from an autonomy answer.
 
 ### Changing Construction policy
 
+Only one protected question (Plan Approval, verification command, Construction
+policy, or checkpoint approval) may be open per session; asking a new one
+withdraws the previous one, so ask them one at a time and wait for each answer.
+
 During Construction, changing `Construction Checkpoints`, `Construction
 Execution`, or `Construction Iteration` requires the human's exact choice for
 that field and value. A recent unrelated human turn, another gate's approval,
@@ -197,7 +201,7 @@ recorded command:
 The verifier stores proof bound to the current artifacts, source, attempt, and
 authorized command's SHA-256 plus display label, not raw command text. File
 presence, a claimed demonstration, a placeholder command, or a previous pass is
-not verification. A failed check halts. Re-run `next` after each checkpoint action;
+not verification. A failed check halts. Re-run `next` after verification;
 the resulting directive is the next source of truth about readiness and
 verification.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
@@ -220,26 +224,40 @@ learnings ritual for the represented stages only when
 `directive.protocol_modules` lists `learnings`. With the module listed,
 consolidate relevant candidates into one Unit learning question and persist only
 the human's explicit selections through each owning stage's learning tools, then
-ask the checkpoint approval as a separate question and turn. During automatic
+open the checkpoint approval with `ask` below as a separate question and turn. During automatic
 execution, retain candidates in the diaries for the next human checkpoint or
 final handoff only when `directive.protocol_modules` lists `learnings`; do not
 infer acceptance, persist unapproved rules, or fabricate a “nothing to add” answer.
 When the module is absent, keep no diary and ask no learning question; go straight
-to the checkpoint approval question when a human is required.
-Present **Approve** / **Request Changes** when a human is required. Show the
-command in the approval question: "Verified with `<verification_command>`
-(exit 0). Approve this completed <unit>?" Then use only their actual answer:
+to the checkpoint approval procedure when a human is required. Before presenting
+**Approve** / **Request Changes**, bind the question to the current checkpoint
+and the invoking SessionStart session:
+
+```bash
+{{INVOKE}} engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
+```
+
+Then present the choices and wait for the human. For a verified checkpoint, show
+the command in the approval question: "Verified with `<verification_command>`
+(exit 0). Approve this completed <unit>?" The human's exact **Approve** /
+**Request Changes** reply in that session, to this checkpoint question, authorizes
+the matching action; an unrelated reply, another session's reply, or a reply to
+a different question does not. Never pass `--user-input` the human did not choose.
+The response is one-shot and bound to this Unit, kind, and current fingerprint;
+if the checkpoint changes, obtain a new directive and ask again. Automatic
+approval (`human_required: false`) needs no `ask` and no `--user-input`, but a
+human Request Changes always requires this question-and-answer flow.
 
 ```bash
 # Only after the human chose Approve:
-{{INVOKE}} engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --user-input 'Approve'
+{{INVOKE}} engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Approve'
 # Automatic approval: verified ordinary Unit and human_required: false only.
 {{INVOKE}} engine bolt checkpoint --action approve --unit "<unit>" --kind unit
 # Only after the human chose Request Changes and supplied feedback:
-{{INVOKE}} engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
+{{INVOKE}} engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
-After the action, re-run `next`. Never use a checkpoint approval as
+After approval or rejection, re-run `next`. Never use a checkpoint approval as
 `report --stage code-generation --result approved` for the whole Unit set.
 Once all Unit approvals are recorded, the engine may emit normal stage gates
 with `completion_only: true`; settle those through the bookkeeping branch above.
