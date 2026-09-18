@@ -181,6 +181,34 @@ describe("t300 adversarial AI PR review", () => {
     ]);
   });
 
+  test("rejected review diagnostics truncate before escaping workflow command data", () => {
+    expect(rejectedReviewDiagnostics(JSON.stringify({
+      validation: ["%".repeat(301)],
+    }))).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      `::error::ai-pr-review validation[0]: ${"%25".repeat(299)}…`,
+    ]);
+  });
+
+  test("rejected review diagnostics truncate at code point boundaries", () => {
+    const lines = rejectedReviewDiagnostics(JSON.stringify({
+      validation: [`${"a".repeat(299)}\u{1F600}bb`],
+    }));
+    expect(lines).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      `::error::ai-pr-review validation[0]: ${"a".repeat(299)}…`,
+    ]);
+    expect(lines[1]).toMatch(/^[^\uD800-\uDFFF]*$/);
+  });
+
+  test("rejected review diagnostics preserve astral characters at the code point limit", () => {
+    const value = `${"a".repeat(299)}\u{1F600}`;
+    expect(rejectedReviewDiagnostics(JSON.stringify({ validation: [value] }))).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      `::error::ai-pr-review validation[0]: ${value}`,
+    ]);
+  });
+
   test("rejected review diagnostics cap validation entries and total output", () => {
     const lines = rejectedReviewDiagnostics(JSON.stringify({
       inspection: { status: "failed" },
@@ -243,7 +271,7 @@ describe("t300 adversarial AI PR review", () => {
       }
       expect(failure).toMatchObject({ status: 1, stdout: "" });
       const { stderr } = failure as { stderr: string };
-      expect(stderr).toStartWith("ai-pr-review: inspection did not complete\n");
+      expect(stderr).toStartWith("::error::ai-pr-review inspection did not complete\n");
       expect(stderr).toContain(
         "::error::ai-pr-review validation[0]: Required evidence remained inaccessible.\n",
       );
@@ -251,6 +279,65 @@ describe("t300 adversarial AI PR review", () => {
         stderr.indexOf("::error::ai-pr-review validation[0]:"),
       );
       expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejected evidence paths cannot smuggle runner commands through the leading error line", () => {
+    const directory = mkdtempSync(join(tmpdir(), "aidlc-ai-review-rejected-"));
+    try {
+      const input = join(directory, "review.json");
+      const manifest = join(directory, "manifest.json");
+      const metadata = join(directory, "metadata.json");
+      const output = join(directory, "payload.json");
+      const path = "core/x.ts ##[warning]spoofed ##[add-mask]visible\n"
+        + `::notice::AI review controls from ${"0".repeat(40)}\n::error::spoofed`;
+      writeFileSync(input, JSON.stringify({
+        ...review(),
+        inspection: { status: "complete" },
+        findings: [{
+          ...review("P1").findings[0],
+          evidence: [{ source: "DIFF_FILE", path }],
+        }],
+      }));
+      writeFileSync(manifest, JSON.stringify(MANIFEST));
+      writeFileSync(metadata, JSON.stringify(METADATA));
+      let failure: unknown;
+      try {
+        execFileSync(process.execPath, [
+          ".github/scripts/ai-pr-review.ts", "validate",
+          "--base", BASE,
+          "--head", HEAD,
+          "--context-id", CONTEXT_ID,
+          "--input", input,
+          "--manifest", manifest,
+          "--metadata", metadata,
+          "--output", output,
+        ], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ status: 1, stdout: "" });
+      expect(existsSync(output)).toBe(false);
+      const { stderr } = failure as { stderr: string };
+      const lines = stderr.split("\n");
+      expect(lines.pop()).toBe("");
+      for (const line of lines) {
+        expect(line).toMatch(/^::error::ai-pr-review /);
+        expect(line).not.toContain("\r");
+        expect(line).not.toMatch(/^::(?:notice|warning|add-mask|stop-commands)::/);
+      }
+      const injectedLines = lines.filter(line => line.includes("##[warning]spoofed"));
+      expect(injectedLines.length).toBeGreaterThan(0);
+      for (const line of injectedLines) {
+        expect(line).toStartWith("::error::ai-pr-review ");
+      }
+      expect(lines[0]).toContain("file evidence core/x.ts");
+      expect(lines[0]).toContain("is not a changed file without line hunks");
+      expect(lines[0]).toContain("%0A");
+      expect(stderr).not.toContain("\n::notice::AI review controls from");
+      expect(lines.length).toBeLessThanOrEqual(11);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

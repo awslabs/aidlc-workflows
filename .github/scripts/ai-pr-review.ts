@@ -416,6 +416,11 @@ function escapeWorkflowCommand(value: string): string {
   return escaped;
 }
 
+function truncateCodePoints(value: string, maxLength: number): string {
+  const codePoints = Array.from(value);
+  return codePoints.length <= maxLength ? value : `${codePoints.slice(0, maxLength - 1).join("")}…`;
+}
+
 export function rejectedReviewDiagnostics(raw: string): string[] {
   let parsed: unknown;
   try {
@@ -429,7 +434,7 @@ export function rejectedReviewDiagnostics(raw: string): string[] {
   const candidate = parsed as Record<string, unknown>;
   const lines: string[] = [];
   const append = (field: string, value: string, maxLength: number): void => {
-    const bounded = value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+    const bounded = truncateCodePoints(value, maxLength);
     lines.push(`::error::ai-pr-review ${field}: ${escapeWorkflowCommand(bounded)}`);
   };
   const inspection = candidate.inspection;
@@ -560,7 +565,11 @@ if (import.meta.main) {
   try {
     main();
   } catch (error) {
-    process.stderr.write(`ai-pr-review: ${error instanceof Error ? error.message : String(error)}\n`);
+    // Validator messages interpolate model-controlled evidence paths. The runner's
+    // legacy ##[cmd] parser matches anywhere in an unframed line, so the leading error
+    // must be a framed V2 command with escaped data, like the diagnostics.
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`::error::ai-pr-review ${escapeWorkflowCommand(truncateCodePoints(message, 1000))}\n`);
     if (lastValidateInput !== null) {
       for (const line of rejectedReviewDiagnostics(lastValidateInput)) {
         process.stderr.write(`${line}\n`);
