@@ -42,14 +42,14 @@ describe("restore destination containment", () => {
     expect(readFileSync(destination, "utf-8")).toBe("recovered");
   });
 
-  test("refuses a parent resolving outside the checkout", () => {
+  test.skipIf(process.platform === "win32")("refuses a parent resolving outside the checkout", () => {
     mkdirSync(join(fixture, "outside"));
     symlinkSync("../outside", join(fixture, "root", "link"));
     const { parent } = restoreDestination(root, Buffer.from("link/file"));
     expect(() => assertParentInsideCheckout(root, parent)).toThrow();
   });
 
-  test("refuses a symlinked ancestor before creating missing directories outside the checkout", () => {
+  test.skipIf(process.platform === "win32")("refuses a symlinked ancestor before creating missing directories outside the checkout", () => {
     mkdirSync(join(fixture, "outside"));
     symlinkSync("../outside", join(fixture, "root", "link"));
     const { parent } = restoreDestination(root, Buffer.from("link/sub/file"));
@@ -61,7 +61,7 @@ describe("restore destination containment", () => {
     expect(existsSync(join(fixture, "outside", "sub"))).toBe(false);
   });
 
-  test("refuses an ancestor symlink even when its target stays inside the checkout", () => {
+  test.skipIf(process.platform === "win32")("refuses an ancestor symlink even when its target stays inside the checkout", () => {
     mkdirSync(join(fixture, "root", "actual", "nested"), { recursive: true });
     symlinkSync("actual", join(fixture, "root", "link"));
     const { parent } = restoreDestination(root, Buffer.from("link/nested/file"));

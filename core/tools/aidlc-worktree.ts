@@ -3179,6 +3179,7 @@ function handleRestore(args: string[]): void {
     }
     const symlinks = symlinkConfig.stdout.trim() !== "false";
     const rootRealpath = realpathSync(Buffer.from(wtPath), { encoding: "buffer" });
+    const umask = process.umask();
     for (let start = 0; start < listed.stdout.length;) {
       const end = listed.stdout.indexOf(0, start);
       if (end === -1) throw new Error("invalid parked index entry");
@@ -3212,7 +3213,7 @@ function handleRestore(args: string[]): void {
         symlinkSync(blob.stdout, destination);
       } else {
         writeFileSync(destination, blob.stdout, { flag: "wx" });
-        if (mode === "100755") chmodSync(destination, 0o755);
+        if (mode === "100755") chmodSync(destination, 0o777 & ~umask);
       }
       materialized++;
     }

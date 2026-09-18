@@ -657,7 +657,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(existsSync(join(wt, "untracked.bin"))).toBe(false);
     }, 30_000);
 
-    test("discard parks and restores raw filtered bytes without changing ordinary dirty files", () => {
+    test.skipIf(process.platform === "win32")("discard parks and restores raw filtered bytes without changing ordinary dirty files", () => {
       const proj = setupLifecycleProject();
       const slug = "raw-filtered";
       const wt = worktreeDir(proj, slug);
@@ -695,7 +695,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(readFileSync(join(restoredPath, "plain.txt"), "utf-8")).toBe(plainBytes);
     });
 
-    test("restore bypasses transforming smudge filters for lowercase and binary blobs", () => {
+    test.skipIf(process.platform === "win32")("restore bypasses transforming smudge filters for lowercase and binary blobs", () => {
       const proj = setupLifecycleProject();
       const slug = "transforming-smudge";
       const wt = worktreeDir(proj, slug);
@@ -768,7 +768,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(readFileSync(join(restoredPath, "notes.broken"), "utf-8")).toBe(dirtyBytes);
     });
 
-    test("restore preserves a dirty tracked non-UTF-8 filename byte-exactly", () => {
+    test.skipIf(process.platform === "win32")("restore preserves a dirty tracked non-UTF-8 filename byte-exactly", () => {
       const proj = setupLifecycleProject();
       const slug = "non-utf8-path";
       const wt = worktreeDir(proj, slug);
@@ -825,7 +825,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(readFileSync(join(recovery.worktree_path, nameFor(fileCount - 1)))).toEqual(bytes);
     }, 60_000);
 
-    test("restore writes symlink target bytes as a regular file with core.symlinks=false", () => {
+    test.skipIf(process.platform === "win32")("restore writes symlink target bytes as a regular file with core.symlinks=false", () => {
       const proj = setupLifecycleProject();
       const slug = "disabled-symlinks";
       writeFileSync(join(proj, "target.txt"), "target contents\n");
@@ -847,7 +847,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(readFileSync(restoredLink)).toEqual(Buffer.from("target.txt"));
     });
 
-    test("restore preserves executable files and symbolic links", () => {
+    test.skipIf(process.platform === "win32")("restore preserves executable files and symbolic links", () => {
       const proj = setupLifecycleProject();
       const slug = "file-modes";
       const wt = worktreeDir(proj, slug);
@@ -868,7 +868,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(restored.status, restored.out).toBe(0);
       const { worktree_path: restoredPath } = JSON.parse(restored.out) as { worktree_path: string };
       expect(readFileSync(join(restoredPath, "bin", "run.sh"), "utf-8")).toBe(scriptBytes);
-      expect(lstatSync(join(restoredPath, "bin", "run.sh")).mode & 0o777).toBe(0o755);
+      expect(lstatSync(join(restoredPath, "bin", "run.sh")).mode & 0o777).toBe(0o777 & ~process.umask());
       expect(lstatSync(join(restoredPath, "runner")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(restoredPath, "runner"))).toBe("bin/run.sh");
       expect(readFileSync(join(restoredPath, "runner"), "utf-8")).toBe(scriptBytes);
