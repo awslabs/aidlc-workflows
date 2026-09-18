@@ -3159,6 +3159,23 @@ export interface VerificationCommandRuntimeResponse {
   responseSha256: string;
 }
 
+export interface ConstructionPolicyRuntimeChallenge {
+  version: 1;
+  session: string;
+  challengeId: string;
+  field: string;
+  value: string;
+  options: [string, string];
+}
+
+export interface ConstructionPolicyRuntimeResponse {
+  version: 1;
+  session: string;
+  challengeId: string;
+  choice: "Approve" | "Request Changes";
+  responseSha256: string;
+}
+
 // `questionsSha256` is the raw questions-file digest at answer time. It is
 // provenance, not validity: `promptSha256` already binds what the human saw
 // (the prompt with answers blanked) and `choice` binds what they answered, so
@@ -3310,6 +3327,20 @@ function verificationCommandResponsePath(projectDir: string, session: string): s
   const segment = runtimeSessionSegment(session);
   return segment
     ? join(planApprovalRuntimeDir(projectDir), `verification-command-response-${segment}.json`)
+    : "";
+}
+
+function constructionPolicyChallengePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `construction-policy-${segment}.json`)
+    : "";
+}
+
+function constructionPolicyResponsePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `construction-policy-response-${segment}.json`)
     : "";
 }
 
@@ -3536,6 +3567,79 @@ export function consumeVerificationCommandChallenge(
   }
 }
 
+export function writeConstructionPolicyChallenge(
+  projectDir: string,
+  challenge: ConstructionPolicyRuntimeChallenge,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = constructionPolicyChallengePath(projectDir, challenge.session);
+  if (!path) throw new Error("Construction policy challenge requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+  try {
+    unlinkSync(constructionPolicyResponsePath(projectDir, challenge.session));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+export function readConstructionPolicyChallenge(
+  projectDir: string,
+  session: string,
+): ConstructionPolicyRuntimeChallenge | null {
+  const value = readPlanApprovalRuntimeJson<ConstructionPolicyRuntimeChallenge>(
+    constructionPolicyChallengePath(projectDir, session),
+    "Construction policy challenge",
+  );
+  return value?.version === 1 && value.session === session &&
+    typeof value.challengeId === "string" && /^[a-f0-9]{64}$/.test(value.challengeId) &&
+    validConstructionPolicyChange(value.field, value.value) &&
+    Array.isArray(value.options) && value.options.length === 2 &&
+    value.options.every((option) => typeof option === "string" && /^[a-f0-9]{64}$/.test(option))
+    ? value : null;
+}
+
+export function writeConstructionPolicyResponse(
+  projectDir: string,
+  response: ConstructionPolicyRuntimeResponse,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = constructionPolicyResponsePath(projectDir, response.session);
+  if (!path) throw new Error("Construction policy response requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
+}
+
+export function readConstructionPolicyResponse(
+  projectDir: string,
+  session: string,
+): ConstructionPolicyRuntimeResponse | null {
+  const value = readPlanApprovalRuntimeJson<ConstructionPolicyRuntimeResponse>(
+    constructionPolicyResponsePath(projectDir, session),
+    "Construction policy response",
+  );
+  return value?.version === 1 && value.session === session &&
+    typeof value.challengeId === "string" && /^[a-f0-9]{64}$/.test(value.challengeId) &&
+    (value.choice === "Approve" || value.choice === "Request Changes") &&
+    typeof value.responseSha256 === "string" && /^[a-f0-9]{64}$/.test(value.responseSha256)
+    ? value : null;
+}
+
+export function consumeConstructionPolicyChallenge(
+  projectDir: string,
+  session: string,
+): void {
+  for (const path of [
+    constructionPolicyChallengePath(projectDir, session),
+    constructionPolicyResponsePath(projectDir, session),
+  ]) {
+    if (!path) continue;
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 export function writePlanApprovalReceipt(
   projectDir: string,
   receipt: PlanApprovalRuntimeReceipt,
@@ -3692,6 +3796,14 @@ export function verificationCommandChallengeRelativePath(
   session: string,
 ): string {
   const path = verificationCommandChallengePath(projectDir, session);
+  return path ? relative(projectDir, path).split(sep).join("/") : "";
+}
+
+export function constructionPolicyChallengeRelativePath(
+  projectDir: string,
+  session: string,
+): string {
+  const path = constructionPolicyChallengePath(projectDir, session);
   return path ? relative(projectDir, path).split(sep).join("/") : "";
 }
 
@@ -8304,6 +8416,57 @@ export const VERIFICATION_COMMAND_RECOVERY =
   'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve". ' +
   'Use the invoking SessionStart session ID. ' +
   'Apply the receipt with aidlc-state.ts set-construction-verification-command --command-file verification-command.txt.';
+
+export const CONSTRUCTION_POLICY_CHECKPOINT = "Construction Policy";
+
+export function validConstructionPolicyChange(field: string, value: string): boolean {
+  switch (field) {
+    case "Construction Checkpoints": return value === "enabled" || value === "disabled";
+    case "Construction Execution": return value === "serial" || value === "swarm";
+    case "Construction Iteration": return value === "unit-major" || value === "stage-major";
+    default: return false;
+  }
+}
+
+export function authorizedConstructionPolicyChange(
+  projectDir: string,
+  stateContent: string,
+  field: string,
+  value: string,
+  rows?: AuditShardEvent[],
+): boolean {
+  // Applying a receipt sets its value. Returning to another value requires a
+  // newer receipt for this field, so a consumed receipt can never become live again.
+  if (!validConstructionPolicyChange(field, value) || getField(stateContent, field) === value ||
+    !activeIntentUuid(projectDir)) return false;
+  const unreadable: string[] = [];
+  const events = (rows ?? readAuditShardEvents(projectDir, undefined, undefined, unreadable)).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  if (unreadable.length) return false;
+  const workflows = maximalAttemptEvents(events.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return false;
+  const actions = maximalAttemptEvents(events.filter((row) =>
+    ["DECISION_RECORDED", "QUESTION_ANSWERED", "CONSTRUCTION_POLICY_RECORDED"].includes(row.event) &&
+    auditBlockField(row.block, "Checkpoint") === CONSTRUCTION_POLICY_CHECKPOINT &&
+    auditBlockField(row.block, "Field") === field,
+  ));
+  if (actions.length !== 1) return false;
+  const receipt = actions[0];
+  return receipt.event === "CONSTRUCTION_POLICY_RECORDED" &&
+    attemptEventDefinitelyBefore(workflows[0], receipt) &&
+    auditBlockField(receipt.block, "Value") === value &&
+    !!auditBlockField(receipt.block, "Session")?.trim() &&
+    auditBlockField(receipt.block, "User Input") === "Approve";
+}
+
+export const CONSTRUCTION_POLICY_RECOVERY =
+  'Record the requested field and value with aidlc-log.ts decision --stage "<stage>" --checkpoint construction-policy ' +
+  '--field "<Construction Checkpoints|Construction Execution|Construction Iteration>" --value "<value>" --session "<session ID>" ' +
+  '--decision "Change this Construction policy?" --options "Approve,Request Changes", then wait for the human\'s offered choice in that session. ' +
+  'Run aidlc-log.ts answer with the same --stage, --checkpoint construction-policy, --field, --value, and --session plus --details "Approve", ' +
+  'then apply that value with aidlc-state.ts set-construction-checkpoints, set-construction-execution, or set-construction-iteration. ' +
+  'Use the invoking SessionStart session ID.';
 
 // --- Consolidated-summary confirmation evidence ---
 //

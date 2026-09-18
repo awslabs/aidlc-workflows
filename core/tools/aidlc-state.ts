@@ -37,6 +37,8 @@ import {
   readVerificationCommandFile,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
+  authorizedConstructionPolicyChange,
+  CONSTRUCTION_POLICY_RECOVERY,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -1019,18 +1021,18 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
   withAuditLock(pd, () => {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
-    if (updated !== content) requireHumanConstructionPolicyChange(pd, content);
+    if (updated !== content) requireHumanConstructionPolicyChange(pd, content, field, args[0]);
     writeStateFile(pd, updated);
     console.log(JSON.stringify({ updated: true, field, value: args[0] }));
   });
 }
 
-function requireHumanConstructionPolicyChange(pd: string, content: string): void {
+function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): void {
   if (
     getField(content, "Lifecycle Phase")?.toLowerCase() === "construction" &&
-    !humanPresenceGuardDisabled() && !humanActedSinceGate(pd)
+    !humanPresenceGuardDisabled() && !authorizedConstructionPolicyChange(pd, content, field, value)
   ) {
-    error("Changing Construction policy during execution requires a fresh human request. Keep the current policy until the human asks to change it.");
+    error(`No current unconsumed CONSTRUCTION_POLICY_RECORDED with Field: ${field}, Value: ${value}, and User Input: Approve authorizes this change. ` + CONSTRUCTION_POLICY_RECOVERY);
   }
 }
 
@@ -1124,10 +1126,7 @@ function handleSetConstructionIteration(args: string[]): void {
     "Construction Iteration",
     value,
   );
-  if (
-    updated !== content &&
-    getField(content, "Construction Checkpoints") === "enabled"
-  ) requireHumanConstructionPolicyChange(pd, content);
+  if (updated !== content) requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, construction_iteration: value }));
   });

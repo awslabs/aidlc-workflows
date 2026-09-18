@@ -47,6 +47,7 @@ import {
   readPlanApprovalResponse,
   readPlanApprovalViolation,
   readVerificationCommandChallenge,
+  readConstructionPolicyChallenge,
   readRegularFileNoFollowOrThrow,
   recordDir,
   recordFileTargetOrThrow,
@@ -89,6 +90,7 @@ import {
   writePlanApprovalReceipt,
   writePlanApprovalResponse,
   writeVerificationCommandResponse,
+  writeConstructionPolicyResponse,
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
   type ActiveDirectiveMarker,
@@ -2315,6 +2317,29 @@ export function recordVerificationCommandHumanResponse(
     const choice = offeredCheckpointChoice(challenge.options, responseText, "Approve", true);
     if (!choice) return { recorded: false };
     writeVerificationCommandResponse(projectDir, {
+      version: 1,
+      session,
+      challengeId: challenge.challengeId,
+      choice,
+      responseSha256: createHash("sha256")
+        .update(responseText.trim(), "utf-8")
+        .digest("hex"),
+    });
+    return { recorded: true };
+  });
+}
+
+export function recordConstructionPolicyHumanResponse(
+  projectDir: string,
+  session: string,
+  responseText: string,
+): { recorded: boolean } {
+  return withAuditLock(projectDir, () => {
+    const challenge = readConstructionPolicyChallenge(projectDir, session);
+    if (!challenge) return { recorded: false };
+    const choice = offeredCheckpointChoice(challenge.options, responseText, "Approve", true, true);
+    if (!choice) return { recorded: false };
+    writeConstructionPolicyResponse(projectDir, {
       version: 1,
       session,
       challengeId: challenge.challengeId,

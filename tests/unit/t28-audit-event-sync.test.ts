@@ -81,8 +81,9 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // anchor, commit provenance) takes it to 96; WORKFLOW_ARCHIVED and
 // WORKFLOW_UNARCHIVED take it to 98; CEREMONY_SET takes it to 99;
 // VERIFICATION_COMMAND_RECORDED takes it to 100;
-// CHECKPOINT_VERIFICATION_RECORDED takes it to 101.
-const CANONICAL_COUNT = 101;
+// CHECKPOINT_VERIFICATION_RECORDED takes it to 101;
+// CONSTRUCTION_POLICY_RECORDED takes it to 102.
+const CANONICAL_COUNT = 102;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

@@ -1223,7 +1223,8 @@ through its applicable design stages and Code Generation before the next.
 Design-only and no-Unit workflows keep their existing stage flow; team-owned
 Units keep their own gate rhythm. Existing workflows and explicit iteration
 choices are preserved. To choose swarm execution explicitly, select stage-major
-first:
+first. During Construction, obtain the field/value consent described below
+before each setter; during Inception these setters need no policy receipt:
 
 ```bash
 aidlc engine state set-construction-iteration stage-major
@@ -1238,8 +1239,32 @@ runtime preferences. Generic `state set` refuses `Construction Checkpoints`,
 Command`; use `set-construction-checkpoints`, `set-construction-execution`,
 `set-construction-iteration`, or the receipt-bound
 `set-construction-verification-command`, respectively.
-During Construction, changing these preferences requires a fresh human request;
-an unattended run cannot disable checkpoints to get past a refusal.
+During Construction, changing `Construction Checkpoints`, `Construction
+Execution`, or `Construction Iteration` requires an exact, session-bound human
+choice for that field and value, not merely a fresh human turn. An unattended
+run cannot disable checkpoints to get past a refusal. For example:
+
+```bash
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --decision "Change Construction Checkpoints to disabled?" --options "Approve,Request Changes"
+```
+
+Present **Approve** and **Request Changes**, then wait for the human to choose
+in the invoking SessionStart session. Only after **Approve**, run:
+
+```bash
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --details "Approve"
+{{INVOKE}} engine state set-construction-checkpoints disabled
+```
+
+For **Request Changes**, record the same answer with `--details "Request Changes"`
+and keep the current policy. Use this flow separately for each field/value change,
+including execution and iteration. `CONSTRUCTION_POLICY_RECORDED` authorizes
+only the requested value on that field in the current workflow; a later proposal
+for the field supersedes it and applying it spends it. Another gate's answer,
+an unrelated prompt, or a response from another session cannot authorize the
+change. Reusing an answer is refused. If audit append fails, retry the same
+answer after repairing the failure; the one-shot response is retained until
+the append succeeds.
 
 Execution is separate from approval: swarm works with guided (`gated`) or
 automatic (`autonomous`) completion. Unit-major stays serial and refuses a

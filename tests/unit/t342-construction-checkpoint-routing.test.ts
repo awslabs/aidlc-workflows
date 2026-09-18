@@ -1,6 +1,7 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-bolt:checkpoint, subcommand:aidlc-state:set-construction-checkpoints, subcommand:aidlc-state:set-construction-execution, function:isAutonomousConstructionGate, function:isConstructionSwarmEnabled
 // covers: function:constructionCheckpointGaps
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
+// covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordConstructionPolicyHumanResponse
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -12,7 +13,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
-  reviewArtifactFingerprint,
+  reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
@@ -158,6 +159,42 @@ function approve(p: string, unit: string, kind: "unit" | "skeleton" = "unit") {
   expect(checked.verified).toBe(true);
   appendAuditEntry("HUMAN_TURN", {}, p);
   expect(invoke(["--action", "approve", "--user-input", "Approve"]).approved).toBe(true);
+}
+
+function policyCli(p: string, tool: string, args: string[]) {
+  const env = { ...process.env };
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  delete env.AIDLC_UNATTENDED;
+  return spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", p], {
+    encoding: "utf-8", env,
+  });
+}
+
+function policyHuman(p: string, prompt: string, session = "t342-policy") {
+  const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  delete env.AIDLC_UNATTENDED;
+  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+    encoding: "utf-8", cwd: p, env,
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+}
+
+function policyChoice(p: string, action: "decision" | "answer", field: string, value: string, session = "t342-policy", choice = "Approve") {
+  return policyCli(p, "log", [
+    action, "--stage", "functional-design", "--checkpoint", "construction-policy",
+    "--field", field, "--value", value, "--session", session,
+    ...(action === "decision" ? ["--decision", `Change ${field} to ${value}?`, "--options", "Approve,Request Changes"] : ["--details", choice]),
+  ]);
+}
+
+function recordPolicy(p: string, field: string, value: string) {
+  const decision = policyChoice(p, "decision", field, value);
+  expect(decision.status, `${decision.stdout}${decision.stderr}`).toBe(0);
+  policyHuman(p, "Approve");
+  const answer = policyChoice(p, "answer", field, value);
+  expect(answer.status, `${answer.stdout}${answer.stderr}`).toBe(0);
 }
 
 describe("t342 Construction checkpoint routing", () => {
@@ -365,19 +402,165 @@ describe("t342 Construction checkpoint routing", () => {
     expect(state("set-construction-execution", "serial").status).toBe(0);
   }, 30_000);
 
-  test("an unattended run cannot disable its checkpoints to clear a refusal", () => {
+  test("an unrelated human turn cannot disable checkpoints to clear a refusal", () => {
     const p = fixture({ autonomy: "autonomous" });
-    const env = { ...process.env };
-    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    const set = () => spawnSync(process.execPath, [
-      join(AIDLC_SRC, "tools/aidlc-state.ts"), "set-construction-checkpoints",
-      "disabled", "--project-dir", p,
-    ], { encoding: "utf-8", env });
-    const refused = set();
+    const before = readFileSync(seededStateFile(p));
+    policyHuman(p, "hello");
+    const refused = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
     expect(refused.status).not.toBe(0);
-    expect(`${refused.stdout}${refused.stderr}`).toContain("fresh human request");
-    appendAuditEntry("HUMAN_TURN", {}, p);
-    expect(set().status).toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain("CONSTRUCTION_POLICY_RECORDED");
+    expect(readFileSync(seededStateFile(p))).toEqual(before);
+  }, 30_000);
+
+  test("a choice for another pending decision cannot authorize policy", () => {
+    const p = fixture();
+    const before = readFileSync(seededStateFile(p));
+    expect(policyChoice(p, "decision", "Construction Checkpoints", "disabled").status).toBe(0);
+    expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Approve the design?", "--options", "Approve,Request Changes"]).status).toBe(0);
+    policyHuman(p, "Approve");
+    expect(policyChoice(p, "answer", "Construction Checkpoints", "disabled").status).not.toBe(0);
+    expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "Approve"]).status).toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+    expect(readFileSync(seededStateFile(p))).toEqual(before);
+  }, 30_000);
+
+  test("a lifecycle gate answer does not consent to an earlier policy proposal", () => {
+    const p = fixture();
+    expect(policyChoice(p, "decision", "Construction Checkpoints", "disabled").status).toBe(0);
+    const file = seededStateFile(p);
+    writeFileSync(file, readFileSync(file, "utf-8").replace("[-] functional-design", "[?] functional-design"));
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: "functional-design" }, p);
+    const before = readFileSync(file);
+    policyHuman(p, "Approve");
+    const gateAnswer = policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "Approve"]);
+    expect(gateAnswer.status, `${gateAnswer.stdout}${gateAnswer.stderr}`).toBe(0);
+    expect(JSON.parse(gateAnswer.stdout).reason).toBe("approval-gate-report-owned");
+    expect(policyChoice(p, "answer", "Construction Checkpoints", "disabled").status).not.toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+    expect(readFileSync(file)).toEqual(before);
+  }, 30_000);
+
+  test("a policy receipt binds field and value and authorizes one change only", () => {
+    const p = fixture({ iteration: "stage-major" });
+    const field = "Construction Checkpoints";
+    recordPolicy(p, field, "disabled");
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    expect(authorizedConstructionPolicyChange(p, before, field, "disabled")).toBe(true);
+    expect(policyCli(p, "state", ["set-construction-execution", "swarm"]).status).not.toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).toBe(0);
+    const applied = readFileSync(seededStateFile(p), "utf-8");
+    expect(applied).toContain(`- **${field}**: disabled`);
+    expect(authorizedConstructionPolicyChange(p, applied, field, "disabled")).toBe(false);
+    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "enabled"]).status).not.toBe(0);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(applied);
+    recordPolicy(p, field, "enabled");
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "enabled"]).status).toBe(0);
+    // The old disabled receipt stays spent even after a later authorized return.
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+  }, 30_000);
+
+  test("policy answers cannot cross sessions, proposals, or offered choices", () => {
+    const p = fixture();
+    const field = "Construction Checkpoints";
+    const before = readFileSync(seededStateFile(p));
+    expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
+    policyHuman(p, "Approve", "other-session");
+    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
+    expect(policyChoice(p, "answer", field, "disabled", "other-session").status).not.toBe(0);
+    policyHuman(p, "hello");
+    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
+    policyHuman(p, "1");
+    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
+    policyHuman(p, "Approve");
+    expect(policyChoice(p, "answer", field, "enabled").status).not.toBe(0);
+    // Re-presenting a proposal invalidates the old hook response.
+    expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
+    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
+    policyHuman(p, "Request Changes");
+    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
+    expect(policyChoice(p, "answer", field, "disabled", "t342-policy", "Request Changes").status).toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+    expect(readFileSync(seededStateFile(p))).toEqual(before);
+  }, 30_000);
+
+  test("policy authorization rejects restarts, ambiguous frontiers, and superseding proposals", () => {
+    const p = fixture();
+    const field = "Construction Checkpoints";
+    recordPolicy(p, field, "disabled");
+    const content = readFileSync(seededStateFile(p), "utf-8");
+    const rows = readAuditShardEvents(p);
+    const receipt = rows.findLast((row) => row.event === "CONSTRUCTION_POLICY_RECORDED")!;
+    expect(auditBlockField(receipt.block, "User Input")).toBe("Approve");
+    expect(authorizedConstructionPolicyChange(p, content, field, "disabled", [...rows, { ...receipt, shard: "tied.md" }])).toBe(false);
+    const restarted = { ...receipt, event: "WORKFLOW_STARTED", timestamp: "2099-01-01T00:00:00Z", shard: "later.md", block: "**Event**: WORKFLOW_STARTED\n" };
+    expect(authorizedConstructionPolicyChange(p, content, field, "disabled", [...rows, restarted])).toBe(false);
+    expect(authorizedConstructionPolicyChange(p, content, field, "disabled", [...rows, { ...restarted, block: `${restarted.block}**Workflow**: single-stage:code-generation\n` }])).toBe(true);
+    expect(policyChoice(p, "decision", field, "enabled").status).toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+  }, 30_000);
+
+  test("Inception policy setters keep their receipt-free behavior", () => {
+    const p = fixture();
+    writeFileSync(seededStateFile(p), setField(readFileSync(seededStateFile(p), "utf-8"), "Lifecycle Phase", "INCEPTION"));
+    for (const args of [
+      ["set-construction-iteration", "stage-major"],
+      ["set-construction-execution", "swarm"],
+      ["set-construction-checkpoints", "disabled"],
+    ]) expect(policyCli(p, "state", args).status).toBe(0);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("**Construction Checkpoints**: disabled");
+    expect(readAuditShardEvents(p).some((row) => row.event === "CONSTRUCTION_POLICY_RECORDED")).toBe(false);
+  }, 30_000);
+
+  test("iteration consent is required even when checkpoints are disabled", () => {
+    const p = fixture();
+    writeFileSync(seededStateFile(p), setField(readFileSync(seededStateFile(p), "utf-8"), "Construction Checkpoints", "disabled"));
+    const before = readFileSync(seededStateFile(p));
+    policyHuman(p, "hello");
+    expect(policyCli(p, "state", ["set-construction-iteration", "stage-major"]).status).not.toBe(0);
+    expect(readFileSync(seededStateFile(p))).toEqual(before);
+    recordPolicy(p, "Construction Iteration", "stage-major");
+    expect(policyCli(p, "state", ["set-construction-iteration", "stage-major"]).status).toBe(0);
+  }, 30_000);
+
+  test("public audit append cannot mint policy authority", () => {
+    const p = fixture();
+    const refused = policyCli(p, "audit", ["append", "CONSTRUCTION_POLICY_RECORDED", "--field", "Field=Construction Checkpoints", "--field", "Value=disabled", "--field", "User Input=Approve"]);
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain("reserved");
+    expect(readAuditShardEvents(p).some((row) => row.event === "CONSTRUCTION_POLICY_RECORDED")).toBe(false);
+  });
+
+  test("a policy audit append failure leaves the same human answer retryable", () => {
+    const p = fixture();
+    const field = "Construction Checkpoints";
+    expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
+    policyHuman(p, "Approve");
+    const shard = readAuditShardEvents(p)[0].shard;
+    const args = ["answer", "--stage", "functional-design", "--checkpoint", "construction-policy",
+      "--field", field, "--value", "disabled", "--session", "t342-policy", "--details", "Approve", "--project-dir", p];
+    const injected = `
+      import * as fs from "node:fs";
+      import { spyOn } from "bun:test";
+      const original = fs.openSync;
+      spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+        if (path === ${JSON.stringify(shard)} && typeof flags === "number" && (flags & fs.constants.O_APPEND) !== 0) {
+          throw Object.assign(new Error("Policy audit append unavailable"), { code: "EACCES" });
+        }
+        return original(path, flags, mode);
+      });
+      // Load the CLI after installing the fault so its audit imports see the injected append failure.
+      const { main } = await import(${JSON.stringify(join(AIDLC_SRC, "tools/aidlc-log.ts"))});
+      main(${JSON.stringify(args)});
+    `;
+    const failed = spawnSync(process.execPath, ["--eval", injected], { cwd: p, encoding: "utf-8", env: process.env });
+    expect(failed.status).not.toBe(0);
+    expect(`${failed.stdout}${failed.stderr}`).toContain("Policy audit append unavailable");
+    expect(readAuditShardEvents(p).some((row) => row.event === "CONSTRUCTION_POLICY_RECORDED")).toBe(false);
+    expect(policyChoice(p, "answer", field, "disabled").status).toBe(0);
+    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).toBe(0);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("**Construction Checkpoints**: disabled");
   }, 30_000);
 
   test.each([
@@ -403,6 +586,10 @@ describe("t342 Construction checkpoint routing", () => {
     assertGenericRefused();
     appendAuditEntry("HUMAN_TURN", {}, p);
     assertGenericRefused();
+    const unconsented = policyCli(p, "state", [command, value]);
+    expect(unconsented.status, `${unconsented.stdout}${unconsented.stderr}`).not.toBe(0);
+    expect(readFileSync(file)).toEqual(before);
+    recordPolicy(p, field, value);
     const changed = spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-state.ts"), command, value, "--project-dir", p,
     ], { encoding: "utf-8", env });

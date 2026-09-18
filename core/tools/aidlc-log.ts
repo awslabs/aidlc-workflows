@@ -24,6 +24,14 @@ import {
   consumeVerificationCommandChallenge,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
+  validConstructionPolicyChange,
+  constructionPolicyChallengeRelativePath,
+  writeConstructionPolicyChallenge,
+  readConstructionPolicyChallenge,
+  readConstructionPolicyResponse,
+  consumeConstructionPolicyChallenge,
+  CONSTRUCTION_POLICY_CHECKPOINT,
+  CONSTRUCTION_POLICY_RECOVERY,
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   clearSummaryAuthorization,
@@ -120,6 +128,7 @@ import type {
   TeamUnitGateResolution,
   PlanApprovalRuntimeChallenge,
   VerificationCommandRuntimeChallenge,
+  ConstructionPolicyRuntimeChallenge,
   ReviewClass,
   ReviewRecord,
   ReviewVerdict,
@@ -388,6 +397,20 @@ function handlePlanApprovalBatch(
   }
 }
 
+function constructionPolicyFields(flags: Record<string, string>): Record<string, string> {
+  if (!validConstructionPolicyChange(flags.field, flags.value)) {
+    error("Construction policy requires a valid --field and --value: Construction Checkpoints (enabled|disabled), Construction Execution (serial|swarm), or Construction Iteration (unit-major|stage-major). " + CONSTRUCTION_POLICY_RECOVERY);
+  }
+  if (flags.single !== undefined || flags.unit !== undefined) {
+    error("Construction policy applies to the whole intent; omit --single and --unit.");
+  }
+  const session = flags.session?.trim();
+  if (!session) {
+    error("Construction policy requires --session <id> from the invoking SessionStart context. " + CONSTRUCTION_POLICY_RECOVERY);
+  }
+  return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
+}
+
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
 //   [--rationale <text>] [--checkpoint summary-confirmation
@@ -402,10 +425,11 @@ function handleDecision(args: string[]): void {
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation" &&
     flags.checkpoint !== "verification-command" &&
+    flags.checkpoint !== "construction-policy" &&
     flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
 
@@ -488,6 +512,14 @@ function handleDecision(args: string[]): void {
       error('Verification command decision requires --options "Approve,Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
     }
   }
+  const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(flags) : null;
+  if (policyFields) {
+    Object.assign(fields, policyFields);
+    const options = (flags.options ?? "").split(",").map((option) => option.trim());
+    if (options.length !== 2 || options[0] !== "Approve" || options[1] !== "Request Changes") {
+      error('Construction policy decision requires --options "Approve,Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
+    }
+  }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
     const session = flags.session?.trim();
@@ -505,7 +537,26 @@ function handleDecision(args: string[]): void {
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
   let verificationChallenge: VerificationCommandRuntimeChallenge | null = null;
+  let policyChallenge: ConstructionPolicyRuntimeChallenge | null = null;
   try {
+    if (policyFields) {
+      policyChallenge = withAuditLock(pd, () => {
+        const challenge: ConstructionPolicyRuntimeChallenge = {
+          version: 1,
+          session: fields.Session,
+          challengeId: createHash("sha256").update(randomBytes(32))
+            .update(JSON.stringify([fields.Field, fields.Value]), "utf-8").digest("hex"),
+          field: fields.Field,
+          value: fields.Value,
+          options: ["approve", "request changes"].map((option) =>
+            createHash("sha256").update(option, "utf-8").digest("hex"),
+          ) as [string, string],
+        };
+        writeConstructionPolicyChallenge(pd, challenge);
+        emitAudit(pd, "DECISION_RECORDED", fields);
+        return challenge;
+      });
+    } else
     if (verificationCommand) {
       verificationChallenge = withAuditLock(pd, () => {
         const challenge: VerificationCommandRuntimeChallenge = {
@@ -569,6 +620,12 @@ function handleDecision(args: string[]): void {
         ? {
             challengeId: verificationChallenge.challengeId,
             challengeFile: verificationCommandChallengeRelativePath(pd, verificationChallenge.session),
+          }
+        : {}),
+      ...(policyChallenge !== null
+        ? {
+            challengeId: policyChallenge.challengeId,
+            challengeFile: constructionPolicyChallengeRelativePath(pd, policyChallenge.session),
           }
         : {}),
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
@@ -798,6 +855,31 @@ function pendingVerificationDecision(pd: string, stage: string, sha256: string, 
     auditBlockField(decision.block, "Session") === session;
 }
 
+function pendingConstructionPolicyDecision(pd: string, stage: string, field: string, value: string, session: string): boolean {
+  const unreadable: string[] = [];
+  const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  if (unreadable.length) return false;
+  const workflows = maximalAttemptEvents(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return false;
+  // A choice for another pending decision must not also answer this challenge.
+  const actions = maximalAttemptEvents(rows.filter((row) =>
+    ["DECISION_RECORDED", "QUESTION_ANSWERED", "STAGE_AWAITING_APPROVAL", "GATE_APPROVED", "GATE_REJECTED",
+      "CONSTRUCTION_POLICY_RECORDED", "VERIFICATION_COMMAND_RECORDED",
+      "SUMMARY_CONFIRMATION_RECORDED", "PLAN_APPROVAL_RECORDED"].includes(row.event),
+  ));
+  if (actions.length !== 1) return false;
+  const decision = actions[0];
+  return decision.event === "DECISION_RECORDED" &&
+    attemptEventDefinitelyBefore(workflows[0], decision) &&
+    auditBlockField(decision.block, "Checkpoint") === CONSTRUCTION_POLICY_CHECKPOINT &&
+    auditBlockField(decision.block, "Stage") === stage &&
+    auditBlockField(decision.block, "Field") === field &&
+    auditBlockField(decision.block, "Value") === value &&
+    auditBlockField(decision.block, "Session") === session;
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -807,15 +889,21 @@ function handleAnswer(args: string[]): void {
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation" &&
     flags.checkpoint !== "verification-command" &&
+    flags.checkpoint !== "construction-policy" &&
     flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
   const verificationCheckpoint = flags.checkpoint === "verification-command";
+  const policyCheckpoint = flags.checkpoint === "construction-policy";
+  const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;
+  if (policyCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
+    error('Construction policy requires the exact human choice "Approve" or "Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
+  }
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
@@ -907,6 +995,10 @@ function handleAnswer(args: string[]): void {
     }
     fields.Session = session;
   }
+  if (policyFields) {
+    Object.assign(fields, policyFields);
+    fields["User Input"] = flags.details;
+  }
   if (flags.unit) {
     fields.Unit = flags.unit;
     Object.assign(fields, claimAttemptFields(pd, flags.unit));
@@ -973,7 +1065,7 @@ function handleAnswer(args: string[]): void {
     // a human-backed checkpoint below: its fresh-turn requirement is not waived
     // by Construction autonomy even though its text is one of two exact strings.
     const answerAuthorship =
-      (autonomousDecision && !verificationCheckpoint) || humanPresenceGuardDisabled()
+      (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) || humanPresenceGuardDisabled()
         ? null
         : selfAttributedDecisionMarker(flags.details, "answer");
     if (answerAuthorship) {
@@ -1001,6 +1093,25 @@ function handleAnswer(args: string[]): void {
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeVerificationCommandChallenge(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage }));
+      return;
+    }
+
+    if (policyFields) {
+      if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
+        error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
+      }
+      const challenge = readConstructionPolicyChallenge(pd, fields.Session);
+      const response = readConstructionPolicyResponse(pd, fields.Session);
+      if (!challenge || challenge.field !== fields.Field || challenge.value !== fields.Value ||
+        !response || response.challengeId !== challenge.challengeId || response.choice !== flags.details) {
+        error("Construction policy requires the actual offered choice from this prompt and session: a matching field/value challenge and hook-recorded response for --details. " + CONSTRUCTION_POLICY_RECOVERY);
+      }
+      const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
+      // Append first: a failed append leaves the human's one-shot answer retryable.
+      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", fields);
+      else emitAudit(pd, "QUESTION_ANSWERED", fields);
+      consumeConstructionPolicyChallenge(pd, fields.Session);
+      console.log(JSON.stringify({ emitted, checkpoint: "construction-policy", stage: flags.stage }));
       return;
     }
 

@@ -64,7 +64,9 @@ human decisions. Preserve the existing isolated-run branch for `single: true`.
 
 New workflows default to `Construction Execution: serial`. Setting autonomy
 never changes execution or iteration order. To select swarm explicitly, the
-human chooses stage-major first, then the execution setting:
+human chooses stage-major first, then the execution setting. Obtain a separate
+field/value consent using **Changing Construction policy** below before each
+setter during Construction:
 
 ```bash
 {{INVOKE}} engine state set-construction-iteration stage-major
@@ -77,6 +79,35 @@ select serial before changing back to unit-major. Legacy workflows without the
 execution field retain their existing autonomy-based swarm routing. Team-owned
 work retains its claim and Unit-gate policy. Always follow the engine's emitted
 work rather than deriving batches or changing order from an autonomy answer.
+
+### Changing Construction policy
+
+During Construction, changing `Construction Checkpoints`, `Construction
+Execution`, or `Construction Iteration` requires the human's exact choice for
+that field and value. A recent unrelated human turn, another gate's approval,
+or autonomy never authorizes a policy change. Do not disable checkpoints to
+clear an execution refusal. For example, if the human wants checkpoints disabled:
+
+```bash
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --decision "Change Construction Checkpoints to disabled?" --options "Approve,Request Changes"
+```
+
+Present **Approve** and **Request Changes** and wait for the human's offered
+choice in the invoking SessionStart session. After **Approve**, record and apply it:
+
+```bash
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --details "Approve"
+{{INVOKE}} engine state set-construction-checkpoints disabled
+```
+
+After **Request Changes**, record the same answer with `--details "Request Changes"`
+and keep the existing policy. Substitute the exact field and value for execution
+or iteration changes, then use its typed setter. Each change needs its own
+current-workflow `CONSTRUCTION_POLICY_RECORDED` receipt. The setter spends the
+receipt by applying its value; another value, another session's response, a
+superseding proposal, or a consumed answer is refused. An audit append failure
+leaves the response retryable: fix the failure and retry the same answer.
+During Inception, the typed setters retain their receipt-free planning behavior.
 
 ### Unit and skeleton checkpoints
 
