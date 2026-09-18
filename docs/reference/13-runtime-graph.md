@@ -159,7 +159,8 @@ audit emit. The hook fires on every `Bash` tool call from the
 conductor and filters cheaply:
 
 1. **Command filter** — only transition-capable `aidlc` state, jump, Bolt, and
-   utility routes get past the early exit. The runtime route is excluded
+   utility routes plus `orchestrate report` get past the early exit. The
+   runtime route is excluded
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
@@ -188,6 +189,21 @@ event-sourced, not transition-incremental), pairs `STAGE_STARTED` with
 the next `STAGE_COMPLETED` for the same slug, reads each stage's
 memory.md via `parseMemoryHeadings()` from `aidlc-lib.ts`, and writes
 the artefact atomically via `writeFileAtomic` inside `withAuditLock`.
+
+### The window before the first compile
+
+`init`, `intent create` and `orchestrate next` are not transition-class
+commands, so a fresh workflow has NO runtime-graph.json until its first
+gate reports — the file appears at the `orchestrate report --result
+awaiting-approval` on the first gated stage, not before. A fresh clone,
+a `git clean`, or a single dropped hook compile leaves the same hole
+mid-workflow, because the file is gitignored and machine-local.
+Consumers must therefore treat an absent file as ordinary state and
+recompute or degrade, never fail: `learnings surface` recomputes the one
+field it reads (`memory_path`, derived exactly as the compile derives
+it) and warns on stderr naming the rebuild command, so the §13 ritual
+still runs on the first gate. A MALFORMED file is different — that is
+corruption, and it fails.
 
 ---
 
@@ -401,8 +417,9 @@ fires; runtime-graph silently lags, recovery substrate is corrupt.
 
 The PostToolUse Bash hook fires on the conductor's actual command invocation
 regardless of what the LLM does next. The audit-emitting hidden dispatcher
-routes (`aidlc engine state ...`, `jump ...`, `bolt ...`, and
-`utility ...`) are the deterministic anchor.
+routes (`aidlc engine state ...`, `jump ...`, `bolt ...`,
+`utility ...`, and `orchestrate report ...`) are the deterministic
+anchor.
 
 ---
 
