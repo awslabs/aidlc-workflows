@@ -4,7 +4,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -112,7 +112,7 @@ function fixture(stageLevel = false): Fixture {
 function log(f: Fixture, action: "decision" | "answer", extra: string[] = []) {
   return run(f.project, "tools/aidlc-log.ts", [
     action, "--stage", "code-generation", "--checkpoint", "plan-approval",
-    "--batch-file", f.file, "--session", SESSION,
+    "--batch-file", relative(seededRecordDir(f.project), f.file), "--session", SESSION,
     ...(action === "decision"
       ? ["--decision", "Approve all reviewed service plans?", "--options", "Approve Plans,Request Changes"]
       : ["--details", "Approve Plans"]),
@@ -149,8 +149,65 @@ function approve(f: Fixture): void {
 }
 
 describe("t340 exact reviewed Code Generation batch approval", () => {
-  test("one hook response certifies every exact member, and generation consumes ordinary receipts", () => {
+  test.each(["absolute", "parent traversal"] as const)("%s manifest path cannot read outside the active record", (kind) => {
     const f = fixture();
+    const outside = join(f.project, "outside-batch.json");
+    writeFileSync(outside, "private outside manifest content");
+    const file = kind === "absolute" ? outside : relative(seededRecordDir(f.project), outside);
+    for (const action of ["decision", "answer"] as const) {
+      const result = log(f, action, ["--batch-file", file]);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("escapes its anchor");
+      expect(result.stderr).not.toContain("private outside manifest content");
+    }
+    expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
+    expect(receiptFiles(f.project)).toHaveLength(0);
+  }, 30_000);
+
+  test("manifest path cannot traverse a symlinked parent inside the active record", () => {
+    const f = fixture();
+    const outside = join(f.project, "outside-batches");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "manifest.json"), readFileSync(f.file));
+    symlinkSync(outside, join(seededRecordDir(f.project), "redirected-batches"));
+    for (const action of ["decision", "answer"] as const) {
+      const result = log(f, action, ["--batch-file", "redirected-batches/manifest.json"]);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("no path component may be a symlink");
+    }
+    expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
+    expect(receiptFiles(f.project)).toHaveLength(0);
+  }, 30_000);
+
+  test("manifest larger than 64 KiB is refused before approval", () => {
+    const f = fixture();
+    writeFileSync(f.file, readFileSync(f.file, "utf-8").padEnd(64 * 1024 + 1, " "));
+    for (const action of ["decision", "answer"] as const) {
+      const result = log(f, action);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("Plan Approval batch manifest is 65537 bytes, above the 65536-byte limit");
+    }
+    expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
+    expect(receiptFiles(f.project)).toHaveLength(0);
+  }, 30_000);
+
+  test("malformed manifest reports invalid JSON without exposing file contents", () => {
+    const f = fixture();
+    writeFileSync(f.file, "private manifest content");
+    for (const action of ["decision", "answer"] as const) {
+      const result = log(f, action);
+      expect(result.code).not.toBe(0);
+      expect(JSON.parse(result.stderr)).toEqual({
+        error: "Refusing grouped Plan Approval: Plan Approval batch manifest is not valid JSON",
+      });
+    }
+    expect(readPlanApprovalChallenge(f.project, SESSION)).toBeNull();
+    expect(receiptFiles(f.project)).toHaveLength(0);
+  }, 30_000);
+
+  test("a record-relative manifest at the size limit certifies every member and generation consumes ordinary receipts", () => {
+    const f = fixture();
+    writeFileSync(f.file, readFileSync(f.file, "utf-8").padEnd(64 * 1024, " "));
     const decision = log(f, "decision");
     expect(decision.code, decision.stderr).toBe(0);
     const challenge = readPlanApprovalChallenge(f.project, SESSION)!;
@@ -342,7 +399,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     const response = readPlanApprovalResponse(f.project, SESSION)!;
     const blocked = join(seededRecordDir(f.project), "blocked-audit");
     mkdirSync(blocked);
-    expect(() => recordPlanApprovalBatchReceipts(f.project, f.file, SESSION, "Approve Plan", () => {
+    expect(() => recordPlanApprovalBatchReceipts(f.project, relative(seededRecordDir(f.project), f.file), SESSION, "Approve Plan", () => {
       expect(receiptFiles(f.project)).toHaveLength(2);
       for (const unit of UNITS) expect(evaluateCodeGenerationApproval(f.project, { unit }).ok).toBe(false);
       writeFileSync(blocked, "cannot write an audit row over a directory");
@@ -394,7 +451,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     answers(f, "Request Changes");
     const blocked = join(seededRecordDir(f.project), "blocked-rejection-audit");
     mkdirSync(blocked);
-    expect(() => recordPlanApprovalBatchReceipts(f.project, f.file, SESSION, "Request Changes", () => {
+    expect(() => recordPlanApprovalBatchReceipts(f.project, relative(seededRecordDir(f.project), f.file), SESSION, "Request Changes", () => {
       expect(receiptFiles(f.project)).toHaveLength(0);
       writeFileSync(blocked, "cannot write an audit row over a directory");
     })).toThrow();

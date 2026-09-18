@@ -82,7 +82,7 @@ function approve(pd: string, grouped = true): void {
   const units = UNITS.map((unit) => ({ unit, questionsFile: plan(pd, unit) }));
   const file = join(seededRecordDir(pd), "approval-batch.json");
   writeFileSync(file, JSON.stringify({ batch: "services", units }));
-  const selections = grouped ? [["--batch-file", file]] : units.map((entry) =>
+  const selections = grouped ? [["--batch-file", relative(seededRecordDir(pd), file)]] : units.map((entry) =>
     ["--unit", entry.unit, "--questions-file", entry.questionsFile]);
   for (const selection of selections) {
     const route = ["--stage", STAGE, "--checkpoint", "plan-approval", "--session", SESSION, ...selection];

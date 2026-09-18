@@ -112,7 +112,7 @@ function approveGroupedPlans(pd: string, units: string[], revision: string): voi
   const file = join(recordDir(pd)!, "group-plan.json");
   writeFileSync(file, JSON.stringify({ batch: revision, units: members }));
   const identity = ["--project-dir", pd, "--stage", STAGE, "--checkpoint", "plan-approval",
-    "--batch-file", file, "--session", revision];
+    "--batch-file", "group-plan.json", "--session", revision];
   const decision = tool(pd, "tools/aidlc-log.ts", [
     "decision", ...identity, "--decision", "Approve these plans?", "--options", "Approve Plans,Request Changes",
   ]);
@@ -971,7 +971,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const units = ["alpha", "beta"].map((unit) => ({ unit, questionsFile: plan(pd, unit, "group") }));
     const file = join(recordDir(pd)!, "group-plan.json");
     writeFileSync(file, JSON.stringify({ batch: "group", units }));
-    const identity = ["--project-dir", pd, "--stage", STAGE, "--checkpoint", "plan-approval", "--batch-file", file, "--session", "group"];
+    const identity = ["--project-dir", pd, "--stage", STAGE, "--checkpoint", "plan-approval", "--batch-file", "group-plan.json", "--session", "group"];
     const decision = tool(pd, "tools/aidlc-log.ts", [
       "decision", ...identity, "--decision", "Approve both plans?", "--options", "Approve Plans,Request Changes",
     ]);

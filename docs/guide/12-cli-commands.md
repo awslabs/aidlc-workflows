@@ -1398,7 +1398,9 @@ approved starting point must be reconciled and approved before work resumes.
 
 For the exact live swarm Unit set, a single **Approve Plans** answer can record
 separate Plan Approval receipts for every named Unit. Prepare every plan and
-questions file, then create the batch manifest:
+questions file, then create the batch manifest in the active record. `--batch-file`
+takes its record-relative path, with no absolute paths, `..` components, or
+symlinked components. The manifest must be a regular file of at most 64 KiB:
 
 ```json
 {"batch":"<review name>","units":[{"unit":"<Unit>","questionsFile":"<project-relative questions path>"}]}

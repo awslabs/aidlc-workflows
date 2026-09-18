@@ -696,8 +696,10 @@ prepare/fan-out/check/review/finalize loop run.
 
 Use grouping only for the exact named Units of the live Code Generation
 `invoke-swarm` directive, with all plans ready and unchanged planned source.
-Create a JSON manifest in the active record using the actual project-relative
-questions paths; never reconstruct the Unit set from the DAG:
+Create a JSON manifest of at most 64 KiB in the active record. Pass its
+record-relative path to `--batch-file`, without absolute paths, `..` components,
+or symlinked components. Use the actual project-relative questions paths inside
+the manifest; never reconstruct the Unit set from the DAG:
 
 ```json
 {"batch":"<review name>","units":[{"unit":"<emitted Unit>","questionsFile":"<project-relative questions path>"}]}

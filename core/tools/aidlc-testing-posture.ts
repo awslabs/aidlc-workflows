@@ -49,6 +49,7 @@ import {
   readVerificationCommandChallenge,
   readRegularFileNoFollowOrThrow,
   recordDir,
+  recordFileTargetOrThrow,
   relativeRecordDir,
   recordAcceptedChanges,
   renderChangedPaths,
@@ -1934,9 +1935,16 @@ function assertPlanApprovalBatchLifecycle(projectDir: string, receipt: PlanAppro
 }
 
 function planApprovalBatchSelection(projectDir: string, file: string): PlanApprovalBatchSelection {
-  const value: unknown = JSON.parse(
-    readRegularFileNoFollowOrThrow(resolve(projectDir, file), "Plan Approval batch manifest").toString("utf-8"),
-  );
+  const record = recordDir(projectDir);
+  if (record === null) throw new Error("Cannot resolve the active intent record.");
+  const path = recordFileTargetOrThrow(record, file);
+  const contents = readRegularFileNoFollowOrThrow(path, "Plan Approval batch manifest", 64 * 1024).toString("utf-8");
+  let value: unknown;
+  try {
+    value = JSON.parse(contents);
+  } catch {
+    throw new Error("Plan Approval batch manifest is not valid JSON");
+  }
   if (
     !value || typeof value !== "object" ||
     !("batch" in value) || typeof value.batch !== "string" ||
