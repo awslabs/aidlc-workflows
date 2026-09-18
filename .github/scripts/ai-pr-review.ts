@@ -402,6 +402,58 @@ export function validateStructuredReview(
   };
 }
 
+function escapeWorkflowCommand(value: string): string {
+  let escaped = "";
+  for (const character of value) {
+    if (character === "%") escaped += "%25";
+    else if (character === "\r") escaped += "%0D";
+    else if (character === "\n") escaped += "%0A";
+    else {
+      const code = character.charCodeAt(0);
+      if (code >= 32 && code !== 127) escaped += character;
+    }
+  }
+  return escaped;
+}
+
+function truncateCodePoints(value: string, maxLength: number): string {
+  const codePoints = Array.from(value);
+  return codePoints.length <= maxLength ? value : `${codePoints.slice(0, maxLength - 1).join("")}…`;
+}
+
+export function rejectedReviewDiagnostics(raw: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return ["::error::ai-pr-review final response is not a JSON object"];
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return ["::error::ai-pr-review final response is not a JSON object"];
+  }
+  const candidate = parsed as Record<string, unknown>;
+  const lines: string[] = [];
+  const append = (field: string, value: string, maxLength: number): void => {
+    const bounded = truncateCodePoints(value, maxLength);
+    lines.push(`::error::ai-pr-review ${field}: ${escapeWorkflowCommand(bounded)}`);
+  };
+  const inspection = candidate.inspection;
+  const status = inspection && typeof inspection === "object" && !Array.isArray(inspection)
+    ? (inspection as Record<string, unknown>).status
+    : undefined;
+  append("inspection.status", typeof status === "string" ? status : "<non-string>", 32);
+  if (Array.isArray(candidate.validation)) {
+    for (let index = 0; index < Math.min(candidate.validation.length, 8); index++) {
+      const value = candidate.validation[index];
+      if (typeof value === "string") append(`validation[${index}]`, value, 300);
+    }
+  }
+  if (typeof candidate.residualRisk === "string") {
+    append("residualRisk", candidate.residualRisk, 300);
+  }
+  return lines;
+}
+
 function markdownText(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -469,6 +521,8 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
   return { commit_id: review.head, body: lines.join("\n"), event };
 }
 
+let lastValidateInput: string | null = null;
+
 function main(): void {
   const [command, ...args] = process.argv.slice(2);
   if (command === "build-context") {
@@ -489,8 +543,9 @@ function main(): void {
     const output = argValue(args, "--output");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ChangedFileManifest;
     const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as ReviewMetadata;
+    lastValidateInput = readFileSync(input, "utf8");
     const review = validateStructuredReview(
-      readFileSync(input, "utf8"),
+      lastValidateInput,
       base,
       head,
       manifest,
@@ -510,7 +565,16 @@ if (import.meta.main) {
   try {
     main();
   } catch (error) {
-    process.stderr.write(`ai-pr-review: ${error instanceof Error ? error.message : String(error)}\n`);
+    // Validator messages interpolate model-controlled evidence paths. The runner's
+    // legacy ##[cmd] parser matches anywhere in an unframed line, so the leading error
+    // must be a framed V2 command with escaped data, like the diagnostics.
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`::error::ai-pr-review ${escapeWorkflowCommand(truncateCodePoints(message, 1000))}\n`);
+    if (lastValidateInput !== null) {
+      for (const line of rejectedReviewDiagnostics(lastValidateInput)) {
+        process.stderr.write(`${line}\n`);
+      }
+    }
     process.exit(1);
   }
 }

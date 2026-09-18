@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -15,6 +16,7 @@ import {
   type ChangedFileManifest,
   type ReviewMetadata,
   type StructuredReview,
+  rejectedReviewDiagnostics,
   renderReview,
   validateStructuredReview,
 } from "../../.github/scripts/ai-pr-review.ts";
@@ -134,6 +136,211 @@ describe("t300 adversarial AI PR review", () => {
     expect(validate(JSON.stringify(duplicate)).inspection.changedFiles).toEqual([
       "core/example.ts",
     ]);
+  });
+
+  test("rejected review diagnostics include only allowlisted explanations", () => {
+    const rejected = {
+      ...review("P1"),
+      inspection: { status: "failed" },
+      validation: ["The diff was readable.", "A required base-tree contract was inaccessible."],
+      residualRisk: "Review coverage is incomplete.",
+      evidence: "Never log this evidence.",
+      extra: "Never log this field.",
+    };
+    expect(rejectedReviewDiagnostics(JSON.stringify(rejected))).toEqual([
+      "::error::ai-pr-review inspection.status: failed",
+      "::error::ai-pr-review validation[0]: The diff was readable.",
+      "::error::ai-pr-review validation[1]: A required base-tree contract was inaccessible.",
+      "::error::ai-pr-review residualRisk: Review coverage is incomplete.",
+    ]);
+  });
+
+  test("rejected review diagnostics escape workflow commands and remove control characters", () => {
+    const value = "100%\r\n::warning::injected\u0007\u0000\t\u001f\u007f";
+    expect(rejectedReviewDiagnostics(JSON.stringify({
+      inspection: { status: value },
+      validation: [value],
+      residualRisk: value,
+    }))).toEqual([
+      "::error::ai-pr-review inspection.status: 100%25%0D%0A::warning::injected",
+      "::error::ai-pr-review validation[0]: 100%25%0D%0A::warning::injected",
+      "::error::ai-pr-review residualRisk: 100%25%0D%0A::warning::injected",
+    ]);
+  });
+
+  test("rejected review diagnostics truncate values at the field limits", () => {
+    expect(rejectedReviewDiagnostics(JSON.stringify({
+      inspection: { status: "s".repeat(33) },
+      validation: ["v".repeat(300), "v".repeat(301)],
+      residualRisk: "r".repeat(301),
+    }))).toEqual([
+      `::error::ai-pr-review inspection.status: ${"s".repeat(31)}…`,
+      `::error::ai-pr-review validation[0]: ${"v".repeat(300)}`,
+      `::error::ai-pr-review validation[1]: ${"v".repeat(299)}…`,
+      `::error::ai-pr-review residualRisk: ${"r".repeat(299)}…`,
+    ]);
+  });
+
+  test("rejected review diagnostics truncate before escaping workflow command data", () => {
+    expect(rejectedReviewDiagnostics(JSON.stringify({
+      validation: ["%".repeat(301)],
+    }))).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      `::error::ai-pr-review validation[0]: ${"%25".repeat(299)}…`,
+    ]);
+  });
+
+  test("rejected review diagnostics truncate at code point boundaries", () => {
+    const lines = rejectedReviewDiagnostics(JSON.stringify({
+      validation: [`${"a".repeat(299)}\u{1F600}bb`],
+    }));
+    expect(lines).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      `::error::ai-pr-review validation[0]: ${"a".repeat(299)}…`,
+    ]);
+    expect(lines[1]).toMatch(/^[^\uD800-\uDFFF]*$/);
+  });
+
+  test("rejected review diagnostics preserve astral characters at the code point limit", () => {
+    const value = `${"a".repeat(299)}\u{1F600}`;
+    expect(rejectedReviewDiagnostics(JSON.stringify({ validation: [value] }))).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      `::error::ai-pr-review validation[0]: ${value}`,
+    ]);
+  });
+
+  test("rejected review diagnostics cap validation entries and total output", () => {
+    const lines = rejectedReviewDiagnostics(JSON.stringify({
+      inspection: { status: "failed" },
+      validation: Array.from({ length: 12 }, (_, index) => `Check ${index}`),
+      residualRisk: "Incomplete inspection.",
+    }));
+    expect(lines.filter(line => line.startsWith("::error::ai-pr-review validation["))).toEqual(
+      Array.from({ length: 8 }, (_, index) => `::error::ai-pr-review validation[${index}]: Check ${index}`),
+    );
+    expect(lines).toHaveLength(10);
+  });
+
+  test("rejected review diagnostics do not coerce non-string fields into log text", () => {
+    expect(rejectedReviewDiagnostics(JSON.stringify({
+      inspection: { status: { secret: "Never log this status." } },
+      validation: [null, { secret: "Never log this check." }, "Readable explanation.", 42],
+      residualRisk: ["Never log this risk."],
+    }))).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      "::error::ai-pr-review validation[2]: Readable explanation.",
+    ]);
+  });
+
+  test("rejected review diagnostics reject malformed JSON and non-object responses", () => {
+    for (const raw of ["not-json", "null", "[]", '"response"', "42"]) {
+      expect(rejectedReviewDiagnostics(raw)).toEqual([
+        "::error::ai-pr-review final response is not a JSON object",
+      ]);
+    }
+  });
+
+  test("validate CLI reports bounded diagnostics after an inspection failure", () => {
+    const directory = mkdtempSync(join(tmpdir(), "aidlc-ai-review-rejected-"));
+    try {
+      const input = join(directory, "review.json");
+      const manifest = join(directory, "manifest.json");
+      const metadata = join(directory, "metadata.json");
+      const output = join(directory, "payload.json");
+      writeFileSync(input, JSON.stringify({
+        ...review(),
+        inspection: { status: "failed" },
+        validation: ["Required evidence remained inaccessible."],
+      }));
+      writeFileSync(manifest, JSON.stringify(MANIFEST));
+      writeFileSync(metadata, JSON.stringify(METADATA));
+      let failure: unknown;
+      try {
+        execFileSync(process.execPath, [
+          ".github/scripts/ai-pr-review.ts", "validate",
+          "--base", BASE,
+          "--head", HEAD,
+          "--context-id", CONTEXT_ID,
+          "--input", input,
+          "--manifest", manifest,
+          "--metadata", metadata,
+          "--output", output,
+        ], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ status: 1, stdout: "" });
+      const { stderr } = failure as { stderr: string };
+      expect(stderr).toStartWith("::error::ai-pr-review inspection did not complete\n");
+      expect(stderr).toContain(
+        "::error::ai-pr-review validation[0]: Required evidence remained inaccessible.\n",
+      );
+      expect(stderr.indexOf("inspection did not complete")).toBeLessThan(
+        stderr.indexOf("::error::ai-pr-review validation[0]:"),
+      );
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejected evidence paths cannot smuggle runner commands through the leading error line", () => {
+    const directory = mkdtempSync(join(tmpdir(), "aidlc-ai-review-rejected-"));
+    try {
+      const input = join(directory, "review.json");
+      const manifest = join(directory, "manifest.json");
+      const metadata = join(directory, "metadata.json");
+      const output = join(directory, "payload.json");
+      const path = "core/x.ts ##[warning]spoofed ##[add-mask]visible\n"
+        + `::notice::AI review controls from ${"0".repeat(40)}\n::error::spoofed`;
+      writeFileSync(input, JSON.stringify({
+        ...review(),
+        inspection: { status: "complete" },
+        findings: [{
+          ...review("P1").findings[0],
+          evidence: [{ source: "DIFF_FILE", path }],
+        }],
+      }));
+      writeFileSync(manifest, JSON.stringify(MANIFEST));
+      writeFileSync(metadata, JSON.stringify(METADATA));
+      let failure: unknown;
+      try {
+        execFileSync(process.execPath, [
+          ".github/scripts/ai-pr-review.ts", "validate",
+          "--base", BASE,
+          "--head", HEAD,
+          "--context-id", CONTEXT_ID,
+          "--input", input,
+          "--manifest", manifest,
+          "--metadata", metadata,
+          "--output", output,
+        ], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ status: 1, stdout: "" });
+      expect(existsSync(output)).toBe(false);
+      const { stderr } = failure as { stderr: string };
+      const lines = stderr.split("\n");
+      expect(lines.pop()).toBe("");
+      for (const line of lines) {
+        expect(line).toMatch(/^::error::ai-pr-review /);
+        expect(line).not.toContain("\r");
+        expect(line).not.toMatch(/^::(?:notice|warning|add-mask|stop-commands)::/);
+      }
+      const injectedLines = lines.filter(line => line.includes("##[warning]spoofed"));
+      expect(injectedLines.length).toBeGreaterThan(0);
+      for (const line of injectedLines) {
+        expect(line).toStartWith("::error::ai-pr-review ");
+      }
+      expect(lines[0]).toContain("file evidence core/x.ts");
+      expect(lines[0]).toContain("is not a changed file without line hunks");
+      expect(lines[0]).toContain("%0A");
+      expect(stderr).not.toContain("\n::notice::AI review controls from");
+      expect(lines.length).toBeLessThanOrEqual(11);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("validator rejects fabricated evidence and reserved output syntax", () => {
@@ -396,7 +603,7 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).not.toContain("egress-policy:");
     expect(WORKFLOW).toContain('"$codex_bin" exec');
     expect(WORKFLOW).toContain("--sandbox read-only");
-    expect(WORKFLOW).toContain("bash .github/scripts/prepare-ai-review-runtime.sh");
+    expect(WORKFLOW).toContain("bash .ai-review-controls/scripts/prepare-ai-review-runtime.sh");
     expect(WORKFLOW).toContain("sudo -u ai-pr-review");
     expect(RUNTIME_SETUP).toContain("kernel.unprivileged_userns_clone=1");
     expect(RUNTIME_SETUP).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
@@ -406,6 +613,30 @@ describe("t300 adversarial AI PR review", () => {
     expect(RUNTIME_SETUP).toContain("AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN");
     expect(WORKFLOW).not.toMatch(/ref:\s+\$\{\{\s*needs\.context\.outputs\.head/);
     expect(WORKFLOW).toContain(`ref: \${{ github.event.repository.default_branch }}`);
+    expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts build-context");
+    expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts validate");
+    expect(WORKFLOW).toContain(".ai-review-controls/prompts/ai-pr-review-aidlc.md");
+    const detach = WORKFLOW.indexOf('git checkout --detach "$base"');
+    expect(detach).toBeGreaterThan(-1);
+    const controlsSha = WORKFLOW.indexOf('controls_sha="$(git rev-parse HEAD)"');
+    const snapshot = WORKFLOW.indexOf("mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts");
+    const promptSnapshot = WORKFLOW.indexOf(
+      "cp .github/prompts/ai-pr-review-*.md .ai-review-controls/prompts/",
+    );
+    const scriptSnapshot = WORKFLOW.indexOf(
+      "cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh",
+    );
+    expect(controlsSha).toBeGreaterThan(-1);
+    expect(controlsSha).toBeLessThan(snapshot);
+    expect(snapshot).toBeLessThan(promptSnapshot);
+    expect(promptSnapshot).toBeLessThan(scriptSnapshot);
+    expect(scriptSnapshot).toBeLessThan(detach);
+    expect(WORKFLOW).toContain('echo "::notice::AI review controls from $controls_sha"');
+    const afterDetach = WORKFLOW.slice(detach);
+    expect(afterDetach).not.toContain("bun .github/scripts/");
+    expect(afterDetach).not.toContain("cat .github/prompts");
+    expect(afterDetach).not.toContain(".github/prompts/ai-pr-review-");
+    expect(afterDetach).not.toMatch(/\.github\/(?:prompts|scripts)/);
     expect(WORKFLOW).not.toContain("REVIEW_CONTROL");
     expect(WORKFLOW).toContain("This PR changes AI reviewer controls; self-review is skipped");
     expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.md");
@@ -467,7 +698,7 @@ describe("t300 adversarial AI PR review", () => {
         join(REPO_ROOT, ".github", "prompts", `ai-pr-review-${lens}.md`),
         "utf8",
       );
-      expect(WORKFLOW).toContain(`.github/prompts/ai-pr-review-${lens}.md`);
+      expect(WORKFLOW).toContain(`.ai-review-controls/prompts/ai-pr-review-${lens}.md`);
       expect(prompt.length).toBeGreaterThan(400);
     }
     expect(WORKFLOW).not.toContain("ai-pr-review-correctness.md");
@@ -492,6 +723,9 @@ describe("t300 adversarial AI PR review", () => {
     expect(common).toContain("changed-files.json");
     expect(common).toContain("supersedes, duplicates, or invalidates");
     expect(candidates).toContain("inspection or the command sandbox fails");
+    expect(aidlc).toContain(".ai-review-lenses/prompt-injection.md");
+    expect(aidlc).toContain(".ai-review-lenses/security.md");
+    expect(aidlc).not.toContain("prompt-attack and security outputs");
     expect(aidlc).toContain("First try to kill every candidate");
     expect(aidlc).toContain("Review the code that exists, not the PR description");
     expect(aidlc).toContain("Reconstruct every affected caller, writer, reader");
