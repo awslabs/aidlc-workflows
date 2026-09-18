@@ -1434,7 +1434,7 @@ describe("t265b hook lifecycle", () => {
       ).toBe(0);
 
       // The challenge does not require exact option labels, so "1" is an offered
-      // choice by offeredPlanApprovalChoice. The reply must survive extraction to
+      // choice by offeredCheckpointChoice. The reply must survive extraction to
       // get there: JSON-parsing it turned it into a number and reported no text.
       const numeric = spawnSync(
         BUN,

@@ -622,7 +622,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
       ? `"${process.execPath.replaceAll('"', '""')}"`
       : `'${process.execPath.replaceAll("'", "'\\''")}'`;
     const check = `${executable} -e "if (!require('fs').readFileSync('src/alpha.ts','utf8').includes('alpha = 1')) process.exit(1)"`;
-    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", check];
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", check, "--session", "t343-command"];
     for (const [tool, args] of [
       ["log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]],
       ["log", ["answer", ...identity, "--details", "Approve"]],
@@ -632,6 +632,14 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
         encoding: "utf-8", env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
       });
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      if (args[0] === "decision") {
+        const submitted = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+          encoding: "utf-8", cwd: pd,
+          env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+          input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t343-command", prompt: "Approve" }),
+        });
+        expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
+      }
     }
     expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(true);
     human(pd);

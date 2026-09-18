@@ -2,6 +2,7 @@
 // function:verifyConstructionCheckpoint, function:approveConstructionCheckpoint,
 // function:rejectConstructionCheckpoint, audit:GATE_APPROVED, audit:GATE_REJECTED
 // covers: function:authorizedVerificationCommand, function:verificationCommandDetails, audit:VERIFICATION_COMMAND_RECORDED, subcommand:aidlc-state:set-construction-verification-command
+// covers: function:recordVerificationCommandHumanResponse, hook:aidlc-record-human-turn
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
@@ -28,6 +29,8 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
   readUnitSourceManifest,
+  readVerificationCommandResponse,
+  writeVerificationCommandResponse,
   reviewArtifactFingerprint,
   setField,
   unitMajorConstructionStageSlugs,
@@ -165,15 +168,25 @@ function cli(project: string, tool: string, args: string[], env = process.env) {
   return { code: result.status, out: `${result.stdout}${result.stderr}` };
 }
 
+function submitCommandChoice(project: string, session: string, prompt: string, env = process.env): void {
+  const submitted = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+    encoding: "utf-8", cwd: project,
+    env: { ...env, AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project },
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
+  });
+  expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
+}
+
 function recordCommand(project: string, command: string): void {
   if (authorizedVerificationCommand(project, readFileSync(seededStateFile(project), "utf-8"))?.command === command) return;
-  const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", command];
+  const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", command, "--session", "t341-command"];
   for (const args of [
     ["decision", ...identity, "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"],
     ["answer", ...identity, "--details", "Approve"],
   ]) {
     const result = cli(project, "log", args, { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
     expect(result.code, result.out).toBe(0);
+    if (args[0] === "decision") submitCommandChoice(project, "t341-command", "Approve");
   }
   const result = cli(project, "state", ["set-construction-verification-command", command]);
   expect(result.code, result.out).toBe(0);
@@ -469,9 +482,9 @@ describe("t341 verification command consent", () => {
     expect(setter.out).toContain("Command SHA-256");
   }, 30_000);
 
-  test("answers require the pending command digest and a fresh unused human turn even under autonomy", () => {
+  test("answers require the pending digest and this session's offered choice even under autonomy", () => {
     const dir = project(true);
-    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command"];
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command"];
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     human(dir);
@@ -482,35 +495,139 @@ describe("t341 verification command consent", () => {
     expect(mismatch.out).toContain("Command SHA-256");
     const absent = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
     expect(absent.code).not.toBe(0);
-    expect(absent.out).toContain("HUMAN_TURN");
+    expect(absent.out).toContain("hook-recorded response");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
-    const submitted = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
-      encoding: "utf-8", cwd: dir,
-      env: { ...env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir },
-      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t341-command", prompt: "Approve" }),
-    });
-    expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
+    submitCommandChoice(dir, "t341-command", "Approve", env);
     const approved = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
     expect(approved.code, approved.out).toBe(0);
+    const receipts = readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED");
+    expect(receipts).toHaveLength(1);
+    expect(auditBlockField(receipts[0].block, "Session")).toBe("t341-command");
     const replay = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
     expect(replay.code).not.toBe(0);
+    expect(readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toHaveLength(1);
     const nextDecision = cli(dir, "log", ["decision", ...identity, "--command", "exit 2", "--decision", "Use another command?", "--options", "Approve,Request Changes"], env);
     expect(nextDecision.code, nextDecision.out).toBe(0);
     expect(cli(dir, "log", ["answer", ...identity, "--command", "exit 2", "--details", "Approve"], env).code).not.toBe(0);
   }, 30_000);
 
-  test("Request Changes consumes the question without authorizing a command; other answers refuse", () => {
+  test("Request Changes cannot be changed into Approve by the conductor", () => {
+    const dir = project();
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    expect(cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env).code).toBe(0);
+    submitCommandChoice(dir, "t341-command", "Request Changes", env);
+    const refused = cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env);
+    expect(refused.code).not.toBe(0);
+    expect(refused.out).toContain("actual offered choice");
+    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+  }, 30_000);
+
+  test("unrelated prompts and the presence bypass cannot substitute for the offered response", () => {
+    const dir = project();
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    expect(cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env).code).toBe(0);
+    submitCommandChoice(dir, "t341-command", "What does this command do?", env);
+    const answer = ["answer", ...identity, "--details", "Approve"];
+    expect(cli(dir, "log", answer, env).code).not.toBe(0);
+    expect(cli(dir, "log", answer, { ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }).code).not.toBe(0);
+    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+  }, 30_000);
+
+  test("one session's answer cannot satisfy another session's pending challenge", () => {
     const dir = project();
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0"];
-    const decision = cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    for (const session of ["t341-session-A", "t341-session-B"]) {
+      expect(cli(dir, "log", ["decision", ...identity, "--session", session, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env).code).toBe(0);
+    }
+    submitCommandChoice(dir, "t341-session-A", "Approve", env);
+    const answer = ["answer", ...identity, "--session", "t341-session-B", "--details", "Approve"];
+    const refused = cli(dir, "log", answer, env);
+    expect(refused.code).not.toBe(0);
+    expect(refused.out).toContain("this prompt and session");
+    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+    submitCommandChoice(dir, "t341-session-B", "Approve", env);
+    expect(cli(dir, "log", answer, env).code).toBe(0);
+  }, 30_000);
+
+  test("re-minting the same command invalidates an earlier hook response, including replayed bytes", () => {
+    const dir = project();
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const decision = ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"];
+    const answer = ["answer", ...identity, "--details", "Approve"];
+    expect(cli(dir, "log", decision, env).code).toBe(0);
+    submitCommandChoice(dir, "t341-command", "Approve", env);
+    const previous = readVerificationCommandResponse(dir, "t341-command")!;
+    expect(cli(dir, "log", decision, env).code).toBe(0);
+    expect(cli(dir, "log", answer, env).code).not.toBe(0);
+    writeVerificationCommandResponse(dir, previous);
+    expect(cli(dir, "log", answer, env).code).not.toBe(0);
+    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+    submitCommandChoice(dir, "t341-command", "Approve", env);
+    expect(cli(dir, "log", answer, env).code).toBe(0);
+  }, 30_000);
+
+  test("decision and answer require the invoking session even with presence bypassed", () => {
+    const dir = project();
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0"];
+    const env = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" };
+    for (const args of [
+      ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"],
+      ["answer", ...identity, "--details", "Approve"],
+    ]) {
+      const refused = cli(dir, "log", args, env);
+      expect(refused.code).not.toBe(0);
+      expect(refused.out).toContain("--session");
+    }
+    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+  }, 30_000);
+
+  test("numbered and Recommended-decorated choices retain the Plan Approval matching rules", () => {
+    const dir = project();
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    for (const [prompt, choice, event] of [
+      ["1", "Approve", "VERIFICATION_COMMAND_RECORDED"],
+      ["2", "Request Changes", "QUESTION_ANSWERED"],
+      ["Approve (Recommended)", "Approve", "VERIFICATION_COMMAND_RECORDED"],
+    ]) {
+      expect(cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env).code).toBe(0);
+      submitCommandChoice(dir, "t341-command", prompt, env);
+      const answered = cli(dir, "log", ["answer", ...identity, "--details", choice], env);
+      expect(answered.code, answered.out).toBe(0);
+      expect(JSON.parse(answered.out).emitted).toBe(event);
+    }
+  }, 30_000);
+
+  test("Request Changes consumes the question without authorizing a command; other answers refuse", () => {
+    const dir = project();
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const decision = cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env);
     expect(decision.code, decision.out).toBe(0);
-    const invalid = cli(dir, "log", ["answer", ...identity, "--details", "CONDUCTOR DEFAULT Approve"]);
+    submitCommandChoice(dir, "t341-command", "Request Changes", env);
+    const invalid = cli(dir, "log", ["answer", ...identity, "--details", "CONDUCTOR DEFAULT Approve"], env);
     expect(invalid.code).not.toBe(0);
-    const rejected = cli(dir, "log", ["answer", ...identity, "--details", "Request Changes"]);
+    const rejected = cli(dir, "log", ["answer", ...identity, "--details", "Request Changes"], env);
     expect(rejected.code, rejected.out).toBe(0);
     expect(rejected.out).toContain("QUESTION_ANSWERED");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
-    expect(cli(dir, "log", ["answer", ...identity, "--details", "Approve"]).code).not.toBe(0);
+    const answered = readAuditShardEvents(dir).filter((row) => row.event === "QUESTION_ANSWERED");
+    expect(answered).toHaveLength(1);
+    expect(auditBlockField(answered[0].block, "User Input")).toBe("Request Changes");
+    const configured = setField(readFileSync(seededStateFile(dir), "utf-8"), "Construction Verification Command", "exit 0");
+    expect(authorizedVerificationCommand(dir, configured)).toBeNull();
+    expect(cli(dir, "log", ["answer", ...identity, "--details", "Request Changes"], env).code).not.toBe(0);
+    expect(cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env).code).not.toBe(0);
   }, 30_000);
 
   test("canonical command bytes survive dollar substitutions and long labels are bounded", () => {

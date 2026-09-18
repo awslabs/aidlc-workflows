@@ -1192,7 +1192,7 @@ function handleSetAutonomy(args: string[]): void {
 function handleCheckpoint(args: string[]): void {
   const flags = parseFlags(args);
   if (flags["check-cmd"] !== undefined) {
-    error("checkpoint no longer accepts --check-cmd. Record a human-approved command with aidlc-log.ts decision/answer --checkpoint verification-command --command \"<cmd>\", then aidlc-state.ts set-construction-verification-command \"<cmd>\"; run checkpoint --action verify without --check-cmd.");
+    error("checkpoint no longer accepts --check-cmd. Record a human-approved command with aidlc-log.ts decision/answer --checkpoint verification-command --command \"<cmd>\" --session \"<session ID>\" from the invoking SessionStart context, then aidlc-state.ts set-construction-verification-command \"<cmd>\"; run checkpoint --action verify without --check-cmd.");
   }
   if (!flags.unit) error("checkpoint requires --unit <name>");
   const kind = flags.kind ?? "unit";

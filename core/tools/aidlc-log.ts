@@ -16,6 +16,11 @@ import {
   attemptEventDefinitelyBefore,
   maximalAttemptEvents,
   verificationCommandDetails,
+  verificationCommandChallengeRelativePath,
+  writeVerificationCommandChallenge,
+  readVerificationCommandChallenge,
+  readVerificationCommandResponse,
+  consumeVerificationCommandChallenge,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
   checkSummaryConfirmationEvidence,
@@ -113,6 +118,7 @@ import type {
   GuardRefusal,
   TeamUnitGateResolution,
   PlanApprovalRuntimeChallenge,
+  VerificationCommandRuntimeChallenge,
   ReviewClass,
   ReviewRecord,
   ReviewVerdict,
@@ -462,6 +468,15 @@ function handleDecision(args: string[]): void {
     fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;
     fields["Command SHA-256"] = verificationCommand.sha256;
     fields["Command Label"] = verificationCommand.label;
+    const session = flags.session?.trim();
+    if (!session) {
+      error("Verification command requires --session <id> from the invoking SessionStart context. " + VERIFICATION_COMMAND_RECOVERY);
+    }
+    fields.Session = session;
+    const options = (flags.options ?? "").split(",").map((option) => option.trim().toLowerCase());
+    if (options.length !== 2 || options[0] !== "approve" || options[1] !== "request changes") {
+      error('Verification command decision requires --options "Approve,Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+    }
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
@@ -479,8 +494,26 @@ function handleDecision(args: string[]): void {
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
+  let verificationChallenge: VerificationCommandRuntimeChallenge | null = null;
   try {
-    emitAudit(pd, "DECISION_RECORDED", fields);
+    if (verificationCommand) {
+      verificationChallenge = withAuditLock(pd, () => {
+        const challenge: VerificationCommandRuntimeChallenge = {
+          version: 1,
+          session: fields.Session,
+          challengeId: randomBytes(32).toString("hex"),
+          commandSha256: verificationCommand.sha256,
+          options: ["approve", "request changes"].map((option) =>
+            createHash("sha256").update(option, "utf-8").digest("hex"),
+          ) as [string, string],
+        };
+        writeVerificationCommandChallenge(pd, challenge);
+        emitAudit(pd, "DECISION_RECORDED", fields);
+        return challenge;
+      });
+    } else {
+      emitAudit(pd, "DECISION_RECORDED", fields);
+    }
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
@@ -520,6 +553,12 @@ function handleDecision(args: string[]): void {
         ? {
             challengeId: challenge.challengeId,
             challengeFile: planApprovalChallengeRelativePath(pd, challenge.session),
+          }
+        : {}),
+      ...(verificationChallenge !== null
+        ? {
+            challengeId: verificationChallenge.challengeId,
+            challengeFile: verificationCommandChallengeRelativePath(pd, verificationChallenge.session),
           }
         : {}),
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
@@ -726,34 +765,27 @@ function pendingSummaryDecision(
   return { pending: true, humanAfterDecision: false };
 }
 
-function pendingVerificationDecision(pd: string, stage: string, sha256: string): {
-  pending: boolean; humanAfterDecision: boolean;
-} {
+function pendingVerificationDecision(pd: string, stage: string, sha256: string, session: string): boolean {
   const unreadable: string[] = [];
   const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
     (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
   );
-  const absent = { pending: false, humanAfterDecision: false };
-  if (unreadable.length) return absent;
+  if (unreadable.length) return false;
   const workflows = maximalAttemptEvents(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
-  if (workflows.length !== 1) return absent;
+  if (workflows.length !== 1) return false;
   // A later proposal or answer supersedes the old question, even when its
   // command or stage differs. Cross-shard ties never pick an arbitrary winner.
   const actions = maximalAttemptEvents(rows.filter((row) =>
     ["DECISION_RECORDED", "QUESTION_ANSWERED", "VERIFICATION_COMMAND_RECORDED"].includes(row.event) &&
     auditBlockField(row.block, "Checkpoint") === VERIFICATION_COMMAND_CHECKPOINT,
   ));
-  if (actions.length !== 1) return absent;
+  if (actions.length !== 1) return false;
   const decision = actions[0];
-  if (decision.event !== "DECISION_RECORDED" ||
-    !attemptEventDefinitelyBefore(workflows[0], decision) ||
-    auditBlockField(decision.block, "Stage") !== stage ||
-    auditBlockField(decision.block, "Command SHA-256") !== sha256) return absent;
-  return {
-    pending: true,
-    humanAfterDecision: rows.some((row) => row.event === "HUMAN_TURN" &&
-      attemptEventDefinitelyBefore(decision, row)),
-  };
+  return decision.event === "DECISION_RECORDED" &&
+    attemptEventDefinitelyBefore(workflows[0], decision) &&
+    auditBlockField(decision.block, "Stage") === stage &&
+    auditBlockField(decision.block, "Command SHA-256") === sha256 &&
+    auditBlockField(decision.block, "Session") === session;
 }
 
 function handleAnswer(args: string[]): void {
@@ -859,6 +891,11 @@ function handleAnswer(args: string[]): void {
     fields["Command SHA-256"] = verificationCommand.sha256;
     fields["Command Label"] = verificationCommand.label;
     fields["User Input"] = flags.details;
+    const session = flags.session?.trim();
+    if (!session) {
+      error("Verification command requires --session <id> from the invoking SessionStart context. " + VERIFICATION_COMMAND_RECOVERY);
+    }
+    fields.Session = session;
   }
   if (flags.unit) {
     fields.Unit = flags.unit;
@@ -938,14 +975,18 @@ function handleAnswer(args: string[]): void {
     }
 
     if (verificationCommand) {
-      const pending = pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256);
-      if (!pending.pending) {
-        error("No matching pending DECISION_RECORDED with the same Command SHA-256 exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
+      if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256, fields.Session)) {
+        error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
       }
-      if (!humanPresenceGuardDisabled() &&
-        (!pending.humanAfterDecision || !humanActedSinceLastAnswer(pd))) {
-        error("No unused HUMAN_TURN follows the verification-command decision. End the turn, wait for the human's choice, then run aidlc-log.ts answer --stage \"<stage>\" --checkpoint verification-command --command \"<cmd>\" --details \"Approve\"." + unattendedHumanPresenceHint());
+      const challenge = readVerificationCommandChallenge(pd, fields.Session);
+      const response = readVerificationCommandResponse(pd, fields.Session);
+      // Like Plan Approval, the presence bypass never bypasses the exact
+      // hook-recorded response. Autonomy cannot choose a verification command.
+      if (!challenge || challenge.commandSha256 !== verificationCommand.sha256 ||
+        !response || response.challengeId !== challenge.challengeId || response.choice !== flags.details) {
+        error("Verification command requires the actual offered choice from this prompt and session: a matching challenge, Command SHA-256, and hook-recorded response for --details. " + VERIFICATION_COMMAND_RECOVERY);
       }
+      consumeVerificationCommandChallenge(pd, fields.Session);
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
       if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
       else emitAudit(pd, "QUESTION_ANSWERED", fields);

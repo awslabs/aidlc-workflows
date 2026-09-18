@@ -46,6 +46,7 @@ import {
   readPlanApprovalReceipt,
   readPlanApprovalResponse,
   readPlanApprovalViolation,
+  readVerificationCommandChallenge,
   readRegularFileNoFollowOrThrow,
   recordDir,
   relativeRecordDir,
@@ -86,6 +87,7 @@ import {
   writePlanApprovalOverrideRequest,
   writePlanApprovalReceipt,
   writePlanApprovalResponse,
+  writeVerificationCommandResponse,
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
   type ActiveDirectiveMarker,
@@ -2214,30 +2216,33 @@ export function recordPlanApprovalChallenge(
     : createChallenge();
 }
 
-function offeredPlanApprovalChoice(
-  challenge: PlanApprovalRuntimeChallenge,
+function offeredCheckpointChoice<T extends string>(
+  options: [string, string],
   responseText: string,
-): "Approve Plan" | "Request Changes" | null {
+  approveChoice: T,
+  hashedOptionLabels = false,
+  requireExactOptionLabels = false,
+): T | "Request Changes" | null {
   // One trailing "(Recommended)" is the Codex label decoration, not part of the
   // human's choice. Nothing else about the match is loosened.
   const response = stripRecommendedDecorator(responseText);
-  const comparison = challenge.hashedOptionLabels
+  const comparison = hashedOptionLabels
     ? createHash("sha256")
       .update(response.toLowerCase(), "utf-8")
       .digest("hex")
     : response.toLowerCase();
-  const matchedIndex = challenge.options.findIndex((option) =>
-    challenge.hashedOptionLabels
+  const matchedIndex = options.findIndex((option) =>
+    hashedOptionLabels
       ? option === comparison
       : option.toLowerCase() === comparison
   );
   if (matchedIndex >= 0) {
-    return matchedIndex === 0 ? "Approve Plan" : "Request Changes";
+    return matchedIndex === 0 ? approveChoice : "Request Changes";
   }
-  if (challenge.requireExactOptionLabels) return null;
-  if (response === "1") return "Approve Plan";
+  if (requireExactOptionLabels) return null;
+  if (response === "1") return approveChoice;
   if (response === "2") return "Request Changes";
-  if (response.toLowerCase() === "approve plan") return "Approve Plan";
+  if (response.toLowerCase() === approveChoice.toLowerCase()) return approveChoice;
   if (response.toLowerCase() === "request changes") return "Request Changes";
   return null;
 }
@@ -2253,7 +2258,10 @@ export function recordPlanApprovalHumanResponse(
 ): PlanApprovalHumanResponseResult {
   const challenge = readPlanApprovalChallenge(projectDir, session);
   if (challenge) {
-    const choice = offeredPlanApprovalChoice(challenge, responseText);
+    const choice = offeredCheckpointChoice(
+      challenge.options, responseText, "Approve Plan",
+      challenge.hashedOptionLabels, challenge.requireExactOptionLabels,
+    );
     if (choice) {
       writePlanApprovalResponse(projectDir, {
         version: 1,
@@ -2286,6 +2294,29 @@ export function recordPlanApprovalHumanResponse(
     return { recorded: true };
   }
   return { recorded: false };
+}
+
+export function recordVerificationCommandHumanResponse(
+  projectDir: string,
+  session: string,
+  responseText: string,
+): { recorded: boolean } {
+  return withAuditLock(projectDir, () => {
+    const challenge = readVerificationCommandChallenge(projectDir, session);
+    if (!challenge) return { recorded: false };
+    const choice = offeredCheckpointChoice(challenge.options, responseText, "Approve", true);
+    if (!choice) return { recorded: false };
+    writeVerificationCommandResponse(projectDir, {
+      version: 1,
+      session,
+      challengeId: challenge.challengeId,
+      choice,
+      responseSha256: createHash("sha256")
+        .update(responseText.trim(), "utf-8")
+        .digest("hex"),
+    });
+    return { recorded: true };
+  });
 }
 
 export interface PlanApprovalOverrideRequestResult {

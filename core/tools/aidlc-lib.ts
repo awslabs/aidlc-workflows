@@ -3143,6 +3143,22 @@ export interface PlanApprovalRuntimeResponse {
   responseSha256: string;
 }
 
+export interface VerificationCommandRuntimeChallenge {
+  version: 1;
+  session: string;
+  challengeId: string;
+  commandSha256: string;
+  options: [string, string];
+}
+
+export interface VerificationCommandRuntimeResponse {
+  version: 1;
+  session: string;
+  challengeId: string;
+  choice: "Approve" | "Request Changes";
+  responseSha256: string;
+}
+
 // `questionsSha256` is the raw questions-file digest at answer time. It is
 // provenance, not validity: `promptSha256` already binds what the human saw
 // (the prompt with answers blanked) and `choice` binds what they answered, so
@@ -3280,6 +3296,20 @@ function planApprovalResponsePath(projectDir: string, session: string): string {
   const segment = runtimeSessionSegment(session);
   return segment
     ? join(planApprovalRuntimeDir(projectDir), `response-${segment}.json`)
+    : "";
+}
+
+function verificationCommandChallengePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `verification-command-${segment}.json`)
+    : "";
+}
+
+function verificationCommandResponsePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `verification-command-response-${segment}.json`)
     : "";
 }
 
@@ -3433,6 +3463,79 @@ export function clearPlanApprovalChallenge(
   }
 }
 
+export function writeVerificationCommandChallenge(
+  projectDir: string,
+  challenge: VerificationCommandRuntimeChallenge,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = verificationCommandChallengePath(projectDir, challenge.session);
+  if (!path) throw new Error("Verification command challenge requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+  try {
+    unlinkSync(verificationCommandResponsePath(projectDir, challenge.session));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+export function readVerificationCommandChallenge(
+  projectDir: string,
+  session: string,
+): VerificationCommandRuntimeChallenge | null {
+  const value = readPlanApprovalRuntimeJson<VerificationCommandRuntimeChallenge>(
+    verificationCommandChallengePath(projectDir, session),
+    "Verification command challenge",
+  );
+  return value?.version === 1 && value.session === session &&
+    typeof value.challengeId === "string" && value.challengeId.length > 0 &&
+    typeof value.commandSha256 === "string" && /^[a-f0-9]{64}$/.test(value.commandSha256) &&
+    Array.isArray(value.options) && value.options.length === 2 &&
+    value.options.every((option) => typeof option === "string" && /^[a-f0-9]{64}$/.test(option))
+    ? value : null;
+}
+
+export function writeVerificationCommandResponse(
+  projectDir: string,
+  response: VerificationCommandRuntimeResponse,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = verificationCommandResponsePath(projectDir, response.session);
+  if (!path) throw new Error("Verification command response requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
+}
+
+export function readVerificationCommandResponse(
+  projectDir: string,
+  session: string,
+): VerificationCommandRuntimeResponse | null {
+  const value = readPlanApprovalRuntimeJson<VerificationCommandRuntimeResponse>(
+    verificationCommandResponsePath(projectDir, session),
+    "Verification command response",
+  );
+  return value?.version === 1 && value.session === session &&
+    typeof value.challengeId === "string" && value.challengeId.length > 0 &&
+    (value.choice === "Approve" || value.choice === "Request Changes") &&
+    typeof value.responseSha256 === "string" && /^[a-f0-9]{64}$/.test(value.responseSha256)
+    ? value : null;
+}
+
+export function consumeVerificationCommandChallenge(
+  projectDir: string,
+  session: string,
+): void {
+  for (const path of [
+    verificationCommandChallengePath(projectDir, session),
+    verificationCommandResponsePath(projectDir, session),
+  ]) {
+    if (!path) continue;
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 export function writePlanApprovalReceipt(
   projectDir: string,
   receipt: PlanApprovalRuntimeReceipt,
@@ -3581,6 +3684,14 @@ export function planApprovalChallengeRelativePath(
   session: string,
 ): string {
   const path = planApprovalChallengePath(projectDir, session);
+  return path ? relative(projectDir, path).split(sep).join("/") : "";
+}
+
+export function verificationCommandChallengeRelativePath(
+  projectDir: string,
+  session: string,
+): string {
+  const path = verificationCommandChallengePath(projectDir, session);
   return path ? relative(projectDir, path).split(sep).join("/") : "";
 }
 
@@ -8179,8 +8290,9 @@ export function authorizedVerificationCommand(
 
 export const VERIFICATION_COMMAND_RECOVERY =
   'Record the human choice with aidlc-log.ts decision --stage "<stage>" --checkpoint verification-command ' +
-  '--command "<cmd>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
-  'then aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command "<cmd>" --details "Approve". ' +
+  '--command "<cmd>" --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
+  'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command "<cmd>" --session "<session ID>" --details "Approve". ' +
+  'Use the invoking SessionStart session ID. ' +
   'Apply the receipt with aidlc-state.ts set-construction-verification-command "<cmd>".';
 
 // --- Consolidated-summary confirmation evidence ---

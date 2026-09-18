@@ -7,7 +7,7 @@
 // fabricate an approval with no human having acted this turn.
 //
 // Presence remains the gate signal, while the prompt payload is also inspected
-// for an exact protected Plan Approval choice. appendAuditEntry resolves the
+// for an exact protected Plan Approval or verification-command choice. appendAuditEntry resolves the
 // active intent from the on-disk cursor. No workflow state on disk means nothing
 // to gate, so the hook exits without writing (same self-gate as
 // aidlc-session-start.ts) - otherwise every prompt in a project that carries the
@@ -61,6 +61,7 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
+  recordVerificationCommandHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 
 function extractResponseText(value: unknown): string {
@@ -165,6 +166,11 @@ try {
         appendAuditEntry("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
         if (sessionId && humanResponseText) {
           recordPlanApprovalHumanResponse(
+            projectDir,
+            sessionId,
+            humanResponseText,
+          );
+          recordVerificationCommandHumanResponse(
             projectDir,
             sessionId,
             humanResponseText,

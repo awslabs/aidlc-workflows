@@ -121,7 +121,7 @@ function recordCommand(p: string): string {
     ? `"${value.replaceAll('"', '""')}"`
     : `'${value.replaceAll("'", "'\\''")}'`;
   const command = `${quote(process.execPath)} ${quote(script)}`;
-  const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", command];
+  const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", command, "--session", "t342-command"];
   for (const [tool, args] of [
     ["log", ["decision", ...identity, "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"]],
     ["log", ["answer", ...identity, "--details", "Approve"]],
@@ -131,6 +131,14 @@ function recordCommand(p: string): string {
       encoding: "utf-8", env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
     });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    if (args[0] === "decision") {
+      const human = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+        encoding: "utf-8", cwd: p,
+        env: { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p },
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t342-command", prompt: "Approve" }),
+      });
+      expect(human.status, `${human.stdout}${human.stderr}`).toBe(0);
+    }
   }
   return command;
 }
