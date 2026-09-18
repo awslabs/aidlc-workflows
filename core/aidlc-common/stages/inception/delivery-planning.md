@@ -39,6 +39,7 @@ sensors:
   - required-sections
   - upstream-coverage
 scopes:
+  - express-plus
   - enterprise
   - feature
   - mvp
