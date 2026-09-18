@@ -392,6 +392,24 @@ describe("t265a plan-approval decision table", () => {
     expect(reason).toContain("Steps 2-3");
     expect(reason).toContain("code-generation-plan.md");
   });
+
+  test("blockReason names the missing target marker for a markerless brief", () => {
+    // A brief with no target marker carries no approval question at all: the
+    // defect is the handoff, so the refusal says so instead of claiming the
+    // plan is unapproved and pointing the conductor back at Steps 2-3.
+    const reason = blockReason([]);
+    expect(reason).toContain("carries no target marker");
+    expect(reason).toContain("AIDLC-UNIT");
+    expect(reason).toContain("AIDLC-STAGE: code-generation");
+    expect(reason).not.toContain("not currently approved");
+  });
+
+  test("blockReason names several for multiple targets", () => {
+    const reason = blockReason(["todo-core", "auth"]);
+    expect(reason).toContain("names several");
+    expect(reason).toContain("todo-core");
+    expect(reason).toContain("auth");
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -148,7 +148,12 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     kind: "run-stage",
     stage: "code-generation",
     unit,
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    // stateDigest, not a raw sha256: readActiveDirectiveMarker compares the
+    // normalized digest (projectStateForDigest strips blank lines, derived
+    // Unit Progress rows, and cache fields). A raw digest makes the marker
+    // stale on write and the guard refuses at the authority check before
+    // ever evaluating the dispatch.
+    state_sha256: stateDigest(state),
   });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
@@ -1546,6 +1551,343 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     } finally {
       rmSync(projA, { recursive: true, force: true });
       rmSync(projB, { recursive: true, force: true });
+    }
+  });
+
+  // --- Item 2: native run_subagent dispatch-field translation ---------------
+  //
+  // Devin's run_subagent tool_input is {profile, task, title, is_background?}.
+  // The adapter must present it to the shared core hooks in the shape they
+  // understand (subagent_type / prompt / run_in_background) and hand any
+  // rewrite back in Devin's native shape (updatedInput.task only). These cases
+  // build payloads from the captured native shape; the approved case produces
+  // the receipt through the real decision → record-human-turn → answer
+  // lifecycle exercised above (never a hand-written receipt).
+
+  /** A Devin-native run_subagent PreToolUse payload (captured shape). */
+  function devinRunSubagent(
+    profile: string,
+    task: string,
+    extraInput: Record<string, unknown> = {},
+    session?: string,
+  ): Record<string, unknown> {
+    return {
+      ...(session ? { session_id: session } : {}),
+      hook_event_name: "PreToolUse",
+      tool_name: "run_subagent",
+      tool_input: { profile, task, title: "Item 2 dispatch", ...extraInput },
+    };
+  }
+
+  /** Seed the engine-bundled method memory so stage-rule bundles resolve. */
+  function seedMemorySeed(dir: string): void {
+    cpSync(
+      join(dir, ".devin", "tools", "data", "memory-seed"),
+      join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"),
+      { recursive: true },
+    );
+  }
+
+  /** Drive the real Plan Approval lifecycle to a certified stage-level receipt:
+   *  session-start → log decision (challenge) → record-human-turn (response) →
+   *  questions-file [Answer] → log answer (receipt). Mirrors the 13j flow. */
+  function approveStageLevelPlan(dir: string, session: string): void {
+    const questionsPath = seedStageLevelPlanApproval(dir);
+    expect(runAdapter(dir, "session-start", devinSessionStart(session)).code).toBe(0);
+    const identity = [
+      "--stage",
+      "code-generation",
+      "--checkpoint",
+      "plan-approval",
+      "--questions-file",
+      questionsPath,
+      "--session",
+      session,
+      "--stage-level",
+    ];
+    const decision = runLog(dir, [
+      "decision",
+      ...identity,
+      "--decision",
+      PLAN_APPROVAL_QUESTION,
+      "--options",
+      PLAN_APPROVAL_OPTIONS.join(","),
+    ]);
+    expect(decision.code, decision.stderr).toBe(0);
+    expect(
+      runAdapter(
+        dir,
+        "record-human-turn",
+        devinAnswerPayload(session, "Approve Plan", `${session}-answer`),
+      ).code,
+    ).toBe(0);
+    writeFileSync(
+      questionsPath,
+      readFileSync(questionsPath, "utf-8").replace(
+        /\[Answer\]:\s*$/m,
+        "[Answer]: Approve Plan",
+      ),
+    );
+    writeCurrentSessionId(dir, session);
+    const answer = runLog(dir, ["answer", ...identity, "--details", "Approve Plan"]);
+    expect(answer.code, `${answer.stdout}\n${answer.stderr}`).toBe(0);
+  }
+
+  test("Item 2 case 1: plan-approval-guard allows the approved stage-level developer dispatch carried in native task", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "devin-item2-approved";
+      approveStageLevelPlan(dir, session);
+      const task =
+        "AIDLC-STAGE: code-generation\n" +
+        `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(dir).contract_sha256}\n` +
+        "Implement the approved stage-level plan";
+      const r = runAdapter(
+        dir,
+        "plan-approval-guard",
+        devinRunSubagent("aidlc-developer-agent", task, {}, session),
+      );
+      expect(r.code, r.stderr).toBe(0);
+      expect(readAudit(dir)).not.toContain("PLAN_APPROVAL_BLOCKED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("Item 2 case 2: plan-approval-guard blocks the same native dispatch while approval is absent (stage Unit row)", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const task =
+        "AIDLC-STAGE: code-generation\n" +
+        `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}\n` +
+        "Implement the stage-level plan";
+      const r = runAdapter(
+        dir,
+        "plan-approval-guard",
+        devinRunSubagent("aidlc-developer-agent", task),
+      );
+      expect(r.code).toBe(2);
+      // The one-target wording: the marker names the zero-Unit stage-level
+      // implementation, so the refusal scopes to it and the audit row carries
+      // the stage target — not "(missing marker)".
+      expect(r.stderr).toContain("Code generation cannot start for the zero-Unit stage-level implementation");
+      const audit = readAudit(dir);
+      expect(audit).toContain("**Unit**: stage-level");
+      expect(audit).not.toContain("**Unit**: (missing marker)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 3: plan-approval-guard blocks a developer dispatch whose native task carries no target marker", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(
+        dir,
+        "plan-approval-guard",
+        devinRunSubagent("aidlc-developer-agent", "Implement the feature per the plan"),
+      );
+      expect(r.code).toBe(2);
+      // The zero-marker wording names the actual defect (no target marker in
+      // the brief) instead of claiming the plan is unapproved.
+      expect(r.stderr).toContain("carries no target marker");
+      expect(r.stderr).not.toContain("not currently approved");
+      expect(readAudit(dir)).toContain("**Unit**: (missing marker)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 4: plan-approval-guard early-allows a non-developer profile dispatch", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(
+        dir,
+        "plan-approval-guard",
+        devinRunSubagent("aidlc-product-agent", "AIDLC-UNIT: todo-core\nDo product work"),
+      );
+      expect(r.code).toBe(0);
+      expect(readAudit(dir)).not.toContain("PLAN_APPROVAL_BLOCKED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 5: plan-approval-guard ignores legacy agent/prompt fields (no profile/task)", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "PreToolUse",
+        tool_name: "run_subagent",
+        tool_input: {
+          agent: "aidlc-developer-agent",
+          prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+        },
+      });
+      // Legacy fields are no longer identity or brief: with no `profile` the
+      // dispatch is not a developer dispatch and allows without judging it.
+      expect(r.code).toBe(0);
+      expect(readAudit(dir)).not.toContain("PLAN_APPROVAL_BLOCKED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 6: deliver-stage-rules returns the active-stage bundle inside a Devin-native updatedInput.task", () => {
+    const dir = scratchProject(true);
+    try {
+      seedMemorySeed(dir);
+      const task =
+        "Run .devin/skills/aidlc/stages/inception/requirements-analysis.md " +
+        "and draft requirements.md";
+      const r = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        devinRunSubagent("aidlc-product-agent", task),
+      );
+      expect(r.code, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: {
+          hookEventName?: string;
+          updatedInput?: Record<string, unknown>;
+        };
+      };
+      expect(out.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      const updated = out.hookSpecificOutput?.updatedInput ?? {};
+      // Devin merges updatedInput as a subset, so the rewrite is exactly one
+      // native key — never the injected subagent_type/prompt aliases.
+      expect(Object.keys(updated)).toEqual(["task"]);
+      const rewritten = updated.task as string;
+      expect(rewritten.startsWith(task)).toBe(true);
+      expect(rewritten.split("AIDLC_DISPATCH_RULES_BEGIN").length - 1).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 7: deliver-stage-rules emits only updatedInput.task for a background dispatch (is_background)", () => {
+    const dir = scratchProject(true);
+    try {
+      seedMemorySeed(dir);
+      const task =
+        "Run .devin/skills/aidlc/stages/inception/requirements-analysis.md " +
+        "and draft requirements.md";
+      const r = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        devinRunSubagent("aidlc-product-agent", task, { is_background: true }),
+      );
+      expect(r.code, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: { updatedInput?: Record<string, unknown> };
+      };
+      const updated = out.hookSpecificOutput?.updatedInput ?? {};
+      expect(Object.keys(updated)).toEqual(["task"]);
+      expect(updated.run_in_background).toBeUndefined();
+      expect(updated.is_background).toBeUndefined();
+      const rewritten = updated.task as string;
+      expect(rewritten.startsWith(task)).toBe(true);
+      expect(rewritten.split("AIDLC_DISPATCH_RULES_BEGIN").length - 1).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 8: deliver-stage-rules passes a built-in profile through silently", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        devinRunSubagent("subagent_explore", "Read the codebase and report"),
+      );
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 9: deliver-stage-rules passes the exempt composer profile through silently", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        devinRunSubagent("aidlc-composer-agent", "Compose a workflow for the request"),
+      );
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 10: deliver-stage-rules is idempotent — a task already carrying the exact bundle gets no rewrite", () => {
+    const dir = scratchProject(true);
+    try {
+      seedMemorySeed(dir);
+      const task =
+        "Run .devin/skills/aidlc/stages/inception/requirements-analysis.md " +
+        "and draft requirements.md";
+      const first = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        devinRunSubagent("aidlc-product-agent", task),
+      );
+      expect(first.code, first.stderr).toBe(0);
+      const bundled = (
+        JSON.parse(first.stdout) as {
+          hookSpecificOutput?: { updatedInput?: { task?: string } };
+        }
+      ).hookSpecificOutput?.updatedInput?.task;
+      expect(typeof bundled).toBe("string");
+      const second = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        devinRunSubagent("aidlc-product-agent", bundled as string),
+      );
+      expect(second.code).toBe(0);
+      expect(second.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 11: deliver-stage-rules forwards a core block (unresolvable rule bundle) as exit 2 + stderr, no stdout", () => {
+    const dir = scratchProject(true);
+    try {
+      // Empty memory dir: the stage's rules_in_context name files that do not
+      // exist, so the core hook refuses with exit 2 instead of rewriting.
+      const r = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        devinRunSubagent(
+          "aidlc-product-agent",
+          "Run .devin/skills/aidlc/stages/inception/requirements-analysis.md",
+        ),
+      );
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("Cannot load required stage rule");
+      expect(r.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 2 case 12: malformed stdin fails open (exit 0) on both dispatch arms", () => {
+    const dir = scratchProject(true);
+    try {
+      for (const t of ["plan-approval-guard", "deliver-stage-rules"]) {
+        const r = runAdapter(dir, t, FIXTURES.malformed as string);
+        expect(r.code, `target=${t}`).toBe(0);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

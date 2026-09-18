@@ -34,7 +34,7 @@ The native task/prompt mismatch from DEVIN-07 also affects what dispatch evidenc
 | Written answer without evidence | Generation remains refused | t265 conductor-authored-answer and missing-receipt tests |
 | Content/attempt/source drift | Stale approval cannot authorize changed work or another target | t265; t328-plan-approval-runtime-authority; t330-authority-rebinding |
 | Session isolation | A response or certification supplied for one session pairs only with that session's own challenge/response; missing or mismatched authority is refused and `.current-session` is never consulted | t328 `Item 1 session isolation`; t265 CLI/hook A/B; t332 adapter A/B transport; live S2/S3/S4 on 3000.10.31 (session-isolation-run) |
-| Receipt reuse after session change | A valid certified receipt survives `/clear`/restart without a new approval | Live S5: persistence and later honoring observed; no-re-prompt inconclusive until DEVIN-07 dispatch translation is fixed |
+| Receipt reuse after session change | A valid certified receipt survives `/clear`/restart without a new approval | Live S5: persistence and later honoring observed; no-re-prompt inconclusive in that run because of the DEVIN-07 dispatch block (fixed since). In `native-dispatch-run/` (2026-09-18) the same session was resumed and compacted mid code-generation without a new Plan Approval prompt (`PLAN_APPROVAL_RECORDED` stayed 1), but no `/clear` was issued, so the cross-session case is still unverified; rerun the DEVIN-14 live protocol (approve, `/clear`, resume) to close it |
 | Re-entry and Stop | Observer consultation preserves live authority; ordinary publication remains distinct | DEVIN-11; t328-authority-rebinding integration |
 
 ### Session-isolation matrix (upgrade checklist)

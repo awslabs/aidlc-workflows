@@ -355,14 +355,25 @@ export function appendixBlockReason(mentioned: string[]): string {
 // missing evidence and the exact stage steps that produce it, so the
 // conductor self-corrects instead of retrying the same call.
 export function blockReason(mentioned: string[], detail: string | null = null): string {
+  // A brief with no target marker carries no approval question at all: the
+  // defect is the handoff, not the approval, so the refusal says so instead of
+  // claiming the plan is unapproved and pointing the conductor back at Steps
+  // 2-3 it may already have finished.
+  if (mentioned.length === 0) {
+    return (
+      "Code generation cannot start because the developer handoff carries no target marker. " +
+      `The brief's first lines must name exactly one target with "AIDLC-UNIT: <unit>" or ` +
+      `"AIDLC-STAGE: code-generation", followed by "AIDLC-TESTING-CONTRACT: <contract hash>" ` +
+      "(run `aidlc-testing-posture.ts brief` for the target and pass its output verbatim). " +
+      "If Plan Approval has already been recorded, do not re-present it; fix the handoff and retry."
+    );
+  }
   const scope =
     mentioned.length === 1
       ? mentioned[0] === `stage:${GUARDED_STAGE}`
         ? "the zero-Unit stage-level implementation"
         : `unit ${mentioned[0]}`
-      : mentioned.length > 1
-        ? `one target, but the brief names several (${mentioned.join(", ")})`
-        : "one target, but the brief does not name it";
+      : `one target, but the brief names several (${mentioned.join(", ")})`;
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
     `not currently approved.${detail ? ` Reason: ${detail}.` : ""} Finish Steps 2-3 in code-generation: update ` +

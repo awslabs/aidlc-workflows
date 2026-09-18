@@ -25,7 +25,7 @@ Four distinctions are essential:
 | DEVIN-04 | [Permission scopes and configuration isolation](04-permissions-and-configuration.md) | Implemented defaults; effective host policy remains external |
 | DEVIN-05 | [Optional MCP servers and default-off behavior](05-optional-mcp.md) | Implemented configuration; authenticated connections not verified |
 | DEVIN-06 | [Hook events, payload translation, and output contracts](06-hook-transport.md) | Implemented transport with explicit payload and enforcement gaps |
-| DEVIN-07 | [Ensemble dispatch, reviewer attribution, and subagent lifecycle](07-subagent-lifecycle-and-ensemble.md) | Protocol binding implemented; adapter acceptance incomplete |
+| DEVIN-07 | [Ensemble dispatch, reviewer attribution, and subagent lifecycle](07-subagent-lifecycle-and-ensemble.md) | Protocol binding and native dispatch translation implemented, regression-covered, and accepted live on 3000.10.31 (full workflow completed); reviewer attribution and background lifecycle open |
 | DEVIN-08 | [Structured questions and human-turn recording](08-questions-and-human-turns.md) | Implemented response compatibility; live batch/cancellation authority coverage remains limited |
 | DEVIN-09 | [Plan Approval sessions, challenges, responses, and receipts](09-plan-approval-authority.md) | Strict session pairing implemented, regression-covered, and accepted live on 3000.10.31; receipt reuse without re-prompt inconclusive pending DEVIN-07 |
 | DEVIN-10 | [Planning commands, shell composition, and working directories](10-shell-guards-and-working-directory.md) | Implemented protections with scoped guarantees |
@@ -40,11 +40,11 @@ Read DEVIN-01–06 for the integration architecture, DEVIN-07–12 for behaviora
 
 | Finding | Unresolved boundary | Evidence needed to close it |
 | --- | --- | --- |
-| DEVIN-07 | Native `profile`/`task` dispatch translation and rule augmentation are incomplete | Realistic field-contract tests through the adapter, then current-host dispatch evidence |
+| DEVIN-07 | `runtime-graph.json` is never compiled on Devin: `classifyRuntimeCompileCommand` builds its harness-path pattern from `KNOWN_HARNESS_DIRS`, which omits `.devin` (observed live in native-dispatch-run; `learnings surface` fails) | A core fix that derives the pattern open-set (or adds the missing dirs) plus a classifier test per shipped harness dir |
 | DEVIN-07 | Reviewer-specific read/search enforcement lacks adapter handling and captured child identity | Supported identity contract plus native read/search/notebook boundary tests |
 | DEVIN-07 | Background launch is not terminal completion; poll exclusion is not lifecycle tracking | Capture-backed persistent lifecycle and restart/repeated-read tests |
 | DEVIN-08 | Unknown/partial/contradictory question responses and first-answer extraction | Batch/cancellation authority tests and fresh interactive hook captures |
-| DEVIN-09 | Receipt reuse without re-prompt after a session change | A live run after the DEVIN-07 dispatch fix in which `/clear` + resume proceeds on the existing receipt with no new Plan Approval prompt |
+| DEVIN-09 | Receipt reuse without re-prompt after a session change | A live run in which `/clear` + resume proceeds on the existing receipt with no new Plan Approval prompt (dispatch fix is in; native-dispatch-run only exercised same-session resume/compaction) |
 | DEVIN-12 | Testing Contract repair retirement | Vendor-confirmed fixed version, real write/read regression, supported baseline, and stored-plan migration |
 | DEVIN-02, DEVIN-05, DEVIN-13 | Actual context injection, authenticated MCP/header behavior, Desktop execution, current hook approval | Separate host/platform validation; static config or doctor output is insufficient |
 
@@ -104,6 +104,8 @@ git show 6e208f7b:docs/reference/research/devin/devin-harness-port-plan.md
 | question-rendering-core-extraction-plan.md | DEVIN-08 |
 | stop-hook-read-only-probe-plan.md | DEVIN-11 |
 | testing-contract-repair-observability-plan.md | DEVIN-12 |
+
+Active (not yet folded): [pr-996-item-2-native-dispatch-translation-plan.md](pr-996-item-2-native-dispatch-translation-plan.md) — implementation plan for review Item 2 (DEVIN-07 native `profile`/`task` translation), implemented and live-accepted 2026-09-18 (`evidence/devin-e2e-run/native-dispatch-run/`); fold into DEVIN-07/09/14 once the change lands.
 
 `pr-996-item-1-plan-approval-session-isolation-plan.md` (DEVIN-09) was folded into findings 09/14 after the fix landed in `8bbdb928` and is not in the `6e208f7b` baseline; recover it with `git show 8bbdb928:docs/reference/research/devin/pr-996-item-1-plan-approval-session-isolation-plan.md`.
 

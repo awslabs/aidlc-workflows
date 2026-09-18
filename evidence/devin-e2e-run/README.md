@@ -22,11 +22,12 @@ evidence/devin-e2e-run/` for provenance.
 | `third-run/` (removed) | 2026-09-01 | express (9 stages) | interactive (`devin`) | BLOCKED at code-generation plan approval — run-2 fix (`normalizeToolResponse`) was necessary but NOT sufficient: `hasExplicitHumanSelection` still rejects all Devin response shapes, so the PostToolUse `record-human-turn` arm has NEVER fired (all 7 HUMAN_TURNs from UserPromptSubmit, 0 from PostToolUse); 4 bugs found (A: arm never fires, B: guard blocks hooks, C: downstream refusal, D: directive corruption on re-run); 15/17 hooks verified (`log-subagent` newly PASS); `PLAN_APPROVAL_RECORDED: 0`, `PLAN_APPROVAL_BLOCKED: 23` |
 | `fourth-run/` (removed) | — | express (9 stages) | interactive (`devin`) | Retained session exports, including native question schema/response observations used during later fixes; not a blanket all-topology PASS or independent hook-stdin capture. |
 
-## Current run
+## Current runs
 
 | Run | Scope | Mode | Status |
 |-----|-------|------|--------|
 | `session-isolation-run/` (2026-09-17, Devin CLI 3000.10.31, `bce80f29` + uncommitted Item 1 fix) | express (minimal `hello.py` prompt) | interactive, two concurrent sessions + `/clear` session change | Item 1 ACCEPTED: S1 receipt, S2, S3, S4 PASS; S5 receipt persistence PASS, no-re-prompt inconclusive. Workflow BLOCKED at developer dispatch by review Item 2 / DEVIN-07 (native `task` field not forwarded) — `PLAN_APPROVAL_RECORDED: 2`, `PLAN_APPROVAL_BLOCKED: 10` (3 correct pre-approval, 7 Item 2). See `SUMMARY.md`. |
+| `native-dispatch-run/` (2026-09-17/18, Devin CLI 3000.10.31, `3baf4d54` + uncommitted Item 2 fix) | express (same `hello.py` prompt) | interactive, single session (resumed + compacted once, no `/clear`) | Item 2 ACCEPTED: V2 approved dispatch allowed on first attempt, V3 child received native `task` + one rule bundle, V4 workflow COMPLETED (`hello.py` prints `ok`, 4/4 tests, doctor 58/0) — `PLAN_APPROVAL_RECORDED: 1`, `PLAN_APPROVAL_BLOCKED: 0`. V1/V6 not exercised live (deterministic pins only); V5 `/clear` no-re-prompt not exercised. Side finding: `runtime-graph.json` never compiled on `.devin` (classifier gap, pre-existing). |
 
 ## Why this record was tracked
 

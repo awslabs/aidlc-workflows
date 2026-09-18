@@ -1,0 +1,160 @@
+=== event counts (grep '**Event**: X' | sort | uniq -c) ===
+     17 SENSOR_PASSED
+     17 SENSOR_FIRED
+     14 ARTIFACT_UPDATED
+     13 HUMAN_TURN
+     12 ARTIFACT_CREATED
+      9 STAGE_STARTED
+      7 DECISION_RECORDED
+      6 STAGE_COMPLETED
+      5 QUESTION_ANSWERED
+      4 PHASE_VERIFIED
+      4 PHASE_STARTED
+      4 PHASE_COMPLETED
+      3 STAGE_SKIPPED
+      3 STAGE_AWAITING_APPROVAL
+      3 GATE_APPROVED
+      1 WORKSPACE_SCANNED
+      1 WORKSPACE_SCAFFOLDED
+      1 WORKSPACE_INITIALISED
+      1 WORKFLOW_STARTED
+      1 WORKFLOW_COMPLETED
+      1 SUMMARY_CONFIRMATION_RECORDED
+      1 SUBAGENT_COMPLETED
+      1 SESSION_RESUMED
+      1 SESSION_ENDED
+      1 SESSION_COMPACTED
+      1 PLAN_APPROVAL_RECORDED
+      1 PHASE_SKIPPED
+      1 HEALTH_CHECKED
+      1 GUARDRAIL_LOADED
+
+=== PLAN_APPROVAL_RECORDED rows ===
+559----
+560-
+561-## Plan Approval Recorded
+562-**Timestamp**: 2026-09-18T01:42:09Z
+563:**Event**: PLAN_APPROVAL_RECORDED
+564-**Stage**: code-generation
+565-**Details**: Approve Plan
+566-**Session**: nettle-vicuna
+567-**Checkpoint**: Code Generation Plan Approval
+568-**Plan Target**: stage:code-generation
+569-**Intent**: 01a0b218-56a1-718b-a879-b67afde8d360
+570-**Directive Epoch**: sha256:244f5a46bd12e3c96e0f8e391c64df243de5a60cdb7cb2d0c688d62cbaa93dbb
+571-**Run floor**: STAGE_STARTED:2026-09-18T01:31:03Z#1
+572-**Approval Fingerprint**: sha256:v3:90cbd31fa689c7bcdb5fdec72699d8c335f2e51deb6771f8a07119fa81370e8d
+573-**Questions File**: aidlc/spaces/default/intents/260918-hello-ok-script/construction/code-generation/code-generation-questions.md
+574-**Questions SHA-256**: 0b597b2f981dc82edac9b7f6302f0c80f8ee9d40a0168421334cf4a2c56ddb49
+575-**Prompt SHA-256**: 9d670197da507919bf55db453e38e3f202e1a88846d22e360bb6cdce61e2b804
+576-
+577----
+
+=== SESSION_ENDED rows ===
+783----
+784-
+785-## Session Resume
+786-**Timestamp**: 2026-09-18T11:03:15Z
+787:**Event**: SESSION_RESUMED
+788-**Source**: resume
+789-**Session**: nettle-vicuna
+790-
+791----
+792-
+793-## Human Turn
+794-**Timestamp**: 2026-09-18T11:03:59Z
+795-**Event**: HUMAN_TURN
+796-**Session**: nettle-vicuna
+797-
+--
+830----
+831-
+832-## Session Compacted
+833-**Timestamp**: 2026-09-18T11:07:55Z
+834:**Event**: SESSION_COMPACTED
+835-**Current Stage**: build-and-test
+836-**State Validity**: valid
+837-
+838----
+839-
+840-## Artifact Created
+841-**Timestamp**: 2026-09-18T11:10:09Z
+842-**Event**: ARTIFACT_CREATED
+843-**Tool**: Write
+844-**File**: <project-dir>/aidlc/spaces/default/intents/260918-hello-ok-script/construction/build-and-test/build-instructions.md
+--
+1223----
+1224-
+1225-## Session End
+1226-**Timestamp**: 2026-09-18T11:44:42Z
+1227:**Event**: SESSION_ENDED
+1228-**Reason**: prompt_input_exit
+1229-
+1230----
+
+=== STAGE_* transition rows (stage name + timestamp) ===
+31-**Timestamp**: 2026-09-18T01:18:54Z
+32:**Event**: STAGE_STARTED
+33-**Stage**: workspace-scaffold
+47-**Timestamp**: 2026-09-18T01:18:54Z
+48:**Event**: STAGE_COMPLETED
+49-**Stage**: workspace-scaffold
+55-**Timestamp**: 2026-09-18T01:18:54Z
+56:**Event**: STAGE_STARTED
+57-**Stage**: workspace-detection
+74-**Timestamp**: 2026-09-18T01:18:54Z
+75:**Event**: STAGE_COMPLETED
+76-**Stage**: workspace-detection
+82-**Timestamp**: 2026-09-18T01:18:54Z
+83:**Event**: STAGE_STARTED
+84-**Stage**: state-init
+103-**Timestamp**: 2026-09-18T01:18:54Z
+104:**Event**: STAGE_COMPLETED
+105-**Stage**: state-init
+135-**Timestamp**: 2026-09-18T01:18:54Z
+136:**Event**: STAGE_STARTED
+137-**Stage**: requirements-analysis
+436-**Timestamp**: 2026-09-18T01:30:23Z
+437:**Event**: STAGE_AWAITING_APPROVAL
+438-**Stage**: requirements-analysis
+443-**Timestamp**: 2026-09-18T01:30:59Z
+458-**Timestamp**: 2026-09-18T01:31:03Z
+459:**Event**: STAGE_COMPLETED
+460-**Stage**: requirements-analysis
+491-**Timestamp**: 2026-09-18T01:31:03Z
+492:**Event**: STAGE_STARTED
+493-**Stage**: code-generation
+779-**Timestamp**: 2026-09-18T01:48:13Z
+780:**Event**: STAGE_AWAITING_APPROVAL
+781-**Stage**: code-generation
+786-**Timestamp**: 2026-09-18T11:03:15Z
+816-**Timestamp**: 2026-09-18T11:06:46Z
+817:**Event**: STAGE_COMPLETED
+818-**Stage**: code-generation
+825-**Timestamp**: 2026-09-18T11:06:46Z
+826:**Event**: STAGE_STARTED
+827-**Stage**: build-and-test
+1085-**Timestamp**: 2026-09-18T11:30:15Z
+1086:**Event**: STAGE_AWAITING_APPROVAL
+1087-**Stage**: build-and-test
+1101-**Timestamp**: 2026-09-18T11:30:15Z
+1102:**Event**: STAGE_COMPLETED
+1103-**Stage**: build-and-test
+1134-**Timestamp**: 2026-09-18T11:30:15Z
+1135:**Event**: STAGE_STARTED
+1136-**Stage**: deployment-pipeline
+1151-**Timestamp**: 2026-09-18T11:32:20Z
+1152:**Event**: STAGE_SKIPPED
+1153-**Stage**: deployment-pipeline
+1160-**Timestamp**: 2026-09-18T11:32:20Z
+1161:**Event**: STAGE_STARTED
+1162-**Stage**: deployment-execution
+1168-**Timestamp**: 2026-09-18T11:33:34Z
+1169:**Event**: STAGE_SKIPPED
+1170-**Stage**: deployment-execution
+1177-**Timestamp**: 2026-09-18T11:33:34Z
+1178:**Event**: STAGE_STARTED
+1179-**Stage**: observability-setup
+1185-**Timestamp**: 2026-09-18T11:34:26Z
+1186:**Event**: STAGE_SKIPPED
+1187-**Stage**: observability-setup
