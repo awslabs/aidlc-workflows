@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1031,
+    "total": 1039,
     "enumeratedByClass": {
-      "function": 713,
+      "function": 721,
       "audit": 102,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 420,
+      "function": 422,
       "audit": 63,
       "scope": 11,
       "stage": 11,
@@ -1355,6 +1355,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:activeProtectedChallengeKind",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:activeSpace",
       "minMechanism": "none",
       "coveredBy": [
@@ -2536,6 +2543,13 @@
     {
       "unitClass": "function",
       "unitId": "function:constructionSkeletonOn",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:consumeCheckpointApprovalChallenge",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4703,6 +4717,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:mintProtectedChallenge",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:modelRatesPath",
       "minMechanism": "none",
       "coveredBy": [
@@ -5390,6 +5416,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readCheckpointApprovalChallenge",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readCheckpointApprovalResponse",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readClaimGenerations",
       "minMechanism": "none",
       "coveredBy": [
@@ -6070,6 +6110,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:requireCheckpointApprovalResponse",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8398,6 +8450,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeCheckpointApprovalChallenge",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeCheckpointApprovalResponse",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
