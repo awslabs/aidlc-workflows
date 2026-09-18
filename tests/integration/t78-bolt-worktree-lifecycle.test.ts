@@ -651,6 +651,97 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(existsSync(join(wt, "untracked.bin"))).toBe(false);
     }, 30_000);
 
+    test("discard parks and restores raw filtered bytes without changing ordinary dirty files", () => {
+      const proj = setupLifecycleProject();
+      const slug = "raw-filtered";
+      const wt = worktreeDir(proj, slug);
+      gitInitMain(proj);
+      expect(git(proj, "config", "filter.lossy.clean", "tr a-z A-Z").status).toBe(0);
+      writeFileSync(join(proj, ".gitattributes"), "*.lossy filter=lossy\n");
+      writeFileSync(join(proj, "notes.lossy"), "original filtered notes\n");
+      writeFileSync(join(proj, "plain.txt"), "original ordinary notes\n");
+      expect(git(proj, "add", ".gitattributes", "notes.lossy", "plain.txt").status).toBe(0);
+      expect(git(proj, "commit", "-q", "-m", "seed clean-filtered source").status).toBe(0);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const trackedBytes = "dirty lowercase tracked notes\n";
+      const untrackedBytes = "untracked lowercase scratch\n";
+      const plainBytes = "ordinary dirty lowercase bytes\n";
+      writeFileSync(join(wt, "notes.lossy"), trackedBytes);
+      writeFileSync(join(wt, "scratch.lossy"), untrackedBytes);
+      writeFileSync(join(wt, "plain.txt"), plainBytes);
+
+      const aborted = runBolt(
+        proj, "abort", "--name", "Raw Filtered Bolt", "--slug", slug,
+        "--reason", "keep the exact dirty bytes", "--discard",
+      );
+      expect(aborted.status).toBe(0);
+      const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
+      expect(existsSync(wt)).toBe(false);
+      expect(git(proj, "cat-file", "-p", `${parkedRef}/head:notes.lossy`).stdout).toBe(trackedBytes);
+      expect(git(proj, "cat-file", "-p", `${parkedRef}/head:scratch.lossy`).stdout).toBe(untrackedBytes);
+      expect(git(proj, "cat-file", "-p", `${parkedRef}/head:plain.txt`).stdout).toBe(plainBytes);
+
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status).toBe(0);
+      const { worktree_path: restoredPath } = JSON.parse(restored.out) as { worktree_path: string };
+      expect(readFileSync(join(restoredPath, "notes.lossy"), "utf-8")).toBe(trackedBytes);
+      expect(readFileSync(join(restoredPath, "scratch.lossy"), "utf-8")).toBe(untrackedBytes);
+      expect(readFileSync(join(restoredPath, "plain.txt"), "utf-8")).toBe(plainBytes);
+    });
+
+    test("a broken optional clean filter still parks and restores the raw bytes", () => {
+      const proj = setupLifecycleProject();
+      const slug = "optional-filter";
+      const wt = worktreeDir(proj, slug);
+      writeFileSync(join(proj, ".gitattributes"), "notes.broken filter=broken\n");
+      writeFileSync(join(proj, "notes.broken"), "original notes\n");
+      gitInitMain(proj);
+      expect(git(proj, "config", "filter.broken.clean", "false").status).toBe(0);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const dirtyBytes = "dirty bytes survive an optional filter failure\n";
+      writeFileSync(join(wt, "notes.broken"), dirtyBytes);
+
+      const aborted = runBolt(
+        proj, "abort", "--name", "Optional Filter Bolt", "--slug", slug,
+        "--reason", "git falls back to raw bytes", "--discard",
+      );
+      expect(aborted.status).toBe(0);
+      const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
+      expect(existsSync(wt)).toBe(false);
+      expect(git(proj, "cat-file", "-p", `${parkedRef}/head:notes.broken`).stdout).toBe(dirtyBytes);
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status).toBe(0);
+      const { worktree_path: restoredPath } = JSON.parse(restored.out) as { worktree_path: string };
+      expect(readFileSync(join(restoredPath, "notes.broken"), "utf-8")).toBe(dirtyBytes);
+    });
+
+    test("a broken required clean filter refuses discard without destroying the live attempt", () => {
+      const proj = setupLifecycleProject();
+      const slug = "required-filter";
+      const wt = worktreeDir(proj, slug);
+      writeFileSync(join(proj, ".gitattributes"), "notes.broken filter=broken\n");
+      writeFileSync(join(proj, "notes.broken"), "original notes\n");
+      gitInitMain(proj);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const head = git(wt, "rev-parse", "HEAD").stdout.trim();
+      const dirtyBytes = "dirty bytes survive a required filter failure\n";
+      writeFileSync(join(wt, "notes.broken"), dirtyBytes);
+      expect(git(proj, "config", "filter.broken.clean", "false").status).toBe(0);
+      expect(git(proj, "config", "filter.broken.required", "true").status).toBe(0);
+
+      const aborted = runBolt(
+        proj, "abort", "--name", "Required Filter Bolt", "--slug", slug,
+        "--reason", "snapshot must succeed first", "--discard",
+      );
+      expect(aborted.status).toBe(1);
+      expect(existsSync(wt)).toBe(true);
+      expect(git(proj, "rev-parse", "--verify", `refs/heads/bolt-${slug}`).stdout.trim()).toBe(head);
+      expect(git(wt, "rev-parse", "HEAD").stdout.trim()).toBe(head);
+      expect(readFileSync(join(wt, "notes.broken"), "utf-8")).toBe(dirtyBytes);
+      expect(eventBlock(proj, "WORKTREE_DISCARDED")).toBe("");
+      expect(eventBlock(proj, "BOLT_FAILED")).toBe("");
+    });
+
     test("a conflicting parked ref refuses abort before audit or destructive cleanup", () => {
       const proj = setupLifecycleProject();
       const slug = "blocked-parking";

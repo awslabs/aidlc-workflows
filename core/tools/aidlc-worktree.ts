@@ -26,6 +26,7 @@ import {
   discoverSiblingRepos,
   emitError,
   errorMessage,
+  filteredRawIndexEntries,
   findAllEvents,
   getField,
   gitCommitSourceListing,
@@ -2825,6 +2826,30 @@ function parkAttempt(
       const head = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
       requireGit(["read-tree", head], wtPath, env);
       requireGit(["add", "-A"], wtPath, env);
+      // Clean filters may transform dirty bytes; the park must hold the exact
+      // bytes that `worktree remove --force` is about to destroy.
+      // Symlinks and gitlinks stay exactly as `git add -A` staged them.
+      const includedRegularPaths = new Set<string>();
+      for (const record of requireGit(["ls-files", "-s", "-z"], wtPath, env).split("\0")) {
+        if (!/^100(?:644|755) /.test(record)) continue;
+        const tab = record.indexOf("\t");
+        if (tab === -1) throw new Error("cannot parse a parked regular-file index entry");
+        includedRegularPaths.add(record.slice(tab + 1));
+      }
+      const rawEntries = filteredRawIndexEntries(wtPath, idx, includedRegularPaths);
+      if (rawEntries === null) throw new Error("cannot compare raw bytes for filtered paths");
+      for (const entry of rawEntries) {
+        const indexed = requireGit(["ls-files", "-s", "-z", "--", entry.path], wtPath, env);
+        const mode = indexed.slice(0, indexed.indexOf(" "));
+        if (!/^100(?:644|755)$/.test(mode)) {
+          throw new Error(`cannot resolve the index mode for filtered path ${entry.path}`);
+        }
+        const raw = requireGit(["hash-object", "-w", "--no-filters", "--", entry.path], wtPath, env);
+        if (raw !== entry.sha) {
+          throw new Error(`cannot materialize raw parked bytes for filtered path ${entry.path}`);
+        }
+        requireGit(["update-index", "--cacheinfo", mode, entry.sha, entry.path], wtPath, env);
+      }
       const tree = requireGit(["write-tree"], wtPath, env);
       commit = requireGit([
         "commit-tree", tree, "-p", head, "-m",

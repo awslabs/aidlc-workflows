@@ -752,7 +752,8 @@ Audit-of-intent semantics apply to side-effects whose outcome cannot be checked 
 | `MERGE_DISPATCH_INVOKED` | `tools/aidlc-bolt.ts` `dispatch-event` | Audit emit, then `Task(aidlc-pipeline-deploy-agent, ...)` LLM dispatch — the side-effect is the LLM call itself; success is observed via the matching `MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK` post-call emit |
 
 Discard snapshots tracked and untracked, non-ignored working-tree content with a
-temporary Git index and `commit-tree`. All parked copies must exist before
+temporary Git index and `commit-tree`. Regular files with configured clean filters
+retain raw bytes, bypassing clean filters. All parked copies must exist before
 `WORKTREE_DISCARDED` can be emitted; if parking or audit emission fails, teardown
 does not start. The row's `Parked ref` names
 `refs/aidlc/parked/<slug>/<UTC-YYYYMMDDTHHMMSSZ[-N]>`, whose `/head` points to

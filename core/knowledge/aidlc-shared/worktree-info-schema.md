@@ -65,6 +65,7 @@ snapshot and reviewed source refs before emitting `WORKTREE_DISCARDED`, then
 removes the live checkout and branch and compare-deletes the original reviewed
 source refs. A temporary Git index and `commit-tree` capture tracked files and
 non-ignored untracked files; ignored untracked files are not backed up.
+Regular files with configured clean filters retain raw bytes, bypassing clean filters.
 
 The parked namespace is `refs/aidlc/parked/<slug>/<stamp>`, where `stamp` is UTC
 `YYYYMMDDTHHMMSSZ`, with a numeric `-N` suffix for collisions. `/head` points to
