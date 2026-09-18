@@ -768,6 +768,85 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(readFileSync(join(restoredPath, "notes.broken"), "utf-8")).toBe(dirtyBytes);
     });
 
+    test("restore preserves a dirty tracked non-UTF-8 filename byte-exactly", () => {
+      const proj = setupLifecycleProject();
+      const slug = "non-utf8-path";
+      const wt = worktreeDir(proj, slug);
+      gitInitMain(proj);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const name = Buffer.concat([Buffer.from("notes-"), Buffer.from([0xff]), Buffer.from(".bin")]);
+      const path = Buffer.concat([Buffer.from(`${wt}/`), name]);
+      writeFileSync(path, "original bytes\n");
+      expect(git(wt, "add", "-A").status).toBe(0);
+      expect(git(wt, "commit", "-q", "-m", "track a non-UTF-8 filename").status).toBe(0);
+      const dirtyBytes = Buffer.from([0, 0xff, 13, 10, 0x80]);
+      writeFileSync(path, dirtyBytes);
+
+      const aborted = runBolt(
+        proj, "abort", "--name", "Non-UTF-8 Filename Bolt", "--slug", slug,
+        "--reason", "retain filename bytes", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const { worktree_path: restoredPath } = JSON.parse(restored.out) as { worktree_path: string };
+      const restoredName = readdirSync(restoredPath, { encoding: "buffer" })
+        .map((entry) => Buffer.from(entry)).find((entry) => entry.equals(name));
+      expect(restoredName).toEqual(name);
+      expect(readFileSync(Buffer.concat([Buffer.from(`${restoredPath}/`), name]))).toEqual(dirtyBytes);
+    });
+
+    test("restore materializes a large index exceeding one MiB", () => {
+      const proj = setupLifecycleProject();
+      const slug = "large-index";
+      const wt = worktreeDir(proj, slug);
+      gitInitMain(proj);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const fileCount = 12_000;
+      const nameFor = (i: number): string => `${String(i).padStart(5, "0")}-${"x".repeat(84)}`;
+      const bytes = Buffer.from([0, 0xff, 10, 0x80]);
+      for (let i = 0; i < fileCount; i++) writeFileSync(join(wt, nameFor(i)), bytes);
+      expect(git(wt, "add", "-A").status).toBe(0);
+      expect(git(wt, "commit", "-q", "-m", "track a large source tree").status).toBe(0);
+      const listing = Bun.spawnSync(["git", "ls-files", "-s", "-z"], { cwd: wt, stdout: "pipe" });
+      expect(listing.exitCode).toBe(0);
+      expect(listing.stdout.length).toBeGreaterThan(1024 * 1024);
+      const parkedFileCount = listing.stdout.reduce((count, byte) => count + Number(byte === 0), 0);
+
+      const aborted = runBolt(
+        proj, "abort", "--name", "Large Index Bolt", "--slug", slug,
+        "--reason", "recover every indexed file", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const recovery = JSON.parse(restored.out) as { worktree_path: string; materialized: number };
+      expect(recovery.materialized).toBe(parkedFileCount);
+      expect(readFileSync(join(recovery.worktree_path, nameFor(fileCount - 1)))).toEqual(bytes);
+    }, 60_000);
+
+    test("restore writes symlink target bytes as a regular file with core.symlinks=false", () => {
+      const proj = setupLifecycleProject();
+      const slug = "disabled-symlinks";
+      writeFileSync(join(proj, "target.txt"), "target contents\n");
+      symlinkSync("target.txt", join(proj, "runner"));
+      gitInitMain(proj);
+      expect(git(proj, "config", "core.symlinks", "false").status).toBe(0);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const aborted = runBolt(
+        proj, "abort", "--name", "Disabled Symlinks Bolt", "--slug", slug,
+        "--reason", "honor the repository symlink policy", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const { worktree_path: restoredPath } = JSON.parse(restored.out) as { worktree_path: string };
+      const restoredLink = join(restoredPath, "runner");
+      expect(lstatSync(restoredLink).isSymbolicLink()).toBe(false);
+      expect(lstatSync(restoredLink).isFile()).toBe(true);
+      expect(readFileSync(restoredLink)).toEqual(Buffer.from("target.txt"));
+    });
+
     test("restore preserves executable files and symbolic links", () => {
       const proj = setupLifecycleProject();
       const slug = "file-modes";

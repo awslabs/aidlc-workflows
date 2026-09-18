@@ -14,7 +14,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
@@ -2837,8 +2837,15 @@ function parkAttempt(
       // Clean filters may transform dirty bytes; the park must hold the exact
       // bytes that `worktree remove --force` is about to destroy.
       // Symlinks and gitlinks stay exactly as `git add -A` staged them.
+      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+        cwd: wtPath,
+        env: { ...process.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
       const includedRegularPaths = new Set<string>();
-      for (const record of requireGit(["ls-files", "-s", "-z"], wtPath, env).split("\0")) {
+      for (const record of listed.stdout.toString().split("\0")) {
         if (!/^100(?:644|755) /.test(record)) continue;
         const tab = record.indexOf("\t");
         if (tab === -1) throw new Error("cannot parse a parked regular-file index entry");
@@ -3083,6 +3090,49 @@ function parkedRepoCwd(
   return parkedRepos[0].cwd;
 }
 
+/** Validate Git's relative path without decoding the bytes used for filesystem IO. */
+export function restoreDestination(
+  rootRealpath: Buffer,
+  pathBytes: Buffer,
+): { destination: Buffer; parent: Buffer } {
+  // Decode only for lexical checks: filenames may contain arbitrary non-UTF-8 bytes.
+  const path = pathBytes.toString();
+  const root = rootRealpath.toString();
+  if (!path || pathBytes.includes(0) || isAbsolute(path) ||
+      path.split("/").includes("..") ||
+      !resolve(root, path).startsWith(`${root}${sep}`)) {
+    throw new Error(`refusing parked path outside the restore checkout: ${JSON.stringify(path)}`);
+  }
+  const destination = Buffer.concat([rootRealpath, Buffer.from(sep), pathBytes]);
+  const slash = pathBytes.lastIndexOf(0x2f);
+  const parent = slash === -1 ? rootRealpath : destination.subarray(0, rootRealpath.length + 1 + slash);
+  return { destination, parent };
+}
+
+/** Check existing prefixes before recursive mkdir can follow a symlink outside the checkout. */
+export function assertNoSymlinkedAncestor(rootRealpath: Buffer, parent: Buffer): void {
+  for (let end = rootRealpath.length + 1; end <= parent.length; end++) {
+    if (end !== parent.length && parent[end] !== 0x2f && parent[end] !== sep.charCodeAt(0)) continue;
+    const ancestor = parent.subarray(0, end);
+    const stat = lstatSync(ancestor, { throwIfNoEntry: false });
+    if (!stat) return;
+    if (stat.isSymbolicLink()) {
+      throw new Error(`refusing symlinked parked parent: ${JSON.stringify(ancestor.toString())}`);
+    }
+  }
+}
+
+/** Reject symlinked parents, including aliases whose targets remain inside the checkout. */
+export function assertParentInsideCheckout(rootRealpath: Buffer, parent: Buffer): void {
+  const isSeparator = (byte: number): boolean => byte === 0x2f || byte === sep.charCodeAt(0);
+  const inside = (path: Buffer): boolean => path.equals(rootRealpath) ||
+    (path.subarray(0, rootRealpath.length).equals(rootRealpath) && isSeparator(path[rootRealpath.length]));
+  if (!inside(parent) || !inside(realpathSync(parent, { encoding: "buffer" }))) {
+    throw new Error(`refusing parked parent outside the restore checkout: ${JSON.stringify(parent.toString())}`);
+  }
+  assertNoSymlinkedAncestor(rootRealpath, parent);
+}
+
 function handleRestore(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -3117,22 +3167,37 @@ function handleRestore(args: string[]): void {
   try {
     const indexed = runGit(["read-tree", head.oid], wtPath);
     if (!indexed.ok) throw new Error(`git read-tree failed: ${indexed.stderr.trim() || `exit ${indexed.code}`}`);
-    const listed = runGit(["ls-files", "-s", "-z"], wtPath);
-    if (!listed.ok) throw new Error(`git ls-files failed: ${listed.stderr.trim() || `exit ${listed.code}`}`);
-    for (const entry of listed.stdout.split("\0")) {
-      if (!entry) continue;
-      const match = /^([0-7]{6}) ([0-9a-f]{40,64}) 0\t([\s\S]+)$/.exec(entry);
-      if (!match) throw new Error("invalid parked index entry");
-      const [, mode, sha, path] = match;
-      const destination = resolve(wtPath, path);
-      if (isAbsolute(path) || path.split("/").includes("..") || !destination.startsWith(`${wtPath}${sep}`)) {
-        throw new Error(`refusing parked path outside the restore checkout: ${JSON.stringify(path)}`);
-      }
+    const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+      cwd: wtPath,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
+    const symlinkConfig = runGit(["config", "--bool", "core.symlinks"], wtPath);
+    if (!symlinkConfig.ok && symlinkConfig.code !== 1) {
+      throw new Error(`git config core.symlinks failed: ${symlinkConfig.stderr.trim() || `exit ${symlinkConfig.code}`}`);
+    }
+    const symlinks = symlinkConfig.stdout.trim() !== "false";
+    const rootRealpath = realpathSync(Buffer.from(wtPath), { encoding: "buffer" });
+    for (let start = 0; start < listed.stdout.length;) {
+      const end = listed.stdout.indexOf(0, start);
+      if (end === -1) throw new Error("invalid parked index entry");
+      const entry = listed.stdout.subarray(start, end);
+      start = end + 1;
+      const tab = entry.indexOf(0x09);
+      const match = /^([0-7]{6}) ([0-9a-f]{40,64}) 0$/.exec(entry.subarray(0, tab).toString("ascii"));
+      if (tab === -1 || !match) throw new Error("invalid parked index entry");
+      const [, mode, sha] = match;
+      const pathBytes = entry.subarray(tab + 1);
+      const { destination, parent } = restoreDestination(rootRealpath, pathBytes);
       if (mode !== "100644" && mode !== "100755" && mode !== "120000" && mode !== "160000") {
-        throw new Error(`unsupported parked index mode ${mode} for ${JSON.stringify(path)}`);
+        throw new Error(`unsupported parked index mode ${mode} for ${JSON.stringify(pathBytes.toString())}`);
       }
+      assertNoSymlinkedAncestor(rootRealpath, parent);
+      mkdirSync(parent, { recursive: true });
+      assertParentInsideCheckout(rootRealpath, parent);
       if (mode === "160000") {
-        mkdirSync(destination, { recursive: true });
+        mkdirSync(destination);
         continue;
       }
       const blob = Bun.spawnSync(["git", "cat-file", "blob", sha], {
@@ -3141,11 +3206,9 @@ function handleRestore(args: string[]): void {
         stderr: "pipe",
       });
       if (blob.exitCode !== 0) {
-        throw new Error(`git cat-file failed for ${JSON.stringify(path)}: ${blob.stderr.toString().trim() || `exit ${blob.exitCode}`}`);
+        throw new Error(`git cat-file failed for ${JSON.stringify(pathBytes.toString())}: ${blob.stderr.toString().trim() || `exit ${blob.exitCode}`}`);
       }
-      mkdirSync(dirname(destination), { recursive: true });
-      if (mode === "120000") {
-        rmSync(destination, { recursive: true, force: true });
+      if (mode === "120000" && symlinks) {
         symlinkSync(blob.stdout, destination);
       } else {
         writeFileSync(destination, blob.stdout, { flag: "wx" });
