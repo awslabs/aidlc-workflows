@@ -139,9 +139,10 @@ before the batch can be approved; a changed command also retires prior approval.
 
 If `ready` is false, explain the named evidence errors and repair the missing
 source landing, verification, or review through its owning procedure. Do not
-invent verification or approval. When ready, guided/gated completion uses the
-human question-and-answer flow below. Automatic completion uses the recorded
-autonomous policy, needs no `ask`, and omits `--user-input`.
+invent verification or approval. Only after status reports `ready: true` may
+guided/gated completion issue `swarm-checkpoint --action ask` and use the human
+question-and-answer flow below; `ask` refuses an unready batch. Automatic
+completion uses the recorded autonomous policy, needs no `ask`, and omits `--user-input`.
 
 At a human batch checkpoint, run the §13 learning-selection question only when
 `directive.protocol_modules` lists `learnings`. With the module listed,
@@ -153,20 +154,29 @@ module is absent, keep no diary and ask no learning question; go straight to the
 batch approval procedure when a human is required. Bookkeeping settlement never
 repeats an already handled ritual.
 
-Before presenting **Approve** / **Request Changes**, bind the question to the
-current batch and the invoking SessionStart session:
+After confirming `ready: true` and before presenting **Approve** / **Request Changes**,
+bind the question to the current batch fingerprint, per-Unit `Command SHA-256`
+set, and the invoking SessionStart session:
 
 ```bash
 {{INVOKE}} engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"
 ```
 
-Then present the choices and wait for the human. The human's exact **Approve** /
-**Request Changes** reply in that session, to this checkpoint question, authorizes
-the matching action; an unrelated reply, another session's reply, or a reply to
-a different question does not. Never pass `--user-input` the human did not choose.
-The response is one-shot and bound to this batch, exact Unit set, and current
-fingerprint; if the checkpoint changes, obtain a new directive and ask again.
-A human Request Changes always requires this flow, even under autonomous policy.
+Then present the choices and wait for the human. Show "Verified with
+`<full command>` (exit 0). Approve this completed batch?" using the complete
+recorded command, never abbreviated. Copy the canonical `command` from the
+verification-command tool output into a code span whose delimiter preserves any
+backticks. The human's exact **Approve** / **Request Changes** reply in that
+session, to this checkpoint question, authorizes the matching action; an unrelated
+reply, another session's reply, or a reply to a different question does not.
+Never pass `--user-input` the human did not choose. The response is one-shot and
+bound to this batch, exact Unit set, current fingerprint, and per-Unit command
+digest set. Re-running swarm `finalize` withdraws every open checkpoint question
+and captured checkpoint response for this intent, in any session. After fresh
+verification and source landing, obtain a new directive, confirm `ready: true`,
+and ask again; a reply captured before `finalize` cannot approve the new evidence.
+A human Request Changes always requires this ready question-and-answer flow,
+even under autonomous policy.
 
 ```bash
 # Only after a real human Approve:

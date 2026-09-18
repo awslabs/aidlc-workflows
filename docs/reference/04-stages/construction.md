@@ -62,6 +62,13 @@ be interpolated into a shell line, where substitutions could execute before
 approval. Use the invoking SessionStart session ID: both `log decision` and
 `log answer` require
 `--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
+Copy the complete canonical command exactly from the `command` field in the
+`decision` tool's JSON output into the verification-command question's code span;
+never abbreviate it. Choose a delimiter that preserves any command backticks.
+The human can also open `<record>/verification-command.txt`. The canonical
+command is a nonblank single line of at most 1024 characters. Control characters
+and display-spoofing characters (Unicode format characters, including zero-width
+and bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
 The human's exact **Approve** / **Request Changes** reply in that session binds
 the answer to the pending command. Only **Approve** authorizes the receipt;
 an unrelated reply, **Request Changes**, or a reply from another session does not.
@@ -99,21 +106,29 @@ After the per-unit work:
 verifies and approves existing Unit work; it does not rerun Code Generation.
 With `command_authorized: false`, ask the verification-command question before
 any `verify`, complete the human decision/answer/setter flow, then call `next`.
-Show "Verified with `<verification_command>` (exit 0)" in the approval question;
-`verification_command` is the recorded command's display label.
+Show "Verified with `<full command>` (exit 0)" in the approval question;
+`verification_command` is the full canonical recorded command, never an abbreviated label.
 A `swarm_checkpoint` handles a completed batch before later batch work. After
 verification, approval, or rejection, call `next`, never approve the whole stage for one Unit or batch.
-Before a human Unit/skeleton approval question, run
+Only after `verify` reports `verified: true` and the current checkpoint has
+`ready: true`, open the human Unit/skeleton approval question with
 `aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
-for a human batch question, run
+`ask` refuses an unready or unverified checkpoint. For a human batch question,
+only after status reports `ready: true`, run
 `aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
 Then present **Approve** / **Request Changes** and wait. The human's exact reply
 in that session, to this checkpoint question, authorizes the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Pass that same `--session` on approval/rejection and never pass
 `--user-input` the human did not choose. Consent is one-shot and bound to the
-current checkpoint fingerprint. Automatic approval (`human_required: false`)
-needs no `ask` and no `--user-input`; human rejection always needs this flow.
+current checkpoint fingerprint, verification proof ID, and authorized command
+digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
+Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
+and captured checkpoint response for this intent, in any session. Re-verify,
+confirm `verified: true` (batch: `ready: true` after source landing), and ask again;
+an older response cannot approve the new evidence. Automatic approval
+(`human_required: false`) needs no `ask` and no `--user-input`; human rejection
+always needs this verified question-and-answer flow.
 
 A stage with `construction_policy.completion_only: true` and
 `human_completion_required: false` skips body, questions, reviewer, and learnings
@@ -121,8 +136,8 @@ prompt, then reports `awaiting-approval` and `approved` without invented user
 input. Other completion gates follow `human_completion_required`; the legacy
 path without policy retains its existing human-gate procedure.
 
-Version-3 checkpoint proofs retain the command's `command_sha256` and
-`command_label`, not raw command text, plus exit status and stdout/stderr byte
+Version-3 checkpoint proofs retain the command's `command_sha256` and full
+canonical command in `command_label`, plus exit status and stdout/stderr byte
 counts and SHA-256 digests; neither the proof file nor checkpoint CLI JSON
 retains raw check output. Diagnostics use the same authorized project check,
 not a newly chosen command. Legacy version-1 and version-2 proofs require

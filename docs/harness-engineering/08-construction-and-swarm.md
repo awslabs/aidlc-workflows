@@ -67,10 +67,17 @@ Before presenting the command, write it to
 be interpolated into a shell line, where substitutions could run before approval.
 Use `--command-file verification-command.txt` for `log decision`,
 `log answer`, and `state set-construction-verification-command`; use the invoking
-SessionStart session ID for both log calls via `--session "<session ID>"`. Record the human's
-exact **Approve** / **Request Changes** reply in that session; only **Approve**
-authorizes the receipt, not an unrelated reply, **Request Changes**, or a reply
-from another session. Never write `--details "Approve"` unless the human chose it.
+SessionStart session ID for both log calls via `--session "<session ID>"`. Copy the
+complete canonical command exactly from the `command` field in the `decision`
+tool's JSON output into the verification-command question's code span; never
+abbreviate it. Choose a delimiter that preserves any command backticks. The human
+can also open `<record>/verification-command.txt`. The canonical command is a
+nonblank single line of at most 1024 characters. Control characters and
+display-spoofing characters (Unicode format characters, including zero-width and
+bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
+Record the human's exact **Approve** / **Request Changes** reply in that session;
+only **Approve** authorizes the receipt, not an unrelated reply, **Request Changes**,
+or a reply from another session. Never write `--details "Approve"` unless the human chose it.
 
 Checkpoint policy requires solo ownership, an actual non-empty Unit DAG, and
 an included source-producing per-unit stage. Design-only and no-Unit work keep
@@ -129,28 +136,37 @@ the human decision/answer/setter flow before any `verify`, then re-run `next`.
 Otherwise run `bolt checkpoint --action verify --unit <unit> --kind <unit|skeleton>`;
 it executes the recorded, human-authorized command, not text selected at verify
 time. Approve only current verified evidence and show "Verified with
-`<verification_command>` (exit 0)" in the approval question. A skeleton always
-needs the human; ordinary Units follow `human_required`.
+`<full command>` (exit 0)" in the approval question, using the complete canonical
+`verification_command` from the tool output without abbreviation. A skeleton
+always needs the human; ordinary Units follow `human_required`.
 `swarm_checkpoint` similarly routes a completed batch before the next batch.
-Before a human Unit/skeleton approval question, run
+Only after `verify` reports `verified: true` and the current checkpoint has
+`ready: true`, open the human Unit/skeleton approval question with
 `aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
-for a human batch question, run
+`ask` refuses an unready or unverified checkpoint. For a human batch question,
+only after status reports `ready: true`, run
 `aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
 Then present **Approve** / **Request Changes** and wait. The human's exact reply
 in that session, to this checkpoint question, authorizes the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Pass that same `--session` on approval/rejection and never pass
 `--user-input` the human did not choose. Consent is one-shot and bound to the
-current checkpoint fingerprint. Automatic approval (`human_required: false`)
-needs no `ask` and no `--user-input`; human rejection always needs this flow.
+current checkpoint fingerprint, verification proof ID, and authorized command
+digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
+Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
+and captured checkpoint response for this intent, in any session. Re-verify,
+confirm `verified: true` (batch: `ready: true` after source landing), and ask again;
+an older response cannot approve the new evidence. Automatic approval
+(`human_required: false`) needs no `ask` and no `--user-input`; human rejection
+always needs this verified question-and-answer flow.
 Approval/rejection returns to `next`, never approves the whole Code Generation
 stage for one Unit or batch. See the
 [checkpoint commands](../guide/12-cli-commands.md#aidlc-engine-bolt-checkpoint-verify-and-approve-a-completed-unit)
 for the full action forms.
 
-Version-3 checkpoint proofs store the command's SHA-256 and display label, not
-raw command text, alongside output byte counts and digests rather than raw
-output. Earlier proof versions require re-verification with the authorized command.
+Version-3 checkpoint proofs store the command's SHA-256 and complete canonical
+command as the display label, alongside output byte counts and digests rather
+than raw output. Earlier proof versions require re-verification with the authorized command.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
 proof file cannot verify a Unit.
@@ -159,7 +175,8 @@ A final stage directive carrying `construction_policy.completion_only: true`
 and `human_completion_required: false` only reconciles recorded approvals: skip
 body, questions, reviewer and learnings prompt, report `awaiting-approval` then
 `approved` without user input, and call `next`. Evidence errors require the
-named review/receipt repair or human Request Changes, never invented verification.
+named review/receipt repair, consulting the human as needed, never invented
+verification or an unverified checkpoint approval question.
 
 Plan Approval remains individually bound even when its presentation is grouped.
 The `log decision`/`answer --checkpoint plan-approval --batch-file <JSON>

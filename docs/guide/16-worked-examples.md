@@ -312,6 +312,20 @@ Because the system splits into three integrating units, Contract Design formalis
 
 Delivery Planning identifies notification-core as the first integrated slice: an event must reach stored notification data and in-app delivery. The later delivery grouping contains preferences and email, while the actual order respects their dependency. Per-Bolt DoDs land in `bolt-plan.md`, rationale in `risk-and-sequencing-rationale.md`, and SES/SQS dependencies in `external-dependency-map.md`. The engine follows the 2.7 DAG and recorded iteration choice. Phase boundary verification confirms requirements-to-architecture alignment.
 
+For this example, the project check is `bun run verify:notifications`: it submits
+an event and verifies storage and in-app delivery. The conductor writes the
+proposed command to `<record>/verification-command.txt` with the file-write tool,
+then opens the verification-command decision. It copies the complete canonical
+`command` from the `decision` tool's JSON output exactly into a code span in the
+question: "Use this command to verify each completed Unit?
+`bun run verify:notifications`". Commands are never abbreviated; the human can
+also open `<record>/verification-command.txt`. The canonical command must be a
+nonblank single line of at most 1024 characters. Control characters and
+display-spoofing characters (Unicode format characters, including zero-width and
+bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
+You choose **Approve**; only after recording that exact answer in the same session
+does the typed setter authorize this command for the intent's checkpoints.
+
 > Progress: 19/33 overall | INCEPTION complete. Verification Gate passed.
 
 ### Construction Phase (stages 3.1-3.7)
@@ -330,19 +344,27 @@ the summaries and approve its Code Generation plan before generation. The Unit
 then produces its event handler, notification repository, and in-app delivery
 endpoint: 3 source files and 4 test files in this example.
 
-After the required reviews and completion receipts, a real project check submits
-an event and verifies storage and in-app delivery. Before asking you to approve
-the verified skeleton checkpoint, the conductor opens its session-bound question:
+After the required reviews and completion receipts, the conductor runs the
+recorded command through verification:
+
+```bash
+aidlc engine bolt checkpoint --action verify --unit "notification-core" --kind skeleton
+```
+
+Only after `verify` reports `verified: true` and the current checkpoint has
+`ready: true` does the conductor open its session-bound approval question:
 
 ```bash
 aidlc engine bolt checkpoint --action ask --unit "notification-core" --kind skeleton --session "<session ID>"
 ```
 
-It presents **Approve** / **Request Changes** and waits. You choose **Approve**;
-only that exact reply in that session, to this checkpoint question, authorizes
-approval. An unrelated reply, another session's reply, or a reply to a different
-question does not. The conductor records your actual choice with the same session,
-never passing `--user-input` you did not choose:
+It presents "Verified with `bun run verify:notifications` (exit 0). Approve this
+completed notification-core?" with **Approve** / **Request Changes** and waits.
+The code span shows the full recorded command, not a summary. You choose
+**Approve**; only that exact reply in that session, to this checkpoint question,
+authorizes approval. An unrelated reply, another session's reply, or a reply to
+a different question does not. The conductor records your actual choice with the
+same session, never passing `--user-input` you did not choose:
 
 ```bash
 aidlc engine bolt checkpoint --action approve --unit "notification-core" --kind skeleton --session "<session ID>" --user-input 'Approve'
@@ -350,6 +372,11 @@ aidlc engine bolt checkpoint --action approve --unit "notification-core" --kind 
 
 The earlier Functional Design review by itself would not have established that
 the integration worked, nor could its answer authorize this checkpoint.
+Re-running `verify` withdraws any open checkpoint question and captured response
+for this intent, in any session; the conductor must re-verify and ask again after
+`verified: true`, even if the command and artifacts are unchanged. For swarm
+batches the same rule applies to `finalize`: after fresh verification and source
+landing, confirm `ready: true` before asking again.
 
 If no autonomy choice has already been recorded, the workflow offers:
 

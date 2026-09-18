@@ -490,8 +490,8 @@ working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with
 `construction_checkpoint`: `{kind, unit, stages, fingerprint, ready, verified,
 approved, human_required, verification_command, command_authorized, errors,
-proof_path}`. `verification_command` is the command's display label, not the full
-command. A skeleton checkpoint requires an actual end-to-end project check,
+proof_path}`. `verification_command` is the full canonical recorded command,
+never an abbreviated display label. A skeleton checkpoint requires an actual end-to-end project check,
 current artifact/source/attempt-bound proof,
 and a real human approval. An ordinary Unit checkpoint requires verification
 and follows the recorded completion approval policy. A first design-stage review
@@ -506,6 +506,13 @@ be interpolated into a shell line, where substitutions could execute before
 approval. Use the invoking SessionStart session ID: both `log decision` and
 `log answer` require
 `--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
+Copy the complete canonical command exactly from the `command` field in the
+`decision` tool's JSON output into the verification-command question's code span;
+never abbreviate it. Choose a delimiter that preserves any command backticks.
+The human can also open `<record>/verification-command.txt`. The canonical
+command is a nonblank single line of at most 1024 characters. Control characters
+and display-spoofing characters (Unicode format characters, including zero-width
+and bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
 The human's exact **Approve** / **Request Changes** reply in that session binds
 the answer to the canonical command digest. Only **Approve** authorizes the
 receipt; an unrelated reply, **Request Changes**, or a reply from another session
@@ -516,9 +523,10 @@ authority, not the field alone. When `command_authorized: false`, route to that
 question before any `verify`, even under autonomy, then re-run `next`. Every
 Unit/batch checkpoint reuses the authorized command; changing it requires a new
 receipt and typed setter, never generic `state set`. The approval question shows
-"Verified with `<verification_command>` (exit 0)". Version-3 proofs store the
-command's SHA-256 and display label, not raw command text; older proofs require
-re-verification.
+"Verified with `<full command>` (exit 0)", using the complete canonical
+`verification_command` from the tool output without abbreviation. Version-3 proofs
+store the command's SHA-256 and full canonical command as the display label;
+older proofs require re-verification.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
 proof file cannot verify a Unit.
@@ -527,23 +535,31 @@ proof file cannot verify a Unit.
 through the team path, then `swarm_checkpoint` or `construction_checkpoint`
 through their checkpoint commands before body/reviewer/settle handling. It never
 regenerates a finished Unit because the directive says `run-stage`. Checkpoint
-approval/rejection returns to `next`, not whole-stage report-approval. Missing/stale evidence
-is repaired through its owning review/receipt procedure or human Request Changes;
-verification must never be invented. The
+approval/rejection returns to `next`, not whole-stage report-approval. Missing/stale
+evidence is repaired through its owning review/receipt procedure, consulting the
+human as needed; verification must never be invented. The
 [checkpoint commands](../guide/12-cli-commands.md#aidlc-engine-bolt-checkpoint-verify-and-approve-a-completed-unit)
 show the exact action forms.
 
-Before a human Unit/skeleton approval question, run
+Only after `verify` reports `verified: true` and the current checkpoint has
+`ready: true`, open the human Unit/skeleton approval question with
 `aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
-for a human batch question, run
+`ask` refuses an unready or unverified checkpoint. For a human batch question,
+only after status reports `ready: true`, run
 `aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
 Then present **Approve** / **Request Changes** and wait. The human's exact reply
 in that session, to this checkpoint question, authorizes the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Pass that same `--session` on approval/rejection and never pass
 `--user-input` the human did not choose. Consent is one-shot and bound to the
-current checkpoint fingerprint. Automatic approval (`human_required: false`)
-needs no `ask` and no `--user-input`; human rejection always needs this flow.
+current checkpoint fingerprint, verification proof ID, and authorized command
+digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
+Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
+and captured checkpoint response for this intent, in any session. Re-verify,
+confirm `verified: true` (batch: `ready: true` after source landing), and ask again;
+an older response cannot approve the new evidence. Automatic approval
+(`human_required: false`) needs no `ask` and no `--user-input`; human rejection
+always needs this verified question-and-answer flow.
 
 A normal `run-stage` may also carry `construction_policy` with `iteration`,
 `execution`, `autonomy`, `offer_autonomy`, `human_completion_required`, and `completion_only`.

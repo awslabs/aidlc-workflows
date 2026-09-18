@@ -129,8 +129,8 @@ A `run-stage` with `construction_checkpoint` carries `kind` (`unit` or
 `skeleton`), `unit`, `stages`, `fingerprint`, `ready`, `verified`, `approved`,
 `human_required`, `verification_command`, `command_authorized`, `errors`, and
 `proof_path`. It is a verification/approval re-entry over existing work.
-`verification_command` is the recorded command's display label. Use the exact
-Unit and kind the engine emitted:
+`verification_command` is the full canonical recorded command, never a truncated
+display label. Use the exact Unit and kind the engine emitted:
 
 ```bash
 {{INVOKE}} engine bolt checkpoint --action status --unit "<unit>" --kind <unit|skeleton>
@@ -142,10 +142,12 @@ Command**, reused at every Unit/batch checkpoint. If
 matching receipt, or a changed state field), **do not run `verify`**. Propose a
 real project check from the project scan, such as `bun test`, `pytest`, or
 `make check`. It must demonstrate the skeleton's integrated slice end to end and
-check completed Units' working results. Use one nonblank line of at most 8192
-characters with no control characters (including newline, CR, tab, or NUL).
-The tools trim leading/trailing whitespace before recording, hashing, and
-executing the command. Put multiline checks in a script and record its invocation.
+check completed Units' working results. Use one nonblank line of at most 1024
+characters after trimming leading/trailing whitespace. The tools refuse control
+characters (including newline, CR, tab, or NUL) and display-spoofing characters:
+Unicode format characters (including zero-width and bidi controls), line/paragraph
+separators, and no-break space (U+00A0). The trimmed command is recorded, hashed,
+and executed unchanged. Put multiline checks in a script and record its invocation.
 Before presenting the command, write it as UTF-8 text to
 `<record>/verification-command.txt` using the harness's file-write tool
 (Write/edit), never a shell `echo` or heredoc. Repo-derived command text must
@@ -157,11 +159,15 @@ use the invoking SessionStart session ID:
 {{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 
-Render this structured question through the harness's question binding, showing
-the proposed command, and wait for the human even under autonomous completion:
+Render this structured question through the harness's question binding. Copy the
+complete canonical command exactly from the `command` field in the `log decision`
+tool's JSON output into the question's code span; never abbreviate or substitute
+a summary, prefix, or digest. Use a code-span delimiter long enough to preserve
+any backticks in the command. The human can also open
+`<record>/verification-command.txt`. Wait for the human even under autonomous completion:
 
 ```question
-prompt: "Use this command to verify each completed Unit? `<cmd>`"
+prompt: "Use this command to verify each completed Unit? `<full command>`"
 header: Verification
 multiSelect: false
 options:
@@ -199,22 +205,24 @@ recorded command:
 ```
 
 The verifier stores proof bound to the current artifacts, source, attempt, and
-authorized command's SHA-256 plus display label, not raw command text. File
-presence, a claimed demonstration, a placeholder command, or a previous pass is
-not verification. A failed check halts. Re-run `next` after verification;
+authorized command's SHA-256 plus the complete canonical command as its display
+label. File presence, a claimed demonstration, a placeholder command, or a previous
+pass is not verification. A failed check halts. Re-run `next` after verification;
 the resulting directive is the next source of truth about readiness and
-verification.
+verification. Re-running `verify` withdraws every open checkpoint question and
+captured checkpoint response for this intent, in any session. Ask again only
+after the new verification reports `verified: true`.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
 proof file cannot verify a Unit.
 
 If `ready` is false or evidence became stale, explain `errors`. Repair the named
-missing review or receipt through its owning procedure, or let the human request
-changes; do not replay the whole body just because the checkpoint uses
-`gate: true`. A human Request Changes is available without pretending that
-verification succeeded. After any repair, obtain a new directive and verify the
-current result. If no real project check exists, resolve that gap with the human
-before claiming a pass.
+missing review or receipt through its owning procedure, consulting the human
+about the repair as needed; do not replay the whole body just because the
+checkpoint uses `gate: true`. Do not open a checkpoint approval question or claim
+verification succeeded while it is unverified. After any repair, obtain a new
+directive and verify the current result. If no real project check exists,
+resolve that gap with the human before claiming a pass.
 
 Only a verified checkpoint can be approved. A skeleton always needs a real
 human approval. An ordinary Unit needs one when `human_required` is true
@@ -229,24 +237,30 @@ execution, retain candidates in the diaries for the next human checkpoint or
 final handoff only when `directive.protocol_modules` lists `learnings`; do not
 infer acceptance, persist unapproved rules, or fabricate a “nothing to add” answer.
 When the module is absent, keep no diary and ask no learning question; go straight
-to the checkpoint approval procedure when a human is required. Before presenting
-**Approve** / **Request Changes**, bind the question to the current checkpoint
-and the invoking SessionStart session:
+to the checkpoint approval procedure when a human is required. Only after `verify`
+reports `verified: true` and the current directive has `ready: true`, run `ask`.
+It refuses an unready or unverified checkpoint. Before presenting **Approve** /
+**Request Changes**, bind the question to the current checkpoint proof and
+authorized command digest in the invoking SessionStart session:
 
 ```bash
 {{INVOKE}} engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
 ```
 
-Then present the choices and wait for the human. For a verified checkpoint, show
-the command in the approval question: "Verified with `<verification_command>`
-(exit 0). Approve this completed <unit>?" The human's exact **Approve** /
-**Request Changes** reply in that session, to this checkpoint question, authorizes
-the matching action; an unrelated reply, another session's reply, or a reply to
-a different question does not. Never pass `--user-input` the human did not choose.
-The response is one-shot and bound to this Unit, kind, and current fingerprint;
-if the checkpoint changes, obtain a new directive and ask again. Automatic
-approval (`human_required: false`) needs no `ask` and no `--user-input`, but a
-human Request Changes always requires this question-and-answer flow.
+Then present the choices and wait for the human. Show the complete recorded
+command, never abbreviated, in the approval question: "Verified with
+`<full command>` (exit 0). Approve this completed <unit>?" Use the full
+`verification_command` from the current tool output, with a code-span delimiter
+that preserves any backticks. The human's exact **Approve** / **Request Changes**
+reply in that session, to this checkpoint question, authorizes the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Never pass `--user-input` the human did not choose. The response is
+one-shot and bound to this Unit, kind, current fingerprint, verification proof ID,
+and authorized command digest. If the checkpoint changes, obtain a new directive,
+re-verify, and ask again; a reply captured before re-verification cannot approve
+the new proof. Automatic approval (`human_required: false`) needs no `ask` and no
+`--user-input`, but a human Request Changes always requires this verified
+question-and-answer flow.
 
 ```bash
 # Only after the human chose Approve:

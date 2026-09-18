@@ -1302,10 +1302,10 @@ framework records or other files.
 ### Construction verification command — record human authorization
 
 For checkpoint-enabled work, Delivery Planning proposes a real project check from
-the project scan, such as `bun test`, `pytest`, or `make check`. Show the exact
-command with **Use this command to verify each completed Unit?** as a structured
-**Approve** / **Request Changes** question. Before presenting the command, write
-it as UTF-8 text to `<record>/verification-command.txt` with the harness's
+the project scan, such as `bun test`, `pytest`, or `make check`. The structured
+**Approve** / **Request Changes** question asks **Use this command to verify each
+completed Unit?** Before presenting the command, write it as UTF-8 text to
+`<record>/verification-command.txt` with the harness's
 file-write tool (Write/edit), never a shell `echo` or heredoc. Repo-derived command
 text must never be interpolated into a shell line: shell substitutions could
 execute before approval. Pass only the record-relative path and use the invoking
@@ -1314,6 +1314,12 @@ SessionStart session ID:
 ```bash
 {{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
+Copy the complete canonical command exactly from the `command` field in the
+`decision` tool's JSON output into the question's code span; never abbreviate or
+substitute a summary, prefix, or digest. Use a code-span delimiter long enough to
+preserve any backticks in the command. The human can also open
+`<record>/verification-command.txt`.
+
 
 Wait for the human's exact **Approve** / **Request Changes** reply in that
 session. Only **Approve** authorizes the receipt; an unrelated reply,
@@ -1334,12 +1340,16 @@ interpolation. Files must be record-relative regular files, with no absolute
 path, `..`, or symlink in the chain, and no larger than 16 KiB. The file is decoded
 as UTF-8 and canonicalized exactly like the direct argument.
 Leading/trailing whitespace is trimmed before recording, hashing, and execution.
-The resulting command must be nonblank, at most 8192 characters, and a single
-line with no control characters (including newline, CR, tab, or NUL). Put
+The resulting command must be nonblank, at most 1024 characters, and a single
+line. The tools refuse control characters (including newline, CR, tab, or NUL)
+and display-spoofing characters: Unicode format characters (including zero-width
+and bidi controls), line/paragraph separators, and no-break space (U+00A0). Put
 multiline checks in a script and record its invocation.
 `decision` records `DECISION_RECORDED` with `Checkpoint: Construction Verification
-Command` and `Command SHA-256`. `answer` requires a matching pending decision and
-the human-turn hook's response bound to that command and session's current
+Command` and `Command SHA-256`. Its JSON output includes the full canonical
+`command` and `command_sha256` alongside `challengeId` and `challengeFile`;
+`answer` also prints `command_sha256`. `answer` requires a matching pending
+decision and the human-turn hook's response bound to that command and session's current
 challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the exact choice matching
 `--details`; a later `HUMAN_TURN` alone is insufficient. Recording a new decision
 replaces the session's prior challenge and response; a successful answer appends
@@ -1348,15 +1358,16 @@ retryable; stale, mismatched, and successfully consumed responses are refused.
 `--details "Approve"` emits the tool-owned `VERIFICATION_COMMAND_RECORDED` receipt;
 `--details "Request Changes"` records only `QUESTION_ANSWERED` and means propose
 another command without setting state. Other answers are refused. The receipt
-carries the stage, checkpoint, session, SHA-256 of that canonical command, a
-control-character-free display label truncated to 120 characters, and the
-human's exact choice.
+carries the stage, checkpoint, session, SHA-256 of that canonical command, the
+complete canonical command as `Command Label` (never truncated), and the human's
+exact choice.
 `aidlc-audit append` cannot mint this reserved receipt.
 
 The typed setter accepts `--command-file <record-relative path>` or one positional
 command argument, never both. It writes `- **Construction Verification Command**: <cmd>`
 under `## Runtime State` in `aidlc-state.md` only when the latest current-workflow
-approval receipt matches its digest. It does not ask for another human turn:
+approval receipt matches its digest. Its JSON output includes the full canonical
+`command` and `command_sha256`. It does not ask for another human turn:
 the receipt, not the state field, authorizes execution. Verification checks the
 same binding; older-workflow and isolated-stage receipts do not authorize it,
 and a later receipt for a different command supersedes the earlier one. A field
@@ -1386,10 +1397,14 @@ is false, do not run `verify`: complete the
 [recorded-command flow](#construction-verification-command-record-human-authorization),
 then re-run `next`. A skeleton's command must prove the integrated slice end to
 end and check ordinary Units' working results. Approval requires a current
-verified proof. Show "Verified with `<verification_command>` (exit 0)" in the
-human approval question; `verification_command` is the command's display label.
-Before presenting **Approve** / **Request Changes**, open the one-shot question
-for the current Unit, kind, and fingerprint in the invoking SessionStart session:
+verified proof. Show "Verified with `<full command>` (exit 0)" in the human
+approval question, copying the complete `verification_command` from the current
+tool output into a code span without abbreviation. This display label is the full
+canonical command, not a prefix. Only after `verify` reports `verified: true` and
+the current checkpoint has `ready: true`, run `ask`; it refuses an unready or
+unverified checkpoint. Before presenting **Approve** / **Request Changes**, open
+the one-shot question for the current Unit, kind, fingerprint, verification proof
+ID, and authorized command digest in the invoking SessionStart session:
 
 ```bash
 aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
@@ -1408,12 +1423,16 @@ aidlc engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skele
 aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
-The action consumes the response; a changed checkpoint needs a new question and
-answer. A verified ordinary Unit with `human_required: false` is approved without
-`--user-input` and needs no `ask`; human rejection always needs the flow above.
-A skeleton always requires the human. Missing or stale evidence is explained
-in `errors`: repair the named review/receipt or take human Request Changes,
-without inventing verification. Re-run `next` after verification, approval, or rejection, never report
+The action consumes the response. Re-running `verify` withdraws every open
+checkpoint question and captured checkpoint response for this intent, in any
+session; ask again only after the new verification reports `verified: true`.
+A response to an older proof cannot approve a newer one, even if its fingerprint
+and command are unchanged. A verified ordinary Unit with `human_required: false`
+is approved without `--user-input` and needs no `ask`; human rejection always
+needs the verified question-and-answer flow above. A skeleton always requires
+the human. Missing or stale evidence is explained in `errors`: repair the named
+review/receipt, consulting the human as needed, without inventing verification
+or opening a checkpoint approval question early. Re-run `next` after verification, approval, or rejection, never report
 one Unit's checkpoint as approval of the whole Code Generation stage.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
@@ -1423,9 +1442,9 @@ Only one protected question (Plan Approval, verification command, Construction
 policy, or checkpoint approval) may be open per session; asking a new one
 withdraws the previous one, so ask them one at a time and wait for each answer.
 
-The version-3 proof and CLI JSON retain `command_sha256` and `command_label`, not
-raw command text, plus exit status and captured stdout/stderr byte counts and
-SHA-256 digests, never raw output. Approval binds `Verification Command SHA-256`
+The version-3 proof and CLI JSON retain `command_sha256` and the full canonical
+command in `command_label`, plus exit status and captured stdout/stderr byte
+counts and SHA-256 digests, never raw output. Approval binds `Verification Command SHA-256`
 on `GATE_APPROVED` to the proof's `command_sha256`. When diagnostics are needed,
 use the same authorized project check, not a newly chosen command. Version-1 and
 version-2 proofs are unverified after upgrading; authorize the recorded command
@@ -1447,7 +1466,10 @@ complete the [recorded-command flow](#construction-verification-command-record-h
 and `set-construction-verification-command`, rather than substituting a passing
 command. Legacy autonomy without checkpoints still requires `--check-cmd` on
 both commands. `check` is advisory; `finalize` reruns the command and validates
-review evidence before merging each claimed Unit. Only verified native passes
+review evidence before merging each claimed Unit. Re-running `finalize` withdraws
+every open checkpoint question and captured checkpoint response for this intent,
+in any session; ask again only after fresh verification, source landing, and a
+batch status of `ready: true`. Only verified native passes
 receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` under
 checkpoints. Land their source through the native worktree merge before `next`.
 
@@ -1460,13 +1482,18 @@ another batch starts. Use exactly its batch number and Unit list:
 aidlc engine bolt swarm-checkpoint --action status --batch <N> --units "<comma-separated Units>"
 ```
 
-Before presenting **Approve** / **Request Changes**, open the one-shot question
-for the current batch, exact Unit set, and fingerprint in the invoking SessionStart
-session:
+Only after status reports `ready: true`, run `swarm-checkpoint --action ask`;
+it refuses an unready batch. Before presenting **Approve** / **Request Changes**,
+open the one-shot question for the current batch, exact Unit set, fingerprint,
+and per-Unit `Command SHA-256` set in the invoking SessionStart session:
 
 ```bash
 aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"
 ```
+Show "Verified with `<full command>` (exit 0)" in the approval question. Copy the
+complete canonical `command` from the verification-command tool output into a
+code span without abbreviation, preserving any backticks with a longer delimiter.
+
 
 Wait for the human's exact **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
@@ -1482,8 +1509,12 @@ aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>"
 ```
 
 The action consumes the response; a changed checkpoint needs a new question and
-answer. Automatic completion omits `--user-input` and needs no `ask` when
-`human_required: false`; human rejection always needs the flow above. Readiness
+answer. Re-running `finalize` withdraws every open checkpoint question and captured
+response for this intent, in any session; after fresh verification and source
+landing, confirm `ready: true` and ask again. A response captured before `finalize`
+cannot approve the new evidence. Automatic completion omits `--user-input` and
+needs no `ask` when `human_required: false`; human rejection always needs this
+ready question-and-answer flow. Readiness
 comes from the completed batch's current evidence, including each Unit's native
 `Command SHA-256` matching the current
 authorized Construction Verification Command. Batch approval binds that digest

@@ -204,10 +204,12 @@ Only one protected question (Plan Approval, verification command, Construction
 policy, or checkpoint approval) may be open per session; asking a new one
 withdraws the previous one, so ask them one at a time and wait for each answer.
 
-Use one nonblank line of at most 8192 characters with no control characters
-(including newline, CR, tab, or NUL). The tools trim leading/trailing whitespace
-before recording, hashing, and executing the command. Put multiline checks in a
-script and record its invocation. Before presenting the command, write it as
+Use one nonblank line of at most 1024 characters after trimming leading/trailing
+whitespace. The tools refuse control characters (including newline, CR, tab, or
+NUL) and display-spoofing characters: Unicode format characters (including
+zero-width and bidi controls), line/paragraph separators, and no-break space
+(U+00A0). The trimmed command is recorded, hashed, and executed unchanged. Put
+multiline checks in a script and record its invocation. Before presenting the command, write it as
 UTF-8 text to `<record>/verification-command.txt` using the harness's
 file-write tool (Write/edit), never a shell `echo` or heredoc. Repo-derived
 command text must never be interpolated into a shell line: shell substitutions
@@ -218,10 +220,14 @@ below and use the invoking SessionStart session ID:
 {{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 
-Show the actual proposed command in the structured question and wait for the human:
+Copy the complete canonical command exactly from the `command` field in the
+`log decision` tool's JSON output into the structured question's code span; never
+abbreviate or substitute a summary, prefix, or digest. Use a code-span delimiter
+long enough to preserve any backticks in the command. The human can also open
+`<record>/verification-command.txt`. Wait for the human:
 
 ```question
-prompt: "Use this command to verify each completed Unit? `<cmd>`"
+prompt: "Use this command to verify each completed Unit? `<full command>`"
 header: Verification
 multiSelect: false
 options:
