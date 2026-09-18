@@ -742,7 +742,7 @@ export const ROUTES: readonly Route[] = [
     group: "worktree",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["create", "merge", "discard", "list", "verify", "info"],
+    verbs: ["create", "merge", "discard", "restore", "purge", "list", "verify", "info"],
     tool: TOOLS.worktree,
     ...HIDDEN_ENGINE,
   },

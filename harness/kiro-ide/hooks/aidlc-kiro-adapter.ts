@@ -118,6 +118,7 @@ import {
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -216,10 +217,11 @@ function legacyToolCommand(
   tool: "aidlc-log.ts" | "aidlc-orchestrate.ts",
   args: string[],
 ): string[] {
-  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  return executable
-    ? [executable, "engine", tool.replace(/^aidlc-|\.ts$/g, ""), ...args]
-    : [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args];
+  return aidlcEngineCommand(
+    tool === "aidlc-log.ts" ? "log" : "orchestrate",
+    args,
+    join(HOOKS_DIR, "..", "tools", tool),
+  );
 }
 
 function runLegacyPlanTool(

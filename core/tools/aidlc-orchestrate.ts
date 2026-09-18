@@ -280,6 +280,7 @@ import {
 import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
 import {
   aidlcDispatcherInvocation,
+  aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
   isCompiledExecutable,
@@ -288,6 +289,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
+import { sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
   type GuardPreflightAction,
   type GuardPreflightResult,
@@ -332,7 +334,7 @@ interface PreparedEmission {
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
     rules_bundle?: string; directive_sha256?: string;
     ask_type?: string;
-    remedies?: Array<Pick<GuardRemedy, "op" | "action">>;
+    remedies?: Array<Pick<GuardRemedy, "op" | "action" | "operation" | "interaction">>;
   };
 }
 
@@ -501,7 +503,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
       stage: transported.stage,
       ask_type: GUARD_RECOVERY_ASK_TYPE,
       ...(typeof transported.unit === "string" ? { unit: transported.unit } : {}),
-      remedies: transported.remedies.map(({ op, action }) => ({ op, action })),
+      remedies: transported.remedies.map(({ op, action, operation, interaction }) => ({
+        op,
+        action,
+        ...(operation ? { operation } : {}),
+        ...(interaction ? { interaction } : {}),
+      })),
       state_sha256: stateDigest(askState),
     };
   }
@@ -657,7 +664,9 @@ function guardRecoveryAskMarkerIsCurrent(
     current.remedies.length === marker.remedies.length &&
     current.remedies.every((remedy, index) =>
       remedy.op === marker.remedies?.[index]?.op &&
-      remedy.action === marker.remedies[index]?.action
+      remedy.action === marker.remedies[index]?.action &&
+      remedy.interaction === marker.remedies[index]?.interaction &&
+      sameGuardOperation(remedy.operation, marker.remedies[index]?.operation)
     );
 }
 
@@ -7841,15 +7850,14 @@ function spawnState(
   projectDir: string,
   subArgs: string[],
 ): { exitCode: number; stdout: string; stderr: string } {
-  const command = IS_COMPILED
-    ? [process.execPath, "engine", "state", ...subArgs, "--project-dir", projectDir]
-    : [
-        process.execPath,
-        fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)),
-        ...subArgs,
-        "--project-dir",
-        projectDir,
-      ];
+  // In source and compiled modes, the orchestrator uses only its own process
+  // identity, never an executable supplied through the environment.
+  const command = aidlcEngineCommand(
+    "state",
+    [...subArgs, "--project-dir", projectDir],
+    fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)),
+    IS_COMPILED ? process.execPath : null,
+  );
   const result = Bun.spawnSync({
     cmd: command,
     env: engineChildEnv({

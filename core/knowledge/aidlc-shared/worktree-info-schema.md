@@ -10,7 +10,7 @@ This schema is the contract between the tool (deterministic) and the LLM (prose 
 {{INVOKE}} engine worktree info --slug <kebab-slug>
 ```
 
-The slug is the kebab-case Bolt identifier threaded through every worktree command for that Bolt (`create`, `verify`, `merge`, `discard`). See `SKILL.md` per-Bolt loop "Slug derivation" paragraph for the `name → slug` transformation.
+The slug is the kebab-case Bolt identifier threaded through every worktree command for that Bolt (`create`, `verify`, `merge`, `discard`, `restore`, `purge`). See `SKILL.md` per-Bolt loop "Slug derivation" paragraph for the `name → slug` transformation.
 
 ## Exit codes
 
@@ -57,6 +57,77 @@ worktree common directories and compares the digests.
 Migration remains compatible with older metadata carrying plaintext
 `gitCommonDir`: readers hash that stored value before comparison. New metadata
 must not write both fields.
+
+## Recoverable discard, restore, and purge
+
+`{{INVOKE}} engine worktree discard --slug <slug>` parks the working-tree
+snapshot and reviewed source refs before emitting `WORKTREE_DISCARDED`, then
+removes the live checkout and branch and compare-deletes the original reviewed
+source refs. A temporary Git index and `commit-tree` capture tracked files and
+non-ignored untracked files; ignored untracked files are not backed up.
+Regular files with configured clean filters retain raw bytes, bypassing clean filters.
+
+The parked namespace is `refs/aidlc/parked/<slug>/<stamp>`, where `stamp` is UTC
+`YYYYMMDDTHHMMSSZ`, with a numeric `-N` suffix for collisions. `/head` points to
+the snapshot commit, and `/reviewed-source/<commit>` preserves each reviewed
+source ref. The discard JSON adds `parked_ref` (the namespace prefix, not its
+`/head` ref) and `parked_commit` (the snapshot commit). If only reviewed source
+refs remain to park, `parked_commit` is `"-"` and no `/head` exists to restore.
+The already-discarded response is unchanged and has neither field. Successful
+`bolt abort` JSON includes `parked_ref`, or `null` when no parking result exists;
+the abort arguments and human-consent requirement are unchanged.
+
+### Restore a parked snapshot
+
+```
+{{INVOKE}} engine worktree restore --slug <slug> [--parked <stamp>] [--repo <name>] [--intent <intent>] [--space <space>]
+```
+
+Without `--parked`, restore selects the latest parked `/head`, ordering timestamp
+suffixes numerically (`-10` is newer than `-2`). With it, restore selects that
+exact stamp. Use `--repo` for the repository holding the parked refs and the
+intent/space selectors when needed to resolve workspace context. Restore
+creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
+`restore/bolt-<slug>-<stamp>`, never reusing or changing the live
+`.aidlc/worktrees/bolt-<slug>` path or `bolt-<slug>` branch. Restoring files does
+not resume an aborted Bolt or reinstate its review authority. Parked reviewed
+source refs remain in the parked namespace, not copied back into active refs.
+
+```json
+{
+  "restored": true,
+  "slug": "onboarding-wizard",
+  "parked_ref": "refs/aidlc/parked/onboarding-wizard/20260918T123456Z",
+  "worktree_path": "/Users/dev/project/.aidlc/restored/bolt-onboarding-wizard-20260918T123456Z",
+  "branch": "restore/bolt-onboarding-wizard-20260918T123456Z",
+  "reviewed_source_refs": 1
+}
+```
+
+`reviewed_source_refs` counts the retained reviewed source refs in that parked
+namespace. A namespace without `/head` is not restorable.
+
+### Purge parked refs
+
+```
+{{INVOKE}} engine worktree purge --slug <slug> [--parked <stamp>] [--repo <name>]
+```
+
+Purge compare-deletes all parked refs for the slug, or just the selected stamp
+when `--parked` is supplied. It refuses if any corresponding restored checkout
+still exists; remove that checkout explicitly before purging its recovery refs.
+It never removes the live Bolt checkout or branch. The JSON reports the number
+of refs deleted, not the number of snapshots:
+
+```json
+{
+  "purged": 2,
+  "slug": "onboarding-wizard",
+  "stamps": ["20260918T123456Z"]
+}
+```
+
+Restore and purge emit no new audit events; the Worktree taxonomy stays at seven.
 
 ## Stderr error messages
 
