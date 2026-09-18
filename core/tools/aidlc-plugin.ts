@@ -1043,6 +1043,7 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
     produces?: string[];
     sensors?: string[];
     consumes?: string[];
+    requires_stage?: string[];
     required_sections?: string[];
     required_sections_created?: boolean;
   }> = {};
@@ -1067,6 +1068,7 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
         if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
         if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
         if (record.consumes?.length) after = removeConsumes(after, new Set(record.consumes));
+        if (record.requires_stage?.length) after = removeListValues(after, "requires_stage", new Set(record.requires_stage), false);
         if (record.required_sections?.length) {
           after = removeListValues(
             after,

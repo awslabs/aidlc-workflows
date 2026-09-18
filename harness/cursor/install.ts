@@ -142,6 +142,7 @@ interface StageContribRecord {
   sensors?: string[];
   consumes?: Array<string | ConsumeEntry>;
   scopes?: string[];
+  requires_stage?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
 }
@@ -186,6 +187,7 @@ function stageContribRecord(value: unknown): StageContribRecord | null {
     "produces",
     "sensors",
     "scopes",
+    "requires_stage",
     "required_sections",
   ] as const) {
     const entries = value[field];
@@ -407,6 +409,7 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
     sensors: new Set(listFieldValues(content, "sensors") ?? []),
     consumes: consumeEntryValues(content),
     scopes: new Set(listFieldValues(content, "scopes") ?? []),
+    requires_stage: new Set(listFieldValues(content, "requires_stage") ?? []),
     required_sections: new Set(listFieldValues(content, "required_sections") ?? []),
   };
   const coreHasRequiredSections =
@@ -417,6 +420,7 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
       "produces",
       "sensors",
       "scopes",
+      "requires_stage",
       "required_sections",
     ] as const) {
       const prior = binding.record[field] ?? [];
@@ -712,6 +716,7 @@ function rebuildPluginComposedStage(
     sensors: new Set<string>(),
     consumes: new Set<string>(),
     scopes: new Set<string>(),
+    requires_stage: new Set<string>(),
     required_sections: new Set<string>(),
   };
   let requiredSectionsCreated = false;
@@ -720,6 +725,7 @@ function rebuildPluginComposedStage(
       "produces",
       "sensors",
       "scopes",
+      "requires_stage",
       "required_sections",
     ] as const) {
       for (const value of record[field] ?? []) owned[field].add(value);
@@ -730,13 +736,14 @@ function rebuildPluginComposedStage(
     requiredSectionsCreated ||= record.required_sections_created === true;
   }
 
-  const ordered: Record<"produces" | "sensors" | "scopes" | "required_sections", string[]> = {
+  const ordered: Record<"produces" | "sensors" | "scopes" | "requires_stage" | "required_sections", string[]> = {
     produces: [],
     sensors: [],
     scopes: [],
+    requires_stage: [],
     required_sections: [],
   };
-  for (const field of ["produces", "sensors", "scopes", "required_sections"] as const) {
+  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
     const values = listFieldValues(installed, field);
     if (owned[field].size > 0 && values === null) return null;
     ordered[field] = (values ?? []).filter((value) => owned[field].has(value));
@@ -749,6 +756,7 @@ function rebuildPluginComposedStage(
   base = removeListValues(base, "produces", owned.produces, false);
   base = removeListValues(base, "sensors", owned.sensors, false);
   base = removeListValues(base, "scopes", owned.scopes, false);
+  base = removeListValues(base, "requires_stage", owned.requires_stage, false);
   base = removeConsumesEntries(base, owned.consumes);
   base = removeListValues(
     base,
@@ -763,6 +771,8 @@ function rebuildPluginComposedStage(
   desired = mergeListValues(desired, "sensors", ordered.sensors);
   if (desired === null) return null;
   desired = mergeListValues(desired, "scopes", ordered.scopes);
+  if (desired === null) return null;
+  desired = mergeListValues(desired, "requires_stage", ordered.requires_stage);
   if (desired === null) return null;
   desired = mergeConsumes(desired, consumes);
   if (desired === null) return null;

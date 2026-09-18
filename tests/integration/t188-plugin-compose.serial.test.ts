@@ -74,6 +74,7 @@ function fileInventory(root: string, relative = ""): string[] {
 interface GraphStage {
   slug?: string;
   produces?: string[];
+  requires_stage?: string[];
   consumes?: Array<{ artifact?: string; required?: boolean }>;
   sensors_applicable?: Array<{ id?: string }>;
   enabled?: false;
@@ -948,6 +949,114 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     for (const s of ["Branch Coverage", "Edge Cases", "API Positive and Negative", "Requirement Traceability"]) {
       expect(fm).toContain(`- "${s}"`);
     }
+  });
+
+  // --- Contribution seam: adds.requires_stage (graduated surface) ---
+  test("contribution merges requires_stage into the target stage node", () => {
+    // test-pro's build-and-test contribution consumes test-pro-test-harness-design,
+    // which its nfr-design contribution produces — the edge the stage-definition
+    // guide asks for ("I consume X, which stage Y produces → require Y").
+    const bat = stage(project, "build-and-test");
+    expect(bat?.requires_stage).toContain("nfr-design");
+    // The core edge is untouched by the union.
+    expect(bat?.requires_stage).toContain("code-generation");
+    const sidecar = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json"), "utf-8"),
+    );
+    expect(sidecar["build-and-test"]?.requires_stage).toEqual(["nfr-design"]);
+  });
+
+  test("adds.requires_stage set-unions an earlier stage and strips on disable", () => {
+    // nfr-requirements (3.2) is pinned before build-and-test (3.6), so the edge
+    // holds. code-generation is already a core edge: the union must not
+    // duplicate it, and the sidecar records only what was actually added.
+    const contrib = [
+      "---", "target: build-and-test", "plugin: syn-edge-ok",
+      "adds:", "  requires_stage:", "    - nfr-requirements", "    - code-generation",
+      "---", "",
+    ].join("\n");
+    // A scope file gives the plugin an installed identity: select-plugins only
+    // knows plugins that own a stage or a scope, and disable-time strip runs
+    // for known plugins.
+    const scope = [
+      "---", "name: syn-edge-ok", "plugin: syn-edge-ok",
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope carrying the requires_stage plugin identity", "skeleton: off", "---", "",
+      "# syn-edge-ok", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-edge-ok", {
+      "scopes/syn-edge-ok.md": scope,
+      "contributions/construction/build-and-test.md": contrib,
+    });
+    expect(drops).not.toContain("adds.requires_stage");
+    const stagePath = stageSourcePath(proj, "construction", "build-and-test");
+    const edgesOf = (raw: string) =>
+      (raw.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "").match(/^requires_stage:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    const merged = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(merged).toContain("- nfr-requirements\n");
+    expect(merged.match(/- code-generation\n/g)?.length).toBe(1);
+    expect(stage(proj, "build-and-test")?.requires_stage).toContain("nfr-requirements");
+    const sidecarPath = join(proj, ".claude", "tools", "data", "plugin-contrib-syn-edge-ok.json");
+    const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8"));
+    expect(sidecar["build-and-test"]?.requires_stage).toEqual(["nfr-requirements"]);
+
+    // Disable-time strip removes exactly the recorded edge and the sidecar,
+    // like the other structural surfaces.
+    const strip = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(strip.status).toBe(0);
+    const stripped = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(stripped).not.toContain("- nfr-requirements");
+    expect(stripped).toContain("- code-generation\n");
+    expect(existsSync(sidecarPath)).toBe(false);
+  });
+
+  test("adds.requires_stage that cannot hold is dropped-with-log, not merged", () => {
+    // Four entries that must all be refused: an unknown slug, a same-phase
+    // stage numbered AFTER the target, a stage this very compose adds (it seeds
+    // past the phase max, so an installed stage can never be ordered behind it
+    // — RFC #1100), and the target itself. Compose stays fail-open: the new
+    // stage still lands and the graph still compiles.
+    const newStage = [
+      "---", "slug: syn-edge-discovery", "plugin: syn-edge", "phase: inception",
+      "execution: ALWAYS", "condition: always",
+      "lead_agent: aidlc-product-agent", "support_agents: []", "mode: inline",
+      "produces:", "  - syn-edge-catalogue", "consumes: []", "requires_stage: []",
+      "inputs: x", "outputs: y", "---", "", "# syn-edge-discovery", "", "## Steps", "body", "",
+    ].join("\n");
+    const contrib = [
+      "---", "target: requirements-analysis", "plugin: syn-edge",
+      "adds:", "  requires_stage:",
+      "    - no-such-stage", "    - delivery-planning", "    - syn-edge-discovery", "    - requirements-analysis",
+      "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-edge", {
+      "stages/inception/syn-edge-discovery.md": newStage,
+      "contributions/inception/requirements-analysis.md": contrib,
+    });
+    expect(drops).not.toContain("compile failed");
+    expect(drops).not.toContain("adds.requires_stage is not yet an implemented merge surface");
+    const fm = readFileSync(stageSourcePath(proj, "inception", "requirements-analysis"), "utf-8")
+      .match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+    const edges = fm.match(/^requires_stage:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    for (const refused of ["no-such-stage", "delivery-planning", "syn-edge-discovery", "requirements-analysis"]) {
+      expect(edges).not.toContain(`- ${refused}\n`);
+    }
+    expect(drops).toContain('adds.requires_stage "no-such-stage" names no installed stage');
+    expect(drops).toContain('adds.requires_stage "delivery-planning"');
+    expect(drops).toContain("is not lower-numbered than requirements-analysis");
+    expect(drops).toContain('adds.requires_stage "syn-edge-discovery"');
+    expect(drops).toContain("RFC #1100");
+    expect(drops).toContain('adds.requires_stage "requirements-analysis" is the target itself');
+    // Nothing merged, so nothing recorded for the target; the new stage compiled.
+    const sidecarPath = join(proj, ".claude", "tools", "data", "plugin-contrib-syn-edge.json");
+    if (existsSync(sidecarPath)) {
+      const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8"));
+      expect(sidecar["requirements-analysis"]?.requires_stage ?? []).toEqual([]);
+    }
+    expect(stage(proj, "syn-edge-discovery")).toBeDefined();
   });
 
   // --- Contribution seam: adds.scopes (graduated surface) ---

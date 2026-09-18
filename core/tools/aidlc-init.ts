@@ -3379,6 +3379,7 @@ type StageContribRecord = {
   produces?: string[];
   sensors?: string[];
   consumes?: string[];
+  requires_stage?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
 };
@@ -3457,6 +3458,7 @@ function stripRecordedContributions(content: string, record: StageContribRecord)
   for (const [field, items] of [
     ["produces", record.produces],
     ["sensors", record.sensors],
+    ["requires_stage", record.requires_stage],
     ["required_sections", record.required_sections],
   ] as const) {
     if (!items?.length) continue;
@@ -3787,6 +3789,7 @@ function prepareRefreshSource(
           produces: [...new Set([...(priorRecord.produces ?? []), ...(record.produces ?? [])])],
           sensors: [...new Set([...(priorRecord.sensors ?? []), ...(record.sensors ?? [])])],
           consumes: [...new Set([...(priorRecord.consumes ?? []), ...(record.consumes ?? [])])],
+          requires_stage: [...new Set([...(priorRecord.requires_stage ?? []), ...(record.requires_stage ?? [])])],
           required_sections: [
             ...new Set([...(priorRecord.required_sections ?? []), ...(record.required_sections ?? [])]),
           ],
@@ -3823,6 +3826,7 @@ function prepareRefreshSource(
         let fresh = readFileSync(stagedPath, "utf-8");
         fresh = mergeListField(fresh, "produces", record.produces ?? []);
         fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
+        fresh = mergeListField(fresh, "requires_stage", record.requires_stage ?? []);
         fresh = mergeConsumes(fresh, consumeBlocks(current, new Set(record.consumes ?? [])));
         fresh = mergeRequiredSections(fresh, record);
         fresh = mergePluginFragments(fresh, fragments);

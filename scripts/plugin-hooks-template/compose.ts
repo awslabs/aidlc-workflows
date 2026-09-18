@@ -1980,8 +1980,8 @@ try {
   // fragment records let doctor verify sentinel-marked prose after an engine
   // reinstall. Accumulated across re-runs: structural entries are unioned, while
   // a fragment upgrade replaces the prior hash for its (anchor, order) identity.
-  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: Array<string | ConsumeEntry>; scopes?: string[]; required_sections?: string[]; required_sections_created?: boolean; fragments?: FragmentRecord[] };
-  type StringContribField = "produces" | "sensors" | "scopes" | "required_sections";
+  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: Array<string | ConsumeEntry>; scopes?: string[]; requires_stage?: string[]; required_sections?: string[]; required_sections_created?: boolean; fragments?: FragmentRecord[] };
+  type StringContribField = "produces" | "sensors" | "scopes" | "requires_stage" | "required_sections";
   const contribManifestPath = join(HARNESS_DIR, "tools", "data", `plugin-contrib-${PLUGIN_KEY}.json`);
   let contribManifestLoadError: string | null = null;
   const contribManifest: Record<string, StageContribRecord> = (() => {
@@ -2096,6 +2096,21 @@ try {
   // this plugin's own scope files were already copied in above, and
   // contributions must not conjure new scope files.
   const installedScopes = installedNameRoster(join(HARNESS_DIR, "scopes"));
+  // Pinned stage numbers from the installed graph, for the adds.requires_stage
+  // ordering guard. A stage THIS compose is adding has no row yet (the compiler
+  // seeds it past its phase max), so an absent number is meaningful, not an
+  // error. An unreadable or missing graph reads every stage as unpinned.
+  const pinnedNumber = (() => {
+    const numbers = new Map<string, string>();
+    try {
+      const rows = JSON.parse(readFileSync(join(HARNESS_DIR, "tools", "data", "stage-graph.json"), "utf-8")) as Array<{ slug?: string; number?: string }>;
+      for (const row of rows) if (row.slug && row.number) numbers.set(row.slug, row.number);
+    } catch { /* no installed graph yet */ }
+    return (slug: string): [number, number] | null => {
+      const [prefix, index] = (numbers.get(slug) ?? "").split(".").map((n) => parseInt(n, 10));
+      return Number.isFinite(prefix) && Number.isFinite(index) ? [prefix, index] : null;
+    };
+  })();
   for (const phase of contribPhases) {
     const phaseDir = join(contribRoot, phase);
     let files: string[];
@@ -2184,14 +2199,14 @@ try {
 
       // Drop-log any adds.* key compose does not implement — no silent no-op.
       // Implemented merge surfaces: produces / sensors / consumes / scopes /
-      // required_sections. A documented-but-deferred surface (e.g.
-      // requires_stage) is recorded as a drop so an author sees it had no
-      // effect, per the no-silent-failures contract. (When a surface
-      // graduates, add it to IMPLEMENTED_ADDS + a merge call below.)
-      const IMPLEMENTED_ADDS = new Set(["produces", "sensors", "consumes", "scopes", "required_sections"]);
+      // requires_stage / required_sections. A documented-but-deferred surface
+      // is recorded as a drop so an author sees it had no effect, per the
+      // no-silent-failures contract. (When a surface graduates, add it to
+      // IMPLEMENTED_ADDS + a merge call below.)
+      const IMPLEMENTED_ADDS = new Set(["produces", "sensors", "consumes", "scopes", "requires_stage", "required_sections"]);
       for (const km of addsBlock.matchAll(/^ {2}([a-z_]+):/gm)) {
         if (!IMPLEMENTED_ADDS.has(km[1])) {
-          recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/scopes/required_sections); ignored`, "advisory");
+          recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/scopes/requires_stage/required_sections); ignored`, "advisory");
         }
       }
 
@@ -2217,7 +2232,7 @@ try {
       // stage (mixed endings). Contribution content is already normalized above.
       let stageContent = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
       const before = stageContent;
-      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: ConsumeEntry[] = [], addedScopes: string[] = [], addedSections: string[] = [];
+      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: ConsumeEntry[] = [], addedScopes: string[] = [], addedRequires: string[] = [], addedSections: string[] = [];
       const sectionsMeta: { created?: boolean } = {};
       // adds.scopes — set-union the target stage into this plugin's scopes.
       // Two guard rails, both drop-logged: the scope's identity file must
@@ -2244,10 +2259,54 @@ try {
         }
         return true;
       });
+      // adds.requires_stage — set-union ordering edges into the target stage.
+      // Three guard rails, all drop-logged, never merged: the dependency must be
+      // an installed stage (core, or a plugin stage already on disk); it is not
+      // the target itself; and it must land BEFORE the target once compiled —
+      // otherwise the compiler's edge-local invariant would fail the whole
+      // compose and roll it back. "Before" follows the compiler's own rule: an
+      // earlier phase always precedes; within one phase the dependency needs a
+      // pinned number lower than the target's. A stage THIS compose adds has no
+      // number yet and seeds past its phase max, so a same-phase edge from an
+      // installed stage onto it can never hold (RFC #1100 tracks ordering a
+      // plugin stage before a core one). An edge to a stage a scope skips is
+      // vacuous there, exactly like core's own edges across scopes.
+      const targetPhase = PHASES.indexOf(basename(dirname(stageFile)));
+      const targetNumber = pinnedNumber(target);
+      const mergeableRequires = listOf("requires_stage").filter((dep) => {
+        if (dep === target) {
+          recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" is the target itself; dropped`);
+          return false;
+        }
+        const depFile = findStageFile(dep);
+        if (!depFile) {
+          recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" names no installed stage (core or plugin); dropped`);
+          return false;
+        }
+        const depPhase = PHASES.indexOf(basename(dirname(depFile)));
+        if (depPhase !== targetPhase) {
+          if (depPhase < targetPhase) return true;
+          recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" is in a later phase than ${target}; an edge must point at an earlier stage; dropped`);
+          return false;
+        }
+        const depNumber = pinnedNumber(dep);
+        if (depNumber === null) {
+          // Both new this compose: the per-phase batch seed orders them by edge.
+          if (targetNumber === null) return true;
+          recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" is a new same-phase stage that compiles after ${target} (new stages seed past the phase max), so the edge cannot hold — ordering a plugin stage before an installed one is RFC #1100; dropped`);
+          return false;
+        }
+        // Target new this compose, dependency already pinned before it.
+        if (targetNumber === null) return true;
+        if (depNumber[1] < targetNumber[1]) return true;
+        recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" (${depNumber.join(".")}) is not lower-numbered than ${target} (${targetNumber.join(".")}); an edge must point at an earlier stage; dropped`);
+        return false;
+      });
       stageContent = mergeListField(stageContent, "produces", listOf("produces"), target, addedProduces);
       stageContent = mergeListField(stageContent, "sensors", listOf("sensors"), target, addedSensors);
       stageContent = mergeListField(stageContent, "scopes", mergeableScopes, target, addedScopes);
       stageContent = mergeConsumes(stageContent, consumes, target, addedConsumes);
+      stageContent = mergeListField(stageContent, "requires_stage", mergeableRequires, target, addedRequires);
       // Only merge required_sections if the installed engine accepts the key —
       // otherwise skip + drop-log rather than break the install's next compile.
       if (requiredSections.length > 0 && !requiredSectionsSafe) {
@@ -2259,11 +2318,12 @@ try {
       recordContrib(target, "sensors", addedSensors);
       recordConsumes(target, addedConsumes);
       recordContrib(target, "scopes", addedScopes);
+      recordContrib(target, "requires_stage", addedRequires);
       recordContrib(target, "required_sections", addedSections);
       if (sectionsMeta.created) {
         contribRecord(target).required_sections_created = true;
       }
-      if (addedProduces.length || addedSensors.length || addedConsumes.length || addedScopes.length || addedSections.length) {
+      if (addedProduces.length || addedSensors.length || addedConsumes.length || addedScopes.length || addedRequires.length || addedSections.length) {
         contribManifestDirty = true;
       }
 
