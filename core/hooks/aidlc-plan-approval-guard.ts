@@ -593,9 +593,6 @@ function isPlanApprovalPrerequisite(args: string[]): boolean {
   ) {
     return true;
   }
-  // Stopping a worker does not authorize generation. Keep native cleanup
-  // available even when the plan that would permit more work is stale.
-  if (noun === "bolt" && verb === "abort") return true;
   // Checkpoint review owns its own audit/readiness/human authority. It must
   // remain reachable after the engine replaces invoke-swarm with its gate
   // successor, including when Request Changes retired the old Plan Approval.

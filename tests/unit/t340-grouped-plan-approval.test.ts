@@ -309,9 +309,14 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       }
       if (condition === "missing all") {
         for (const entry of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
+          // An ad-hoc discard is not a published recovery selection (#1149);
+          // only the exact guard-recovery abort invocation passes without one.
           const abort = guard(pd,
             `${entry} engine bolt abort --name alpha --slug alpha --reason "Human Retry" --discard --project-dir "${pd}"`);
-          expect(abort.code, `${entry}: cancellation\n${abort.out}\n${abort.err}`).toBe(0);
+          expect(abort.code, `${entry}: ad-hoc discard\n${abort.out}\n${abort.err}`).toBe(2);
+          const recovery = guard(pd,
+            `${entry} engine bolt abort --name alpha --slug alpha --reason "stale review recovery exhausted" --discard`);
+          expect(recovery.code, `${entry}: recovery abort\n${recovery.out}\n${recovery.err}`).toBe(0);
           const start = guard(pd,
             `${entry} engine bolt start --name alpha --slug alpha --batch 1 --worktree --project-dir "${pd}"`);
           expect(start.code, `${entry}: generation start\n${start.out}\n${start.err}`).toBe(2);
