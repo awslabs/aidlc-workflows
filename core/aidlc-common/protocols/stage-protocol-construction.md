@@ -242,10 +242,10 @@ re-dispatch by default. Before `prepare`, check for worktrees or
 `bolt-<slug>` branches left by the prior attempt (a crash or a halt-and-ask
 mid-swarm leaves them in place): `prepare` hard-errors on collision, and
 `finalize` refuses a unit without the current attempt's prepare stamp, so
-park/discard the stale worktrees/branches before a fresh `prepare` — never adopt
-them into the new attempt. Their parked snapshots remain recoverable with
-`{{INVOKE}} engine worktree restore --slug <slug>` in separate restored
-checkouts, not as current-attempt evidence. Do not spend a worker turn per unit: after
+discard the stale worktrees/branches before a fresh `prepare` — never adopt
+them into the new attempt. Discard parks each attempt; its snapshot remains
+recoverable with `{{INVOKE}} engine worktree restore --slug <slug>` in a
+separate restored checkout, never as current-attempt evidence. Do not spend a worker turn per unit: after
 `prepare`, run
 `check <unit> --check-cmd "<the project's convergence check>"` on every unit
 FIRST. A unit already green needs no builder turn, but before putting it in

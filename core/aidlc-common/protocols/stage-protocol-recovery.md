@@ -61,11 +61,11 @@ jump already exists, resume the settlement-aware re-entry instead:
 receipt-mode continues from the first unsettled unit, artifact-only mode
 resumes the pre-gate override, and a replay that re-emits `invoke-swarm`
 (autonomous stage-major) follows that section's "Swarm interaction" procedure:
-park/discard stale worktrees/branches, run a fresh `prepare`, check every unit
-first, record fresh reviewer receipts, and `finalize`. Parked work can be
-recovered with `{{INVOKE}} engine worktree restore --slug <slug>` in a separate
-checkout without touching a new live Bolt. None of the three paths may treat
-preserved or restored artifacts or prior receipts as current-attempt evidence.
+discard stale worktrees/branches, run a fresh `prepare`, check every unit
+first, record fresh reviewer receipts, and `finalize`. None of the three paths
+may treat preserved artifacts or prior receipts as current-attempt evidence.
+Discard parks the stale attempt; `{{INVOKE}} engine worktree restore --slug <slug>`
+recovers it into a separate checkout that is likewise never current-attempt evidence.
 
 ### Session resume context loading
 When resuming, load context appropriate to the current phase and stage type:
