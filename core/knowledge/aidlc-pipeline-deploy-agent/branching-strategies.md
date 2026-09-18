@@ -298,8 +298,14 @@ orders those suffixes numerically. Restore creates
 touching the live `.aidlc/worktrees/bolt-<slug>` path or `bolt-<slug>` branch.
 It does not resume the aborted lifecycle or restore active review authority.
 Its JSON is `{restored: true, slug, parked_ref, worktree_path, branch,
-reviewed_source_refs}`; the last field counts retained parked reviewed refs,
-which are not copied into the active namespace.
+reviewed_source_refs, materialized, raw_bytes: true}`.
+`reviewed_source_refs` counts retained parked reviewed refs, which are not copied into the active namespace.
+`materialized` counts regular files plus symbolic links written, excluding submodule gitlinks.
+`raw_bytes: true` confirms byte-exact blob materialization.
+
+Symbolic links are materialized as symlinks when `core.symlinks` is unset or true;
+with `core.symlinks=false`, a mode-120000 entry is written as a regular file whose
+bytes are the link target, exactly as Git checks it out.
 
 `{{INVOKE}} engine worktree purge --slug <bolt-slug> [--parked <stamp>]
 [--repo <name>]` compare-deletes all matching parked refs (all stamps for the

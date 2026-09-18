@@ -95,8 +95,11 @@ source refs remain in the parked namespace, not copied back into active refs.
 
 Restore writes the parked blobs byte-exact without running smudge/process
 filters; the checkout may show those paths as modified under their own filter.
-Executable files and symbolic links retain their modes. Submodule gitlinks
-become empty directories; submodule checkouts are not restored. Git's
+Executable files retain their modes. Symbolic links are materialized as symlinks
+when `core.symlinks` is unset or true; with `core.symlinks=false`, a mode-120000
+entry is written as a regular file whose bytes are the link target, exactly as
+Git checks it out. Submodule gitlinks become empty directories; submodule
+checkouts are not restored. Git's
 eol/`text=auto` normalization during parking is the explicit limit: CRLF bytes
 normalized at park time are not recoverable.
 
