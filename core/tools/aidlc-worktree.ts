@@ -757,6 +757,26 @@ function repositoryBoltEvidence(
   };
 }
 
+function worktreeRepoCandidates(
+  pd: string,
+  creationRows: readonly WorktreeAuditRow[],
+): Map<string, string | null> {
+  const selectors = new Map<string, string | null>();
+  selectors.set(repoSelectorKey(null), null);
+  for (const repo of discoverSiblingRepos(pd)) {
+    selectors.set(repoSelectorKey(repo), repo);
+  }
+  for (const row of creationRows) {
+    const field = auditBlockField(row.block, "Repo");
+    if (field === "-") {
+      selectors.set(repoSelectorKey(null), null);
+    } else if (field !== null && isValidRepoName(field)) {
+      selectors.set(repoSelectorKey(field), field);
+    }
+  }
+  return selectors;
+}
+
 interface DiscardCreationAuthority {
   evidenceExists: boolean;
   intent?: string;
@@ -776,19 +796,7 @@ function discardCreationAuthority(
       row.event === "WORKTREE_CREATED" &&
       auditBlockField(row.block, "Bolt slug") === slug,
   );
-  const selectors = new Map<string, string | null>();
-  selectors.set(repoSelectorKey(null), null);
-  for (const repo of discoverSiblingRepos(pd)) {
-    selectors.set(repoSelectorKey(repo), repo);
-  }
-  for (const row of creationRows) {
-    const field = auditBlockField(row.block, "Repo");
-    if (field === "-") {
-      selectors.set(repoSelectorKey(null), null);
-    } else if (field !== null && isValidRepoName(field)) {
-      selectors.set(repoSelectorKey(field), field);
-    }
-  }
+  const selectors = worktreeRepoCandidates(pd, creationRows);
   if (recorded?.repoSelector !== undefined) {
     selectors.set(
       repoSelectorKey(recorded.repoSelector),
@@ -3037,12 +3045,50 @@ function handleDiscard(args: string[]): void {
 
 // --- Subcommands: restore / purge ---
 // Local recovery uses a separate path and branch namespace, never a live Bolt.
+function parkedRepoCwd(
+  pd: string,
+  flags: Record<string, string>,
+  slug: string,
+): string {
+  if (flags.repo !== undefined) return resolveRepoCwd(pd, flags, slug);
+  const creationRows = allWorktreeAuditRows(pd).rows.filter(
+    (row) =>
+      row.event === "WORKTREE_CREATED" &&
+      auditBlockField(row.block, "Bolt slug") === slug,
+  );
+  const candidates = worktreeRepoCandidates(pd, creationRows);
+  const parkedRepos: { cwd: string; repo: string | null }[] = [];
+  for (const repo of candidates.values()) {
+    const cwd = repo === null ? pd : repoDir(pd, repo);
+    const listed = runGit(
+      ["for-each-ref", "--format=%(refname)", `refs/aidlc/parked/${slug}/`],
+      cwd,
+    );
+    if (listed.ok && listed.stdout.trim()) parkedRepos.push({ cwd, repo });
+  }
+  if (parkedRepos.length === 0) {
+    errorWithSlug(slug, `no parked attempt for slug ${slug}`);
+  }
+  if (parkedRepos.length > 1) {
+    const labels = parkedRepos
+      .map(({ repo }) => repoSelectorLabel(repo))
+      .sort()
+      .map((value) => JSON.stringify(value))
+      .join(", ");
+    errorWithSlug(
+      slug,
+      `parked attempts for slug ${slug} exist in several repositories (${labels}); pass --repo <name>`,
+    );
+  }
+  return parkedRepos[0].cwd;
+}
+
 function handleRestore(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   validateParkedStamp(flags.parked);
   const pd = resolveProjectDir(projectDir);
-  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  const repoCwd = parkedRepoCwd(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
   const refs = parkedSourceRefs(repoCwd, slug);
   const heads = refs.filter(({ ref }) =>
@@ -3078,7 +3124,7 @@ function handlePurge(args: string[]): void {
   const slug = validateSlug(flags.slug);
   validateParkedStamp(flags.parked);
   const pd = resolveProjectDir(projectDir);
-  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  const repoCwd = parkedRepoCwd(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
   const refs = parkedSourceRefs(repoCwd, slug).filter(({ ref }) =>
     flags.parked === undefined || parkedStamp(ref) === flags.parked);

@@ -155,7 +155,7 @@ describe("structured guard recovery operations", () => {
     }
   });
 
-  test("an explicit source child ignores the compiled executable environment override", () => {
+  test("explicit source and native children ignore the compiled executable environment override", () => {
     const previous = process.env.AIDLC_COMPILED_EXECUTABLE;
     process.env.AIDLC_COMPILED_EXECUTABLE = "/tmp/evil/aidlc";
     try {

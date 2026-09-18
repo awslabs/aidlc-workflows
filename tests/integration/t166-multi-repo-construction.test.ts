@@ -943,8 +943,8 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
   describe("multi-repo: discard is bound to the creating repository", () => {
     const proj = freshWorkspace();
-    makeSiblingRepo(proj, "repo-a");
-    makeSiblingRepo(proj, "repo-b");
+    const repoA = makeSiblingRepo(proj, "repo-a");
+    const repoB = makeSiblingRepo(proj, "repo-b");
     runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     runWorktree(
       proj,
@@ -956,6 +956,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--repo",
       "repo-a",
     );
+    writeFileSync(join(worktreeDir(proj, "discard-repo"), "recovery.txt"), "parked dirty source\n");
     const wrong = runWorktree(
       proj,
       "discard",
@@ -970,6 +971,26 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--slug",
       "discard-repo",
     );
+    const parked = JSON.parse(recovered.stdout) as { parked_ref: string; parked_commit: string };
+    const stamp = parked.parked_ref.split("/").at(-1);
+    const restoredPath = join(proj, ".aidlc", "restored", `bolt-discard-repo-${stamp}`);
+    const conflictingRef = `${parked.parked_ref}/head`;
+    git(repoB, "update-ref", conflictingRef, "HEAD");
+    const ambiguousRestore = runWorktree(proj, "restore", "--slug", "discard-repo");
+    const ambiguousPurge = runWorktree(proj, "purge", "--slug", "discard-repo");
+    const retainedA = git(repoA, "rev-parse", "--verify", conflictingRef);
+    const retainedB = git(repoB, "rev-parse", "--verify", conflictingRef);
+    const ambiguousCheckoutExists = existsSync(restoredPath);
+    const explicitPurge = runWorktree(proj, "purge", "--slug", "discard-repo", "--repo", "repo-b");
+    const restored = runWorktree(proj, "restore", "--slug", "discard-repo");
+    const restoredSource = existsSync(join(restoredPath, "recovery.txt"))
+      ? readFileSync(join(restoredPath, "recovery.txt"), "utf-8")
+      : null;
+    const removed = git(repoA, "worktree", "remove", "--force", restoredPath);
+    const purged = runWorktree(proj, "purge", "--slug", "discard-repo");
+    const remainingRefs = git(repoA, "for-each-ref", "--format=%(refname)", "refs/aidlc/parked/discard-repo/");
+    const missingRestore = runWorktree(proj, "restore", "--slug", "discard-repo");
+    const missingPurge = runWorktree(proj, "purge", "--slug", "discard-repo");
 
     test("wrong selector refuses and selector-free retry uses the creating repo", () => {
       expect(wrong.status).not.toBe(0);
@@ -977,6 +998,38 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(recovered.status, recovered.out).toBe(0);
       expect(existsSync(worktreeDir(proj, "discard-repo"))).toBe(false);
       expect(hasBoltBranch(proj, "repo-a", "discard-repo")).toBe(false);
+    });
+
+    test("ambiguous parked repositories refuse recovery without deleting either attempt", () => {
+      for (const result of [ambiguousRestore, ambiguousPurge]) {
+        expect(result.status).not.toBe(0);
+        expect(emittedError(result)).toContain("parked attempts for slug discard-repo exist in several repositories");
+        expect(emittedError(result)).toContain('("repo-a", "repo-b"); pass --repo <name>');
+      }
+      expect(retainedA.status, retainedA.out).toBe(0);
+      expect(retainedA.out.trim()).toBe(parked.parked_commit);
+      expect(retainedB.status, retainedB.out).toBe(0);
+      expect(ambiguousCheckoutExists).toBe(false);
+      expect(explicitPurge.status, explicitPurge.out).toBe(0);
+      expect(JSON.parse(explicitPurge.stdout).purged).toBe(1);
+    });
+
+    test("selector-free restore recovers the creating repo's source under the project", () => {
+      expect(restored.status, restored.out).toBe(0);
+      expect(JSON.parse(restored.stdout).worktree_path).toBe(restoredPath);
+      expect(restoredSource).toBe("parked dirty source\n");
+      expect(removed.status, removed.out).toBe(0);
+    });
+
+    test("selector-free purge removes parked refs after the restore checkout is removed", () => {
+      expect(purged.status, purged.out).toBe(0);
+      expect(JSON.parse(purged.stdout)).toEqual({ purged: 1, slug: "discard-repo", stamps: [stamp] });
+      expect(remainingRefs.status, remainingRefs.out).toBe(0);
+      expect(remainingRefs.out).toBe("");
+      for (const result of [missingRestore, missingPurge]) {
+        expect(result.status).not.toBe(0);
+        expect(result.out).toContain("no parked attempt for slug discard-repo");
+      }
     });
   });
 

@@ -266,7 +266,6 @@ import {
   aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
-  compiledExecutable,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveHarnessRoot,
@@ -7560,13 +7559,13 @@ function spawnState(
   projectDir: string,
   subArgs: string[],
 ): { exitCode: number; stdout: string; stderr: string } {
-  // The orchestrator trusts only its own process identity; adapters running
-  // under the compiled dispatcher receive the executable through the environment.
+  // In source and compiled modes, the orchestrator uses only its own process
+  // identity, never an executable supplied through the environment.
   const command = aidlcEngineCommand(
     "state",
     [...subArgs, "--project-dir", projectDir],
     fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)),
-    IS_COMPILED ? compiledExecutable() : null,
+    IS_COMPILED ? process.execPath : null,
   );
   const result = Bun.spawnSync({
     cmd: command,
