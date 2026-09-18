@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1039,
+    "total": 1040,
     "enumeratedByClass": {
-      "function": 721,
+      "function": 722,
       "audit": 102,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 422,
+      "function": 423,
       "audit": 63,
       "scope": 11,
       "stage": 11,
@@ -2151,6 +2151,22 @@
       "coveredBy": [
         {
           "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearCheckpointApprovalChallenges",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
