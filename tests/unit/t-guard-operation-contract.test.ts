@@ -154,6 +154,21 @@ describe("structured guard recovery operations", () => {
       else process.env.AIDLC_COMPILED_EXECUTABLE = previous;
     }
   });
+
+  test("an explicit source child ignores the compiled executable environment override", () => {
+    const previous = process.env.AIDLC_COMPILED_EXECUTABLE;
+    process.env.AIDLC_COMPILED_EXECUTABLE = "/tmp/evil/aidlc";
+    try {
+      const args = ["approve", "code-generation", "--project-dir", "/workspace with spaces"];
+      expect(aidlcEngineCommand("state", args, "/source/aidlc-state.ts", null))
+        .toEqual([process.execPath, "/source/aidlc-state.ts", ...args]);
+      expect(aidlcEngineCommand("state", args, "/source/aidlc-state.ts", "/native install/aidlc"))
+        .toEqual(["/native install/aidlc", "engine", "state", ...args]);
+    } finally {
+      if (previous === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
+      else process.env.AIDLC_COMPILED_EXECUTABLE = previous;
+    }
+  });
 });
 
 describe("recovery selection records the next interaction", () => {

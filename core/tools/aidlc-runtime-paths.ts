@@ -150,8 +150,8 @@ export function aidlcEngineCommand(
   route: "orchestrate" | "log" | "state" | "bolt",
   args: readonly string[],
   sourceToolPath?: string,
+  executable: string | null = compiledExecutable(),
 ): string[] {
-  const executable = compiledExecutable();
   return executable
     ? [executable, "engine", route, ...args]
     : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];

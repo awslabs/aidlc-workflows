@@ -46,6 +46,12 @@ function withProcessEnv(env: NodeJS.ProcessEnv, fn: () => void): void {
 }
 
 describe("runner guard profile options", () => {
+  test("production guard CI checkout does not persist credentials before uploading logs", () => {
+    const ci = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    const guardJob = ci.slice(ci.indexOf("  test_guards:"), ci.indexOf("  test:", ci.indexOf("  test_guards:")));
+    expect(guardJob).toMatch(/uses: actions\/checkout@[^\n]+\n\s+with:\n\s+persist-credentials: false/);
+  });
+
   test("fixture remains the default regardless of an inherited profile marker", () => {
     const args = parseRunnerArgs([], { [GUARD_PROFILE_ENV]: "production" });
     expect(args.guardProfile).toBe("fixture");
