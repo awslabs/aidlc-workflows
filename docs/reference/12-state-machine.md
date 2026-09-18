@@ -630,7 +630,7 @@ Pre-registered for v0.4.0; the three `WORKTREE_*` rows ship with `aidlc-worktree
 |---|---|---|
 | `WORKTREE_CREATED` | `tools/aidlc-worktree.ts` | Audit-first per-Bolt creation records the immutable Base commit, `Base Source Listing`, and portable creating-repo selector (`Repo`, `-` for root); private worktree metadata also binds the canonical Git common-dir. Swarm prepare additionally stamps intent/Unit/batch/stage/floor provenance (subcommand: `create`) |
 | `WORKTREE_MERGED` | `tools/aidlc-worktree.ts` | Bolt's worktree merged back to main on gate approval (subcommand: `merge`) |
-| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Aborted Bolt's worktree explicitly removed (subcommand: `discard`) |
+| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Bolt's recoverable working-tree snapshot and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission; `Parked ref` records that namespace prefix and `Parked commit` the snapshot commit (`-` when only reviewed refs remain). The live checkout and branch are then removed (subcommand: `discard`) |
 | `STATE_FORKED` | `tools/aidlc-state.ts` | State file forked to worktree on Bolt start (subcommand: `fork`) |
 | `STATE_MERGED` | `tools/aidlc-state.ts` | Worktree's state merged back to main on gate approval; alphabetical-slug tiebreak as defence-in-depth (subcommand: `merge`) |
 | `AUDIT_FORKED` | `tools/aidlc-audit.ts` (`audit-fork`) | Audit log forked to worktree on Bolt start; audit-of-intent — emit precedes the byte-copy |
@@ -744,11 +744,23 @@ A missing entry understates what happened; a phantom entry asserts something unt
 
 Audit-of-intent semantics apply to side-effects whose outcome cannot be checked before emission — including disk operations (worktree creation / removal, audit byte-copy) and LLM Task dispatch (aidlc-pipeline-deploy-agent). The emitting tool writes the audit entry first, then performs the side-effect. If the side-effect fails after the emit, the tool calls `emitError` with the slug embedded in the message (`[slug=<slug>]`); the audit-fork / audit-merge handlers additionally tag failures with `[fork-emitted:<timestamp>]` so `--doctor` (v0.4.0 milestone 15) can distinguish "intent recorded, side-effect never landed" from earlier failure modes. For `MERGE_DISPATCH_INVOKED`, doctor reconciliation matches orphan INVOKED rows to a missing `MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK` partner via slug + timestamp window (no correlation tag needed because the LLM Task call has no disk artifact to sequence against). `appendAuditEntry` records an `ERROR_LOGGED` entry on disk-side-effect failure; doctor reconciles audit drift at observation time.
 
-| Event group | Emitter | Side-effect that follows the emit |
+| Event group | Emitter | Ordering and effects |
 |---|---|---|
-| `WORKTREE_CREATED`, `WORKTREE_MERGED`, `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | `git worktree add`, `git merge` + cleanup, `git worktree remove` + branch delete |
-| `AUDIT_FORKED`, `AUDIT_MERGED` | `tools/aidlc-audit.ts` | `mkdir -p` + `copyFileSync` of main audit; `appendFileSync` of worktree-audit delta to main audit |
-| `MERGE_DISPATCH_INVOKED` | `tools/aidlc-bolt.ts` `dispatch-event` | `Task(aidlc-pipeline-deploy-agent, ...)` LLM dispatch — the side-effect is the LLM call itself; success is observed via the matching `MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK` post-call emit |
+| `WORKTREE_CREATED`, `WORKTREE_MERGED` | `tools/aidlc-worktree.ts` | Audit emit, then `git worktree add` or `git merge` + cleanup |
+| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Snapshot and park the head plus all reviewed source refs first; emit the audit row second; force-remove the live checkout, delete its branch, and compare-delete the original reviewed source refs last |
+| `AUDIT_FORKED`, `AUDIT_MERGED` | `tools/aidlc-audit.ts` | Audit emit, then `mkdir -p` + `copyFileSync` of main audit or `appendFileSync` of worktree-audit delta to main audit |
+| `MERGE_DISPATCH_INVOKED` | `tools/aidlc-bolt.ts` `dispatch-event` | Audit emit, then `Task(aidlc-pipeline-deploy-agent, ...)` LLM dispatch — the side-effect is the LLM call itself; success is observed via the matching `MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK` post-call emit |
+
+Discard snapshots tracked and untracked, non-ignored working-tree content with a
+temporary Git index and `commit-tree`. All parked copies must exist before
+`WORKTREE_DISCARDED` can be emitted; if parking or audit emission fails, teardown
+does not start. The row's `Parked ref` names
+`refs/aidlc/parked/<slug>/<UTC-YYYYMMDDTHHMMSSZ[-N]>`, whose `/head` points to
+`Parked commit` and whose `/reviewed-source/<commit>` refs preserve the reviewed
+source evidence. `aidlc engine worktree restore --slug <slug>` recovers the
+snapshot in an isolated restored checkout; `worktree purge` explicitly removes
+parked refs. Neither command adds an audit event, and neither repurposes the
+live Bolt path or branch.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
 
@@ -834,11 +846,16 @@ install; abort renders `aidlc engine bolt abort --name <unit> --slug <slug>
 templates for documentation: emitted commands contain concrete targets and no
 unresolved placeholders.
 
-The conductor must obtain human consent before aborting a Bolt. The Plan
-Approval hook's exact abort exception preserves source/native trusted-tool
-parity; it does not authenticate that consent. Direct refusal asks do not
-publish the selection marker used by the separately checked native restart
-continuation.
+The conductor must obtain human consent before aborting a Bolt. This
+conductor-prose-obtained consent remains the trust boundary: the Plan Approval
+hook's exact abort exception preserves source/native trusted-tool parity but
+does not authenticate consent. Direct refusal asks do not publish the selection
+marker used by the separately checked native restart continuation. A mistaken
+abort with the unchanged `--discard` argv now parks the work for
+`aidlc engine worktree restore --slug <slug>` rather than irretrievably deleting
+it. Restore recovers files separately, not the aborted lifecycle or its review
+authority. A mechanical selection receipt remains a candidate for later
+hardening; recoverable discard does not change command admission.
 
 Directive validation requires an exact rendering of the operation, including
 all arguments, and checks its remedy and target: restart matches the ask's stage

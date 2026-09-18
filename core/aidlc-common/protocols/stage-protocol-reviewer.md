@@ -345,10 +345,14 @@ re-checked.`).
 > If an autonomous Unit invalidates its one recovery receipt, halt before
 > `finalize`: do not put the Unit in `--claimed`, do not merge it, and present a
 > human Retry/Abort decision through the halt-and-ask seam. On Retry, return to
-> the main workspace, abort and discard the old Bolt, then rerun the current
+> the main workspace, abort and park/discard the old Bolt, then rerun the current
 > `aidlc-swarm.ts prepare` step for that Unit with the original batch/base/repo
 > arguments. The fresh worktree and `BOLT_STARTED` boundary reset review
 > accounting without claiming convergence. Never synthesize `GATE_REJECTED`.
+> The discard parks tracked files, non-ignored untracked files, and reviewed
+> source refs before removing the live checkout and branch. Recover the parked
+> work with `{{INVOKE}} engine worktree restore --slug <slug>`; restoration uses
+> a separate checkout and does not reinstate the old review authority.
 
 ### What the reviewer does NOT do
 

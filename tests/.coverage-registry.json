@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1003,
+    "total": 1005,
     "enumeratedByClass": {
       "function": 693,
       "audit": 99,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 142,
+      "subcommand": 144,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -36,7 +36,7 @@
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 129,
+      "subcommand": 131,
       "render-surface": 7
     }
   },
@@ -12300,6 +12300,30 @@
         },
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree purge",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree restore",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
           "mechanism": "cli"
         }
       ],

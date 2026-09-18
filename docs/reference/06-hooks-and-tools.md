@@ -555,12 +555,18 @@ the emitted argument shape: `aidlc engine bolt abort --name <unit> --slug <slug>
 --reason 'stale review recovery exhausted' --discard`, with concrete identifiers
 and no extra arguments. This narrowly admits an attempt to recover; the Bolt
 command follows the same trusted-tool admission as its source-mode equivalent.
-Abort consent is required by the conductor protocol, not authenticated by this
-Plan Approval exception: a direct review refusal prints its ask without
-publishing a selection marker. Requiring that absent marker here would prevent
-the offered abort. The native restart continuation has a recorded ask and
-separately verifies its human selection. Other Bolt commands gain no exemption,
-and abort admission never approves generation or a review verdict.
+Conductor-prose-obtained abort consent remains the trust boundary: it is required
+by the protocol, not authenticated by this Plan Approval exception. A direct
+review refusal prints its ask without publishing a selection marker; requiring
+that absent marker here would prevent the offered abort. The unchanged
+`--discard` command now parks the working-tree snapshot and reviewed source refs
+before removing the live checkout and branch. A mistaken abort is recoverable
+with `aidlc engine worktree restore --slug <slug>` in a separate restored
+checkout, not by reviving the live Bolt. A mechanical selection receipt remains
+a candidate for later hardening, not a check added by this recovery behavior.
+The native restart continuation has a recorded ask and separately verifies its
+human selection. Other Bolt commands gain no exemption, and abort admission
+never approves generation or a review verdict.
 Directive validation binds each command to its structured operation and target.
 For interaction, exact feedback, and failure handling, see
 [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks).
