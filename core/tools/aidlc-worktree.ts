@@ -221,9 +221,9 @@ function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): s
 //
 // `aidlc-worktree` must not run from a checkout NESTED INSIDE the main repo
 // checkout's working tree — the `.aidlc/worktrees/<bolt>` (or legacy
-// `.claude/worktrees/<dev>`) shape the error names. Creating a Bolt worktree from
-// there would place one worktree inside another's tracked tree, which is exactly
-// what "Bolt worktrees are siblings of the main checkout, not nested" forbids.
+// `.claude/worktrees/<dev>`) shape the error names. A nested checkout is refused
+// because a Bolt worktree created from there would sit inside another worktree's
+// tracked tree.
 // The main checkout is the directory whose `.git` is `git rev-parse
 // --git-common-dir`'s parent. macOS symlinks `/var → /private/var`, so
 // canonicalise both sides via `realpathSync` before comparing.
@@ -269,7 +269,7 @@ function assertNotSiblingWorktree(repoCwd?: string): void {
 
   if (cwdTop !== mainCheckout && isNestedInside(mainCheckout, cwdTop)) {
     error(
-      `aidlc-worktree must run from the main repo checkout or a worktree outside it, not from a worktree nested inside it at ${cwdTop}. Bolt worktrees are siblings of the main checkout, not nested.`
+      `aidlc-worktree must run from the main repo checkout or a worktree outside it, not from a worktree nested inside it at ${cwdTop}. Bolt worktrees live under the invoking checkout's .aidlc/worktrees/, so creating one from a nested checkout would put a worktree inside another worktree's tracked tree.`
     );
   }
 }
@@ -477,7 +477,16 @@ function handleCreate(args: string[]): void {
   const branchName = `bolt-${slug}`;
   const branchExists = runGit(["rev-parse", "--verify", `refs/heads/${branchName}`], repoCwd);
   if (branchExists.ok) {
-    errorWithSlug(slug, `Branch already exists: ${branchName}`);
+    const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
+    const owner = listed.ok
+      ? worktreeCheckedOutAt(listed.stdout, `refs/heads/${branchName}`)
+      : null;
+    errorWithSlug(
+      slug,
+      `Branch already exists: ${branchName}` +
+        (owner ? ` (checked out at ${owner})` : "") +
+        ". Bolt branches are shared by every worktree of this repository; finish or discard the Bolt that owns it, or rename the Unit.",
+    );
   }
 
   // Audit-first: emit BEFORE git so a kill-9 between emit and git surfaces
@@ -726,6 +735,17 @@ interface RepositoryBoltEvidence {
   durable: boolean;
   registered: boolean;
   retained: boolean;
+}
+
+// Path of the registered worktree that has `branchRef` checked out, or null.
+function worktreeCheckedOutAt(porcelain: string, branchRef: string): string | null {
+  for (const block of porcelain.split(/\r?\n\r?\n/)) {
+    const lines = block.split(/\r?\n/);
+    if (lines.includes(`branch ${branchRef}`)) {
+      return lines.find((line) => line.startsWith("worktree "))?.slice(9) ?? null;
+    }
+  }
+  return null;
 }
 
 function repositoryRegistersBoltWorktree(
@@ -3378,13 +3398,11 @@ function handlePurge(args: string[]): void {
     a.localeCompare(b, "en", { numeric: true }));
   const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
   if (!listed.ok) errorWithSlug(slug, `git worktree list failed: ${listed.stderr.trim()}`);
-  const registrations = listed.stdout.split(/\r?\n\r?\n/).map((block) => block.split(/\r?\n/));
   for (const stamp of stamps) {
     const wtPath = resolve(pd, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
     const branch = `refs/heads/restore/bolt-${slug}-${stamp}`;
     // Match registrations too: a restored checkout may have been moved.
-    const registration = registrations.find((lines) => lines.includes(`branch ${branch}`));
-    const registeredPath = registration?.find((line) => line.startsWith("worktree "))?.slice(9);
+    const registeredPath = worktreeCheckedOutAt(listed.stdout, branch);
     if (existsSync(wtPath) || registeredPath) {
       errorWithSlug(slug, `restore checkout still present at ${registeredPath ?? wtPath}; remove it first`);
     }
