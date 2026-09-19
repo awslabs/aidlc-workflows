@@ -1208,6 +1208,87 @@ describe("t243 project initialization", () => {
     expect(readFileSync(target, "utf-8")).toContain("// active refresh marker");
   }, 60_000);
 
+  // The refusal above protects project bytes. A dry run writes none, and the
+  // workflow that cannot complete is exactly what the operator is trying to
+  // diagnose, so the preview has to stay reachable. The refusal's own
+  // remediation must likewise name a route that works from this state, not
+  // `config --harness <name>`, which re-enters the same guard.
+  test("a dry run previews the refresh under an active workflow, and the refusal names a reachable route", () => {
+    const project = temp("aidlc-t243-active-dry-run-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--yes",
+      "--json",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    const dirName = "260919-active-dry-run";
+    const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+    const intentDir = join(intentsDir, dirName);
+    mkdirSync(intentDir, { recursive: true });
+    writeFileSync(
+      join(intentsDir, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000000002",
+        slug: "active-dry-run",
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intentDir, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+    );
+
+    const newer = temp("aidlc-t243-active-dry-run-upstream-");
+    cpSync(CLAUDE_RELEASE, newer, { recursive: true });
+    const rel = join(".claude", "tools", "aidlc-command.ts");
+    writeFileSync(join(newer, rel), `${readFileSync(join(newer, rel), "utf-8")}\n// dry-run marker\n`);
+    const target = join(project, rel);
+    const before = readFileSync(target);
+    const rootEntries = readdirSync(project).sort();
+
+    const previewed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+      "--dry-run",
+      "--json",
+    ], project);
+    expect(previewed.status, previewed.stdout + previewed.stderr).toBe(0);
+    expect(previewed.stdout + previewed.stderr).not.toContain("refusing to refresh while");
+    // The preview is inert: the refresh it describes has not been applied.
+    expect(readFileSync(target)).toEqual(before);
+    expect(readdirSync(project).sort()).toEqual(rootEntries);
+
+    // Applying it is still refused, and the remediation is a route that does
+    // not re-enter this guard.
+    const refused = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+      "--json",
+    ], project);
+    expect(refused.status).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain("refusing to refresh while 1 workflow(s) are active");
+    expect(payload.remediation ?? "").toContain("--dry-run");
+    expect(payload.remediation ?? "").not.toMatch(/config --harness/);
+    expect(readFileSync(target)).toEqual(before);
+  }, 60_000);
+
   test("exact legacy root signatures are adopted while modified lookalikes still refuse", () => {
     const project = temp("aidlc-t240-legacy-adopt-");
     mkdirSync(join(project, ".git"));
