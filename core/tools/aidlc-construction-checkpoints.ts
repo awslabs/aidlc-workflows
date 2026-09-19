@@ -474,7 +474,11 @@ function outputTail(output: Buffer | null): string {
     // A byte-bounded tail may start inside a UTF-8 code point.
     while (start < output.length && (output[start]! & 0xc0) === 0x80) start++;
   }
-  return output.subarray(start).toString("utf-8").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "\ufffd");
+  // Keep newlines and tabs; every other C0/C1 control byte becomes U+FFFD.
+  return output.subarray(start).toString("utf-8").replace(
+    /\p{Cc}/gu,
+    (char) => (char === "\n" || char === "\t" ? char : "\ufffd"),
+  );
 }
 
 export function verifyConstructionCheckpoint(
