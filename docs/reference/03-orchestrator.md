@@ -351,7 +351,7 @@ sequenceDiagram
     participant AU as audit/ shard
 
     O->>A: 1. Apply load-steering parts, then read inline_context_paths
-    Note over A: Rules arrive as content; persona and knowledge remain path-loaded
+    Note over A: Rules arrive as content - persona and knowledge remain path-loaded
 
     O->>SF: 2. Read stage file
     Note over SF: directive.stage_file
