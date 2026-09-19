@@ -3379,6 +3379,7 @@ type StageContribRecord = {
   produces?: string[];
   sensors?: string[];
   consumes?: string[];
+  requires_stage?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
 };
@@ -3457,6 +3458,7 @@ function stripRecordedContributions(content: string, record: StageContribRecord)
   for (const [field, items] of [
     ["produces", record.produces],
     ["sensors", record.sensors],
+    ["requires_stage", record.requires_stage],
     ["required_sections", record.required_sections],
   ] as const) {
     if (!items?.length) continue;
@@ -3542,6 +3544,46 @@ function anchorOffset(content: string, anchor: string): number {
     return next < 0 ? content.length : from + next;
   }
   return -1;
+}
+
+// A recorded requires_stage edge is replayed onto a FRESH runtime only if it
+// still holds there: the dependency stage exists, and it compiles before the
+// target — an earlier phase, or a lower pinned number in the same phase read
+// from the staged graph. An upgrade that removes or reorders a stage would
+// otherwise resurrect an edge the compile invariant rejects. Same-phase edges
+// need the staged graph; without a readable one they are dropped.
+const REFRESH_PHASE_ORDER = ["initialization", "ideation", "inception", "construction", "operation"];
+function requiresEdgeHolds(stagedHarnessRoot: string, target: string, dependency: string): boolean {
+  if (target === dependency) return false;
+  const phaseOf = (slug: string): number => {
+    for (const [index, phase] of REFRESH_PHASE_ORDER.entries()) {
+      if (existsSync(join(stagedHarnessRoot, "aidlc-common", "stages", phase, `${slug}.md`))) return index;
+    }
+    return -1;
+  };
+  const targetPhase = phaseOf(target);
+  const dependencyPhase = phaseOf(dependency);
+  if (targetPhase < 0 || dependencyPhase < 0) return false;
+  if (dependencyPhase !== targetPhase) return dependencyPhase < targetPhase;
+  try {
+    const graph = JSON.parse(
+      readFileSync(join(stagedHarnessRoot, "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug?: string; number?: string }>;
+    const indexOf = (slug: string): number => {
+      const raw = graph.find((row) => row.slug === slug)?.number ?? "";
+      const index = Number.parseInt(raw.split(".")[1] ?? "", 10);
+      return Number.isFinite(index) ? index : Number.NaN;
+    };
+    const dependencyIndex = indexOf(dependency);
+    const targetIndex = indexOf(target);
+    return Number.isFinite(dependencyIndex) && Number.isFinite(targetIndex) && dependencyIndex < targetIndex;
+  } catch {
+    return false;
+  }
+}
+
+export function _requiresEdgeHoldsForTests(stagedHarnessRoot: string, target: string, dependency: string): boolean {
+  return requiresEdgeHolds(stagedHarnessRoot, target, dependency);
 }
 
 function mergePluginFragments(
@@ -3787,6 +3829,7 @@ function prepareRefreshSource(
           produces: [...new Set([...(priorRecord.produces ?? []), ...(record.produces ?? [])])],
           sensors: [...new Set([...(priorRecord.sensors ?? []), ...(record.sensors ?? [])])],
           consumes: [...new Set([...(priorRecord.consumes ?? []), ...(record.consumes ?? [])])],
+          requires_stage: [...new Set([...(priorRecord.requires_stage ?? []), ...(record.requires_stage ?? [])])],
           required_sections: [
             ...new Set([...(priorRecord.required_sections ?? []), ...(record.required_sections ?? [])]),
           ],
@@ -3823,6 +3866,13 @@ function prepareRefreshSource(
         let fresh = readFileSync(stagedPath, "utf-8");
         fresh = mergeListField(fresh, "produces", record.produces ?? []);
         fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
+        fresh = mergeListField(
+          fresh,
+          "requires_stage",
+          (record.requires_stage ?? []).filter((dependency) =>
+            requiresEdgeHolds(join(root, descriptor.harnessDir), file.slice(0, -3), dependency)
+          ),
+        );
         fresh = mergeConsumes(fresh, consumeBlocks(current, new Set(record.consumes ?? [])));
         fresh = mergeRequiredSections(fresh, record);
         fresh = mergePluginFragments(fresh, fragments);

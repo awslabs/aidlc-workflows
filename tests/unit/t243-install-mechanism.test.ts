@@ -28,7 +28,7 @@ import {
   readTarGz,
   type ArchiveEntry,
 } from "../../core/tools/aidlc-archive.ts";
-import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
+import { _installedSourcesForTests, _requiresEdgeHoldsForTests } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { sha256Bytes, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import {
@@ -848,6 +848,36 @@ describe("t243 project initialization", () => {
       if (prior === undefined) delete process.env.KIRO_PROJECT_DIR;
       else process.env.KIRO_PROJECT_DIR = prior;
     }
+  });
+
+  test("refresh replays a recorded requires_stage edge only where it still holds", () => {
+    const harness = join(temp("aidlc-t243-edge-"), ".claude");
+    const stage = (phase: string, slug: string) => {
+      mkdirSync(join(harness, "aidlc-common", "stages", phase), { recursive: true });
+      writeFileSync(join(harness, "aidlc-common", "stages", phase, `${slug}.md`), `---\nslug: ${slug}\n---\n`);
+    };
+    stage("inception", "requirements-analysis");
+    stage("construction", "nfr-requirements");
+    stage("construction", "build-and-test");
+    mkdirSync(join(harness, "tools", "data"), { recursive: true });
+    const graphPath = join(harness, "tools", "data", "stage-graph.json");
+    writeFileSync(graphPath, JSON.stringify([
+      { slug: "requirements-analysis", number: "2.3" },
+      { slug: "nfr-requirements", number: "3.2" },
+      { slug: "build-and-test", number: "3.6" },
+    ]));
+    // Earlier phase, and lower number in the same phase: hold.
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(true);
+    // Later in the same phase, a removed dependency, a self-edge: dropped.
+    expect(_requiresEdgeHoldsForTests(harness, "nfr-requirements", "build-and-test")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "gone-stage")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "build-and-test")).toBe(false);
+    // Without a readable graph a same-phase edge cannot be verified, a
+    // cross-phase one still can.
+    writeFileSync(graphPath, "not json");
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
   });
 
   test("fresh init, dry-run, refresh preservation, conflict, and force use one projection", () => {

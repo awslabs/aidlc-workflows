@@ -142,6 +142,7 @@ interface StageContribRecord {
   sensors?: string[];
   consumes?: Array<string | ConsumeEntry>;
   scopes?: string[];
+  requires_stage?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
 }
@@ -186,6 +187,7 @@ function stageContribRecord(value: unknown): StageContribRecord | null {
     "produces",
     "sensors",
     "scopes",
+    "requires_stage",
     "required_sections",
   ] as const) {
     const entries = value[field];
@@ -407,6 +409,7 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
     sensors: new Set(listFieldValues(content, "sensors") ?? []),
     consumes: consumeEntryValues(content),
     scopes: new Set(listFieldValues(content, "scopes") ?? []),
+    requires_stage: new Set(listFieldValues(content, "requires_stage") ?? []),
     required_sections: new Set(listFieldValues(content, "required_sections") ?? []),
   };
   const coreHasRequiredSections =
@@ -417,6 +420,7 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
       "produces",
       "sensors",
       "scopes",
+      "requires_stage",
       "required_sections",
     ] as const) {
       const prior = binding.record[field] ?? [];
@@ -697,10 +701,47 @@ function spliceFragment(content: string, fragment: PluginFragment): string | nul
   );
 }
 
+// A recorded requires_stage edge is re-applied onto the incoming stage only if
+// it still holds in the distribution being installed: the dependency exists
+// there, and it compiles before the target (an earlier phase, or a lower pinned
+// number in the same phase from the shipped stage-graph.json). A stale edge is
+// still stripped from the installed file's base, so the upgrade proceeds; it is
+// simply not re-created.
+const PHASE_ORDER = ["initialization", "ideation", "inception", "construction", "operation"];
+function requiresEdgeHolds(target: string, dependency: string): boolean {
+  if (target === dependency) return false;
+  const phaseOf = (slug: string): number => {
+    for (const [index, phase] of PHASE_ORDER.entries()) {
+      if (existsSync(join(DIST_ROOT, ".cursor", "aidlc-common", "stages", phase, `${slug}.md`))) return index;
+    }
+    return -1;
+  };
+  const targetPhase = phaseOf(target);
+  const dependencyPhase = phaseOf(dependency);
+  if (targetPhase < 0 || dependencyPhase < 0) return false;
+  if (dependencyPhase !== targetPhase) return dependencyPhase < targetPhase;
+  try {
+    const graph = JSON.parse(
+      readFileSync(join(DIST_ROOT, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug?: string; number?: string }>;
+    const indexOf = (slug: string): number => {
+      const raw = graph.find((row) => row.slug === slug)?.number ?? "";
+      const index = Number.parseInt(raw.split(".")[1] ?? "", 10);
+      return Number.isFinite(index) ? index : Number.NaN;
+    };
+    const dependencyIndex = indexOf(dependency);
+    const targetIndex = indexOf(target);
+    return Number.isFinite(dependencyIndex) && Number.isFinite(targetIndex) && dependencyIndex < targetIndex;
+  } catch {
+    return false;
+  }
+}
+
 function rebuildPluginComposedStage(
   source: Buffer,
   current: Buffer,
   state: PluginStageState,
+  target: string,
 ): { desired: Buffer; base: Buffer } | null {
   if (state.unsafe) return null;
   const installed = current.toString("utf-8");
@@ -712,6 +753,7 @@ function rebuildPluginComposedStage(
     sensors: new Set<string>(),
     consumes: new Set<string>(),
     scopes: new Set<string>(),
+    requires_stage: new Set<string>(),
     required_sections: new Set<string>(),
   };
   let requiredSectionsCreated = false;
@@ -720,6 +762,7 @@ function rebuildPluginComposedStage(
       "produces",
       "sensors",
       "scopes",
+      "requires_stage",
       "required_sections",
     ] as const) {
       for (const value of record[field] ?? []) owned[field].add(value);
@@ -730,13 +773,14 @@ function rebuildPluginComposedStage(
     requiredSectionsCreated ||= record.required_sections_created === true;
   }
 
-  const ordered: Record<"produces" | "sensors" | "scopes" | "required_sections", string[]> = {
+  const ordered: Record<"produces" | "sensors" | "scopes" | "requires_stage" | "required_sections", string[]> = {
     produces: [],
     sensors: [],
     scopes: [],
+    requires_stage: [],
     required_sections: [],
   };
-  for (const field of ["produces", "sensors", "scopes", "required_sections"] as const) {
+  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
     const values = listFieldValues(installed, field);
     if (owned[field].size > 0 && values === null) return null;
     ordered[field] = (values ?? []).filter((value) => owned[field].has(value));
@@ -749,6 +793,7 @@ function rebuildPluginComposedStage(
   base = removeListValues(base, "produces", owned.produces, false);
   base = removeListValues(base, "sensors", owned.sensors, false);
   base = removeListValues(base, "scopes", owned.scopes, false);
+  base = removeListValues(base, "requires_stage", owned.requires_stage, false);
   base = removeConsumesEntries(base, owned.consumes);
   base = removeListValues(
     base,
@@ -763,6 +808,12 @@ function rebuildPluginComposedStage(
   desired = mergeListValues(desired, "sensors", ordered.sensors);
   if (desired === null) return null;
   desired = mergeListValues(desired, "scopes", ordered.scopes);
+  if (desired === null) return null;
+  desired = mergeListValues(
+    desired,
+    "requires_stage",
+    ordered.requires_stage.filter((dependency) => requiresEdgeHolds(target, dependency)),
+  );
   if (desired === null) return null;
   desired = mergeConsumes(desired, consumes);
   if (desired === null) return null;
@@ -1069,7 +1120,7 @@ export async function install(targetDir: string): Promise<void> {
           ? pluginRuntime.stages.get(basename(rel, ".md"))
           : undefined;
       if (targetBytes && pluginStage) {
-        const rebuilt = rebuildPluginComposedStage(sourceBytes, targetBytes, pluginStage);
+        const rebuilt = rebuildPluginComposedStage(sourceBytes, targetBytes, pluginStage, basename(rel, ".md"));
         if (rebuilt) {
           desired = rebuilt.desired;
           pluginBase = rebuilt.base;

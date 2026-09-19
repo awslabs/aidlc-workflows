@@ -899,6 +899,7 @@ interface StageContribRecord {
   sensors?: string[];
   consumes?: Array<string | ConsumeContribRecord>;
   scopes?: string[];
+  requires_stage?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
   fragments?: Array<{ anchor: string; order: number; hash: string }>;
@@ -975,7 +976,7 @@ function missingRecordedContributions(
   record: StageContribRecord,
 ): string[] {
   const missing: string[] = [];
-  for (const field of ["produces", "sensors", "scopes", "required_sections"] as const) {
+  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
     const recorded = record[field];
     if (!Array.isArray(recorded) || recorded.length === 0) continue;
     const present = new Set(
@@ -1046,7 +1047,7 @@ function missingRecordedContributions(
 function contributionRecordError(value: unknown): string | undefined {
   if (!isPlainObject(value)) return "expected an object";
   let hasContribution = false;
-  for (const field of ["produces", "sensors", "scopes", "required_sections"] as const) {
+  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
     if (!(field in value)) continue;
     if (!Array.isArray(value[field])) return `${field} must be an array`;
     if (value[field].some((entry) => typeof entry !== "string" || entry.length === 0)) {
@@ -1173,6 +1174,7 @@ function stripDisabledPluginContributions(
           if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
           if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
           if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
+          if (record.requires_stage?.length) content = removeListValues(content, "requires_stage", new Set(record.requires_stage), false);
           if (record.consumes?.length) {
             const artifacts = record.consumes.flatMap((entry) =>
               typeof entry === "string"
