@@ -926,6 +926,28 @@ Bun nor `jq` at runtime.
 
 ---
 
+### Human turns and protected question responses
+
+The human-turn hook routes a reply to one recorder: Plan Approval's existing
+`recordPlanApprovalHumanResponse`, or `recordProtectedHumanResponse` for the
+session's verification-command, Construction-policy, or checkpoint-approval
+question. Minting either challenge removes the other challenge and response;
+if conflicting files nevertheless exist, the hook deletes both and records no
+response. A protected response binds the session, fresh challenge ID, and offered
+choice. Its consumer also requires the current canonical target digest.
+
+When a picker supplies the rendered question, the hook requires its exact text
+digest to match the minting command's `--decision` text. Without rendered text,
+the one-open-question rule is the fallback. Every `log decision`, including an
+ordinary question, withdraws protected consent for its explicit or
+ancestry-resolved session before recording the decision; if the session cannot
+be resolved, it withdraws every session's protected consent. Opening a lifecycle
+gate through `report --result awaiting-approval` also withdraws every session's
+protected consent. Ask protected questions one at a time and wait for the answer
+before anything else; a withdrawn question must be asked again. These ordinary
+decision and lifecycle-gate withdrawals do not change Plan Approval's separate
+challenge/response lifecycle.
+
 ## Appendix C: Approval Gate Patterns
 
 ### Standard 2-Option Gate (Construction and Operation)

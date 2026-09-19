@@ -82,9 +82,10 @@ work rather than deriving batches or changing order from an autonomy answer.
 
 ### Changing Construction policy
 
-Only one protected question (Plan Approval, verification command, Construction
-policy, or checkpoint approval) may be open per session; asking a new one
-withdraws the previous one, so ask them one at a time and wait for each answer.
+Only one protected question may be open per session. Asking any new question
+(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
+protected questions one at a time and wait for the answer before anything else.
+A withdrawn question must be asked again.
 
 During Construction, changing `Construction Checkpoints`, `Construction
 Execution`, or `Construction Iteration` requires the human's exact choice for

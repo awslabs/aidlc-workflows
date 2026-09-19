@@ -1438,9 +1438,10 @@ The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
 proof file cannot verify a Unit.
 
-Only one protected question (Plan Approval, verification command, Construction
-policy, or checkpoint approval) may be open per session; asking a new one
-withdraws the previous one, so ask them one at a time and wait for each answer.
+Only one protected question may be open per session. Asking any new question
+(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
+protected questions one at a time and wait for the answer before anything else.
+A withdrawn question must be asked again.
 
 The version-3 proof and CLI JSON retain `command_sha256` and the full canonical
 command in `command_label`, plus exit status and captured stdout/stderr byte

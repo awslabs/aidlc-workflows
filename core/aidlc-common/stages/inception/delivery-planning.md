@@ -200,9 +200,10 @@ check exists yet (greenfield), the human may defer selection; leave the field
 unset and explain that the first checkpoint will ask before verification. Never
 invent a placeholder or treat deferral as approval.
 
-Only one protected question (Plan Approval, verification command, Construction
-policy, or checkpoint approval) may be open per session; asking a new one
-withdraws the previous one, so ask them one at a time and wait for each answer.
+Only one protected question may be open per session. Asking any new question
+(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
+protected questions one at a time and wait for the answer before anything else.
+A withdrawn question must be asked again.
 
 Use one nonblank line of at most 1024 characters after trimming leading/trailing
 whitespace. The tools refuse control characters (including newline, CR, tab, or

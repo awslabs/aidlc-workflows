@@ -55,6 +55,29 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `session-end.ts` | SessionEnd | Project-wide (settings.json) | (empty) | Emit `SESSION_ENDED` on graceful exit to the intent recorded for that exact session; fail closed instead of using the shared active cursor when a UUID-backed workflow has no session binding |
 | `aidlc-statusline.ts` | statusLine | Project-wide (settings.json) | -- | Show real-time progress in terminal |
 
+For Plan Approval and the three protected Construction decisions, the human-turn
+hook additionally records the offered response, not just presence. It selects
+`recordPlanApprovalHumanResponse` or the unified `recordProtectedHumanResponse`
+from the session's challenge file, never both. Conflicting challenge files are
+deleted with their responses and no choice is recorded. The protected mailbox
+uses `protected-question-<sessionSegment>.json` and
+`protected-question-response-<sessionSegment>.json` under
+`aidlc/.aidlc-sessions/plan-approval/` (or the delegated worktree runtime directory).
+Questions bind the kind, session, random challenge ID, canonical target digest,
+and offered choices; answers bind the session and challenge ID and are consumed
+only after the owning audit append succeeds.
+
+For a question minted by `log decision`, rendered picker text must match the
+exact `--decision` digest when supplied in `tool_input.questions[].question` or
+`tool_input.question`. Codex preserves its `request_user_input` tool input when
+forwarding a structured selection. A reply without rendered text relies on
+exclusivity: a new `log decision` withdraws the invoking session's protected
+question, or all sessions' questions if neither `--session` nor process ancestry
+resolves the owner. A lifecycle `gate-start` withdraws all protected questions
+before `STAGE_AWAITING_APPROVAL`. Plan Approval keeps its separate runtime format;
+minting either kind removes the other's challenge and response, but ordinary
+decisions and lifecycle gates do not withdraw Plan Approval itself.
+
 ### Shared Characteristics
 
 All seventeen TypeScript hook sources:
