@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1005,
+    "total": 1006,
     "enumeratedByClass": {
-      "function": 693,
+      "function": 694,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -3491,6 +3491,13 @@
     {
       "unitClass": "function",
       "unitId": "function:hooksHealthDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hooksHealthReadDir",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

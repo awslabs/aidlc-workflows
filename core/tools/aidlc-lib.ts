@@ -50,6 +50,7 @@ import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
 export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
+const LEGACY_HOOKS_HEALTH_DIR = ".aidlc-hooks-health";
 const LEGACY_SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
 const LEGACY_REVIEW_RECORDS_DIR = ".aidlc-reviews";
 const LEGACY_SOURCE_REVIEW_DIR = ".aidlc-source-review";
@@ -18989,6 +18990,22 @@ export function hooksHealthDir(projectDir: string, intent?: string, space?: stri
   return join(engineDir(projectDir, intent, space), "hooks-health");
 }
 
+/**
+ * Read heartbeats from the record that predates the engine-dir move until the
+ * new directory exists; writers use hooksHealthDir. A record created before
+ * the relocation keeps its heartbeats under the legacy name until the next
+ * hook fires, and a reader without this fallback sees an absent directory -
+ * which liveness readers cannot distinguish from hooks that never ran.
+ */
+export function hooksHealthReadDir(projectDir: string, intent?: string, space?: string): string {
+  const record = docsRoot(projectDir, intent, space);
+  return engineReadDirFor(
+    record,
+    join(engineDirFor(record), "hooks-health"),
+    LEGACY_HOOKS_HEALTH_DIR,
+  );
+}
+
 // Hook heartbeats and audit rows are written in the same turn, normally
 // seconds apart. Five minutes absorbs host scheduling and slow tool-return
 // ordering without hiding a resumed workflow that advances after hooks die.
@@ -19032,7 +19049,7 @@ export function hookLiveness(
   projectDir: string,
   events: readonly AuditShardEvent[] = readAuditShardEvents(projectDir),
 ): HookLiveness {
-  const healthDir = hooksHealthDir(projectDir);
+  const healthDir = hooksHealthReadDir(projectDir);
   const heartbeatEntries: string[] = [];
   let newestHeartbeat: HookHeartbeatStamp | null = null;
   let hasHookFiredContent = false;
