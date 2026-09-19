@@ -118,6 +118,18 @@ Check the **Sensors** row in `/aidlc --status`. The `classic` scope defaults to 
 
 On Claude Code, per-stage token usage and cost tracking is on by default: the fold-usage hook records transcript usage into a gitignored local ledger (`aidlc/.aidlc-sessions/usage-ledger.json`), the statusline appends `↑<in> ↓<out> $<usd>`, and completion audit events carry cost rollups. Nothing is transmitted anywhere (metrics emission is separately opt-in via `AIDLC_METRICS_ENDPOINT`). To turn all local tracking off, set `AIDLC_DISABLE_USAGE_TRACKING=1`: the ledger stops updating, the statusline segment disappears, and completion events add no rollup fields. An existing ledger is left on disk; delete it manually if you also want the history gone. Unsetting the flag resumes tracking.
 
+**The `$<usd>` figure is a rough local estimate, not a bill.** It is computed from **public list prices** (see `AIDLC_MODEL_RATES` in [§ Customization](13-customization.md)). The Claude harness ships with Bedrock enabled (`CLAUDE_CODE_USE_BEDROCK=1`), so the number does **not** reflect the Bedrock on-demand rate, any negotiated/Private-Offer/EDP rate, or a subscription plan. It is also driven largely by cache-read tokens, so it climbs quickly and can look inflated relative to what is actually billed. Treat it as a personal awareness signal only.
+
+**Before a customer-facing session or demo, turn the cost segment off** so a misleading estimate is not on screen. Add the kill switch to the gitignored `.claude/settings.local.json` (it only removes the token/cost segment — the workflow is unaffected):
+
+```json
+{
+  "env": {
+    "AIDLC_DISABLE_USAGE_TRACKING": "1"
+  }
+}
+```
+
 ### Hook not configured
 
 Hooks are registered project-wide in the harness's native configuration. On

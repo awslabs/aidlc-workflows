@@ -277,6 +277,8 @@ On **Claude Code**, this implementation displays a statusline in the terminal st
 
 This shows, in order: current phase, phase progress (as a bar and a ratio — both scoped to the current phase), stage display name, and lead agent. Context usage appears on the right (e.g., `ctx:15%`), color-coded as the remaining context drops. When the Claude usage ledger has data, `↑<in> ↓<out> $<usd>` follows for the active workflow and current transcript/session only; prior workflows and sessions are excluded. Setting `AIDLC_DISABLE_USAGE_TRACKING=1` turns usage tracking off entirely and removes this segment.
 
+The `$<usd>` value is a rough local estimate from **public list prices**, not a bill. Because the harness ships with Bedrock enabled (`CLAUDE_CODE_USE_BEDROCK=1`), it does **not** equal the Bedrock on-demand rate, a negotiated/Private-Offer/EDP rate, or a subscription price, and it is dominated by cache-read tokens so it climbs quickly. Before any customer-facing session, set `AIDLC_DISABLE_USAGE_TRACKING=1` (see [§ Troubleshooting](15-troubleshooting.md)) so the estimate is not on screen.
+
 ### Configuration
 
 The statusline is configured in `.claude/settings.json`:
