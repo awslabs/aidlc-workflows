@@ -1456,6 +1456,13 @@ gate instead of calling these steps automatically.
 
 Confirmed learnings apply on the next workflow, not the current one.
 
+`surface` locates the diary from `runtime-graph.json` when that machine-local
+file has been compiled, and works out the same path itself when it has not —
+which is the normal state on a workflow's first gate, and also what a fresh
+clone looks like. In that case it prints a note on stderr naming the
+`aidlc engine runtime compile` that rebuilds the graph; the candidates on stdout
+are unaffected.
+
 ### `aidlc-runtime` — read the runtime graph
 
 The runtime graph (`runtime-graph.json` in the intent's record dir) is the data-plane record of what actually happened this workflow: which stages ran, how full each `memory.md` diary got, which Sensors fired, what each returned. It is the runtime mirror of the structural `stage-graph.json`. The framework recompiles it after every stage transition; this tool lets you trigger a compile or read one stage's row.

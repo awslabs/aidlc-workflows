@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.1] - 2026-09-18
+
+Keep the stage learnings ritual working on the first approval gate of a workflow. `aidlc engine learnings surface` used to fail with `runtime-graph.json not found` whenever that machine-local file had not been compiled yet, which is always the case on the first gated stage, because the ritual runs before the `orchestrate report` call that triggers the compile. **Upgrade:** `aidlc update`, then `aidlc config --yes` in each project to refresh its harness runtime. No workspace migration is required, and no recorded state changes.
+
+* `aidlc engine learnings surface --slug <stage>` now recomputes the stage diary path itself when `runtime-graph.json` is absent or carries no row for the stage, so the learnings question is presented instead of the stage stalling at its gate. The recomputed path is the same one the compile records.
+* When it falls back, `surface` prints a note on stderr naming the command that rebuilds the graph, so a hook that failed to compile is still visible rather than silently absorbed. With a compiled row present the command is unchanged and prints nothing extra.
+* A malformed `runtime-graph.json` still fails with `runtime-graph.json is malformed`. Only an absent file or a missing row is treated as recoverable.
+
 ## [2.9.0] - 2026-09-15
 
 AI-DLC 2.9.0 rolls up the user-visible changes merged since 2.8.2, including the Classic scope v1 ceremony model, commit provenance, intent archiving, on-demand Construction autonomy, review-loop corrections, and the native preview release channel. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.9.0.tar.gz`. Existing in-flight Classic intents keep their recorded stage graph; the new ceremony defaults apply immediately where noted below.
