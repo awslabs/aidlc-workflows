@@ -14530,6 +14530,29 @@ const SOURCE_FINGERPRINT_CONDITIONAL_GLOBS =
   );
 const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
 
+// Incidental OS / editor artifacts a person never authored and no reviewed unit
+// would ever claim as application source. Deliberately a tiny, vendor-neutral,
+// universal set (never tool- or plugin-specific): these files carry no source
+// and are not the project's own content, so excluding them is orthogonal to the
+// binding model. Note this does NOT honor .gitignore — the walk intentionally
+// binds ignored *application source* (see t314), so gitignore is not a valid
+// exclusion boundary; only these never-source artifacts are dropped. Excluding
+// them stops the plan-approval source floor from failing closed on drift no unit
+// can claim (#1099, e.g. a stray .DS_Store).
+const SOURCE_FINGERPRINT_ARTIFACT_FILE_NAMES = new Set<string>([
+  ".DS_Store",
+  "Thumbs.db",
+  "desktop.ini",
+]);
+// Editor swap/backup files: vim `.swp`/`.swo`/`.swn`, and trailing-`~` backups.
+const SOURCE_FINGERPRINT_ARTIFACT_FILE_RE = /(?:\.sw[a-p]|~)$/;
+function isIncidentalArtifactName(name: string): boolean {
+  return (
+    SOURCE_FINGERPRINT_ARTIFACT_FILE_NAMES.has(name) ||
+    SOURCE_FINGERPRINT_ARTIFACT_FILE_RE.test(name)
+  );
+}
+
 // Git runs a configured `clean` filter as content enters a swarm snapshot index.
 // The canonical fingerprint already hashes the raw filesystem bytes, so the
 // immutable Source Commit must replace filtered index blobs with those same raw
@@ -16730,6 +16753,21 @@ function filesystemSourceIdentity(
           continue;
         }
         if (entry.name === ".git") {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        // Incidental OS/editor artifacts (any depth) are not reviewable
+        // application source; excluding them keeps the plan-approval source
+        // floor from failing closed on unclaimable drift (#1099). Registered
+        // source paths still win — an explicitly registered path is never
+        // dropped here. (.gitignore is intentionally NOT consulted: the walk
+        // binds ignored application source by design — see t314.)
+        if (
+          !registeredPathRelevant(childRegistryRel) &&
+          isIncidentalArtifactName(entry.name)
+        ) {
           if (entry.isSymbolicLink()) {
             excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
           }
