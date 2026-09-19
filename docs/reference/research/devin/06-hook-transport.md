@@ -8,7 +8,7 @@ Core hooks consume a Claude-shaped internal interface. Devin's native event name
 
 ## Current implementation
 
-hooks.v1.json is the entire hook map, without an outer hooks key. The registrations use SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostCompaction, and Stop. Broad guard matchers defer dispatch decisions to the adapter; named matchers are anchored for subagents, questions, writes, todos, and exec.
+hooks.v1.json is the entire hook map, without an outer hooks key. The registrations use SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostCompaction, and Stop. Broad guard matchers defer dispatch decisions to the adapter; named matchers are anchored for subagents (`run_subagent` for dispatch rules, `run_subagent|read_subagent` for the completion path), questions, writes, todos, and exec. Devin dispatches no `SubagentStop` event — the adapter synthesizes the Claude-shaped payload the core log-subagent hook reads (DEVIN-07). Registering an unknown event key such as `SubagentStop` in hooks.v1.json poisons the whole file on 3000.10.31: the CLI logs `unknown variant` and loads zero hooks — every future registration must be validated against the binary's accepted variants.
 
 SessionStart calls the shared start hook and wraps additionalContext in hookSpecificOutput. SessionEnd forwards to the end hook. UserPromptSubmit and question PostToolUse feed human-turn recording. Write PostToolUse runs audit then sensors; todo_write forwards the first in_progress item as TaskUpdate; exec PostToolUse drives stage-graph rebuild; PostCompaction validates state; Stop forwards the continuation decision.
 
@@ -22,7 +22,7 @@ fold-usage remains an adapter target but is not registered. Captures did not pro
 
 ## Evidence and limits
 
-The sanitized 3000.6.14 captures and their provenance distinguish real hook stdin from synthetic payloads.json. They observed slug session IDs, prompt_id, tool_use_id, object PostToolUse responses, and absent top-level cwd/transcript_path/agent identity. Those observations are version-specific, not a permanent vendor schema.
+The sanitized 3000.6.14 captures and their provenance distinguish real hook stdin from synthetic payloads.json. They observed slug session IDs, prompt_id, tool_use_id, object PostToolUse responses, and absent top-level cwd/transcript_path/agent identity. The 3000.10.31 re-capture adds: `Stop` stdin now carries `stop_hook_active` and the full `last_assistant_message`; a Stop fires while a background child is in-flight and a second Stop follows the completion notification under the same `prompt_id` (no rotation); a child subagent's turn-end Stop enters the parent's hook stream sharing `session_id`/`prompt_id` with no attribution field; `tool_use_id` is now `<internal-tool>:<n>#<32hex>` and can leak internal tool names (`glob` → `find_file_by_name`); `run_subagent` gained a structured `resume` field. Those observations are version-specific, not a permanent vendor schema.
 
 The configured events reach multiple adapter targets and shared hook bodies. Historical comparisons such as 30 versus 17, or a total hook count, are not meaningful completeness proofs. Use the event→target→payload→observable-effect chain. Background completion and reviewer attribution remain open in DEVIN-07.
 
@@ -48,6 +48,7 @@ Retired claims: all payloads are isomorphic except tool names; all mapped tools 
 - `harness/devin/hooks/aidlc-devin-adapter.ts`
 - `tests/fixtures/devin-hook-payloads/capture-provenance.json`
 - `tests/fixtures/devin-hook-payloads/captured-3000.6.14.json`
+- `tests/fixtures/devin-hook-payloads/captured-3000.10.31.json` and `capture-provenance-3000.10.31.json`
 - `tests/fixtures/devin-hook-payloads/payloads.json`
 - `tests/unit/t331-devin-packaging.test.ts`
 - `tests/unit/t332-devin-adapter.test.ts`

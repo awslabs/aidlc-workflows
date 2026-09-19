@@ -69,7 +69,14 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isNonAnswer, validSessionId } from "../tools/aidlc-lib.ts";
+import {
+  annotateSubagentInflight,
+  errorMessage,
+  findSubagentInflight,
+  isNonAnswer,
+  recordHookDrop,
+  validSessionId,
+} from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -515,6 +522,134 @@ function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "E
     });
   }
   return out;
+}
+
+// --- Subagent lifecycle classification (log-subagent) -------------------------
+//
+// Devin emits no SubagentStart/SubagentStop hook events (C16 on 3000.10.31:
+// the key is not loadable in either config location; SubagentStop exists in
+// the binary only as an output-envelope name — which is exactly the payload
+// shape we synthesize for the core hook). This arm reconstructs the Claude
+// pair from the tool outputs Devin DOES produce. The output strings are an
+// undocumented, versioned host contract pinned from the 3000.10.31 binary
+// and tests/fixtures/devin-hook-payloads/captured-3000.10.31.json; every
+// match is anchored at the start of the first output line and tolerant of
+// the leading tab the binary emits.
+
+// Extract the host's output text from a Devin PostToolUse tool_response
+// ({success, output, error}); a bare-string response (synthetic fixtures) is
+// itself the output.
+function subagentToolOutput(toolResponse: unknown): string {
+  if (typeof toolResponse === "string") return toolResponse;
+  if (
+    toolResponse !== null &&
+    typeof toolResponse === "object" &&
+    !Array.isArray(toolResponse)
+  ) {
+    const output = (toolResponse as Record<string, unknown>).output;
+    if (typeof output === "string") return output;
+  }
+  return "";
+}
+
+function toolResponseFailed(toolResponse: unknown): boolean {
+  return (
+    toolResponse !== null &&
+    typeof toolResponse === "object" &&
+    !Array.isArray(toolResponse) &&
+    (toolResponse as Record<string, unknown>).success === false
+  );
+}
+
+// Strip the single leading tab the binary emits before the status line.
+function unindentSubagentOutput(output: string): string {
+  return output.startsWith("\t") ? output.slice(1) : output;
+}
+
+// "Background subagent started with agent_id=<id>. …" — the launch
+// acknowledgment, the ONLY non-terminal run_subagent success output.
+// Returns the embedded agent id, or null.
+function matchSubagentLaunchAck(output: string): string | null {
+  const m = /^Background subagent started with agent_id=([^\s.]+)/.exec(
+    unindentSubagentOutput(output),
+  );
+  return m ? m[1] : null;
+}
+
+// Foreground / resumed run_subagent terminal envelopes:
+//   "Subagent agent_id=<id> completed successfully:\n\n<report>"
+//   "Subagent <id> exited with an error:…"
+//   "Subagent error: …"      (dispatch-level error carrying no agent id)
+// Returns {agentId} — agentId undefined for the id-less error form — or null
+// when the output is not a terminal envelope.
+function matchSubagentTerminal(output: string): { agentId?: string } | null {
+  const out = unindentSubagentOutput(output);
+  const m = /^Subagent (?:agent_id=)?(\S+) (?:completed successfully:|exited with an error)/.exec(
+    out,
+  );
+  if (m) return { agentId: m[1] };
+  if (/^Subagent error:/.test(out)) return {};
+  return null;
+}
+
+// read_subagent terminal envelopes:
+//   "Subagent <id> completed. Its full report is delivered in the
+//    <subagent_completion_notification> message; you do not need to read it
+//    again."                                        (first terminal read)
+//   "Subagent <id> completed successfully:\n\n<report>"  (re-served report)
+//   "Subagent <id> exited with an error. The error details are delivered in
+//    the <subagent_completion_notification> message."   (error terminal —
+//    binary-pinned; a denied-tool child reads as 'completed', C12)
+// Returns the embedded agent id plus the message to forward: the re-served
+// report when present, else the one-line status.
+function matchSubagentReadTerminal(
+  output: string,
+): { agentId: string; message: string } | null {
+  const m = /^Subagent (?:agent_id=)?(\S+) (?:completed|exited with an error)/.exec(
+    unindentSubagentOutput(output),
+  );
+  if (!m) return null;
+  return { agentId: m[1], message: subagentTerminalMessage(output) };
+}
+
+// "Subagent is still running." / "No subagent found with agent_id=…" — the
+// non-terminal read outputs.
+function isSubagentReadPending(output: string): boolean {
+  const out = unindentSubagentOutput(output);
+  return (
+    /^Subagent is still running\./.test(out) ||
+    /^No subagent found\b/.test(out)
+  );
+}
+
+// "output minus the header line": the completed-successfully envelope
+// carries the agent's report after its status line; every other terminal
+// form is a one-line status forwarded whole (the core trims to 200 chars).
+function subagentTerminalMessage(output: string): string {
+  const out = unindentSubagentOutput(output);
+  const nl = out.indexOf("\n");
+  return nl < 0 ? out : out.slice(nl + 1).replace(/^\s+/, "");
+}
+
+// Forward a synthesized Claude-shaped SubagentStop payload to the core
+// log-subagent hook. The core completes the in-flight entry by exact agent
+// id when one is carried (falling back to the legacy session splice only
+// when the session has no annotated entries) and appends SUBAGENT_COMPLETED.
+function forwardSubagentStop(
+  agentType: string | undefined,
+  agentId: string | undefined,
+  message: string,
+): void {
+  runCore(
+    "aidlc-log-subagent.ts",
+    JSON.stringify({
+      hook_event_name: "SubagentStop",
+      ...(devin.session_id ? { session_id: devin.session_id } : {}),
+      ...(agentType ? { agent_type: agentType } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(message ? { last_assistant_message: message } : {}),
+    }),
+  );
 }
 
 // --- Targets ------------------------------------------------------------------
@@ -982,13 +1117,104 @@ export async function run(
     }
 
     case "log-subagent": {
-      // run_subagent PostToolUse → pipe to aidlc-log-subagent.ts (rewriting
-      // tool_name to Task if needed, but the core hook reads
-      // agent_type/agent_id — forward those). This replaces the absent
-      // SubagentStop event. Advisory.
+      // PostToolUse for run_subagent / read_subagent (the matcher is
+      // ^(run_subagent|read_subagent)$). The synthesized SubagentStart/
+      // SubagentStop pair, per the classifier helpers above:
+      //   run_subagent + resume:<id>      → terminal under that agent id
+      //   run_subagent + launch ack        → annotate the in-flight entry the
+      //                                      deliver-stage-rules PreToolUse
+      //                                      created; no core call, no audit
+      //   run_subagent + terminal output   → forward a synthesized SubagentStop
+      //   run_subagent + anything else     → fail-open terminal forward (the
+      //                                      pre-correlation contract: a
+      //                                      completion is never dropped)
+      //   read_subagent + terminal output  → forward only while an annotated
+      //                                      entry for that id is pending
+      //                                      (repeated reads and foreign ids
+      //                                      are no-ops)
+      //   read_subagent + non-terminal     → no-op; unclassifiable → no-op +
+      //                                      a log-subagent drop line
+      const output = subagentToolOutput(devin.tool_response);
+      const input = devin.tool_input ?? {};
+      const profile =
+        typeof input.profile === "string" && input.profile !== ""
+          ? input.profile
+          : undefined;
       if (tool === "run_subagent") {
-        const rewritten = rewriteStdinToolName(rawInput, devin);
-        runCore("aidlc-log-subagent.ts", rewritten);
+        // A resume always runs foreground under the resumed agent id; an
+        // annotated entry for that id (an unread earlier background run) is
+        // completed by the core's exact-id path.
+        const resume =
+          typeof input.resume === "string" && input.resume !== ""
+            ? input.resume
+            : null;
+        if (resume) {
+          forwardSubagentStop(profile, resume, subagentTerminalMessage(output));
+          return 0;
+        }
+        const launchedId =
+          input.is_background === true ? matchSubagentLaunchAck(output) : null;
+        if (launchedId !== null) {
+          try {
+            annotateSubagentInflight(projectDir, devin.session_id, {
+              agentId: launchedId,
+              ...(profile ? { agentType: profile } : {}),
+            });
+          } catch (error) {
+            recordHookDrop(
+              projectDir,
+              "log-subagent",
+              `could not annotate the background-subagent in-flight ledger: ${errorMessage(error)}`,
+            );
+          }
+          return 0;
+        }
+        const terminal = matchSubagentTerminal(output);
+        if (terminal !== null) {
+          forwardSubagentStop(
+            profile,
+            terminal.agentId,
+            subagentTerminalMessage(output),
+          );
+          return 0;
+        }
+        forwardSubagentStop(profile, undefined, output);
+        return 0;
+      }
+      if (tool === "read_subagent") {
+        if (toolResponseFailed(devin.tool_response)) return 0;
+        const terminalRead = matchSubagentReadTerminal(output);
+        if (terminalRead !== null) {
+          try {
+            const entry = findSubagentInflight(
+              projectDir,
+              devin.session_id,
+              terminalRead.agentId,
+            );
+            if (entry) {
+              forwardSubagentStop(
+                entry.agentType,
+                terminalRead.agentId,
+                terminalRead.message,
+              );
+            }
+          } catch (error) {
+            recordHookDrop(
+              projectDir,
+              "log-subagent",
+              `could not inspect the background-subagent in-flight ledger: ${errorMessage(error)}`,
+            );
+          }
+          return 0;
+        }
+        if (!isSubagentReadPending(output)) {
+          recordHookDrop(
+            projectDir,
+            "log-subagent",
+            "unclassified read_subagent output",
+          );
+        }
+        return 0;
       }
       return 0;
     }

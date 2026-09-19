@@ -53,9 +53,11 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import {
+  hooksHealthDir,
   readPlanApprovalChallenge,
   readPlanApprovalResponse,
   stateDigest,
+  subagentInflightMarkerPath,
   writeActiveDirectiveMarker,
   writeCurrentSessionId,
   writePlanApprovalChallenge,
@@ -490,13 +492,19 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
 
   // --- log-subagent: run_subagent PostToolUse lands SUBAGENT_COMPLETED ---
 
-  test("11: log-subagent with run_subagent PostToolUse lands SUBAGENT_COMPLETED in the audit", () => {
+  test("11: log-subagent with run_subagent PostToolUse lands SUBAGENT_COMPLETED in the audit with the dispatch profile as Agent Type", () => {
+    // Item 3 case 13: a FOREGROUND run_subagent PostToolUse is a terminal
+    // event; the adapter forwards a synthesized SubagentStop carrying the
+    // dispatch profile, so the row lands `Agent Type: subagent_general`
+    // (previously the raw Devin payload carried no agent_type and the row
+    // landed `unknown`).
     const dir = scratchProject(true);
     try {
       const r = runAdapter(dir, "log-subagent", withCwd(FIXTURES.postToolUse_runSubagent as Record<string, unknown>, dir));
       expect(r.code).toBe(0);
       const audit = readAudit(dir);
       expect(audit).toContain("SUBAGENT_COMPLETED");
+      expect(audit).toContain("**Agent Type**: subagent_general");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1886,6 +1894,454 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         const r = runAdapter(dir, t, FIXTURES.malformed as string);
         expect(r.code, `target=${t}`).toBe(0);
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --- Item 3: background subagent lifecycle (launch → pending → terminal) ---
+  //
+  // Devin dispatches no SubagentStart/SubagentStop events (C16 negative on
+  // 3000.10.31: the key is not loadable in either config location). The
+  // adapter synthesizes the Claude pair from what Devin DOES emit:
+  //   - the run_subagent launch-ack PostToolUse only ANNOTATES the core
+  //     in-flight ledger entry the deliver-stage-rules PreToolUse created —
+  //     no core call, no audit row (SubagentStart parity);
+  //   - a TERMINAL PostToolUse — a foreground/resumed run_subagent completion
+  //     or a read_subagent terminal read — forwards a synthesized
+  //     {hook_event_name:"SubagentStop"} payload to the core log-subagent
+  //     hook, correlated by agent_id, so SUBAGENT_COMPLETED lands exactly
+  //     once with the profile and agent id;
+  //   - repeated reads and foreign ids are no-ops; an unread background agent
+  //     stays pending in the ledger until the 2h TTL.
+  //
+  // Payloads are cloned from the 3000.10.31 capture fixture's events with
+  // <placeholder> substitution; every classifier string below is verbatim
+  // from the capture except where a case is marked binary-pinned (the
+  // 'exited with an error' read string did not appear on this host — C12's
+  // denied-tool child read back as 'completed').
+
+  const CAPTURED_3000_10_31 = JSON.parse(
+    readFileSync(
+      join(
+        REPO_ROOT,
+        "tests",
+        "fixtures",
+        "devin-hook-payloads",
+        "captured-3000.10.31.json",
+      ),
+      "utf-8",
+    ),
+  ) as Record<string, { events: Array<Record<string, unknown>> }>;
+
+  /** Clone one event of a capture case, substituting the fixture's
+   *  <placeholder> tokens (e.g. "<agent-id>") with concrete values. */
+  function capturedEvent(
+    caseName: string,
+    index: number,
+    subs: Record<string, string> = {},
+  ): Record<string, unknown> {
+    const event = CAPTURED_3000_10_31[caseName]?.events[index];
+    if (!event) {
+      throw new Error(`capture fixture ${caseName} has no event[${index}]`);
+    }
+    let json = JSON.stringify(event);
+    for (const [token, value] of Object.entries(subs)) {
+      json = json.replaceAll(token, value);
+    }
+    return JSON.parse(json) as Record<string, unknown>;
+  }
+
+  /** A captured read_subagent PostToolUse with a chosen output string. The
+   *  event envelope is C06's non-blocking read; the output string is
+   *  substituted so binary-pinned strings the capture never produced (still
+   *  running, error terminal, unclassifiable) ride a real envelope. */
+  function capturedReadPostToolUse(
+    subs: Record<string, string>,
+    output?: string,
+  ): Record<string, unknown> {
+    const event = capturedEvent("C06_repeatedRead", 1, subs);
+    if (output !== undefined) {
+      (event.tool_response as Record<string, unknown>).output = output;
+    }
+    return event;
+  }
+
+  /** The workspace-level background-subagent ledger's raw entries. */
+  function inflightEntries(dir: string): Array<Record<string, unknown>> {
+    const path = subagentInflightMarkerPath(dir);
+    if (!existsSync(path)) return [];
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+      entries?: Array<Record<string, unknown>>;
+    };
+    return parsed.entries ?? [];
+  }
+
+  function subagentCompletedRows(dir: string): number {
+    return (readAudit(dir).match(/\*\*Event\*\*: SUBAGENT_COMPLETED/g) ?? [])
+      .length;
+  }
+
+  /** Contents of a per-hook drop-counter file ("" when absent). */
+  function hookDrops(dir: string, hook: string): string {
+    const path = join(hooksHealthDir(dir), `${hook}.drops`);
+    return existsSync(path) ? readFileSync(path, "utf-8") : "";
+  }
+
+  /** Drive a background dispatch through both real hook arms: the
+   *  deliver-stage-rules PreToolUse (creates the in-flight entry) then the
+   *  log-subagent PostToolUse launch ack (annotates it). */
+  function launchBackground(dir: string, session: string, agentId: string): void {
+    expect(
+      runAdapter(
+        dir,
+        "deliver-stage-rules",
+        devinRunSubagent(
+          "subagent_explore",
+          "Read sentinel.txt in the project root and report its first line verbatim",
+          { is_background: true },
+          session,
+        ),
+      ).code,
+    ).toBe(0);
+    expect(
+      runAdapter(
+        dir,
+        "log-subagent",
+        withCwd(
+          capturedEvent("C05_backgroundLaunch", 1, {
+            "<session>": session,
+            "<agent-id>": agentId,
+          }),
+          dir,
+        ),
+      ).code,
+    ).toBe(0);
+  }
+
+  /** The captured terminal read ("Subagent <id> completed. Its full report
+   *  is delivered…") for an agent in a session. */
+  function readTerminal(dir: string, session: string, agentId: string): void {
+    expect(
+      runAdapter(
+        dir,
+        "log-subagent",
+        withCwd(
+          capturedEvent("C05_backgroundCompletion", 6, {
+            "<session>": session,
+            "<agent-id>": agentId,
+          }),
+          dir,
+        ),
+      ).code,
+    ).toBe(0);
+  }
+
+  test("Item 3 case 1: a background launch annotates the in-flight ledger entry and writes no audit row", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case1";
+      launchBackground(dir, session, "aa37dc28");
+      const entries = inflightEntries(dir);
+      expect(entries.length).toBe(1);
+      expect(entries[0]).toMatchObject({
+        sessionId: session,
+        agentId: "aa37dc28",
+        agentType: "subagent_explore",
+      });
+      expect(subagentCompletedRows(dir)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 2: a terminal read_subagent completes the annotated entry and lands one SUBAGENT_COMPLETED naming profile and agent id", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case2";
+      launchBackground(dir, session, "aa37dc28");
+      readTerminal(dir, session, "aa37dc28");
+      expect(inflightEntries(dir)).toEqual([]);
+      expect(existsSync(subagentInflightMarkerPath(dir))).toBe(false);
+      expect(subagentCompletedRows(dir)).toBe(1);
+      const audit = readAudit(dir);
+      expect(audit).toContain("**Agent Type**: subagent_explore");
+      expect(audit).toContain("**Agent ID**: aa37dc28");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 3: a repeated read_subagent after completion adds nothing (C06 dedup)", () => {
+    // C06: a second read on a completed agent re-serves the report with
+    // success:true — indistinguishable from the first terminal by payload.
+    // With the entry already consumed the read must be a no-op: no second
+    // row, no double decrement.
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case3";
+      launchBackground(dir, session, "aa37dc28");
+      readTerminal(dir, session, "aa37dc28");
+      expect(
+        runAdapter(
+          dir,
+          "log-subagent",
+          withCwd(
+            capturedEvent("C06_repeatedRead", 1, {
+              "<session>": session,
+              "<agent-id>": "aa37dc28",
+            }),
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(subagentCompletedRows(dir)).toBe(1);
+      expect(existsSync(subagentInflightMarkerPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 4: a read_subagent reporting 'still running' keeps the entry pending and writes no row", () => {
+    // BINARY-PINNED string: "Subagent is still running." appears in the
+    // 3000.10.31 binary but never in a captured event (every captured read
+    // was terminal or re-served); it rides C06's read envelope here.
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case4";
+      launchBackground(dir, session, "aa37dc28");
+      expect(
+        runAdapter(
+          dir,
+          "log-subagent",
+          withCwd(
+            capturedReadPostToolUse(
+              { "<session>": session, "<agent-id>": "aa37dc28" },
+              "Subagent is still running.",
+            ),
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(inflightEntries(dir)).toEqual([
+        {
+          sessionId: session,
+          agentId: "aa37dc28",
+          agentType: "subagent_explore",
+          startedAtMs: expect.any(Number),
+        },
+      ]);
+      expect(subagentCompletedRows(dir)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 5: a read_subagent error terminal completes the entry and lands one row whose Message is the error text", () => {
+    // BINARY-PINNED string: "Subagent <id> exited with an error. The error
+    // details are delivered in the <subagent_completion_notification>
+    // message." comes from the 3000.10.31 binary, NOT the capture — C12
+    // showed a denied-tool background child reads back as
+    // 'completed'+success:true, so no captured event carries this string.
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case5";
+      launchBackground(dir, session, "aa37dc28");
+      expect(
+        runAdapter(
+          dir,
+          "log-subagent",
+          withCwd(
+            capturedReadPostToolUse(
+              { "<session>": session, "<agent-id>": "aa37dc28" },
+              "Subagent aa37dc28 exited with an error. The error details are delivered in the <subagent_completion_notification> message.",
+            ),
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(inflightEntries(dir)).toEqual([]);
+      expect(subagentCompletedRows(dir)).toBe(1);
+      const audit = readAudit(dir);
+      expect(audit).toContain("**Agent ID**: aa37dc28");
+      expect(audit).toContain(
+        "**Message**: Subagent aa37dc28 exited with an error.",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 6: a foreground run_subagent completion lands its own row and never consumes the annotated background entry", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case6";
+      launchBackground(dir, session, "aa37dc28");
+      // C14's foreground completion envelope, for a DIFFERENT agent id than
+      // the pending background entry.
+      expect(
+        runAdapter(
+          dir,
+          "log-subagent",
+          withCwd(
+            capturedEvent("C14_resumeForeground", 10, {
+              "<session>": session,
+              "<agent-id>": "bb48ef31",
+            }),
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(subagentCompletedRows(dir)).toBe(1);
+      const audit = readAudit(dir);
+      expect(audit).toContain("**Agent Type**: subagent_general");
+      expect(audit).toContain("**Agent ID**: bb48ef31");
+      expect(inflightEntries(dir)).toEqual([
+        {
+          sessionId: session,
+          agentId: "aa37dc28",
+          agentType: "subagent_explore",
+          startedAtMs: expect.any(Number),
+        },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 7: two background agents complete independently in read order with no double decrement", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case7";
+      launchBackground(dir, session, "aa37dc28");
+      launchBackground(dir, session, "bb48ef31");
+      expect(inflightEntries(dir).length).toBe(2);
+      readTerminal(dir, session, "bb48ef31");
+      readTerminal(dir, session, "aa37dc28");
+      expect(subagentCompletedRows(dir)).toBe(2);
+      const audit = readAudit(dir);
+      const rowB = audit.indexOf("**Agent ID**: bb48ef31");
+      const rowA = audit.indexOf("**Agent ID**: aa37dc28");
+      expect(rowB).toBeGreaterThan(-1);
+      expect(rowA).toBeGreaterThan(-1);
+      expect(rowB).toBeLessThan(rowA);
+      expect(existsSync(subagentInflightMarkerPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 8: a terminal read_subagent for another session's agent id is a cross-session no-op", () => {
+    const dir = scratchProject(true);
+    try {
+      launchBackground(dir, "item3-s1", "aa37dc28");
+      readTerminal(dir, "item3-s2", "aa37dc28");
+      expect(inflightEntries(dir)).toEqual([
+        {
+          sessionId: "item3-s1",
+          agentId: "aa37dc28",
+          agentType: "subagent_explore",
+          startedAtMs: expect.any(Number),
+        },
+      ]);
+      expect(subagentCompletedRows(dir)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 9: Stop is allowed by the pending-subagent carve-out only while the background entry is pending", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case9";
+      launchBackground(dir, session, "aa37dc28");
+      const stopPayload = () => ({
+        ...(FIXTURES.stop as Record<string, unknown>),
+        session_id: session,
+        cwd: dir,
+      });
+      const whilePending = runAdapter(dir, "continue-workflow", stopPayload());
+      expect(whilePending.code).toBe(0);
+      expect(whilePending.stdout).not.toContain('"decision":"block"');
+      const carveOutCount = (text: string) =>
+        text.split("pending-subagent carve-out").length - 1;
+      expect(carveOutCount(hookDrops(dir, "continue-workflow"))).toBe(1);
+      readTerminal(dir, session, "aa37dc28");
+      const afterTerminal = runAdapter(dir, "continue-workflow", stopPayload());
+      expect(afterTerminal.code).toBe(0);
+      // The ledger is drained, so the same Stop must not cite the
+      // pending-subagent carve-out again (it may block or allow for another
+      // reason — the carve-out line is the assertion).
+      expect(carveOutCount(hookDrops(dir, "continue-workflow"))).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 10: a resume:<id> foreground completion completes the unread background entry by exact id", () => {
+    // C14: run_subagent resume always runs foreground under the same
+    // agent_id; if an annotated entry for that id exists (an unread earlier
+    // background run) the exact-id path completes it.
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case10";
+      launchBackground(dir, session, "aa37dc28");
+      expect(
+        runAdapter(
+          dir,
+          "log-subagent",
+          withCwd(
+            capturedEvent("C14_resumeForeground", 17, {
+              "<session>": session,
+              "<agent-id>": "aa37dc28",
+            }),
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(inflightEntries(dir)).toEqual([]);
+      expect(subagentCompletedRows(dir)).toBe(1);
+      const audit = readAudit(dir);
+      expect(audit).toContain("**Agent Type**: subagent_general");
+      expect(audit).toContain("**Agent ID**: aa37dc28");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 11: an unclassifiable read_subagent output is a no-op plus one log-subagent drop line", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case11";
+      launchBackground(dir, session, "aa37dc28");
+      const before = inflightEntries(dir);
+      expect(
+        runAdapter(
+          dir,
+          "log-subagent",
+          withCwd(
+            capturedReadPostToolUse(
+              { "<session>": session, "<agent-id>": "aa37dc28" },
+              "Unrecognized subagent status payload.",
+            ),
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(inflightEntries(dir)).toEqual(before);
+      expect(subagentCompletedRows(dir)).toBe(0);
+      const drops = hookDrops(dir, "log-subagent");
+      expect(drops).toContain("unclassified read_subagent output");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 12: malformed stdin on log-subagent fails open (exit 0)", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "log-subagent", FIXTURES.malformed as string);
+      expect(r.code).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

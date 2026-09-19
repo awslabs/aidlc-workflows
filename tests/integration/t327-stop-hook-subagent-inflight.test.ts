@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS
+// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS, function:annotateSubagentInflight, function:findSubagentInflight, function:hasSubagentInflight
 //
 // t327 - session-scoped background-subagent Stop-hook carve-out.
 //
@@ -26,6 +26,10 @@ import {
 } from "../harness/fixtures.ts";
 import {
   activeIntent,
+  annotateSubagentInflight,
+  completeSubagentInflight,
+  findSubagentInflight,
+  hasSubagentInflight,
   inspectSubagentInflight,
   markSubagentInflight,
   subagentInflightMarkerPath,
@@ -265,5 +269,173 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
 
     expect(completeBackground(proj, "session-b", "worker-b").rc).toBe(0);
     expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+  });
+});
+
+describe("t327 agent-id correlation on the in-flight ledger", () => {
+  function rawEntries(proj: string): Array<Record<string, unknown>> {
+    const path = subagentInflightMarkerPath(proj);
+    if (!existsSync(path)) return [];
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+      entries?: Array<Record<string, unknown>>;
+    };
+    return parsed.entries ?? [];
+  }
+
+  function ageEntries(proj: string, ageMs: number): void {
+    const path = subagentInflightMarkerPath(proj);
+    const ledger = JSON.parse(readFileSync(path, "utf-8")) as {
+      entries: Array<{ startedAtMs: number }>;
+    };
+    for (const entry of ledger.entries) entry.startedAtMs -= ageMs;
+    writeFileSync(path, `${JSON.stringify(ledger)}\n`, "utf-8");
+  }
+
+  test("annotate attaches to the newest un-annotated fresh entry only", () => {
+    const proj = makeProject();
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    expect(
+      annotateSubagentInflight(proj, "session-a", {
+        agentId: "worker-a",
+        agentType: "general-purpose",
+      }),
+    ).toBe(true);
+    const entries = rawEntries(proj);
+    expect(entries.length).toBe(2);
+    // The newest entry gets the identity; the older stays un-annotated.
+    expect(entries[0].agentId).toBeUndefined();
+    expect(entries[1]).toMatchObject({
+      agentId: "worker-a",
+      agentType: "general-purpose",
+    });
+    // A second annotate takes the remaining un-annotated entry.
+    expect(
+      annotateSubagentInflight(proj, "session-a", { agentId: "worker-b" }),
+    ).toBe(true);
+    expect(rawEntries(proj)[0].agentId).toBe("worker-b");
+    // Nothing un-annotated left — annotate returns false and mutates nothing.
+    expect(
+      annotateSubagentInflight(proj, "session-a", { agentId: "worker-c" }),
+    ).toBe(false);
+    expect(rawEntries(proj).length).toBe(2);
+  });
+
+  test("annotate never creates an entry and never touches another session", () => {
+    const proj = makeProject();
+    expect(
+      annotateSubagentInflight(proj, "session-a", { agentId: "worker-a" }),
+    ).toBe(false);
+    expect(markSubagentInflight(proj, "session-b")).toBe(true);
+    expect(
+      annotateSubagentInflight(proj, "session-a", { agentId: "worker-a" }),
+    ).toBe(false);
+    expect(rawEntries(proj)).toEqual([
+      { sessionId: "session-b", startedAtMs: expect.any(Number) },
+    ]);
+  });
+
+  test("exact-id completion removes exactly the annotated entry", () => {
+    const proj = makeProject();
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    annotateSubagentInflight(proj, "session-a", { agentId: "worker-a" });
+    annotateSubagentInflight(proj, "session-a", { agentId: "worker-b" });
+    expect(completeSubagentInflight(proj, "session-a", "worker-a")).toBe(true);
+    const entries = rawEntries(proj);
+    expect(entries.length).toBe(1);
+    expect(entries[0].agentId).toBe("worker-b");
+  });
+
+  test("an unmatched id never falls back to the session splice while an annotated entry exists", () => {
+    const proj = makeProject();
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    annotateSubagentInflight(proj, "session-a", { agentId: "worker-a" });
+    // A foreground completion (or a repeated/foreign read) names a different
+    // id — it must not consume the pending background entry.
+    expect(completeSubagentInflight(proj, "session-a", "other-id")).toBe(false);
+    expect(rawEntries(proj).length).toBe(1);
+    expect(hasSubagentInflight(proj, "session-a", "worker-a")).toBe(true);
+  });
+
+  test("id-less entries keep the legacy first-entry splice even when an id is passed", () => {
+    const proj = makeProject();
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    // A completion that carries an id the session never annotated falls back
+    // to the session splice only because NO annotated entry exists.
+    expect(completeSubagentInflight(proj, "session-a", "worker-a")).toBe(true);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+    // And the no-id path (Claude/Copilot) is unchanged.
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    expect(completeSubagentInflight(proj, "session-a")).toBe(true);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+  });
+
+  test("malformed agent ids fail closed", () => {
+    const proj = makeProject();
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    annotateSubagentInflight(proj, "session-a", { agentId: "worker-a" });
+    for (const bad of [123, "", null, { id: "worker-a" }, ["worker-a"]]) {
+      expect(completeSubagentInflight(proj, "session-a", bad)).toBe(false);
+      expect(hasSubagentInflight(proj, "session-a", bad)).toBe(false);
+      expect(findSubagentInflight(proj, "session-a", bad)).toBeNull();
+    }
+    expect(
+      annotateSubagentInflight(proj, "session-a", { agentId: "" }),
+    ).toBe(false);
+    expect(rawEntries(proj).length).toBe(1);
+  });
+
+  test("find/has return the annotated entry for its own session only", () => {
+    const proj = makeProject();
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    annotateSubagentInflight(proj, "session-a", {
+      agentId: "worker-a",
+      agentType: "general-purpose",
+    });
+    expect(findSubagentInflight(proj, "session-a", "worker-a")).toMatchObject({
+      sessionId: "session-a",
+      agentId: "worker-a",
+      agentType: "general-purpose",
+    });
+    expect(hasSubagentInflight(proj, "session-a", "worker-a")).toBe(true);
+    // Cross-session and cross-id lookups see nothing.
+    expect(hasSubagentInflight(proj, "session-b", "worker-a")).toBe(false);
+    expect(hasSubagentInflight(proj, "session-a", "worker-b")).toBe(false);
+  });
+
+  test("the TTL prune still applies to annotated entries (has/find are fresh-only)", () => {
+    const proj = makeProject();
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    annotateSubagentInflight(proj, "session-a", { agentId: "worker-a" });
+    ageEntries(proj, SUBAGENT_INFLIGHT_TTL_MS + 60 * 60 * 1000);
+    expect(hasSubagentInflight(proj, "session-a", "worker-a")).toBe(false);
+    // The stale entry was pruned under the lock on the way through.
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+    expect(findSubagentInflight(proj, "session-a", "worker-a")).toBeNull();
+    // And the prune happens before rule evaluation in complete too: an aged
+    // annotated entry can no longer veto the legacy splice.
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    expect(completeSubagentInflight(proj, "session-a", "any-id")).toBe(true);
+  });
+
+  test("a malformed ledger fails closed the same way for the new functions", () => {
+    const proj = makeProject();
+    writeFileSync(
+      subagentInflightMarkerPath(proj),
+      '{"version":1,"entries":[{"sessionId":"session-a","startedAtMs":1,"agentId":""}]}\n',
+      "utf-8",
+    );
+    // An empty-string agentId is malformed on read (a present id must be a
+    // non-empty string), so every read/mutate path fails closed.
+    expect(() =>
+      annotateSubagentInflight(proj, "session-a", { agentId: "worker-a" }),
+    ).toThrow("malformed");
+    expect(() => findSubagentInflight(proj, "session-a", "worker-a")).toThrow(
+      "malformed",
+    );
+    expect(() =>
+      completeSubagentInflight(proj, "session-a", "worker-a"),
+    ).toThrow("malformed");
   });
 });

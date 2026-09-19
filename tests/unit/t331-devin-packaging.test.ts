@@ -169,7 +169,10 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(re(sync?.matcher).test("todo_write")).toBe(true);
     expect(re(sync?.matcher).test("exec")).toBe(false);
     expect(re(log?.matcher).test("run_subagent")).toBe(true);
-    expect(re(log?.matcher).test("read_subagent")).toBe(false);
+    // Item 3: read_subagent IS routed to log-subagent — a background
+    // agent's terminal state is only observable through a read (the
+    // adapter gates terminal-vs-no-op inside the arm).
+    expect(re(log?.matcher).test("read_subagent")).toBe(true);
     expect(re(humanTurn?.matcher).test("ask_user_question")).toBe(true);
     expect(re(humanTurn?.matcher).test("exec")).toBe(false);
     expect(re(rebuild?.matcher).test("exec")).toBe(true);

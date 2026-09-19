@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 992,
+    "total": 995,
     "enumeratedByClass": {
-      "function": 682,
+      "function": 685,
       "audit": 99,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 409,
+      "function": 412,
       "audit": 59,
       "scope": 11,
       "stage": 11,
@@ -1346,6 +1346,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:annotateSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2987,6 +2999,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:findSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:firstInScopeStageOfPhase",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3334,6 +3358,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hasSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
           "mechanism": "cli"
         }
       ],

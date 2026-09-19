@@ -1,0 +1,577 @@
+{
+  "$schema": "captured-devin-hook-payloads/v1",
+  "cliVersion": "3000.10.31",
+  "captureDate": "2026-09-19",
+  "classification": "captured",
+  "sanitization": "Real Devin CLI 3000.10.31 hook stdin captured via a capture-only .devin/hooks.v1.json logger (plus a .claude/settings.json SubagentStop probe — see C16) on Linux/WSL2. Only paths, session/prompt/tool-use/agent identifiers, shell ids, and verbose prompt text were replaced with placeholders. Property names, nesting, booleans, missing-vs-null distinctions, response status, correlation relationships, and EVENT ORDER (one global sequence, including interleaved parent/child events) are preserved exactly. Agent-authored report and stop text is kept verbatim where it is load-bearing evidence (it quotes only fixture file contents). No secrets, no real document content, no unredacted user prompts.",
+  "placeholderLegend": {
+    "<session>": "real session_id is a short human-readable slug (e.g. 'sunny-cowbell', 'robust-calcium', 'bottlenose-molasses', 'indecisive-swordfish'), NOT a UUID; each capture run is its own session",
+    "<prompt-id>": "real prompt_id is a UUID v4, rotated per user prompt; ABSENT on SessionStart (fires before first prompt); does NOT rotate when a subagent completion notification starts a new agent turn (both parent Stops in C11 share one prompt_id)",
+    "<tool-use-id-parent>": "parent/conductor-issued tool_use_id. NEW FORMAT on 3000.10.31: '<internal-tool>:<n>#<32hex>' (e.g. 'run_subagent:0#a1b2…'); replaces the 3000.6.14 'chatcmpl-tool-<hex>'",
+    "<tool-use-id-child>": "subagent-issued tool_use_id; SAME '<internal-tool>:<n>#<32hex>' format as the parent — the 3000.6.14 'functions.<tool>:<n>' child format is gone. The embedded internal tool name can differ from the hook tool_name: glob events carry 'find_file_by_name:0#…'",
+    "<project-root>": "absolute path of the capture fixture project root",
+    "<agent-id>": "8-char hex subagent identifier (e.g. 'aa37dc28'), embedded in run_subagent/read_subagent output strings and present as read_subagent tool_input.agent_id and run_subagent tool_input.resume; NOT a top-level event field",
+    "<agent-id-2>": "reserved: second distinct agent_id for a case where two subagents appear (unused in this capture — every case ran one agent; C14's resume reuses the same id)",
+    "<shell-id>": "short hex shell id embedded in exec PostToolUse output"
+  },
+  "C05_backgroundLaunch": {
+    "scenario": "Background run_subagent dispatch (is_background:true); parent launches then immediately blocks on read_subagent. (Capture files 0002–0003 of the C05'/C06' run.)",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "Read sentinel first line", "task": "<prompt: read sentinel.txt in the project root and report its first line verbatim>", "profile": "subagent_explore", "is_background": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "Read sentinel first line", "task": "<prompt: read sentinel.txt in the project root and report its first line verbatim>", "profile": "subagent_explore", "is_background": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Background subagent started with agent_id=<agent-id>. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "run_subagent tool_input (background): {profile, task, title?, is_background:true}. is_background is a BOOLEAN. Unchanged since 3000.6.14.",
+      "The launch acknowledgment is a PostToolUse with success:true; the agent_id is embedded in the output string ('Background subagent started with agent_id=<agent-id>.'). Output string IDENTICAL to 3000.6.14.",
+      "There is NO dedicated launch-acknowledgment event separate from PostToolUse; the launch IS the PostToolUse.",
+      "NEW on 3000.10.31: tool_use_id is '<internal-tool>:<n>#<32hex>' (real value 'run_subagent:0#<32hex>') for parent-issued calls too — the 3000.6.14 'chatcmpl-tool-<hex>' parent format is gone; there is no longer a parent/child format distinction."
+    ]
+  },
+  "C05_backgroundCompletion": {
+    "scenario": "Background subagent terminal completion observed via read_subagent (block:true). The child's own tool calls and Stop interleave into the parent's blocked-read window. (Capture files 0004–0010 of the C05'/C06' run.)",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>", "block": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "glob",
+        "tool_input": { "pattern": "sentinel.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "glob",
+        "tool_input": { "pattern": "sentinel.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "<project-root>/sentinel.txt",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/sentinel.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/sentinel.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "<file-view path=\"<project-root>/sentinel.txt\" start_line=\"1\" end_line=\"4\" total_lines=\"4\">\n  1|# Sentinel\n  2|line2\n  3|line3\n  4|line4\n</file-view>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "**File found:** `<project-root>/sentinel.txt` (4 lines total)\n\n**First line (verbatim):**\n```\n# Sentinel\n```\n\nFor completeness, the full file contents are:\n- Line 1: `# Sentinel`\n- Line 2: `line2`\n- Line 3: `line3`\n- Line 4: `line4`",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>", "block": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent <agent-id> completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "read_subagent tool_input: {agent_id, block?}. timeout was NOT sent in this capture (optional; the 3000.6.14 capture sent timeout:600). agent_id remains the ONLY correlation key to the launch.",
+      "Terminal completion is observable ONLY via read_subagent PostToolUse (success:true + 'completed' in output). Output string IDENTICAL to 3000.6.14. There is NO dedicated completion hook event.",
+      "NEW on 3000.10.31: the CHILD subagent's own Stop event (6th event here, 'File found: …') enters the PARENT's hook stream — it fired while the parent was blocked inside read_subagent, between the read_subagent PreToolUse and its PostToolUse. It shares the parent's session_id and prompt_id and carries NO agent identity; only last_assistant_message content (the child's report) and ordering distinguish it from a parent Stop.",
+      "Stop payload on 3000.10.31: {stop_hook_active:boolean, last_assistant_message:string, session_id, prompt_id}. stop_hook_active was false on every captured Stop (no Stop-hook block loop exercised).",
+      "The child's glob PreToolUse/PostToolUse carry tool_use_id 'find_file_by_name:0#<32hex>' — the embedded internal tool name differs from the hook tool_name ('glob').",
+      "The async <subagent_completion_notification> is delivered to the AGENT'S CONTEXT, not as a hook event. Still the S09 STOP-gate evidence: a ledger incremented on background launch cannot be reliably cleared by a hook on completion."
+    ]
+  },
+  "C06_repeatedRead": {
+    "scenario": "read_subagent called a second time on the same completed background subagent, non-blocking. (Capture files 0011–0012 of the C05'/C06' run.)",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent <agent-id> completed successfully:\n\n**File found:** `<project-root>/sentinel.txt` (4 lines total)\n\n**First line (verbatim):**\n```\n# Sentinel\n```\n\nFor completeness, the full file contents are:\n- Line 1: `# Sentinel`\n- Line 2: `line2`\n- Line 3: `line3`\n- Line 4: `line4`",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "A REPEATED read_subagent on an already-completed subagent returns success:true AGAIN and re-serves the report. It is indistinguishable from the first terminal completion by hook payload alone. Unchanged since 3000.6.14.",
+      "The second read's tool_input omits block entirely (ABSENT, not false) and uses a DIFFERENT tool_use_id but the SAME agent_id.",
+      "The re-served output embeds the report verbatim after the 'Subagent <agent-id> completed successfully:' header — same envelope as a foreground run_subagent completion.",
+      "Implication for S09 (unchanged): treating every read_subagent PostToolUse with success:true as a completion would DOUBLE-DECREMENT the ledger; dedup on (session_id, agent_id) is required."
+    ]
+  },
+  "C11_stopTiming": {
+    "scenario": "Background launch where the parent ends its turn WITHOUT reading (replies 'launched' and stops). Probes whether Stop fires while a background subagent is still in-flight, and what follows the completion notification. FULL sequence, capture files 0015–0026.",
+    "events": [
+      {
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "session_id": "<session>"
+      },
+      {
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "<prompt: launch background subagent_explore reader, do NOT call read_subagent, reply 'launched' and stop>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "profile": "subagent_explore", "is_background": true, "title": "bg read", "task": "<prompt: read sentinel.txt in the project root and report its first line verbatim>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "profile": "subagent_explore", "is_background": true, "title": "bg read", "task": "<prompt: read sentinel.txt in the project root and report its first line verbatim>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Background subagent started with agent_id=<agent-id>. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "glob",
+        "tool_input": { "pattern": "sentinel.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "glob",
+        "tool_input": { "pattern": "sentinel.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "<project-root>/sentinel.txt",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "launched",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/sentinel.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/sentinel.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "<file-view path=\"<project-root>/sentinel.txt\" start_line=\"1\" end_line=\"4\" total_lines=\"4\">\n  1|# Sentinel\n  2|line2\n  3|line3\n  4|line4\n</file-view>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "The first line of `sentinel.txt` (located at `<project-root>/sentinel.txt`) is, verbatim:\n\n```\n# Sentinel\n```\n\nFor context, the file contains 4 lines total: `# Sentinel`, `line2`, `line3`, `line4`.",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "The background subagent finished. First line of `sentinel.txt`, verbatim:\n\n```\n# Sentinel\n```",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "SessionEnd",
+        "reason": "other",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "C11 ANSWERED: a parent Stop DOES fire while a background subagent is still in-flight. Order: launch PostToolUse → child glob Pre/Post → PARENT Stop ('launched') → child read Pre/Post → CHILD Stop (the sentinel report) → PARENT Stop #2 ('The background subagent finished…') → SessionEnd. The 3000.10.21 changelog note ('the turn stays active until it finishes') does NOT suppress the Stop hook — the pending-subagent carve-out is LOAD-BEARING.",
+      "Attribution: the 7th event is the PARENT's Stop (its message is the instructed reply 'launched'); the 10th is the CHILD's Stop (its message is the child's sentinel report); the 11th is the PARENT's second Stop on the post-notification turn. Stop payloads carry NO field identifying which agent stopped — attribution is only possible from last_assistant_message content and ordering.",
+      "A SECOND parent Stop fires after the <subagent_completion_notification> is delivered to the agent's context — under the SAME session_id AND the SAME prompt_id (the notification turn does not rotate prompt_id; only real user prompts do). A session can therefore emit multiple Stop events per prompt_id.",
+      "A background child's Stop can also arrive BETWEEN two of the parent's own events (here between parent Stop #1 and parent Stop #2); a Stop payload is never attributable to parent-vs-child by any structured field.",
+      "No SubagentStop event fired anywhere in the sequence (see C16 — the key is not loadable)."
+    ]
+  },
+  "C12_backgroundDeniedTool": {
+    "scenario": "Background subagent (subagent_general) whose task needs an approval-gated tool (curl). The tool is auto-denied in background mode; the parent still reads the agent. FULL sequence, capture files 0027–0036.",
+    "events": [
+      {
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "session_id": "<session>"
+      },
+      {
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "<prompt: launch background subagent_general to run 'curl -sI https://example.com' and report the HTTP status line, then read_subagent block:true>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "curl test", "task": "<prompt: run 'curl -sI https://example.com' and report the HTTP status line; if it cannot be run or is denied, report that it failed>", "profile": "subagent_general", "is_background": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "curl test", "task": "<prompt: run 'curl -sI https://example.com' and report the HTTP status line; if it cannot be run or is denied, report that it failed>", "profile": "subagent_general", "is_background": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Background subagent started with agent_id=<agent-id>. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "exec",
+        "tool_input": { "command": "curl -sI https://example.com" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>", "block": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "The command `curl -sI https://example.com` failed to run. It was denied because this agent is running in the background, and tools requiring approval are automatically denied in that mode. Therefore, I cannot report the HTTP status line.",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>", "block": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent <agent-id> completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "The subagent's curl command was denied (background agents can't run approval-required tools), so no HTTP status line was obtained.",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "SessionEnd",
+        "reason": "other",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "A background child's approval-gated tool is AUTO-DENIED: the exec fires PreToolUse ONLY ('curl -sI https://example.com') with NO PostToolUse — the same hook signature as a rejected tool call.",
+      "Despite the denial the blocked read_subagent returns success:true with the SAME output as a successful terminal read ('Subagent <agent-id> completed. Its full report is delivered…') — a denied/failed child reads back as 'completed'. The binary's 'Subagent <id> exited with an error' read string did NOT appear for this failure mode.",
+      "The failure is visible ONLY in the CHILD's Stop last_assistant_message ('…denied because this agent is running in the background, and tools requiring approval are automatically denied in that mode…'), which lands inside the parent's blocked read_subagent window (between its PreToolUse and PostToolUse).",
+      "Implication for the classifier: read_subagent 'completed' output CANNOT distinguish a clean completion from a child that failed internally — and there is no hook-visible PostToolUse for the denied exec to correlate against.",
+      "The parent's own Stop ('The subagent's curl command was denied…') follows the read_subagent PostToolUse; SessionEnd keeps reason='other'."
+    ]
+  },
+  "C14_resumeForeground": {
+    "scenario": "Foreground run_subagent writes a.txt, then a SECOND run_subagent passes resume:'<agent-id>' to continue the same completed agent (append 'beta'). FULL sequence, capture files 0037–0056 (--permission-mode accept-edits).",
+    "events": [
+      {
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "session_id": "<session>"
+      },
+      {
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "<prompt: foreground subagent_general writes a.txt containing 'alpha', then run_subagent again with resume=<agent-id> to append 'beta'>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "write a.txt", "task": "<prompt: write a file named a.txt in the project root containing exactly one line: alpha>", "profile": "subagent_general" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "exec",
+        "tool_input": { "command": "pwd && ls" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "exec",
+        "tool_input": { "command": "pwd && ls" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "Output from command in shell <shell-id>:\n<project-root>\ncaptures\nsentinel.txt\n\n\nExit code: 0",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "write",
+        "tool_input": { "file_path": "<project-root>/a.txt", "content": "alpha\n" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "write",
+        "tool_input": { "file_path": "<project-root>/a.txt", "content": "alpha\n" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "File created successfully at: <project-root>/a.txt",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "exec",
+        "tool_input": { "command": "cat <project-root>/a.txt && wc -l <project-root>/a.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "exec",
+        "tool_input": { "command": "cat <project-root>/a.txt && wc -l <project-root>/a.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "Output from command in shell <shell-id>:\nalpha\n1 <project-root>/a.txt\n\n\nExit code: 0",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "Created `<project-root>/a.txt` containing exactly one line:\n\n```\nalpha\n```\n\nVerified with `cat` and `wc -l` — the file has exactly 1 line with content \"alpha\".",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "write a.txt", "task": "<prompt: write a file named a.txt in the project root containing exactly one line: alpha>", "profile": "subagent_general" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent agent_id=<agent-id> completed successfully:\n\nCreated `<project-root>/a.txt` containing exactly one line:\n\n```\nalpha\n```\n\nVerified with `cat` and `wc -l` — the file has exactly 1 line with content \"alpha\".",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "write a.txt", "task": "<prompt: append one line to a.txt: beta>", "profile": "subagent_general", "resume": "<agent-id>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/a.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/a.txt" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "<file-view path=\"<project-root>/a.txt\" start_line=\"1\" end_line=\"1\" total_lines=\"1\">\n  1|alpha\n</file-view>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "edit",
+        "tool_input": { "file_path": "<project-root>/a.txt", "old_string": "alpha", "new_string": "alpha\nbeta" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "edit",
+        "tool_input": { "file_path": "<project-root>/a.txt", "old_string": "alpha", "new_string": "alpha\nbeta" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "The file <project-root>/a.txt has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n  1|alpha\n  2|beta",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "Appended \"beta\" to `<project-root>/a.txt`. The file now contains:\n\n```\nalpha\nbeta\n```",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "write a.txt", "task": "<prompt: append one line to a.txt: beta>", "profile": "subagent_general", "resume": "<agent-id>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent agent_id=<agent-id> completed successfully:\n\nAppended \"beta\" to `<project-root>/a.txt`. The file now contains:\n\n```\nalpha\nbeta\n```",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "Done — `a.txt` now contains two lines: `alpha` and `beta`.",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "SessionEnd",
+        "reason": "other",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "NEW field on 3000.10.31: run_subagent tool_input.resume takes an agent_id STRING ('resume':'<agent-id>') to re-dispatch a COMPLETED agent. The resumed call has NO is_background field — resumes always run in the FOREGROUND (matches subagents.mdx).",
+      "The resumed dispatch gets a NEW tool_use_id but its completion output embeds the SAME agent_id ('Subagent agent_id=<agent-id> completed successfully:'). One agent_id can have multiple launch/terminal cycles — agent_id alone is NOT unique per lifecycle.",
+      "Between the resume PreToolUse and PostToolUse, the resumed child's tool calls (read, edit) and its Stop enter the parent hook stream exactly as a fresh foreground dispatch — sharing session_id+prompt_id, no identity fields.",
+      "In a FOREGROUND dispatch the child's Stop lands BEFORE the parent's run_subagent PostToolUse (both cycles observed: Stop 'Created …a.txt' precedes the completion PostToolUse; resumed Stop 'Appended \"beta\"…' precedes the resume PostToolUse).",
+      "No new structured identity fields appeared anywhere: still no agent_id/agent_type/profile on child tool events or Stops."
+    ]
+  },
+  "C16_subagentStopNegative": {
+    "scenario": "SubagentStop registered as a hook event key. It could NOT be registered in .devin/hooks.v1.json (an entry there makes the CLI log 'unknown variant `SubagentStop`' and reject the WHOLE file — hooks discovery loaded=0, zero capture files, CLI still exits 0); it was registered in .claude/settings.json instead, where the same warning skips only that file while the devin provider still loads (loaded=7, by_provider=[devin=7]).",
+    "events": [],
+    "fieldObservations": [
+      "NEGATIVE PROVEN: no SubagentStop event is dispatched on 3000.10.31 — no *SubagentStop* capture file exists in any run, and no run produced a startup error (every run exited 0).",
+      "SubagentStop is NOT a loadable event key in EITHER config location. In hooks.v1.json it poisons the entire file (WARN 'Failed to parse hooks file … unknown variant `SubagentStop`', loaded=0 — all 7 real events lose their hooks). In .claude/settings.json the same unknown-variant warning rejects that file alone ('Failed to parse JSONC … unknown variant `SubagentStop`').",
+      "Unknown event keys are a per-FILE rejection (WARN only), never a startup failure.",
+      "SubagentStop exists in the binary only as a ClaudeHookSpecificOutput OUTPUT variant (accepted in hookSpecificOutput.hookEventName) — never as a dispatched event. A SubagentStop-shaped payload remains an adapter-side construction (as the Copilot adapter synthesizes), not a host-observable event."
+    ]
+  }
+}

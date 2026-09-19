@@ -1,0 +1,35 @@
+# 10-environment.txt — background-lifecycle-run environment provenance
+
+## versions
+$ devin --version
+devin 3000.10.31 (b98cc431)
+$ bun --version
+1.3.14
+$ uname -a
+Linux GalaxyBook 5.15.167.4-microsoft-standard-WSL2 #1 SMP Tue Nov 5 00:21:55 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux
+
+## installed adapter — Item 3 markers
+$ grep -n 'annotateSubagentInflight' .devin/hooks/aidlc-devin-adapter.ts
+73:  annotateSubagentInflight,
+1159:            annotateSubagentInflight(projectDir, devin.session_id, {
+$ grep -n 'forwardSubagentStop' .devin/hooks/aidlc-devin-adapter.ts
+638:function forwardSubagentStop(
+1152:          forwardSubagentStop(profile, resume, subagentTerminalMessage(output));
+1174:          forwardSubagentStop(
+1181:        forwardSubagentStop(profile, undefined, output);
+1195:              forwardSubagentStop(
+$ grep -n 'matchSubagentLaunchAck' .devin/hooks/aidlc-devin-adapter.ts
+572:function matchSubagentLaunchAck(output: string): string | null {
+1156:          input.is_background === true ? matchSubagentLaunchAck(output) : null;
+
+## hooks.v1.json log-subagent matcher
+16:    { "matcher": "^run_subagent$", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" deliver-stage-rules" }] }
+21:    { "matcher": "^(run_subagent|read_subagent)$", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" log-subagent" }] },
+
+## sha256
+b249cd4914213161ad57ff017f9003d42d825e7340efef75ec4cb58eba9fc849  .devin/hooks/aidlc-devin-adapter.ts
+48d4ff042779bed866b80d80a70b4219832f9b1bc6ae8b8fa205993d92fb36f2  .devin/hooks.v1.json
+
+## source repo HEAD
+10b71cb5c4725decf5b0e63c6a982a5b4f89524f
+(Item 3 change was uncommitted at run time — installed into dist/devin via 'bun scripts/package.ts' before the install commit a86b7df)

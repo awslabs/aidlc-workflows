@@ -1,0 +1,97 @@
+04-l3-repeated-read.txt — L3 dedup evidence (session cosmic-minnow)
+==================================================================
+
+DB source: <home>/.local/share/devin/cli/sessions.db copied (with -wal/-shm) to
+/tmp/bg-sessions.db for a consistent read-only snapshot; queried via bun:sqlite
+readonly. The live file was never opened directly.
+
+Schema (.schema message_nodes):
+  CREATE TABLE message_nodes (
+    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    node_id INTEGER NOT NULL,           -- node_id within this session's forest
+    parent_node_id INTEGER,             -- NULL for root nodes
+    chat_message TEXT NOT NULL,
+    created_at INTEGER NOT NULL, metadata TEXT,
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    UNIQUE(session_id, node_id)
+  )
+
+SQL used:
+  SELECT node_id, parent_node_id, created_at, chat_message, metadata
+    FROM message_nodes WHERE session_id = 'cosmic-minnow'
+    AND node_id IN (80,88,89,99,100,101,102,238,310,311,529,530,531,532);
+  SELECT node_id FROM message_nodes WHERE session_id = 'cosmic-minnow'
+    AND chat_message LIKE '%read_subagent%' ORDER BY node_id;
+
+Note on created_at: every cosmic-minnow node shows the same bulk re-render
+timestamp (1789841274, 2026-09-19T18:07:54Z) — the column reflects when the
+row was (re)materialized, not the event time. Event times below come from the
+audit shard and continue-workflow.drops, which carry wall-clock timestamps.
+
+Timeline (audit/drops timestamps):
+  17:11:13Z  node 89   launch ack tool result (agent_id=3e9497b8)
+  17:11:21Z  continue-workflow.drops — pending-subagent carve-out line
+  17:11:35Z  node 102  first read_subagent result -> SUBAGENT_COMPLETED #1
+  17:45:15Z  node 311  developer foreground completion -> SUBAGENT_COMPLETED #2
+  18:07:xxZ  node 532  SECOND read_subagent result (re-served report) -> nothing
+
+=== node 89 — launch ack tool result (full chat_message, pretty-printed) ===
+{
+  "message_id": "b4af59c9-faec-4430-ba4e-4183e8bd4cc6",
+  "role": "tool",
+  "content": "Background subagent started with agent_id=3e9497b8. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.",
+  "tool_call_id": "call_e920662eb13f41f89c0b1440#fe232b43e99948e1b85a855ab829696f"
+}
+(parent_node_id=88; pairs with nodes 80/88, the parent's run_subagent dispatch
+with is_background:true)
+
+=== nodes 100/101 — first read_subagent call (assistant, re-render pair) ===
+node 100 (parent_node_id=99) and node 101 (parent_node_id=99) share:
+  message_id: 9625af55-4f56-4483-96d4-6c664ddfece5
+  tool_calls: [{"id":"call_e3269f772f6742a1aba713cb#33e64f647fc74849b17b86e26d6431da",
+                "name":"read_subagent","arguments":{"agent_id":"3e9497b8"}}]
+  thinking (verbatim): "The background subagent has finished. I need to read its
+    result to collect the completion status and release the pending-work marker,
+    as instructed."
+  -- the conductor explicitly cites the new SKILL.md sentence ("read each result
+     via read_subagent before integrating ... releases its pending-work marker")
+
+=== node 102 — first read result (tool, parent_node_id=101) ===
+{
+  "message_id": "befbc7ea-a829-4848-b7c0-6fd762438b8f",
+  "role": "tool",
+  "content": "Subagent 3e9497b8 completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.",
+  "tool_call_id": "call_e3269f772f6742a1aba713cb#33e64f647fc74849b17b86e26d6431da"
+}
+
+=== node 529 — the operator's prompt that drove the L3 check ===
+{"role":"user","content":"read_subagent agent 3e9497b8 once more"}
+
+=== nodes 530/531 — SECOND read_subagent call (assistant, re-render pair) ===
+node 530 (parent_node_id=529) and node 531 (parent_node_id=529) share:
+  message_id: 1851e34c-436e-42ec-a4cf-6067b6e75622
+  tool_calls: [{"id":"call_5e9b5d7ca0a849f1a409adb7#818478a870d94c00bec60e5d18c70c9c",
+                "name":"read_subagent","arguments":{"agent_id":"3e9497b8"}}]
+  thinking (verbatim): "I need to re-read the output from subagent `3e9497b8`.
+    This is the same `subagent_explore` that previously read AGENTS.md and
+    reported its first heading. I'll call `read_subagent` with that agent ID."
+
+=== node 532 — second read result (tool, parent_node_id=531) ===
+{
+  "message_id": "a98dbab1-bfdb-4a98-8867-04180d312380",
+  "role": "tool",
+  "content": "Subagent 3e9497b8 completed successfully:\n\n## Findings\n\n**File:** `<home>/devin-e2e-background-lifecycle/AGENTS.md`\n\n**First Markdown heading** (line 9):\n```\n# Project Name <!-- Replace with your project name -->\n```\n\n**Total lines:** 84\n\nNote: The file begins with an HTML comment block (lines 1–7) and a blank line (line 8), so the first `#` heading appears on line 9 rather than line 1. The heading contains an inline HTML comment placeholder (`<!-- Replace with your project name -->`), indicating this AGENTS.md is a project template.\n\nNo modifications were made — read-only task completed.",
+  "tool_call_id": "call_5e9b5d7ca0a849f1a409adb7#818478a870d94c00bec60e5d18c70c9c"
+}
+-- the second read RE-SERVED the full report (success:true shape); it is a
+   genuine terminal-read PostToolUse, not a failure or pending reply.
+
+=== Dedup result ===
+SUBAGENT_COMPLETED rows in the audit shard (06-audit-shard.md): 2 total —
+  1. 17:11:35Z  subagent_explore  agent 3e9497b8  (first read, node 102)
+  2. 17:45:15Z  aidlc-developer-agent  agent c1804c13  (foreground completion)
+The second read_subagent (node 532, ~18:07Z) produced NO new audit row and no
+ledger change: the ledger entry for 3e9497b8 was already consumed by the first
+read, so findSubagentInflight returned nothing and the adapter emitted no
+SubagentStop forward. Count stayed exactly 2.

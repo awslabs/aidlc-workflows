@@ -25,7 +25,7 @@ Four distinctions are essential:
 | DEVIN-04 | [Permission scopes and configuration isolation](04-permissions-and-configuration.md) | Implemented defaults; effective host policy remains external |
 | DEVIN-05 | [Optional MCP servers and default-off behavior](05-optional-mcp.md) | Implemented configuration; authenticated connections not verified |
 | DEVIN-06 | [Hook events, payload translation, and output contracts](06-hook-transport.md) | Implemented transport with explicit payload and enforcement gaps |
-| DEVIN-07 | [Ensemble dispatch, reviewer attribution, and subagent lifecycle](07-subagent-lifecycle-and-ensemble.md) | Protocol binding and native dispatch translation implemented, regression-covered, and accepted live on 3000.10.31 (full workflow completed); reviewer attribution and background lifecycle open |
+| DEVIN-07 | [Ensemble dispatch, reviewer attribution, and subagent lifecycle](07-subagent-lifecycle-and-ensemble.md) | Protocol binding and native dispatch translation accepted live on 3000.10.31; background lifecycle implemented, regression-covered, and accepted live on 3000.10.31 (2026-09-19); reviewer attribution opend); reviewer attribution and background lifecycle open |
 | DEVIN-08 | [Structured questions and human-turn recording](08-questions-and-human-turns.md) | Implemented response compatibility; live batch/cancellation authority coverage remains limited |
 | DEVIN-09 | [Plan Approval sessions, challenges, responses, and receipts](09-plan-approval-authority.md) | Strict session pairing implemented, regression-covered, and accepted live on 3000.10.31; receipt reuse without re-prompt inconclusive pending DEVIN-07 |
 | DEVIN-10 | [Planning commands, shell composition, and working directories](10-shell-guards-and-working-directory.md) | Implemented protections with scoped guarantees |
@@ -42,7 +42,7 @@ Read DEVIN-01–06 for the integration architecture, DEVIN-07–12 for behaviora
 | --- | --- | --- |
 | DEVIN-07 | `runtime-graph.json` is never compiled on Devin: `classifyRuntimeCompileCommand` builds its harness-path pattern from `KNOWN_HARNESS_DIRS`, which omits `.devin` (observed live in native-dispatch-run; `learnings surface` fails) | A core fix that derives the pattern open-set (or adds the missing dirs) plus a classifier test per shipped harness dir |
 | DEVIN-07 | Reviewer-specific read/search enforcement lacks adapter handling and captured child identity | Supported identity contract plus native read/search/notebook boundary tests |
-| DEVIN-07 | Background launch is not terminal completion; poll exclusion is not lifecycle tracking | Capture-backed persistent lifecycle and restart/repeated-read tests |
+| DEVIN-07 | ~~Background launch is not terminal completion~~ — implemented on 3000.10.31 captures (launch annotates the in-flight entry; terminal forwards a synthesized `SubagentStop` by `agent_id`; repeated reads dedup) | Accepted live 2026-09-19 (`background-lifecycle-run/`); unread/cancelled agents recover by TTL only (documented residual); a failing child was not exercised |
 | DEVIN-08 | Unknown/partial/contradictory question responses and first-answer extraction | Batch/cancellation authority tests and fresh interactive hook captures |
 | DEVIN-09 | Receipt reuse without re-prompt after a session change | A live run in which `/clear` + resume proceeds on the existing receipt with no new Plan Approval prompt (dispatch fix is in; native-dispatch-run only exercised same-session resume/compaction) |
 | DEVIN-12 | Testing Contract repair retirement | Vendor-confirmed fixed version, real write/read regression, supported baseline, and stored-plan migration |
@@ -104,6 +104,8 @@ git show 6e208f7b:docs/reference/research/devin/devin-harness-port-plan.md
 | question-rendering-core-extraction-plan.md | DEVIN-08 |
 | stop-hook-read-only-probe-plan.md | DEVIN-11 |
 | testing-contract-repair-observability-plan.md | DEVIN-12 |
+
+Active (not yet folded): [pr-996-item-3-background-subagent-lifecycle-plan.md](pr-996-item-3-background-subagent-lifecycle-plan.md) — review Item 3 (DEVIN-07 background launch/terminal lifecycle); Phase-0 captures landed, implemented, regression-covered, and accepted live 2026-09-19 (`background-lifecycle-run/`); fold into DEVIN-07/14 at commitf the missing SubagentStop; fold into DEVIN-07/14 once implemented and live-accepted.
 
 `pr-996-item-2-native-dispatch-translation-plan.md` (DEVIN-07) was folded into findings 07/14 after the fix landed in `661527fa`; recover it with `git show 661527fa:docs/reference/research/devin/pr-996-item-2-native-dispatch-translation-plan.md`.
 

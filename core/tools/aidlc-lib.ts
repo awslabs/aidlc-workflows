@@ -20152,9 +20152,15 @@ export function subagentInflightMarkerPath(projectDir: string): string {
 // how long a crashed dispatch can relax forwarding-loop enforcement.
 export const SUBAGENT_INFLIGHT_TTL_MS = 2 * 60 * 60 * 1000;
 
-interface SubagentInflightEntry {
+export interface SubagentInflightEntry {
   sessionId: string | null;
   startedAtMs: number;
+  // Optional host identity, attached post-dispatch by annotateSubagentInflight
+  // (Devin correlates the launch-ack's embedded agent_id back onto the entry).
+  // Absence is always valid; a present agentId must be a non-empty string or
+  // the ledger is malformed (same fail-closed contract as every other field).
+  agentId?: string;
+  agentType?: string;
 }
 
 interface SubagentInflightLedger {
@@ -20216,8 +20222,16 @@ function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
         entry.sessionId === null ||
         (typeof entry.sessionId === "string" &&
           validSessionId(entry.sessionId) === entry.sessionId);
+      const validAgentId =
+        entry.agentId === undefined ||
+        (typeof entry.agentId === "string" && entry.agentId.length > 0);
+      const validAgentType =
+        entry.agentType === undefined ||
+        (typeof entry.agentType === "string" && entry.agentType.length > 0);
       if (
         !validIdentity ||
+        !validAgentId ||
+        !validAgentType ||
         typeof entry.startedAtMs !== "number" ||
         !Number.isFinite(entry.startedAtMs) ||
         entry.startedAtMs <= 0
@@ -20227,6 +20241,8 @@ function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
       entries.push({
         sessionId: entry.sessionId ?? null,
         startedAtMs: entry.startedAtMs,
+        ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
+        ...(entry.agentType !== undefined ? { agentType: entry.agentType } : {}),
       });
     }
     return { exists: true, malformed: false, entries };
@@ -20285,12 +20301,26 @@ export function markSubagentInflight(
   });
 }
 
-export function completeSubagentInflight(
+// Attach host identity to the newest un-annotated fresh entry of this
+// session (Devin correlates the launch-ack's embedded agent_id back onto the
+// entry its dispatch PreToolUse created). Returns false when the session has
+// no un-annotated fresh entry — annotation never creates entries, so a
+// launch ack that arrives without a dispatch-accepted entry is a no-op.
+export function annotateSubagentInflight(
   projectDir: string,
-  sessionId?: unknown,
+  sessionId: unknown,
+  meta: { agentId: string; agentType?: string },
 ): boolean {
   const identity = subagentSessionIdentity(sessionId);
   if (!identity.valid) return false;
+  if (
+    meta === null ||
+    typeof meta !== "object" ||
+    typeof meta.agentId !== "string" ||
+    meta.agentId.length === 0
+  ) {
+    return false;
+  }
   return withAuditLock(projectDir, () => {
     const current = readSubagentInflightLedger(projectDir);
     if (!current.exists) return false;
@@ -20300,12 +20330,137 @@ export function completeSubagentInflight(
       );
     }
     const entries = freshSubagentEntries(current.entries, Date.now());
-    const index = entries.findIndex(
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      if (
+        entry.sessionId === identity.sessionId &&
+        entry.agentId === undefined
+      ) {
+        entry.agentId = meta.agentId;
+        if (typeof meta.agentType === "string" && meta.agentType.length > 0) {
+          entry.agentType = meta.agentType;
+        }
+        writeSubagentInflightLedger(projectDir, entries);
+        return true;
+      }
+    }
+    writeSubagentInflightLedger(projectDir, entries);
+    return false;
+  });
+}
+
+// Exact-id lookup over the session's fresh entries (the Devin adapter's
+// read_subagent correlation). Returns the matching annotated entry — its
+// agentType is what the synthesized SubagentStop reports — or null. Stale
+// entries are pruned under the lock like matchSubagentInflight; a malformed
+// ledger throws so corruption can never masquerade as "no pending entry".
+export function findSubagentInflight(
+  projectDir: string,
+  sessionId: unknown,
+  agentId: unknown,
+): SubagentInflightEntry | null {
+  const identity = subagentSessionIdentity(sessionId);
+  if (!identity.valid) return null;
+  if (typeof agentId !== "string" || agentId.length === 0) return null;
+  return withAuditLock(projectDir, () => {
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.exists) return null;
+    if (current.malformed) {
+      throw new Error(
+        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+      );
+    }
+    const entries = freshSubagentEntries(current.entries, Date.now());
+    if (entries.length !== current.entries.length) {
+      writeSubagentInflightLedger(projectDir, entries);
+    }
+    return (
+      entries.find(
+        (entry) =>
+          entry.sessionId === identity.sessionId &&
+          entry.agentId === agentId,
+      ) ?? null
+    );
+  });
+}
+
+export function hasSubagentInflight(
+  projectDir: string,
+  sessionId: unknown,
+  agentId: unknown,
+): boolean {
+  return findSubagentInflight(projectDir, sessionId, agentId) !== null;
+}
+
+export function completeSubagentInflight(
+  projectDir: string,
+  sessionId?: unknown,
+  agentId?: unknown,
+): boolean {
+  const identity = subagentSessionIdentity(sessionId);
+  if (!identity.valid) return false;
+  // A malformed agent id fails closed: a caller that cannot name its id
+  // removes nothing (an exact-id completion is only ever exact).
+  if (
+    agentId !== undefined &&
+    (typeof agentId !== "string" || agentId.length === 0)
+  ) {
+    return false;
+  }
+  return withAuditLock(projectDir, () => {
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.exists) return false;
+    if (current.malformed) {
+      throw new Error(
+        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+      );
+    }
+    const entries = freshSubagentEntries(current.entries, Date.now());
+    const sessionEntries = entries.filter(
       (entry) => entry.sessionId === identity.sessionId,
     );
-    if (index >= 0) entries.splice(index, 1);
+    let removed = false;
+    if (agentId !== undefined) {
+      // Rule 1: an entry carrying this exact agent id is the one removed.
+      const index = entries.findIndex(
+        (entry) =>
+          entry.sessionId === identity.sessionId &&
+          entry.agentId === agentId,
+      );
+      if (index >= 0) {
+        entries.splice(index, 1);
+        removed = true;
+      } else if (
+        // Rule 2: an unmatched id removes NOTHING while the session carries
+        // at least one annotated entry — exact-id semantics are what stop a
+        // foreground completion or a repeated/foreign read from consuming a
+        // background entry.
+        !sessionEntries.some((entry) => entry.agentId !== undefined)
+      ) {
+        // Rule 3: no annotated entries at all — the session still uses the
+        // legacy first-entry splice (id-less entries can only ever be
+        // completed this way).
+        const legacy = entries.findIndex(
+          (entry) => entry.sessionId === identity.sessionId,
+        );
+        if (legacy >= 0) {
+          entries.splice(legacy, 1);
+          removed = true;
+        }
+      }
+    } else {
+      // Rule 3 / legacy path (Claude Code, Copilot — callers that never
+      // annotate): remove the session's first entry, unchanged.
+      const index = entries.findIndex(
+        (entry) => entry.sessionId === identity.sessionId,
+      );
+      if (index >= 0) {
+        entries.splice(index, 1);
+        removed = true;
+      }
+    }
     writeSubagentInflightLedger(projectDir, entries);
-    return index >= 0;
+    return removed;
   });
 }
 
