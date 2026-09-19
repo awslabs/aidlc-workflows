@@ -1770,6 +1770,91 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   });
 
   // --- Idempotency ---
+  // --- Contribution seam: contributions/agents/ (core personas) ---
+  test("agent contribution splices a fragment into the core persona", () => {
+    // test-pro reuses aidlc-quality-agent as its test lead and names its metrics
+    // persona as a collaborator: one fragment at in:Collaboration, recorded in
+    // the sidecar under the agent slug.
+    const persona = readFileSync(join(project, ".claude", "agents", "aidlc-quality-agent.md"), "utf-8");
+    const open = persona.indexOf("<!-- plugin:test-pro:in:Collaboration:100:");
+    expect(open).toBeGreaterThan(-1);
+    expect(persona).toContain("**Works with (test-pro)**: test-pro-metrics-agent");
+    // Inside the Collaboration section: after its heading, before the next H2.
+    const heading = persona.indexOf("\n## Collaboration");
+    const nextHeading = persona.indexOf("\n## ", heading + 1);
+    expect(heading).toBeGreaterThan(-1);
+    expect(open).toBeGreaterThan(heading);
+    if (nextHeading !== -1) expect(open).toBeLessThan(nextHeading);
+    const sidecar = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json"), "utf-8"),
+    );
+    expect(sidecar["aidlc-quality-agent"]?.fragments).toEqual([
+      expect.objectContaining({ anchor: "in:Collaboration", order: 100 }),
+    ]);
+  });
+
+  test("agent contributions anchor after the preflight, refuse adds, and strip on disable", () => {
+    const scope = [
+      "---", "name: syn-persona", "plugin: syn-persona",
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope carrying the persona plugin identity", "skeleton: off", "---", "",
+      "# syn-persona", "",
+    ].join("\n");
+    const anchored = [
+      "---", "target: aidlc-architect-agent", "plugin: syn-persona",
+      "adds:", "  produces:", "    - syn-persona-ignored",
+      "fragments:", "  - anchor: after-preflight", "    order: 100",
+      "---", "",
+      "## fragment: after-preflight", "",
+      "**Synthetic mandatory anchor:** read the frozen standards snapshot before designing.", "",
+    ].join("\n");
+    const unknown = [
+      "---", "target: no-such-agent", "plugin: syn-persona",
+      "fragments:", "  - anchor: in:Collaboration", "    order: 100",
+      "---", "",
+      "## fragment: in:Collaboration", "", "- never lands", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-persona", {
+      "scopes/syn-persona.md": scope,
+      "contributions/agents/aidlc-architect-agent.md": anchored,
+      "contributions/agents/no-such-agent.md": unknown,
+    });
+    const personaPath = join(proj, ".claude", "agents", "aidlc-architect-agent.md");
+    const persona = readFileSync(personaPath, "utf-8");
+    // The fragment sits right after the injected preflight paragraph and
+    // before the persona's own title.
+    const preflight = persona.indexOf("<!-- aidlc-delegated-knowledge-preflight -->");
+    const block = persona.indexOf("<!-- plugin:syn-persona:after-preflight:100:");
+    const title = persona.indexOf("\n# ");
+    expect(preflight).toBeGreaterThan(-1);
+    expect(block).toBeGreaterThan(preflight);
+    expect(block).toBeLessThan(title);
+    expect(persona).toContain("**Synthetic mandatory anchor:**");
+    // adds.* on a persona is ignored with an advisory drop, never merged.
+    expect(persona).not.toContain("syn-persona-ignored");
+    expect(drops).toContain("agent contributions carry prose fragments only");
+    // An unknown persona is dropped-with-log; compose stays fail-open.
+    expect(drops).toContain('targets missing agent "no-such-agent"');
+    expect(drops).not.toContain("compile failed");
+    const sidecarPath = join(proj, ".claude", "tools", "data", "plugin-contrib-syn-persona.json");
+    const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8"));
+    expect(sidecar["aidlc-architect-agent"]?.fragments).toEqual([
+      expect.objectContaining({ anchor: "after-preflight", order: 100 }),
+    ]);
+
+    // Disable-time strip removes the fragment and the sidecar, like stage fragments.
+    const strip = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(strip.status).toBe(0);
+    const stripped = readFileSync(personaPath, "utf-8");
+    expect(stripped).not.toContain("plugin:syn-persona:");
+    expect(stripped).not.toContain("Synthetic mandatory anchor");
+    expect(stripped).toContain("<!-- aidlc-delegated-knowledge-preflight -->");
+    expect(existsSync(sidecarPath)).toBe(false);
+  });
+
   test("re-running compose does not duplicate fragments", () => {
     const rerun = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
       cwd: project,

@@ -294,6 +294,18 @@ function pluginRuntimeState(targetRoot: string): PluginRuntimeState {
   } catch {
     // Existing sidecar/graph evidence remains usable.
   }
+  // Personas carry compose-time prose fragments too (contributions/agents/).
+  const agentsDir = join(targetRoot, ".cursor", "agents");
+  try {
+    for (const path of filesUnder(agentsDir)) {
+      if (!path.endsWith(".md")) continue;
+      if (!readFileSync(path, "utf-8").includes("<!-- plugin:")) continue;
+      state.composed = true;
+      stageState(basename(path, ".md"));
+    }
+  } catch {
+    // Stage evidence above still applies.
+  }
   return state;
 }
 
@@ -1065,7 +1077,8 @@ export async function install(targetDir: string): Promise<void> {
       let pluginBase: Buffer | undefined;
       let rebuiltPluginStage = false;
       const pluginStage =
-        rel.startsWith(".cursor/aidlc-common/stages/") && rel.endsWith(".md")
+        (rel.startsWith(".cursor/aidlc-common/stages/") || rel.startsWith(".cursor/agents/")) &&
+        rel.endsWith(".md")
           ? pluginRuntime.stages.get(basename(rel, ".md"))
           : undefined;
       if (targetBytes && pluginStage) {

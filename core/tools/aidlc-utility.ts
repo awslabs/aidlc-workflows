@@ -1194,6 +1194,20 @@ function stripDisabledPluginContributions(
         }
       }
     }
+    // Persona contributions are prose-only, so their strip needs no sidecar
+    // record: the fragment sentinels carry the plugin name.
+    const personasDir = resolveHarnessPath(["agents"], { mutable: true });
+    if (existsSync(personasDir)) {
+      for (const f of readdirSync(personasDir).filter((name) => name.endsWith(".md")).sort()) {
+        const path = join(personasDir, f);
+        const before = readFileSync(path, "utf-8");
+        const content = removePluginFragments(before, plugin);
+        if (content !== before) {
+          writeFileSync(path, content, "utf-8");
+          pluginTouched = true;
+        }
+      }
+    }
     if (existsSync(sidecar)) {
       rmSync(sidecar, { force: true });
       pluginTouched = true;
@@ -3420,6 +3434,20 @@ export async function collectDoctorReport(
       { path: string; content: string; parsed: Record<string, unknown> }
     >();
     const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
+    // Persona contributions (prose fragments into <harness>/agents/*.md) are
+    // verified from the same sidecar records, keyed by the agent slug. A
+    // persona has no structural fields, so its parsed view is empty.
+    const personasRoot = resolveHarnessPath(["agents"]);
+    if (existsSync(personasRoot)) {
+      for (const f of readdirSync(personasRoot).filter((name) => name.endsWith(".md")).sort()) {
+        const path = join(personasRoot, f);
+        try {
+          stageSources.set(f.replace(/\.md$/, ""), { path, content: readFileSync(path, "utf-8"), parsed: {} });
+        } catch {
+          // An unreadable persona surfaces through the agent roster checks.
+        }
+      }
+    }
     for (const phase of PHASES) {
       const dir = join(stagesRoot, phase);
       if (!existsSync(dir)) continue;

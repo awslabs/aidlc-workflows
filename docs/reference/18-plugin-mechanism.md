@@ -55,6 +55,7 @@ plugins/<name>/
   tools/<id>.ts                          # ✅ sensor scripts (so a sensor can run)
   tools/<plugin>-doctor.ts               # ✅ optional /aidlc --doctor checks
   contributions/<phase>/<slug>.md        # ✅ ADDITIVE modifications to core stages (§6)
+  contributions/agents/<agent>.md        # ✅ PROSE fragments into core personas (§6)
   agents/<plugin>-<role>-agent.md        # ✅ NEW agents (stem == frontmatter name)
   scopes/<plugin>-<name>.md              # ✅ NEW scopes (stem == frontmatter name)
   knowledge/<agent-slug>/…               # ✅ per-agent METHODOLOGY knowledge
@@ -429,6 +430,8 @@ fragments:                    # PROSE — spliced into the stage body
 | `after-questions` | after the questions-generating step |
 | `end-of-steps` | at the end of the `## Steps` block |
 | `in:<Compartment>` | at the end of the named `## <Compartment>` block |
+| `after-preflight` | personas: right after the delegated-knowledge preflight the packager injects |
+| `end-of-body` | at the end of the authored body (before knowledge absorbed into a reviewer persona) |
 
 **Surface-by-surface** — what a plugin uses for each kind of upstream change. "Status" marks what the compose hook merges today vs. what is designed-but-deferred:
 
@@ -442,6 +445,7 @@ fragments:                    # PROSE — spliced into the stage body
 | Add a `requires_stage` edge | `adds.requires_stage` | ⏳ deferred (declared → logged, not merged) |
 | Put an existing stage under a plugin scope | `adds.scopes` (own-plugin scopes only; installed identity file required) | ✅ implemented |
 | Inject phase policy / guardrails | ship `memory/phases/<p>.md` into the default-space seed (§7) | ⏳ deferred (not yet projected) |
+| Enrich a core persona (a collaboration bullet, a mandatory anchor) | `contributions/agents/<agent>.md` with `fragments` at `in:<H2>`, `after-preflight` or `end-of-body` | ✅ implemented (prose only; `adds.*` is refused with an advisory drop) |
 
 ## 7. Method/rules, agents, knowledge, scopes, and activation
 
@@ -465,6 +469,16 @@ also migrates an existing persona only when it is an exact, unchanged,
 same-plugin copy from the pre-projection composer; edited or foreign files retain
 no-clobber behavior. An already-composed unsupported value is left in place with
 a degraded diagnostic that names the file to remove before re-compose.
+
+A plugin may also enrich a **core** persona through
+`contributions/agents/<agent>.md` (§6): prose fragments only, spliced into
+`<harness>/agents/<agent>.md` at `in:<H2>`, `after-preflight` or `end-of-body`,
+recorded in the contribution sidecar under the agent slug and stripped on
+disable exactly like stage fragments. The Markdown persona is what every
+harness ships and what the engine roster and Claude's native dispatch read;
+the harness-native twins some emitters transpose at build time (Codex agent
+TOMLs, OpenCode and Copilot agent files) do not receive compose-time
+fragments.
 
 On Kiro CLI, Codex, and OpenCode, a Markdown persona in the engine roster is
 available only for `mode: inline`. Native dispatch also requires a per-harness
