@@ -69,10 +69,10 @@ Regular files with configured clean filters retain raw bytes, bypassing clean fi
 
 The parked namespace is `refs/aidlc/parked/<slug>/<stamp>`, where `stamp` is UTC
 `YYYYMMDDTHHMMSSZ`, with a numeric `-N` suffix for collisions. `/head` points to
-the snapshot commit, with `/snapshot` pointing to the same commit to mark its raw
-working-tree blobs. If the checkout is already gone but its branch remains,
-`/head` instead preserves the branch tip, whose blobs are ordinary committed
-forms; no `/snapshot` ref is created. `/reviewed-source/<commit>` preserves each
+the snapshot commit with its raw working-tree blobs. If the checkout is already
+gone but its branch remains, `/head` instead preserves the branch tip, whose
+blobs are ordinary committed forms; only this branch-only park creates a
+`/branch-tip` ref pointing to the same commit. `/reviewed-source/<commit>` preserves each
 reviewed source ref. The discard JSON adds `parked_ref` (the namespace prefix,
 not its `/head` ref) and `parked_commit` (the snapshot commit or branch tip). If
 only reviewed source refs remain to park, `parked_commit` is `"-"` and no `/head`
@@ -97,12 +97,12 @@ creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
 not resume an aborted Bolt or reinstate its review authority. Parked reviewed
 source refs remain in the parked namespace, not copied back into active refs.
 
-A snapshot park (`/snapshot` present) restores its blobs byte-exact without
-running smudge/process filters. A branch-only park (no `/snapshot`) instead uses
-Git's ordinary checkout, including its filters; a required failing filter fails
-the restore with Git's error. The bare `--raw` flag bypasses checkout filters and
-writes the stored blobs byte-exact for any park, including older snapshots with
-no `/snapshot` marker. Regular-file blobs stream directly to disk rather than
+A park without `/branch-tip`, including legacy unmarked snapshots, restores its
+blobs byte-exact without running smudge/process filters. A branch-only park
+(`/branch-tip` present) instead uses Git's ordinary checkout, including its
+filters; a required failing filter fails the restore with Git's error. The bare
+`--raw` flag bypasses checkout filters and writes the stored blobs byte-exact for
+any park, including marked branch tips. Regular-file blobs stream directly to disk rather than
 being buffered in memory; only symlink targets are buffered. Raw-restored paths
 may show as modified under their own filter.
 Executable files retain their modes. Symbolic links are materialized as symlinks
@@ -112,8 +112,9 @@ Git checks it out. Submodule gitlinks become empty directories; submodule
 checkouts are not restored. Git's
 eol/`text=auto` normalization during parking is the explicit limit: CRLF bytes
 normalized at park time are not recoverable.
-A regular file with a non-UTF-8 name and an effective clean/process filter cannot
-currently be parked; discard refuses before teardown instead of altering bytes.
+A regular file with a non-UTF-8 name and a `filter`, `text`, `eol`, `ident`, or
+`working-tree-encoding` attribute (neither unspecified nor unset) cannot currently
+be parked; discard refuses before teardown instead of altering bytes.
 
 ```json
 {

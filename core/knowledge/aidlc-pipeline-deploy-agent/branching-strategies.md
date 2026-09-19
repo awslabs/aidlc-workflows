@@ -282,10 +282,10 @@ That already-discarded response has no `parked_ref` or `parked_commit` fields.
 
 Discard snapshots tracked files and non-ignored untracked files with a temporary
 index and `commit-tree`; ignored untracked files are not backed up. Before audit
-emission, it parks `/head`, the matching `/snapshot` marker, and
-`/reviewed-source/<commit>` refs below the `parked_ref` namespace. If the checkout
-is already gone but its branch remains, `/head` holds that branch tip instead,
-without a `/snapshot` marker. Only then does it remove the live checkout and
+emission, it parks `/head` and `/reviewed-source/<commit>` refs below the
+`parked_ref` namespace. If the checkout is already gone but its branch remains,
+`/head` holds that branch tip instead, with a matching `/branch-tip` marker
+created only for this branch-only park. Only then does it remove the live checkout and
 branch and compare-delete the original reviewed source refs. If only reviewed
 refs remain, `parked_commit` is `"-"`; there is no `/head` to restore.
 
@@ -302,12 +302,13 @@ It does not resume the aborted lifecycle or restore active review authority.
 Its JSON is `{restored: true, slug, parked_ref, worktree_path, branch,
 reviewed_source_refs, raw_bytes}` with `materialized` added only in raw mode.
 `reviewed_source_refs` counts retained parked reviewed refs, which are not copied into the active namespace.
-`raw_bytes: true` means byte-exact materialization: `/snapshot` is present or the
-bare `--raw` flag was supplied. It bypasses smudge/process filters and streams
+`raw_bytes: true` means byte-exact materialization: `/branch-tip` is absent or the
+bare `--raw` flag was supplied. Unmarked legacy snapshots therefore restore raw
+by default. This mode bypasses smudge/process filters and streams
 regular-file blobs directly to disk; only symlink targets are buffered.
 `materialized` counts regular files plus symbolic links written, excluding submodule gitlinks.
-Without `/snapshot` or `--raw`, branch-only parks restore through Git's ordinary
-checkout, applying filters, and report `raw_bytes: false`. A required failing
+With `/branch-tip` present and no `--raw`, branch-only parks restore through Git's
+ordinary checkout, applying filters, and report `raw_bytes: false`. A required failing
 filter fails the restore with Git's message; `--raw` bypasses filters after any
 remaining restore checkout and branch have been removed.
 
@@ -317,8 +318,9 @@ bytes are the link target, exactly as Git checks it out.
 Raw-restored filtered paths may appear modified under their own filter. Submodule
 gitlinks become empty directories, not restored submodule checkouts. Git's
 eol/`text=auto` normalization during parking remains a limit: normalized CRLF
-bytes cannot be recovered. A regular file with a non-UTF-8 name and an effective
-clean/process filter cannot currently be parked; discard refuses before teardown.
+bytes cannot be recovered. A regular file with a non-UTF-8 name and a `filter`,
+`text`, `eol`, `ident`, or `working-tree-encoding` attribute (neither unspecified
+nor unset) cannot currently be parked; discard refuses before teardown.
 
 `{{INVOKE}} engine worktree purge --slug <bolt-slug> [--parked <stamp>]
 [--repo <name>]` compare-deletes all matching parked refs (all stamps for the

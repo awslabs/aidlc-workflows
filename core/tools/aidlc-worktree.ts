@@ -2864,7 +2864,7 @@ function parkAttempt(
       if (nonUtf8Paths.length > 0) {
         // String-based attribute/hash helpers cannot address these filenames.
         // Ask Git with the original NUL-terminated bytes before trusting add's blobs.
-        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "filter", "text", "eol"], {
+        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "filter", "text", "eol", "ident", "working-tree-encoding"], {
           cwd: wtPath,
           env: { ...process.env, ...env },
           stdin: Buffer.concat(nonUtf8Paths),
@@ -2911,7 +2911,7 @@ function parkAttempt(
     commit = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
   }
   if (commit !== "-") requireGit(["update-ref", `${ref}/head`, commit, ""]);
-  if (dirExists) requireGit(["update-ref", `${ref}/snapshot`, commit, ""]);
+  if (!dirExists && branchExists) requireGit(["update-ref", `${ref}/branch-tip`, commit, ""]);
   // Copy every source ref before audit/removal. Originals remain intact if any
   // copy fails; their compare-and-delete runs only after successful teardown.
   for (const source of retained) {
@@ -3193,9 +3193,9 @@ function handleRestore(args: string[]): void {
   if (existsSync(wtPath) || runGit(["rev-parse", "--verify", `refs/heads/${branch}`], repoCwd).ok) {
     errorWithSlug(slug, `already restored at ${wtPath}`);
   }
-  const raw = args.includes("--raw") || runGit(["rev-parse", "--verify", `${parkedRef}/snapshot`], repoCwd).ok;
-  // Snapshot blobs hold working-tree bytes; branch-only heads hold ordinary
-  // committed blobs and need Git's checkout conversions unless --raw is explicit.
+  const raw = args.includes("--raw") || !runGit(["rev-parse", "--verify", `${parkedRef}/branch-tip`], repoCwd).ok;
+  // Unmarked heads include legacy snapshots and hold working-tree bytes.
+  // Only marked branch tips need Git's checkout conversions unless --raw is explicit.
   const added = runGit(["worktree", "add", ...(raw ? ["--no-checkout"] : []), "-b", branch, wtPath, head.oid], repoCwd);
   if (!added.ok) {
     errorWithSlug(slug, `git worktree add failed: ${added.stderr.trim() || `exit ${added.code}`}${raw ? "" : "; --raw bypasses checkout filters"}`);
