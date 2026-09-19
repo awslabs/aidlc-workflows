@@ -81,6 +81,7 @@ import {
   generateKiroIdeSeed,
   inspectKiroIdeChatSurfaceDocument,
   KIRO_IDE_BIN,
+  kiroIdeMissingBinaryReason,
   launchKiroIde,
   pageTarget,
   prepareKiroIdeChat,
@@ -406,14 +407,7 @@ function skipReason(): string | null {
       "(%LOCALAPPDATA%\\Programs\\Kiro\\Kiro.exe)"
     );
   }
-  if (!existsSync(KIRO_IDE_BIN)) {
-    return (
-      `Kiro IDE binary not found at ${KIRO_IDE_BIN}; expected ` +
-      "/Applications/Kiro.app/Contents/MacOS/Electron on macOS or " +
-      "%LOCALAPPDATA%\\Programs\\Kiro\\Kiro.exe on Windows " +
-      "(override with AIDLC_KIRO_IDE_BIN)"
-    );
-  }
+  if (!existsSync(KIRO_IDE_BIN)) return kiroIdeMissingBinaryReason();
   if (SEED_OVERRIDE && !existsSync(SEED_OVERRIDE)) {
     return `AIDLC_KIRO_IDE_SEED set but path does not exist: ${SEED_OVERRIDE}`;
   }

@@ -33,12 +33,50 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { platform } from "node:os";
 import { join } from "node:path";
 
+/**
+ * The macOS executable inside Kiro.app, newest naming FIRST.
+ *
+ * Kiro renamed it from the stock Electron name to `Kiro` (1.1.14 declares
+ * CFBundleExecutable = Kiro). The old single-path default silently stopped
+ * resolving, and because every Kiro IDE gate treats a missing binary as a SKIP
+ * REASON, the whole live journey skipped while the file still reported PASS.
+ * That is the failure mode the test policy warns about: a skip is an unmet gate,
+ * not coverage. Probing both names keeps the gate honest across Kiro versions,
+ * and `kiroIdeMissingBinaryReason` below reports every path tried so the next
+ * rename says so out loud instead of disappearing.
+ */
+const MACOS_KIRO_IDE_BINS = [
+  "/Applications/Kiro.app/Contents/MacOS/Kiro",
+  "/Applications/Kiro.app/Contents/MacOS/Electron",
+] as const;
+
+function windowsKiroIdeBin(): string {
+  return join(process.env.LOCALAPPDATA ?? "", "Programs", "Kiro", "Kiro.exe");
+}
+
+/** Every path the default would accept on this platform, in preference order. */
+export function kiroIdeBinCandidates(): readonly string[] {
+  return platform() === "win32" ? [windowsKiroIdeBin()] : MACOS_KIRO_IDE_BINS;
+}
+
 /** Default launch binary; override via AIDLC_KIRO_IDE_BIN (mirrors AIDLC_CODEX_BIN). */
-const DEFAULT_KIRO_IDE_BIN =
-  platform() === "win32"
-    ? join(process.env.LOCALAPPDATA ?? "", "Programs", "Kiro", "Kiro.exe")
-    : "/Applications/Kiro.app/Contents/MacOS/Electron";
-export const KIRO_IDE_BIN = process.env.AIDLC_KIRO_IDE_BIN ?? DEFAULT_KIRO_IDE_BIN;
+function defaultKiroIdeBin(): string {
+  const candidates = kiroIdeBinCandidates();
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
+export const KIRO_IDE_BIN = process.env.AIDLC_KIRO_IDE_BIN ?? defaultKiroIdeBin();
+
+/** The skip sentence for a missing binary, naming every path that was tried. */
+export function kiroIdeMissingBinaryReason(bin: string = KIRO_IDE_BIN): string {
+  const tried = process.env.AIDLC_KIRO_IDE_BIN
+    ? `AIDLC_KIRO_IDE_BIN=${bin}`
+    : kiroIdeBinCandidates().join(" or ");
+  return (
+    `Kiro IDE binary not found (tried ${tried}); install Kiro or point ` +
+    "AIDLC_KIRO_IDE_BIN at its executable"
+  );
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
