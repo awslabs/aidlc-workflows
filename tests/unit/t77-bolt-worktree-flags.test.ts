@@ -488,6 +488,8 @@ describe("t77 — abort", () => {
     expect(r.out).toContain('"discarded":false');
     const parsed = JSON.parse(r.out.trim());
     expect(parsed.discarded).toBe(false);
+    expect(parsed.reason).toBe("preserve test");
+    expect(parsed).not.toHaveProperty("restore_hint");
   });
 
   test("default abort (no --discard) preserves the worktree directory [.sh T28]", () => {
@@ -495,10 +497,14 @@ describe("t77 — abort", () => {
     const wtDir = join(proj, ".aidlc", "worktrees", "bolt-exp-pres");
     mkdirSync(wtDir, { recursive: true });
     writeFileSync(join(wtDir, "file.txt"), "marker");
-    runBolt([
+    const aborted = runBolt([
       "abort", "--name", "Pres", "--slug", "exp-pres",
       "--reason", "default-pres test", "--project-dir", proj,
     ]);
+    expect(aborted.status, aborted.out).toBe(0);
+    const parsed = JSON.parse(aborted.out);
+    expect(parsed.reason).toBe("default-pres test");
+    expect(parsed).not.toHaveProperty("restore_hint");
     // Worktree directory survives a default abort (no --discard).
     expect(existsSync(wtDir)).toBe(true);
   });

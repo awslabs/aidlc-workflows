@@ -60,7 +60,7 @@ must not write both fields.
 
 ## Recoverable discard, restore, and purge
 
-`{{INVOKE}} engine worktree discard --slug <slug>` parks the working-tree
+`{{INVOKE}} engine worktree discard --slug <slug>` sets aside the working-tree
 snapshot and reviewed source refs before emitting `WORKTREE_DISCARDED`, then
 removes the live checkout and branch and compare-deletes the original reviewed
 source refs. A temporary Git index and `commit-tree` capture tracked files and
@@ -79,19 +79,50 @@ reviewed source ref. The discard JSON adds `parked_ref` (the namespace prefix,
 not its `/head` ref) and `parked_commit` (the snapshot commit or branch tip). If
 only reviewed source refs remain to park, `parked_commit` is `"-"` and no `/head`
 exists to restore.
-The already-discarded response is unchanged and has neither field. Successful
-`bolt abort` JSON includes `parked_ref`, or `null` when no parking result exists;
-the abort arguments and human-consent requirement are unchanged.
+The already-discarded response is unchanged and has neither field.
 
-### Restore a parked attempt
+Successful `bolt abort` JSON echoes the supplied `--reason` text in `reason`
+and includes `parked_ref`, or `null` when no parking result exists. A non-null
+`parked_ref` additionally includes `restore_hint` (the `worktree restore`
+command rendered with this install's own tool prefix) and the exact
+`parked_excludes` array `["ignored files", "eol/text=auto normalization"]`.
+Both additional fields are absent when `parked_ref` is `null`. A result for an
+attempt that was set aside looks like:
+
+```json
+{
+  "emitted": "BOLT_FAILED",
+  "reason": "stale review recovery exhausted",
+  "failed_bolt": "Onboarding Wizard",
+  "slug": "onboarding-wizard",
+  "discarded": true,
+  "parked_ref": "refs/aidlc/parked/onboarding-wizard/20260918T123456Z",
+  "restore_hint": "{{INVOKE}} engine worktree restore --slug onboarding-wizard",
+  "parked_excludes": ["ignored files", "eol/text=auto normalization"]
+}
+```
+
+`restore_hint` selects the latest saved attempt for the slug; use
+`--parked <stamp>` to recover the exact stamp in `parked_ref`. The audit
+`BOLT_FAILED` field remains `Reason: aborted`;
+only the success JSON reason echoes the caller's text. Abort arguments and the
+human-consent requirement are unchanged. In spoken text, call this attempt
+**set aside**, not deleted or completed; on a later restore request, run
+`{{INVOKE}} engine worktree restore --slug <slug>` and announce the returned
+`worktree_path` plainly.
+
+### Restore a set-aside attempt
 
 ```
-{{INVOKE}} engine worktree restore --slug <slug> [--parked <stamp>] [--raw] [--repo <name>] [--intent <intent>] [--space <space>]
+{{INVOKE}} engine worktree restore --slug <slug> [--parked <stamp>] [--raw] [--repo <name|.>] [--intent <intent>] [--space <space>]
 ```
 
 Without `--parked`, restore selects the latest parked `/head`, ordering timestamp
 suffixes numerically (`-10` is newer than `-2`). With it, restore selects that
-exact stamp. Use `--repo` for the repository holding the parked refs and the
+exact stamp. If the slug exists in several repositories, `--repo <name>` selects
+an existing sibling Git repository and `--repo .` selects the project root.
+These explicit restore/purge selectors work independently of the current
+intent's repo list; live create/discard selector behavior is unchanged. Use the
 intent/space selectors when needed to resolve workspace context. Restore
 creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
 `restore/bolt-<slug>-<stamp>`, never reusing or changing the live
@@ -121,7 +152,15 @@ eol/`text=auto` normalization during parking is the explicit limit: CRLF bytes
 normalized at park time are not recoverable.
 A regular file with a non-UTF-8 name and a `filter`, `text`, `eol`, `ident`, or
 `working-tree-encoding` attribute (neither unspecified nor unset) cannot currently
-be parked; discard refuses before teardown instead of altering bytes.
+be parked; discard refuses before teardown with the attribute-specific message:
+
+```text
+cannot park file with a non-UTF-8 name and a content-transforming attribute (<attr>=<value>): <name>; rename the file or unset its <attr> attribute
+```
+
+The live attempt remains intact. Names without these attributes can be saved
+normally. The `ignored files` exclusion means ignored untracked files, not
+tracked files that happen to match an ignore pattern.
 
 ```json
 {
@@ -159,14 +198,21 @@ any remaining restore checkout and its `restore/bolt-<slug>-<stamp>` branch.
 ### Purge parked refs
 
 ```
-{{INVOKE}} engine worktree purge --slug <slug> [--parked <stamp>] [--repo <name>]
+{{INVOKE}} engine worktree purge --slug <slug> [--parked <stamp> | --older-than <days>] [--repo <name|.>]
 ```
 
-Purge compare-deletes all parked refs for the slug, or just the selected stamp
-when `--parked` is supplied. It refuses if any corresponding restored checkout
-still exists; remove that checkout explicitly before purging its recovery refs.
-It never removes the live Bolt checkout or branch. The JSON reports the number
-of refs deleted, not the number of snapshots:
+Purge compare-deletes all parked refs for the slug, just the selected stamp
+when `--parked` is supplied, or only attempts strictly older than the
+`--older-than <days>` threshold. Days must be nonnegative and finite; fractions
+are accepted. The timestamp is the UTC `YYYYMMDDTHHMMSSZ` part of the stamp,
+independent of any `-N` collision suffix and of commit dates. An attempt exactly
+at the age threshold is retained. `--older-than` and `--parked` are mutually
+exclusive.
+
+Purge refuses if any corresponding restored checkout still exists or is
+registered with Git, including a moved checkout; remove that checkout explicitly
+before purging its recovery refs. It never removes the live Bolt checkout or
+branch. The JSON reports the number of refs deleted, not the number of snapshots:
 
 ```json
 {
@@ -177,6 +223,34 @@ of refs deleted, not the number of snapshots:
 ```
 
 Restore and purge emit no new audit events; the Worktree taxonomy stays at seven.
+
+### Doctor inventory
+
+Doctor shows a **Parked attempts** informational section in ordinary and verbose
+reports, omitted when no saved `/head` entries exist. These entries are neither
+warnings nor failures. Each reports its slug, exact stamp, age in days, mode
+(`snapshot`, `branch-tip`, or `legacy` according to the marker refs), whether its
+canonical `.aidlc/restored/bolt-<slug>-<stamp>` checkout exists, and exact rendered
+restore and purge commands with `--parked <stamp>`. Commands add `--repo <name>`
+or `--repo .` only when needed to disambiguate repositories sharing the slug.
+The `legacy` inventory mode does not classify the commit identity; restore
+performs that distinction when invoked. A checkout moved elsewhere may not
+appear as restored in this inventory, but purge still checks Git worktree
+registrations and refuses to delete its refs.
+
+The public doctor's JSON exposes `data.parked_attempts`, an array of objects:
+
+| Field | Meaning |
+|---|---|
+| `slug`, `stamp` | Exact Bolt identifier and saved namespace stamp |
+| `age_days` | Whole elapsed UTC days from the stamp, ignoring `-N`; future stamps show `0`, and invalid calendar timestamps show `null` (`unknown` in text) |
+| `mode` | `snapshot`, `branch-tip`, or `legacy` from marker presence |
+| `repo` | Sibling repository name, or `null` for the project root |
+| `restored_path`, `restored_exists` | Canonical restore path and whether it exists |
+| `restore_command`, `purge_command` | Rendered commands for this exact stamp and repository |
+
+The rounded display age is informational; purge compares the timestamp against
+the exact `--older-than` threshold rather than rounding the elapsed age.
 
 ## Stderr error messages
 

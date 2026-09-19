@@ -63,6 +63,7 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeFileAtomic,
+  REPO_NAME_REGEX,
 } from "./aidlc-lib.js";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
@@ -2979,8 +2980,9 @@ function parkAttempt(
           if (valueEnd === -1) throw new Error("invalid parked path attributes");
           const value = attrs.stdout.subarray(attrEnd + 1, valueEnd).toString();
           if (value !== "unspecified" && value !== "unset") {
+            const attribute = attrs.stdout.subarray(pathEnd + 1, attrEnd).toString();
             const path = attrs.stdout.subarray(start, pathEnd);
-            throw new Error(`cannot park filtered file with a non-UTF-8 name: ${JSON.stringify(path.toString("latin1"))}; rename it or remove its filter`);
+            throw new Error(`cannot park file with a non-UTF-8 name and a content-transforming attribute (${attribute}=${value}): ${JSON.stringify(path.toString("latin1"))}; rename the file or unset its ${attribute} attribute`);
           }
           start = valueEnd + 1;
         }
@@ -3008,9 +3010,6 @@ function parkAttempt(
           start = valueEnd + 1;
           if (value.equals(unspecified) || value.equals(unset)) continue;
           const path = pathBytes.toString();
-          if (!Buffer.from(path).equals(pathBytes)) {
-            throw new Error(`cannot park encoded file with a non-UTF-8 name: ${JSON.stringify(pathBytes.toString("latin1"))}; rename it or remove its working-tree-encoding attribute`);
-          }
           const indexed = requireGit(["ls-files", "-s", "-z", "--", path], wtPath, env);
           const mode = indexed.slice(0, indexed.indexOf(" "));
           if (!/^100(?:644|755)$/.test(mode)) {
@@ -3069,6 +3068,9 @@ function handleDiscard(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
+  if (flags.repo !== undefined && !isValidRepoName(flags.repo)) {
+    errorWithSlug(slug, `Invalid --repo "${flags.repo}": a repo name must be a single path segment matching ${REPO_NAME_REGEX}.`);
+  }
   const intentWasExplicit =
     flags.intent !== undefined || flags.space !== undefined;
   const recorded = recordedWorktreeSelector(pd, slug);
@@ -3236,16 +3238,28 @@ function parkedRepoCwd(
   flags: Record<string, string>,
   slug: string,
 ): string {
-  if (flags.repo !== undefined) return resolveRepoCwd(pd, flags, slug);
   const creationRows = allWorktreeAuditRows(pd).rows.filter(
     (row) =>
       row.event === "WORKTREE_CREATED" &&
       auditBlockField(row.block, "Bolt slug") === slug,
   );
   const candidates = worktreeRepoCandidates(pd, creationRows);
+  if (flags.repo !== undefined) {
+    const repo = flags.repo === "." ? null : flags.repo;
+    if (repo !== null && (!isValidRepoName(repo) || !candidates.has(repoSelectorKey(repo)))) {
+      errorWithSlug(slug, `Invalid --repo "${flags.repo}": no matching recovery repository; use . for the project root or an existing sibling Git repository name.`);
+    }
+    const cwd = repo === null ? pd : repoDir(pd, repo);
+    const root = runGit(["rev-parse", "--show-toplevel"], cwd);
+    if (!existsSync(join(cwd, ".git")) || !root.ok || pathKey(root.stdout.trim()) !== pathKey(cwd)) {
+      errorWithSlug(slug, `Invalid --repo "${flags.repo}": no Git repository at ${cwd}.`);
+    }
+    return cwd;
+  }
   const parkedRepos: { cwd: string; repo: string | null }[] = [];
   for (const repo of candidates.values()) {
     const cwd = repo === null ? pd : repoDir(pd, repo);
+    if (!existsSync(join(cwd, ".git"))) continue;
     const listed = runGit(
       ["for-each-ref", "--format=%(refname)", `refs/aidlc/parked/${slug}/`],
       cwd,
@@ -3257,13 +3271,13 @@ function parkedRepoCwd(
   }
   if (parkedRepos.length > 1) {
     const labels = parkedRepos
-      .map(({ repo }) => repoSelectorLabel(repo))
+      .map(({ repo }) => repo ?? ".")
       .sort()
       .map((value) => JSON.stringify(value))
       .join(", ");
     errorWithSlug(
       slug,
-      `parked attempts for slug ${slug} exist in several repositories (${labels}); pass --repo <name>`,
+      `parked attempts for slug ${slug} exist in several repositories (${labels}); pass --repo <name> or --repo . for the project root`,
     );
   }
   return parkedRepos[0].cwd;
@@ -3453,11 +3467,29 @@ function handlePurge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   validateParkedStamp(flags.parked);
+  let cutoff: number | undefined;
+  if (flags["older-than"] !== undefined) {
+    if (flags.parked !== undefined) error("--older-than and --parked are mutually exclusive.");
+    const days = Number(flags["older-than"]);
+    if (!flags["older-than"].trim() || !Number.isFinite(days) || days < 0) {
+      error("Invalid --older-than: expected a non-negative finite number of days.");
+    }
+    cutoff = Date.now() - days * 86_400_000;
+  }
   const pd = resolveProjectDir(projectDir);
   const repoCwd = parkedRepoCwd(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
-  const refs = parkedSourceRefs(repoCwd, slug).filter(({ ref }) =>
-    flags.parked === undefined || parkedStamp(ref) === flags.parked);
+  const refs = parkedSourceRefs(repoCwd, slug).filter(({ ref }) => {
+    const stamp = parkedStamp(ref);
+    if (flags.parked !== undefined && stamp !== flags.parked) return false;
+    if (cutoff === undefined) return true;
+    if (!PARKED_STAMP_RE.test(stamp)) return false;
+    const timestamp = Date.parse(stamp.slice(0, 16).replace(
+      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
+      "$1-$2-$3T$4:$5:$6Z",
+    ));
+    return timestamp < cutoff;
+  });
   const stamps = [...new Set(refs.map(({ ref }) => parkedStamp(ref)))].sort((a, b) =>
     a.localeCompare(b, "en", { numeric: true }));
   const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);

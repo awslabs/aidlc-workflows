@@ -191,8 +191,8 @@ interface DoctorResult {
 }
 
 /** `bun UTIL doctor --project-dir <proj>` captured 2>&1, exit code swallowed. */
-function runDoctor(proj: string): DoctorResult {
-  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
+function runDoctor(proj: string, args: string[] = ["--verbose"]): DoctorResult {
+  const res = spawnSync(BUN, [UTIL, "doctor", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env: { ...process.env },
   });
@@ -202,6 +202,24 @@ function runDoctor(proj: string): DoctorResult {
   };
 }
 
+function git(proj: string, ...args: string[]): void {
+  const result = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+}
+
+function initRepo(proj: string): void {
+  mkdirSync(proj, { recursive: true });
+  git(proj, "init", "-q");
+  git(proj, "-c", "user.name=Doctor fixture", "-c", "user.email=doctor@example.test",
+    "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture");
+}
+
+function parkHead(proj: string, slug: string, stamp: string, mode: "snapshot" | "branch-tip" | "legacy"): void {
+  const prefix = `refs/aidlc/parked/${slug}/${stamp}`;
+  git(proj, "update-ref", `${prefix}/head`, "HEAD");
+  if (mode !== "legacy") git(proj, "update-ref", `${prefix}/${mode}`, "HEAD");
+}
+
 describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated from t83-doctor-orphan-worktree.sh, plan 16)", () => {
   test("1: fail-clean on no-worktrees — all three orphan checks render 0 observed", () => {
     const proj = freshProject();
@@ -209,6 +227,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     expect(out).toContain("Orphan worktrees: 0 observed");
     expect(out).toContain("Orphan state files: 0 observed");
     expect(out).toContain("Orphan audit: 0 observed");
+    expect(out).not.toContain("Parked attempts");
   }, 30000);
 
   test("2: active fork (slug in Bolt Refs) does not flag as orphan", () => {
@@ -548,5 +567,114 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     // Both phrases the .sh grepped land on the Check-4 advisory label.
     expect(out).toContain("unknown Reason");
     expect(out).toContain("track for follow-up");
+  }, 30000);
+});
+
+describe("t83 doctor parked attempts", () => {
+  test("an empty repository omits the human section and exposes an empty JSON inventory", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    expect(runDoctor(proj, []).out).not.toContain("Parked attempts");
+    expect(JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts).toEqual([]);
+  }, 30000);
+
+  test("a parked snapshot lists exact recovery commands without changing health severity", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    const baseline = JSON.parse(runDoctor(proj, ["--json"]).out);
+    const stamp = "20240101T000000Z-2";
+    parkHead(proj, "saved", stamp, "snapshot");
+    // Retained source refs without /head are not restorable attempts.
+    git(proj, "update-ref", "refs/aidlc/parked/headless/20240101T000000Z/source", "HEAD");
+    const earliestAge = Math.floor((Date.now() - Date.UTC(2024, 0, 1)) / 86_400_000);
+    const result = JSON.parse(runDoctor(proj, ["--json"]).out);
+    const latestAge = Math.floor((Date.now() - Date.UTC(2024, 0, 1)) / 86_400_000);
+    expect(result.code).toBe(baseline.code);
+    expect(result.data.failed).toBe(baseline.data.failed);
+    expect(result.data.warnings).toBe(baseline.data.warnings);
+    expect(result.data.parked_attempts).toHaveLength(1);
+    const attempt = result.data.parked_attempts[0];
+    expect(attempt).toMatchObject({
+      slug: "saved", stamp, mode: "snapshot", repo: null, restored_exists: false,
+      restored_path: join(proj, ".aidlc", "restored", `bolt-saved-${stamp}`),
+      restore_command: `bun .claude/tools/aidlc-worktree.ts restore --slug saved --parked ${stamp}`,
+      purge_command: `bun .claude/tools/aidlc-worktree.ts purge --slug saved --parked ${stamp}`,
+    });
+    expect(attempt.age_days).toBeGreaterThanOrEqual(earliestAge);
+    expect(attempt.age_days).toBeLessThanOrEqual(latestAge);
+    const { out } = runDoctor(proj, []);
+    expect(out).toContain("Parked attempts");
+    expect(out).toContain(`saved / ${stamp}`);
+    expect(out).toMatch(/age \d+ days, mode snapshot/);
+    expect(out).toContain("restored checkout: absent");
+    expect(out).toContain(attempt.restore_command);
+    expect(out).toContain(attempt.purge_command);
+  }, 30000);
+
+  test("same-slug root and sibling attempts retain modes, restored presence, and repository selectors", () => {
+    const proj = freshProject();
+    const sibling = join(proj, "api");
+    initRepo(proj);
+    initRepo(sibling);
+    const rootStamp = "20240101T000000Z";
+    const siblingStamp = "20240102T000000Z";
+    parkHead(proj, "shared", rootStamp, "branch-tip");
+    parkHead(sibling, "shared", siblingStamp, "legacy");
+    const restored = join(proj, ".aidlc", "restored", `bolt-shared-${siblingStamp}`);
+    mkdirSync(restored, { recursive: true });
+    const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(attempts).toEqual([
+      expect.objectContaining({
+        slug: "shared", stamp: rootStamp, mode: "branch-tip", repo: null, restored_exists: false,
+        restore_command: `bun .claude/tools/aidlc-worktree.ts restore --slug shared --parked ${rootStamp} --repo .`,
+        purge_command: `bun .claude/tools/aidlc-worktree.ts purge --slug shared --parked ${rootStamp} --repo .`,
+      }),
+      expect.objectContaining({
+        slug: "shared", stamp: siblingStamp, mode: "legacy", repo: "api", restored_exists: true,
+        restored_path: restored,
+        restore_command: `bun .claude/tools/aidlc-worktree.ts restore --slug shared --parked ${siblingStamp} --repo api`,
+        purge_command: `bun .claude/tools/aidlc-worktree.ts purge --slug shared --parked ${siblingStamp} --repo api`,
+      }),
+    ]);
+    const { out } = runDoctor(proj, []);
+    expect(out).toContain("mode branch-tip");
+    expect(out).toContain("mode legacy");
+    expect(out).toContain(`restored checkout: present - ${restored}`);
+  }, 30000);
+
+  test("audit-only historical records discover excluded repos without treating ordinary children as repositories", () => {
+    const proj = freshProject();
+    const recordedRepo = join(proj, "node_modules");
+    initRepo(proj);
+    initRepo(recordedRepo);
+    mkdirSync(join(proj, "ordinary"));
+    const stamp = "20240101T000000Z";
+    parkHead(recordedRepo, "historical", stamp, "snapshot");
+    parkHead(proj, "root-only", stamp, "branch-tip");
+    const historicalAudit = join(proj, "aidlc", "spaces", "history", "intents", "old-record", "audit");
+    mkdirSync(historicalAudit, { recursive: true });
+    writeFileSync(join(historicalAudit, "history.md"), [
+      ["historical", "node_modules"],
+      ["root-only", "ordinary"],
+    ].map(([slug, repo]) => [
+      "## Worktree Created",
+      "**Timestamp**: 2024-01-01T00:00:00Z",
+      "**Event**: WORKTREE_CREATED",
+      `**Bolt slug**: ${slug}`,
+      `**Repo**: ${repo}`,
+      "\n---\n",
+    ].join("\n")).join("\n"));
+    const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(attempts).toEqual([
+      expect.objectContaining({
+        slug: "historical", repo: "node_modules", mode: "snapshot",
+        restore_command: `bun .claude/tools/aidlc-worktree.ts restore --slug historical --parked ${stamp}`,
+        purge_command: `bun .claude/tools/aidlc-worktree.ts purge --slug historical --parked ${stamp}`,
+      }),
+      expect.objectContaining({
+        slug: "root-only", repo: null, mode: "branch-tip",
+        restore_command: `bun .claude/tools/aidlc-worktree.ts restore --slug root-only --parked ${stamp}`,
+      }),
+    ]);
   }, 30000);
 });

@@ -9,7 +9,6 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
-  aidlcToolInvocation,
   resolveHarnessPath,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
@@ -22509,9 +22508,10 @@ export function evaluateGuardRefusal(
       op: "abort-bolt",
       action:
         `Halt and ask the human whether to restart autonomous Unit ` +
-        `"${input.autonomousBolt.unit}". On approval, abort and park (discard) the old ` +
-        `attempt, restorable with \`${aidlcToolInvocation("worktree")} restore --slug ${slug}\`, ` +
-        `then rerun the current prepare step in${batch} so a fresh ` +
+        `"${input.autonomousBolt.unit}". On approval, execute the returned abort ` +
+        "command unchanged. After success, use the post-discard SAY line in " +
+        "stage-protocol-construction.md under Halt-and-ask on failure, then " +
+        `rerun the current prepare step in${batch} so a fresh ` +
         "BOLT_STARTED boundary creates a new review allowance.",
       ...guardOperation({ kind: "abort-bolt", unit: input.autonomousBolt.unit, slug }),
       requiresHuman: true,

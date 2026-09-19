@@ -337,6 +337,22 @@ with `{{INVOKE}} engine worktree restore --slug <slug>` in an isolated restored
 checkout; restoring files does not resume the aborted Bolt or revive its review
 authority.
 
+**After a successful discard.** Only after the `--discard` abort succeeds and
+confirms the attempt was parked, and before starting the replacement attempt,
+use the following SAY line. Fill `[reason]` from the returned `reason` in plain
+project terms. Use `On your go-ahead I` only when the human selected the remedy;
+use `I` when no human remedy choice was involved (including an automatic
+loop-back). Do not announce a saved snapshot if the abort failed or did not
+park an attempt.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because [reason], and I'm starting a new attempt. I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings. If you want the previous attempt back, ask me to restore it."
+
+If the human later asks for that attempt back, run
+`{{INVOKE}} engine worktree restore --slug <slug>` with the saved attempt's slug.
+After restoration succeeds, announce the returned restored path plainly:
+**SAY:** "I restored the previous attempt at [returned restored path]."
+This does not resume the old attempt or make its review current.
+
 The orchestrator runs `{{INVOKE}} engine worktree info --slug <slug>` to obtain the worktree `<path>` and `<branch_name>` deterministically before composing the halt-and-ask question. See `SKILL.md` § "Halt-and-ask failure handling" for the full tool-call sequence and the `worktree-info-schema.md` knowledge file for the JSON contract.
 
 ```question

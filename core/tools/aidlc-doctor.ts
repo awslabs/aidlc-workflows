@@ -272,6 +272,15 @@ function humanReport(
       : ""
   }`, out)}\n`;
   output += renderSection(project, findingRows);
+  if (report.parked_attempts.length > 0) {
+    output += `\n${heading("Parked attempts", out)}\n`;
+    for (const attempt of report.parked_attempts) {
+      output += `  ${okVerdict("ok   ", out)} ${attempt.slug} / ${attempt.stamp} (repo ${attempt.repo ?? "."}, age ${attempt.age_days ?? "unknown"} days, mode ${attempt.mode})\n`;
+      output += `        restored checkout: ${attempt.restored_exists ? "present" : "absent"} - ${attempt.restored_path}\n`;
+      output += `        restore: ${attempt.restore_command}\n`;
+      output += `        purge: ${attempt.purge_command}\n`;
+    }
+  }
   output += `\n${heading("Framework integrity", out)}\n`;
   output += renderSection(framework);
   const visibleWarnings = report.warnings + findings.length;

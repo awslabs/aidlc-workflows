@@ -27,6 +27,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
+| A Bolt attempt was set aside | Ask to restore its files, or run `aidlc engine worktree restore --slug <slug>`; see [getting the files back](#a-bolt-attempt-was-set-aside--getting-the-files-back) |
 
 ---
 
@@ -271,6 +272,62 @@ the checks it overrode, and writes a receipt bound to the plan content and stage
 attempt only. The typed phrase is single-use. The conductor never proposes or
 initiates this; if you did not type the phrase, the command refuses with "Plan
 Approval override is human-only".
+
+---
+
+## A Bolt attempt was set aside — getting the files back
+
+A recovery can set aside an attempt when its reviewed files changed again and
+its one allowed re-review was already used. The recovery abort's `--discard`
+saves tracked files, non-ignored untracked files, and reviewed source refs in
+local Git before removing the old checkout and branch, so a fresh attempt can
+start. An ordinary Abort without `--discard` leaves the checkout in place.
+The assistant tells you why it set the attempt aside and offers to restore it;
+the abort result also includes the original `reason` and a `restore_hint`.
+
+Ask to restore the attempt's files, or run this from the main project checkout:
+
+```bash
+aidlc engine worktree restore --slug <slug>
+```
+
+For a Bun-based copy install, use
+`bun .claude/tools/aidlc-worktree.ts restore --slug <slug>` instead, substituting
+your harness directory. Restore chooses the latest saved attempt; add
+`--parked <stamp>` for a particular one. If the slug exists in several
+repositories, use doctor's exact command with `--repo <name>` or `--repo .`
+for the project root.
+
+Open the returned `worktree_path`, normally
+`.aidlc/restored/bolt-<slug>-<stamp>`. It is separate from any new live attempt;
+restoring files does not resume the old attempt or make its review current.
+This is local recovery, not a remote backup. If the old checkout was already
+gone, only its remaining branch tip and review evidence could be saved.
+
+**Limits:** ignored untracked files are not saved (tracked files remain included).
+Git's `eol/text=auto` normalization may change line endings while saving; the
+original normalized bytes cannot be recovered, even with `--raw`. The
+`parked_excludes` result records these limits. Snapshots restore stored blobs
+directly; branch tips use ordinary checkout conversions unless `--raw` is given.
+See the [restore command reference](12-cli-commands.md#aidlc-engine-worktree-restore--recover-files-from-a-set-aside-attempt)
+for filter failures and raw recovery details.
+
+Run `/aidlc --doctor` (or `aidlc doctor`) to find saved attempts. Its informational
+**Parked attempts** section lists slug, stamp, age, mode, restored-checkout
+presence, and exact restore/purge commands. Saved attempts are not warnings or
+failures. Once you no longer need one, remove its restored checkout first, then:
+
+```bash
+aidlc engine worktree purge --slug <slug> --parked <stamp>
+aidlc engine worktree purge --slug <slug> --older-than 30
+```
+
+Purge without either selector removes every saved stamp for the slug.
+`--older-than` accepts nonnegative finite days and selects strictly older UTC
+stamp timestamps, ignoring any `-N` suffix. It cannot be combined with
+`--parked`. Purge refuses while a selected restored checkout exists, even if
+moved; it never removes a live Bolt checkout. Use the same Bun tool prefix for
+copy installs. See the [purge reference](12-cli-commands.md#aidlc-engine-worktree-purge--remove-recovery-refs).
 
 ---
 

@@ -75,6 +75,8 @@ diagnostic and lifecycle routes.
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
+| `aidlc engine worktree restore --slug <slug> [--parked <stamp>] [--raw]` | Recover files from a set-aside Bolt attempt in a separate checkout |
+| `aidlc engine worktree purge --slug <slug> [--parked <stamp> \| --older-than <days>]` | Remove selected local recovery refs once their restored checkouts are gone |
 
 ---
 
@@ -689,6 +691,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Pending approval | When the current stage has waited at an organic approval gate for more than 24 hours, identifies it as waiting for a human rather than stuck and points to `/aidlc --status` (advisory - never fails) |
 | Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-subagent-inflight`. Fresh entries are advisory; stale or malformed entries fail with exact removal guidance. Silent when absent |
+| Set-aside Bolt attempts | Informational list of saved attempts: slug, stamp, age in days, mode (`snapshot`, `branch-tip`, or `legacy`), restored checkout existence, and exact restore/purge commands. These entries are neither warnings nor failures |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
 | Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph. Plugin-owned files name `plugin sync`; other authored stages name `aidlc-graph.ts compile` (advisory, never fails) |
@@ -1619,6 +1622,92 @@ recovery.
 Legacy protected-choice mediation, overrides, and unsupported harnesses use the
 single-Unit flow; per-Unit approval remains mandatory in either presentation.
 See [Construction Execution](../reference/03-orchestrator.md#construction-execution).
+
+### `aidlc engine worktree restore` — recover files from a set-aside attempt
+
+Run from the main project checkout:
+
+```bash
+aidlc engine worktree restore --slug <slug> [--parked <stamp>] [--raw] [--repo <name|.>] [--intent <intent>] [--space <space>]
+```
+
+This recovers files saved by `worktree discard` or an authorized
+`bolt abort --discard`. Without `--parked`, it selects the latest saved `/head`
+for the slug; with it, it selects that exact stamp. Stamps are UTC
+`YYYYMMDDTHHMMSSZ` with an optional numeric `-N` collision suffix, ordered
+numerically for latest selection (`-10` follows `-2`). If the slug exists in
+several repositories, `--repo <name>` selects an existing sibling Git repository
+and `--repo .` selects the project root. Restore and purge resolve this explicit
+selector independently of the current intent's repo list; this does not change
+the selectors for live worktree create/discard commands. Use `--intent` /
+`--space` when needed to resolve workspace context.
+
+Restore creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
+`restore/bolt-<slug>-<stamp>`. It never touches a live
+`.aidlc/worktrees/bolt-<slug>` checkout or `bolt-<slug>` branch, resumes the
+aborted lifecycle, or reinstates review authority. If the restore path or branch
+already exists, it refuses rather than overwriting it. Recovery refs containing
+only reviewed source evidence, with no `/head`, cannot restore a checkout.
+
+| Selection | Behavior |
+|-----------|----------|
+| Bare `--raw` | Write stored blobs byte-for-byte, overriding markers and legacy classification; `restore_mode` is `raw-requested` |
+| `/snapshot` marker | Write stored working-tree blobs byte-for-byte; `restore_mode` is `snapshot` |
+| `/branch-tip` marker | Use Git's ordinary checkout, including filters and encoding conversions; `restore_mode` is `branch-tip` |
+| No marker (legacy) | Recognize the tool-authored snapshot commit identity; use raw bytes for `legacy-snapshot`, ordinary checkout for `legacy-branch-tip` |
+
+Selection follows the table's order. Raw materialization bypasses smudge/process
+filters and `working-tree-encoding`; it does not reverse earlier
+`eol/text=auto` normalization or recover ignored untracked files. Raw-restored
+paths may show as modified under their own filters. Executable modes are
+preserved. Symlinks follow `core.symlinks`; raw submodule gitlinks become empty
+directories, not restored submodule checkouts. A required failing checkout
+filter fails an ordinary restore. Before retrying with `--raw`, explicitly
+remove any remaining restore checkout and its restore branch; a failed raw
+restore leaves its partial checkout in place and reports its path.
+
+Success JSON includes `restored: true`, `slug`, `parked_ref`, `worktree_path`,
+`branch`, `reviewed_source_refs`, `raw_bytes`, and `restore_mode`.
+`reviewed_source_refs` counts retained recovery evidence, not reactivated refs.
+`materialized` appears only when `raw_bytes` is `true` and counts regular files
+plus symlinks, excluding submodule gitlinks. Open the returned `worktree_path`
+to inspect or copy the files you need.
+
+For a Bun-based copy install, replace `aidlc engine worktree` with
+`bun .claude/tools/aidlc-worktree.ts`, substituting your harness directory for
+`.claude`. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside--getting-the-files-back)
+for the recovery walkthrough and [State Machine](../reference/12-state-machine.md)
+for the snapshot contract.
+
+### `aidlc engine worktree purge` — remove recovery refs
+
+```bash
+aidlc engine worktree purge --slug <slug> [--parked <stamp> | --older-than <days>] [--repo <name|.>]
+```
+
+Purge compare-deletes local recovery refs, including snapshot/branch-tip markers
+and reviewed source refs. With no selector it removes all saved stamps for the
+slug; `--parked <stamp>` selects one exact stamp. `--older-than <days>` accepts
+nonnegative finite days, including fractions, and selects only stamps strictly
+older than that threshold. Age is computed from the UTC `YYYYMMDDTHHMMSSZ`
+portion of the stamp, ignoring any `-N` collision suffix; commit dates do not
+affect it. `--parked` and `--older-than` cannot be combined.
+
+Purge refuses while any selected attempt has a restored checkout, including a
+checkout moved elsewhere. Remove that checkout explicitly first. It never
+removes a live Bolt checkout or branch. Success JSON is
+`{purged: <number-of-refs>, slug, stamps: [...]}`; the count is refs, not attempts.
+Restore and purge add no audit events.
+
+`/aidlc --doctor` and `aidlc doctor` show a **Parked attempts** informational
+section when saved `/head` entries exist, in both ordinary and verbose output.
+Each entry includes slug, exact stamp, age in days, mode (`snapshot`,
+`branch-tip`, or `legacy`), canonical restored checkout existence, and rendered
+restore/purge commands. Commands include `--parked <stamp>` and, when the slug
+exists in several repositories, `--repo <name>` or `--repo .`. A moved checkout
+may not show as restored in doctor, but purge still checks its Git registration.
+These entries do not produce warnings or failures. Use the copy-install prefix
+documented for restore when running purge without the native command.
 
 ### `aidlc engine workspace codekb` - resolve the code knowledge directory
 

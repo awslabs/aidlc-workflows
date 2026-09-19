@@ -71,7 +71,7 @@ import {
   writeStateFile,
   VERIFICATION_COMMAND_RECOVERY,
 } from "./aidlc-lib.js";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   askConstructionCheckpoint,
   approveConstructionCheckpoint,
@@ -886,11 +886,15 @@ function handleAbort(args: string[]): void {
   console.log(
     JSON.stringify({
       emitted: "BOLT_FAILED",
-      reason: "aborted",
+      reason: flags.reason,
       failed_bolt: flags.name,
       slug: flags.slug,
       discarded: useDiscard,
       parked_ref: parkedRef,
+      ...(parkedRef === null ? {} : {
+        restore_hint: `${aidlcToolInvocation("worktree")} restore --slug ${flags.slug}`,
+        parked_excludes: ["ignored files", "eol/text=auto normalization"],
+      }),
     })
   );
 }

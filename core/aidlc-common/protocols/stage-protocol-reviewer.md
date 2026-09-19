@@ -353,6 +353,20 @@ re-checked.`).
 > source refs before removing the live checkout and branch. Recover the parked
 > work with `{{INVOKE}} engine worktree restore --slug <slug>`; restoration uses
 > a separate checkout and does not reinstate the old review authority.
+>
+> **After a successful retry discard.** After the `--discard` abort succeeds and
+> confirms the old attempt was parked, but before rerunning `prepare`, use this
+> SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+> use `I`, never implying a human remedy choice that did not happen. Do not
+> announce a saved snapshot if the abort failed or did not park an attempt.
+>
+> **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings. If you want the previous attempt back, ask me to restore it."
+>
+> If the human later asks for that attempt back, run
+> `{{INVOKE}} engine worktree restore --slug <slug>` with the saved attempt's slug.
+> After restoration succeeds, announce the returned restored path plainly:
+> **SAY:** "I restored the previous attempt at [returned restored path]."
+> Restoration does not resume the old attempt or make its review current.
 
 ### What the reviewer does NOT do
 

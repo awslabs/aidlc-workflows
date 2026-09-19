@@ -754,13 +754,19 @@ Audit-of-intent semantics apply to side-effects whose outcome cannot be checked 
 | `AUDIT_FORKED`, `AUDIT_MERGED` | `tools/aidlc-audit.ts` | Audit emit, then `mkdir -p` + `copyFileSync` of main audit or `appendFileSync` of worktree-audit delta to main audit |
 | `MERGE_DISPATCH_INVOKED` | `tools/aidlc-bolt.ts` `dispatch-event` | Audit emit, then `Task(aidlc-pipeline-deploy-agent, ...)` LLM dispatch — the side-effect is the LLM call itself; success is observed via the matching `MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK` post-call emit |
 
-Discard snapshots tracked and untracked, non-ignored working-tree content with a
+Discard sets aside tracked and untracked, non-ignored working-tree content with a
 temporary Git index and `commit-tree`. Regular files with configured clean filters
-or `working-tree-encoding` retain raw bytes, bypassing those transformations. A regular file whose name is not valid
-UTF-8 and carries a `filter`, `text`, `eol`, `ident`, or `working-tree-encoding`
-attribute (neither unspecified nor unset) cannot be parked: discard refuses before removing anything, leaving the
-live attempt intact rather than parking altered bytes; rename the file or remove
-its attributes to proceed. Such names without these attributes park normally.
+or `working-tree-encoding` retain raw bytes, bypassing those transformations. A
+regular file whose name is not valid UTF-8 and carries a `filter`, `text`, `eol`,
+`ident`, or `working-tree-encoding` attribute (neither unspecified nor unset)
+cannot be parked. Discard refuses before teardown, leaving the live attempt
+intact, with this attribute-specific message:
+
+```text
+cannot park file with a non-UTF-8 name and a content-transforming attribute (<attr>=<value>): <name>; rename the file or unset its <attr> attribute
+```
+
+Such names without these attributes can be saved normally.
 All parked copies must exist before
 `WORKTREE_DISCARDED` can be emitted; if parking or audit emission fails, teardown
 does not start. The row's `Parked ref` names
@@ -786,11 +792,43 @@ for byte-exact materialization and `false` for ordinary Git checkout;
 `materialized` counts regular files and symlinks only in raw mode and is absent
 for ordinary checkout. Raw-restored filtered paths may show as modified
 under their own filter. Submodule gitlinks become empty directories;
-submodule checkouts are not restored. Git's eol/`text=auto` normalization during
-parking is the explicit limit: CRLF bytes normalized at park time are not
-recoverable. `worktree purge` explicitly removes all parked refs, including the
-`/snapshot` or `/branch-tip` marker. Neither command
-adds an audit event, and neither repurposes the live Bolt path or branch.
+submodule checkouts are not restored. Ignored untracked files are not backed up;
+tracked files matching ignore patterns remain included. Git's eol/`text=auto`
+normalization during parking is the other explicit exclusion: CRLF bytes
+normalized at park time are not recoverable, even with `--raw`.
+
+`aidlc engine worktree purge --slug <slug> [--parked <stamp> | --older-than <days>]`
+explicitly removes matching parked refs, including `/head`, `/snapshot` or
+`/branch-tip`, and reviewed source refs. Without a selector it removes all stamps
+for the slug; `--parked` selects one exact stamp. `--older-than` accepts
+nonnegative finite days, including fractions, and selects only attempts strictly
+older than the threshold. The age comes from the UTC `YYYYMMDDTHHMMSSZ` timestamp
+in the stamp, independent of any `-N` collision suffix and of commit dates; an
+attempt exactly at the threshold is retained. `--parked` and `--older-than` are
+mutually exclusive. Purge refuses while a corresponding restored checkout exists
+or is registered with Git, including moved checkouts. Restore and purge accept
+`--repo <name>` for an existing sibling Git repository or `--repo .` for the
+project root, independently of the current intent's repo list. Neither command
+adds an audit event or repurposes the live Bolt path or branch.
+
+Successful `bolt abort` JSON echoes the supplied `--reason` in `reason`; its
+audit row still records `Reason: aborted`. The success result includes
+`parked_ref`, or `null` if no recovery namespace was saved. A non-null
+`parked_ref` also produces `restore_hint`, rendered by
+`aidlcToolInvocation("worktree") + " restore --slug " + slug`, and the exact
+`parked_excludes: ["ignored files", "eol/text=auto normalization"]`. Those two
+fields are absent otherwise. The hint uses the native or source invocation
+prefix for the installed channel. This changes no abort arguments, command
+admission, or human-consent requirement. Restoring files later never revives the
+aborted lifecycle or its review authority.
+
+Doctor lists saved `/head` entries informationally, with slug, exact stamp, age
+in days, marker mode (`snapshot`, `branch-tip`, or `legacy`), canonical restored
+checkout existence, and exact rendered restore/purge commands using
+`--parked <stamp>` and any needed repository selector. These entries are neither
+warnings nor failures. `legacy` in this inventory leaves commit-identity
+classification to restore. A moved checkout may not appear as restored in the
+inventory, but purge still checks its Git registration.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
 

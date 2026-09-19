@@ -111,6 +111,7 @@ import {
   defaultScopeResolution,
   DEFAULT_SPACE,
   detectLeakedLocks,
+  discoverSiblingRepos,
   documentInputRequestFilePath,
   DOCUMENT_INPUT_REQUEST_FILE,
   docsDir,
@@ -144,6 +145,7 @@ import {
   RESERVED_RECORD_NAMES,
   scopePathCovered,
   gridCostSummary,
+  listIntentDirs,
   listIntents,
   listSpaces,
   ARCHIVED_INTENT_STATUS,
@@ -179,6 +181,7 @@ import {
   recordHookDrop,
   readCurrentSessionId,
   readProjectDescriptionAuthority,
+  repoDir,
   resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
@@ -2519,12 +2522,113 @@ export type DoctorCheck = {
   fix?: string;
 };
 
+type DoctorParkedAttempt = {
+  slug: string;
+  stamp: string;
+  age_days: number | null;
+  mode: "snapshot" | "branch-tip" | "legacy";
+  repo: string | null;
+  restored_path: string;
+  restored_exists: boolean;
+  restore_command: string;
+  purge_command: string;
+};
+
 export type DoctorReport = {
   checks: DoctorCheck[];
   passed: number;
   warnings: number;
   failed: number;
+  parked_attempts: DoctorParkedAttempt[];
 };
+
+// Keep this read-only inventory aligned with worktreeRepoCandidates/parkedRepoCwd
+// without importing the worktree CLI (which initializes process-scoped state).
+function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
+  const candidates = new Map<string | null, Set<string> | null>([[null, null]]);
+  for (const repo of discoverSiblingRepos(projectDir)) {
+    if (isValidRepoName(repo)) candidates.set(repo, null);
+  }
+  for (const { name: space } of listSpaces(projectDir)) {
+    const intents = new Set(listIntentDirs(projectDir, space));
+    try {
+      for (const entry of readdirSync(intentsDir(projectDir, space), { withFileTypes: true })) {
+        if (entry.isDirectory() && existsSync(join(intentsDir(projectDir, space), entry.name, "audit"))) {
+          intents.add(entry.name);
+        }
+      }
+    } catch {
+      // Missing records must not hide recoverable refs in discovered repositories.
+    }
+    for (const intent of [undefined, ...[...intents].sort()]) {
+      for (const row of readAuditShardEvents(projectDir, intent, space)) {
+        if (row.event !== "WORKTREE_CREATED") continue;
+        const repo = auditBlockField(row.block, "Repo");
+        const slug = auditBlockField(row.block, "Bolt slug");
+        if (repo === null || !isValidRepoName(repo) || slug === null || validateBoltSlug(slug) !== null) continue;
+        if (candidates.get(repo) === null) continue;
+        const slugs = candidates.get(repo) ?? new Set<string>();
+        slugs.add(slug);
+        candidates.set(repo, slugs);
+      }
+    }
+  }
+
+  const listings: { repo: string | null; refs: Set<string>; slugs: Set<string> | null }[] = [];
+  const reposBySlug = new Map<string, Set<string | null>>();
+  for (const [repo, slugs] of candidates) {
+    const cwd = repo === null ? projectDir : repoDir(projectDir, repo);
+    if (!existsSync(join(cwd, ".git"))) continue;
+    const listed = spawnSync("git", ["for-each-ref", "--format=%(refname)", "refs/aidlc/parked/"], {
+      cwd,
+      encoding: "utf-8",
+    });
+    if (listed.status !== 0) continue;
+    const refs = new Set(listed.stdout.split(/\r?\n/).filter(Boolean));
+    listings.push({ repo, refs, slugs });
+    for (const ref of refs) {
+      const slug = ref.split("/")[3];
+      if (!slug || validateBoltSlug(slug) !== null || (slugs !== null && !slugs.has(slug))) continue;
+      const repos = reposBySlug.get(slug) ?? new Set<string | null>();
+      repos.add(repo);
+      reposBySlug.set(slug, repos);
+    }
+  }
+
+  const attempts: DoctorParkedAttempt[] = [];
+  const invoke = aidlcToolInvocation("worktree");
+  const now = Date.now();
+  for (const { repo, refs, slugs } of listings) {
+    for (const ref of refs) {
+      const match = /^refs\/aidlc\/parked\/([^/]+)\/(\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?)\/head$/.exec(ref);
+      if (!match) continue;
+      const [, slug, stamp] = match;
+      if (validateBoltSlug(slug) !== null || (slugs !== null && !slugs.has(slug))) continue;
+      const prefix = ref.slice(0, -"/head".length);
+      const timestamp = `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(9, 11)}:${stamp.slice(11, 13)}:${stamp.slice(13, 15)}Z`;
+      const milliseconds = Date.parse(timestamp);
+      const ageDays = Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === timestamp.replace("Z", ".000Z")
+        ? Math.max(0, Math.floor((now - milliseconds) / 86_400_000))
+        : null;
+      const restoredPath = resolve(projectDir, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
+      const selector = (reposBySlug.get(slug)?.size ?? 0) > 1 ? ` --repo ${repo ?? "."}` : "";
+      const args = `--slug ${slug} --parked ${stamp}${selector}`;
+      attempts.push({
+        slug,
+        stamp,
+        age_days: ageDays,
+        mode: refs.has(`${prefix}/snapshot`) ? "snapshot" : refs.has(`${prefix}/branch-tip`) ? "branch-tip" : "legacy",
+        repo,
+        restored_path: restoredPath,
+        restored_exists: existsSync(restoredPath),
+        restore_command: `${invoke} restore ${args}`,
+        purge_command: `${invoke} purge ${args}`,
+      });
+    }
+  }
+  return attempts.sort((a, b) => a.slug.localeCompare(b.slug) ||
+    a.stamp.localeCompare(b.stamp, "en", { numeric: true }) || (a.repo ?? "").localeCompare(b.repo ?? ""));
+}
 
 function collapseLegacyPolicyChecks(checks: readonly DoctorCheck[]): DoctorCheck[] {
   const marker = "harness.json contains legacy policy key(s)";
@@ -5410,6 +5514,9 @@ export async function collectDoctorReport(
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
+  // Retained attempts are recoverable history, not a health failure or warning.
+  const parkedAttempts = doctorParkedAttempts(projectDir);
+
   results.push(...extraChecks);
   const reportResults = collapseLegacyPolicyChecks(results);
 
@@ -5450,7 +5557,7 @@ export async function collectDoctorReport(
     });
   }
 
-  return { checks: reportResults, passed, warnings, failed };
+  return { checks: reportResults, passed, warnings, failed, parked_attempts: parkedAttempts };
 }
 
 // ---------------------------------------------------------------------------

@@ -582,6 +582,10 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         "--reason", "restart after review", "--discard",
       );
       expect(aborted.status).toBe(0);
+      const result = JSON.parse(aborted.out);
+      expect(result.reason).toBe("restart after review");
+      expect(result.restore_hint).toBe(`bun .claude/tools/aidlc-worktree.ts restore --slug ${slug}`);
+      expect(result.parked_excludes).toEqual(["ignored files", "eol/text=auto normalization"]);
       const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
       expect(parkedRef).toMatch(/^refs\/aidlc\/parked\/recoverable\/\d{8}T\d{6}Z(?:-[1-9]\d*)?$/);
       const stamp = parkedRef.split("/").at(-1)!;
@@ -661,6 +665,110 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(existsSync(join(wt, "committed.txt"))).toBe(false);
       expect(existsSync(join(wt, "untracked.bin"))).toBe(false);
     }, 30_000);
+
+    test("purge --older-than deletes only old stamps, ignoring their collision suffix", () => {
+      const proj = setupLifecycleProject();
+      const slug = "aged-parks";
+      gitInitMain(proj);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const discarded = runWorktree(proj, "discard", "--slug", slug);
+      expect(discarded.status, discarded.out).toBe(0);
+      const { parked_ref: freshRef } = JSON.parse(discarded.out) as { parked_ref: string };
+      const oldStamp = `${new Date(Date.now() - 40 * 86_400_000).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}-2`;
+      const oldRef = `refs/aidlc/parked/${slug}/${oldStamp}`;
+      for (const marker of ["head", "snapshot"]) {
+        expect(git(proj, "update-ref", `${oldRef}/${marker}`, `${freshRef}/${marker}`).status).toBe(0);
+      }
+
+      const purged = runWorktree(proj, "purge", "--slug", slug, "--older-than", "30");
+      expect(purged.status, purged.out).toBe(0);
+      expect(JSON.parse(purged.out)).toEqual({ purged: 2, slug, stamps: [oldStamp] });
+      expect(git(proj, "for-each-ref", "--format=%(refname)", `${oldRef}/`).stdout).toBe("");
+      expect(git(proj, "for-each-ref", "--format=%(refname)", `${freshRef}/`).stdout.trim().split("\n")).toEqual([
+        `${freshRef}/head`, `${freshRef}/snapshot`,
+      ]);
+      const noOldParks = runWorktree(proj, "purge", "--slug", slug, "--older-than", "30");
+      expect(noOldParks.status, noOldParks.out).toBe(0);
+      expect(JSON.parse(noOldParks.out)).toEqual({ purged: 0, slug, stamps: [] });
+    });
+
+    test("purge rejects conflicting selectors and invalid ages before deleting refs", () => {
+      const proj = setupLifecycleProject();
+      const slug = "invalid-age";
+      gitInitMain(proj);
+      const stamp = "20000101T000000Z";
+      const ref = `refs/aidlc/parked/${slug}/${stamp}/head`;
+      expect(git(proj, "update-ref", ref, "HEAD").status).toBe(0);
+      for (const args of [
+        ["--parked", stamp, "--older-than", "30"],
+        ["--older-than", "-1"],
+        ["--older-than", "NaN"],
+        ["--older-than", "Infinity"],
+        ["--older-than", ""],
+      ]) {
+        const refused = runWorktree(proj, "purge", "--slug", slug, ...args);
+        expect(refused.status, refused.out).toBe(1);
+        expect(refused.out).toContain("--older-than");
+        expect(git(proj, "show-ref", "--verify", "--quiet", ref).status).toBe(0);
+      }
+    });
+
+    test("restore and purge select historical root or sibling parks independently of the active intent", () => {
+      const proj = setupLifecycleProject();
+      const slug = "shared-history";
+      const stamp = "20260101T120000Z";
+      const ref = `refs/aidlc/parked/${slug}/${stamp}/head`;
+      writeFileSync(join(proj, "saved.txt"), "root attempt\n");
+      gitInitMain(proj);
+      const sibling = join(proj, "historical");
+      mkdirSync(sibling);
+      writeFileSync(join(sibling, "saved.txt"), "sibling attempt\n");
+      gitInitMain(sibling);
+      for (const cwd of [proj, sibling]) expect(git(cwd, "update-ref", ref, "HEAD").status).toBe(0);
+      const rosterPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
+      const roster = JSON.parse(readFileSync(rosterPath, "utf-8"));
+      roster[0].repos = ["current"];
+      writeFileSync(rosterPath, JSON.stringify(roster));
+
+      for (const operation of ["restore", "purge"]) {
+        const ambiguous = runWorktree(proj, operation, "--slug", slug);
+        expect(ambiguous.status, ambiguous.out).toBe(1);
+        expect(ambiguous.out).toContain("several repositories");
+      }
+      for (const [selector, cwd, bytes] of [
+        [".", proj, "root attempt\n"], ["historical", sibling, "sibling attempt\n"],
+      ]) {
+        const restored = runWorktree(proj, "restore", "--slug", slug, "--parked", stamp, "--repo", selector);
+        expect(restored.status, restored.out).toBe(0);
+        const { worktree_path: path } = JSON.parse(restored.out) as { worktree_path: string };
+        expect(readFileSync(join(path, "saved.txt"), "utf-8")).toBe(bytes);
+        expect(git(cwd, "worktree", "remove", "--force", path).status).toBe(0);
+        const purged = runWorktree(proj, "purge", "--slug", slug, "--parked", stamp, "--repo", selector);
+        expect(purged.status, purged.out).toBe(0);
+        expect(JSON.parse(purged.out)).toEqual({ purged: 1, slug, stamps: [stamp] });
+        expect(git(cwd, "show-ref", "--verify", "--quiet", ref).status).toBe(1);
+      }
+    });
+
+    test("recovery refuses missing or non-repository sibling selectors and live operations reject the root selector", () => {
+      const proj = setupLifecycleProject();
+      gitInitMain(proj);
+      mkdirSync(join(proj, "ordinary"));
+      const ref = "refs/aidlc/parked/missing/20000101T000000Z/head";
+      expect(git(proj, "update-ref", ref, "HEAD").status).toBe(0);
+      for (const operation of ["restore", "purge"]) {
+        for (const repo of ["missing", "ordinary", "../outside"]) {
+          const refused = runWorktree(proj, operation, "--slug", "missing", "--repo", repo);
+          expect(refused.status, refused.out).toBe(1);
+          expect(git(proj, "show-ref", "--verify", "--quiet", ref).status).toBe(0);
+        }
+      }
+      for (const operation of ["create", "discard"]) {
+        const refused = runWorktree(proj, operation, "--slug", "missing", "--base", "main", "--repo", ".");
+        expect(refused.status, refused.out).toBe(1);
+        expect(git(proj, "show-ref", "--verify", "--quiet", ref).status).toBe(0);
+      }
+    });
 
     test.skipIf(process.platform === "win32")("discard parks and restores raw filtered bytes without changing ordinary dirty files", () => {
       const proj = setupLifecycleProject();
@@ -885,6 +993,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       );
       expect(aborted.status, aborted.out).toBe(1);
       expect(aborted.out).toContain("non-UTF-8 name");
+      expect(aborted.out).toContain("content-transforming attribute (filter=lossy)");
+      expect(aborted.out).toContain("rename the file or unset its filter attribute");
       expect(existsSync(wt)).toBe(true);
       expect(git(proj, "rev-parse", "--verify", `refs/heads/bolt-${slug}`).stdout.trim()).toBe(head);
       expect(readFileSync(path)).toEqual(dirtyBytes);
@@ -915,12 +1025,44 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       );
       expect(aborted.status, aborted.out).toBe(1);
       expect(aborted.out).toContain("non-UTF-8 name");
+      expect(aborted.out).toContain("content-transforming attribute (ident=set)");
+      expect(aborted.out).toContain("rename the file or unset its ident attribute");
       expect(existsSync(wt)).toBe(true);
       expect(git(proj, "rev-parse", "--verify", `refs/heads/bolt-${slug}`).stdout.trim()).toBe(head);
       expect(readFileSync(path)).toEqual(dirtyBytes);
       expect(eventBlock(proj, "WORKTREE_DISCARDED")).toBe("");
       expect(eventBlock(proj, "BOLT_FAILED")).toBe("");
     });
+
+    for (const [attribute, value] of [["text", "auto"], ["eol", "lf"]] as const) {
+      test.skipIf(process.platform === "win32")(`discard identifies ${attribute} on a non-UTF-8 filename without removing the live attempt`, () => {
+        const proj = setupLifecycleProject();
+        const slug = `non-utf8-${attribute}`;
+        const wt = worktreeDir(proj, slug);
+        const name = Buffer.concat([Buffer.from("notes-"), Buffer.from([0xff]), Buffer.from(".txt")]);
+        writeFileSync(join(proj, ".gitattributes"), `*.txt ${attribute}=${value}\n`);
+        gitInitMain(proj);
+        const created = runWorktree(proj, "create", "--slug", slug, "--base", "main");
+        expect(created.status, created.out).toBe(0);
+        const head = git(wt, "rev-parse", "HEAD").stdout.trim();
+        const path = Buffer.concat([Buffer.from(`${wt}/`), name]);
+        const dirtyBytes = Buffer.from("line endings must survive\r\n");
+        writeFileSync(path, dirtyBytes);
+
+        const aborted = runBolt(
+          proj, "abort", "--name", "Non-UTF-8 Line Endings Bolt", "--slug", slug,
+          "--reason", "refuse to normalize the saved bytes", "--discard",
+        );
+        expect(aborted.status, aborted.out).toBe(1);
+        expect(aborted.out).toContain(`content-transforming attribute (${attribute}=${value})`);
+        expect(aborted.out).toContain(`rename the file or unset its ${attribute} attribute`);
+        expect(existsSync(wt)).toBe(true);
+        expect(git(proj, "rev-parse", "--verify", `refs/heads/bolt-${slug}`).stdout.trim()).toBe(head);
+        expect(readFileSync(path)).toEqual(dirtyBytes);
+        expect(eventBlock(proj, "WORKTREE_DISCARDED")).toBe("");
+        expect(eventBlock(proj, "BOLT_FAILED")).toBe("");
+      });
+    }
 
     test("raw restore ignores replacement refs for parked blobs", () => {
       const proj = setupLifecycleProject();
