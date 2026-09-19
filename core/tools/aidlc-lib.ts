@@ -28010,17 +28010,22 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
 // refusal naming an intent that does not exist records nothing (an append
 // there would create a phantom audit directory). The bare space record root
 // never holds a state file, so an unresolved selection also records nothing.
+// Refusals may need to name something outside the current project dir, such as
+// another checkout's path, on stderr while keeping the committed audit portable.
+export type EmitErrorMessage = string | { message: string; auditMessage: string };
+
 export function emitError(
   projectDir: string,
   tool: string,
   command: string,
-  msg: string,
+  msg: EmitErrorMessage,
   intent?: string,
   space?: string,
   changeNotices: readonly string[] = [],
 ): never {
+  const message = typeof msg === "string" ? msg : msg.message;
   const auditCommand = redactProjectDirPrefix(command, projectDir);
-  const auditMessage = redactProjectDirPrefix(msg, projectDir);
+  const auditMessage = redactProjectDirPrefix(typeof msg === "string" ? msg : msg.auditMessage, projectDir);
   if (!_errorEmitInProgress) {
     _errorEmitInProgress = true;
     try {
@@ -28076,7 +28081,7 @@ export function emitError(
   // correctly deduplicate that already-recorded acceptance. Keep the text in
   // `error` for existing consumers and expose it structurally for newer ones.
   console.error(JSON.stringify({
-    error: changeNotices.length > 0 ? `${changeNotices.join("\n")}\n${msg}` : msg,
+    error: changeNotices.length > 0 ? `${changeNotices.join("\n")}\n${message}` : message,
     ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
   }));
   process.exit(1);

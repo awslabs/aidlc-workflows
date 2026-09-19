@@ -43,6 +43,7 @@ import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
   seededAuditDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -211,6 +212,8 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
   // The refusal must name the owner so a human can tell which intent holds the Bolt.
   test("6: create is refused when another worktree already holds bolt-<slug>, naming that worktree", () => {
     const fixture = freshFixture();
+    // emitError only records ERROR_LOGGED when the record has a state file.
+    writeFileSync(seededStateFile(fixture), "- **Current Stage**: code-generation\n", "utf-8");
     const { outside } = addOutsideWorktree(fixture);
     const r1 = create(outside, outside, ["--slug", "demo", "--base", "feature-x"]);
     expect(r1.status, r1.out).toBe(0);
@@ -220,5 +223,16 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(r2.out).toContain("Branch already exists: bolt-demo");
     expect(r2.out).toContain(`checked out at ${wtPath(outside, "demo")}`);
     expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
+
+    // Stderr may name the owner in another checkout, but the committed audit
+    // shard must stay portable and must not include that checkout's absolute path.
+    const auditDir = seededAuditDir(fixture);
+    const auditText = readdirSync(auditDir)
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => readFileSync(join(auditDir, name), "utf-8"))
+      .join("\n");
+    expect(auditText).toContain("**Event**: ERROR_LOGGED");
+    expect(auditText).toContain("Branch already exists: bolt-demo (checked out in another worktree of this repository)");
+    expect(auditText).not.toContain(outside);
   }, 30000);
 });

@@ -25,6 +25,7 @@ import {
   currentSwarmSourceMergeChain,
   discoverSiblingRepos,
   emitError,
+  type EmitErrorMessage,
   errorMessage,
   filteredRawIndexEntries,
   findAllEvents,
@@ -481,11 +482,15 @@ function handleCreate(args: string[]): void {
     const owner = listed.ok
       ? worktreeCheckedOutAt(listed.stdout, `refs/heads/${branchName}`)
       : null;
+    const prefix = `Branch already exists: ${branchName}`;
+    const guidance = ". Bolt branches are shared by every worktree of this repository; finish or discard the Bolt that owns it, or rename the Unit.";
+    // The owner lives outside this project dir, so the audit row must not carry its absolute path.
     errorWithSlug(
       slug,
-      `Branch already exists: ${branchName}` +
-        (owner ? ` (checked out at ${owner})` : "") +
-        ". Bolt branches are shared by every worktree of this repository; finish or discard the Bolt that owns it, or rename the Unit.",
+      owner === null ? `${prefix}${guidance}` : {
+        message: `${prefix} (checked out at ${owner})${guidance}`,
+        auditMessage: `${prefix} (checked out in another worktree of this repository)${guidance}`,
+      },
     );
   }
 
@@ -3701,11 +3706,14 @@ export function main(argv: string[]): void {
 // prepended to the message so doctor's regex `\[slug=([a-z0-9-]+)\]` can
 // correlate the error with the affected Bolt without re-engineering
 // emitError's field set.
-function errorWithSlug(slug: string, msg: string): never {
-  error(`[slug=${slug}] ${msg}`);
+function errorWithSlug(slug: string, msg: EmitErrorMessage): never {
+  error(typeof msg === "string" ? `[slug=${slug}] ${msg}` : {
+    message: `[slug=${slug}] ${msg.message}`,
+    auditMessage: `[slug=${slug}] ${msg.auditMessage}`,
+  });
 }
 
-function error(msg: string): never {
+function error(msg: EmitErrorMessage): never {
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-worktree ${process.argv.slice(2).join(" ")}`.trim();
   emitError(pd, "aidlc-worktree", command, msg);
