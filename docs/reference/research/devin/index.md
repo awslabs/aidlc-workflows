@@ -105,7 +105,7 @@ git show 6e208f7b:docs/reference/research/devin/devin-harness-port-plan.md
 | stop-hook-read-only-probe-plan.md | DEVIN-11 |
 | testing-contract-repair-observability-plan.md | DEVIN-12 |
 
-Active (not yet folded): [pr-996-item-3-background-subagent-lifecycle-plan.md](pr-996-item-3-background-subagent-lifecycle-plan.md) — review Item 3 (DEVIN-07 background launch/terminal lifecycle); Phase-0 captures landed, implemented, regression-covered, and accepted live 2026-09-19 (`background-lifecycle-run/`); fold into DEVIN-07/14 at commitf the missing SubagentStop; fold into DEVIN-07/14 once implemented and live-accepted.
+`pr-996-item-3-background-subagent-lifecycle-plan.md` (DEVIN-07) was folded into findings 07/14 after the fix landed in `75ce0ebf`; recover it with `git show 75ce0ebf:docs/reference/research/devin/pr-996-item-3-background-subagent-lifecycle-plan.md`.
 
 `pr-996-item-2-native-dispatch-translation-plan.md` (DEVIN-07) was folded into findings 07/14 after the fix landed in `661527fa`; recover it with `git show 661527fa:docs/reference/research/devin/pr-996-item-2-native-dispatch-translation-plan.md`.
 
