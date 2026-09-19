@@ -181,6 +181,19 @@ describe("t299 (1) additive methodology resolution", () => {
     });
     expect(noSpace.methodology).toBe("tdd");
     expect(noSpace.ordering).toBe("tests first.");
+
+    const prose = resolve({
+      org: ORG,
+      team: [
+        "- **Methodology**: custom",
+        "- **Ordering**: run the suite from",
+        "  C:\\tests, then track issue:ABC-123 before implementation.",
+      ].join("\n"),
+    });
+    expect(prose.methodology).toBe("custom");
+    expect(prose.ordering).toBe(
+      "run the suite from C:\\tests, then track issue:ABC-123 before implementation.",
+    );
   });
 
   test("multi-line comments cannot affirm a methodology", () => {

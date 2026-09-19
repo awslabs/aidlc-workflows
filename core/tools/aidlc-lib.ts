@@ -28143,6 +28143,18 @@ export interface ChangeControlResolution {
   memoryStrict: ChangeControlMemoryDeclaration | null;
 }
 
+// The fields the two memory sections read through this grammar: Change Control
+// declares `Mode`; Testing Posture declares `Methodology` and `Ordering`
+// (practices-discovery keeps every other note as an additional bullet). A
+// wrapped value ends where the next of these begins, at any indentation; any
+// other `word:` inside wrapped prose (a Windows path, `issue:ABC-123`, a URL
+// scheme) is part of the value.
+const STRUCTURED_FIELD_NAMES = ["Mode", "Methodology", "Ordering"] as const;
+const STRUCTURED_FIELD_HEAD = new RegExp(
+  `^[ \\t]*(?:\\*\\*)?(?:${STRUCTURED_FIELD_NAMES.join("|")})(?:\\*\\*)?[ \\t]*:`,
+  "i",
+);
+
 // A `Field: value` line inside a memory section, with an optional list marker
 // and optional bolding around the field name. Shared with Testing Posture so
 // both memory sections read the same grammar.
@@ -28160,18 +28172,17 @@ export function structuredField(section: string, field: string): string | null {
     const parts = [match[2].trim()];
     // A wrapped value continues on lines indented deeper than its head until
     // a blank line, a line at the head's indentation or shallower (the next
-    // paragraph), a `Field:` head recognised as the reader recognises it
-    // (optional bold, one to three words, a colon with or without a space after
-    // it; a URL scheme like `scheme://` is not a field), or a line opening
-    // another block: a list item of any marker, a heading, a blockquote, a table
-    // row, or a fence. Markdown authors and formatters wrap long bullets this
-    // way; the value is the joined prose.
+    // paragraph), one of the structured fields (`Mode`, `Methodology`,
+    // `Ordering`) starting at any indentation, with or without a space after
+    // its colon, or a line opening another block: a list item of any marker,
+    // a heading, a blockquote, a table row, or a fence. Markdown authors and
+    // formatters wrap long bullets this way; the value is the joined prose.
     for (let j = i + 1; j < lines.length; j++) {
       const line = lines[j];
       const indent = (line.match(/^[ \t]*/)?.[0] ?? "").length;
       if (indent <= headIndent || !/\S/.test(line)) break;
       if (/^[ \t]*(?:[-*+][ \t]|\d+[.)][ \t]|[>#|]|```|~~~)/.test(line)) break;
-      if (/^[ \t]*(?:\*\*)?[A-Za-z][\w-]*(?:[ \t]+[\w-]+){0,2}(?:\*\*)?[ \t]*:(?!\/\/)/.test(line)) break;
+      if (STRUCTURED_FIELD_HEAD.test(line)) break;
       parts.push(line.trim());
     }
     const value = parts.filter(Boolean).join(" ");
