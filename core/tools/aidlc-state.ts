@@ -35,6 +35,7 @@ import {
   authorizedVerificationCommand,
   verificationCommandDetails,
   readVerificationCommandFile,
+  withdrawProtectedQuestions,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
   authorizedConstructionPolicyChange,
@@ -5406,6 +5407,7 @@ function handleGateStart(args: string[]): void {
   // C2b lost-update safety: validate→transition→emit-audit→write under one
   // lock (the state-precondition check and the write see one snapshot).
   withAuditLock(pd, () => {
+  withdrawProtectedQuestions(pd, "*");
   let content = readStateFile(pd);
 
   const stage = findStageBySlug(slug);

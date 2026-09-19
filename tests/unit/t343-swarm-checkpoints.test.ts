@@ -2,8 +2,8 @@
 // function:approvedConstructionUnits, function:unitSourceFingerprint, subcommand:aidlc-bolt:swarm-checkpoint,
 // function:readCommittedUnitSourceManifest, function:swarmUnitCheckpointRejections
 // covers: subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, audit:SWARM_UNIT_CONVERGED
-// covers: function:askSwarmCheckpoint, function:requireCheckpointApprovalResponse
-// covers: function:clearCheckpointApprovalChallenges
+// covers: function:askSwarmCheckpoint, function:requireProtectedResponse
+// covers: function:withdrawProtectedQuestions
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -33,8 +33,8 @@ import {
   intentRepos,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
-  readCheckpointApprovalChallenge,
-  readCheckpointApprovalResponse,
+  readProtectedQuestion,
+  readProtectedResponse,
   readCommittedUnitSourceManifest,
   readUnitSourceManifest,
   reviewArtifactFingerprint,
@@ -454,7 +454,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
     expect(asked.code).not.toBe(0);
     expect(asked.out).toContain("not ready");
-    expect(readCheckpointApprovalChallenge(pd, "t343-checkpoint")).toBeNull();
+    expect(readProtectedQuestion(pd, "t343-checkpoint")).toBeNull();
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("not ready");
     expect(gates(pd)).toHaveLength(0);
   }, 30_000);
@@ -824,7 +824,7 @@ describe("t343 response-bound swarm decisions", () => {
     for (const id of [session, "other-swarm-session"]) {
       expect(tool(pd, "bolt", [...route(id), "--action", "ask"]).code).toBe(0);
       choice(pd, id, "Approve");
-      expect(readCheckpointApprovalResponse(pd, id)?.choice).toBe("Approve");
+      expect(readProtectedResponse(pd, id)?.choice).toBe("Approve");
     }
     // Even a finalize run that declines all Units starts a new verification boundary.
     const finalized = tool(pd, "swarm", ["finalize", "--batch", "1", "--units", BATCH.join(",")]);
@@ -832,8 +832,8 @@ describe("t343 response-bound swarm decisions", () => {
     const after = resolveSwarmCheckpoint(pd, 1, BATCH);
     expect(after).toMatchObject({ ready: true, fingerprint: before.fingerprint });
     for (const id of [session, "other-swarm-session"]) {
-      expect(readCheckpointApprovalChallenge(pd, id)).toBeNull();
-      expect(readCheckpointApprovalResponse(pd, id)).toBeNull();
+      expect(readProtectedQuestion(pd, id)).toBeNull();
+      expect(readProtectedResponse(pd, id)).toBeNull();
       choice(pd, id, "Approve");
       expect(tool(pd, "bolt", [...route(id), "--action", "approve", "--user-input", "Approve"]).code).not.toBe(0);
     }
@@ -881,8 +881,8 @@ describe("t343 response-bound swarm decisions", () => {
     const accepted = approve();
     expect(accepted.code, accepted.out).toBe(0);
     expect(JSON.parse(accepted.stdout).approved).toBe(true);
-    expect(readCheckpointApprovalChallenge(pd, session)).toBeNull();
-    expect(readCheckpointApprovalResponse(pd, session)).toBeNull();
+    expect(readProtectedQuestion(pd, session)).toBeNull();
+    expect(readProtectedResponse(pd, session)).toBeNull();
     choice(pd, session, "hello");
     expect(approve().code).not.toBe(0);
     expect(gates(pd)).toHaveLength(1);
@@ -925,7 +925,49 @@ describe("t343 response-bound swarm decisions", () => {
     choice(pd, session, "Request Changes");
     const rejected = reject();
     expect(rejected.code, rejected.out).toBe(0);
-    expect(readCheckpointApprovalResponse(pd, session)).toBeNull();
+    expect(readProtectedResponse(pd, session)).toBeNull();
     expect(gates(pd, "GATE_REJECTED").map((row) => auditBlockField(row.block, "Unit"))).toEqual(BATCH);
+  }, 30_000);
+});
+
+describe("t343 checkpoint question interleaving", () => {
+  test.each(["ordinary-question", "lifecycle-gate"])("%s withdraws batch consent before an unrelated Approve", (interleaving) => {
+    const pd = fixture();
+    if (interleaving === "lifecycle-gate") {
+      writeFileSync(seededStateFile(pd), readFileSync(seededStateFile(pd), "utf-8").replace(
+        "## Stage Progress", "## Stage Progress\n### INCEPTION PHASE\n- [-] delivery-planning — EXECUTE",
+      ));
+    }
+    converge(pd);
+    const session = "swarm-interleaving";
+    const route = ["swarm-checkpoint", "--batch", "1", "--units", BATCH.join(","), "--session", session];
+    const ask = () => {
+      const asked = tool(pd, "bolt", [...route, "--action", "ask"]);
+      expect(asked.code, asked.out).toBe(0);
+    };
+    ask();
+    if (interleaving === "ordinary-question") {
+      const decision = tool(pd, "log", ["decision", "--stage", STAGE, "--decision", "Approve the unrelated naming proposal?", "--session", session]);
+      expect(decision.code, decision.out).toBe(0);
+    } else {
+      const gate = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc-state.ts"), "gate-start", "delivery-planning", "--project-dir", pd], {
+        cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+      });
+      expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(0);
+      expect(readAuditShardEvents(pd).some((row) => row.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(row.block, "Stage") === "delivery-planning")).toBe(true);
+    }
+    choice(pd, session, "Approve");
+    expect(readProtectedQuestion(pd, session)).toBeNull();
+    expect(readProtectedResponse(pd, session)).toBeNull();
+    const approve = () => tool(pd, "bolt", [...route, "--action", "approve", "--user-input", "Approve"]);
+    const refused = approve();
+    expect(refused.code, refused.out).not.toBe(0);
+    expect(refused.out).toContain("--action ask");
+    expect(gates(pd)).toEqual([]);
+    ask();
+    choice(pd, session, "Approve");
+    const accepted = approve();
+    expect(accepted.code, accepted.out).toBe(0);
+    expect(gates(pd)).toHaveLength(1);
   }, 30_000);
 });

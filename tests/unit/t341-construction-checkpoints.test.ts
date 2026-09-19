@@ -2,11 +2,11 @@
 // function:verifyConstructionCheckpoint, function:approveConstructionCheckpoint,
 // function:rejectConstructionCheckpoint, audit:GATE_APPROVED, audit:GATE_REJECTED
 // covers: function:authorizedVerificationCommand, function:verificationCommandDetails, audit:VERIFICATION_COMMAND_RECORDED, subcommand:aidlc-state:set-construction-verification-command
-// covers: function:recordVerificationCommandHumanResponse, hook:aidlc-record-human-turn
+// covers: function:recordProtectedHumanResponse, hook:aidlc-record-human-turn
 // covers: audit:CHECKPOINT_VERIFICATION_RECORDED
 // covers: function:readVerificationCommandFile
-// covers: function:askConstructionCheckpoint, function:recordCheckpointApprovalHumanResponse, function:mintProtectedChallenge
-// covers: function:clearCheckpointApprovalChallenges
+// covers: function:askConstructionCheckpoint, function:mintProtectedQuestion
+// covers: function:withdrawProtectedQuestions, function:protectedTargetDigest, function:requireProtectedResponse
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
@@ -30,19 +30,24 @@ import {
   artifactFilename,
   auditBlockField,
   humanActedSinceGate,
-  readConstructionPolicyChallenge,
-  readConstructionPolicyResponse,
-  readCheckpointApprovalChallenge,
-  readCheckpointApprovalResponse,
-  writeCheckpointApprovalChallenge,
-  writeCheckpointApprovalResponse,
+  readProtectedQuestion,
+  readProtectedResponse,
+  writeProtectedResponse,
+  mintProtectedQuestion,
+  protectedQuestionRelativePath,
+  protectedTargetDigest,
+  requireProtectedResponse,
+  readPlanApprovalChallenge,
+  readPlanApprovalResponse,
+  writePlanApprovalChallenge,
+  writePlanApprovalResponse,
+  planApprovalChallengeRelativePath,
+  resolveSessionIdFromAncestry,
+  type PlanApprovalRuntimeChallenge,
   findStageBySlug,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
   readUnitSourceManifest,
-  readVerificationCommandChallenge,
-  readVerificationCommandResponse,
-  writeVerificationCommandResponse,
   reviewArtifactFingerprint,
   setField,
   unitMajorConstructionStageSlugs,
@@ -696,8 +701,8 @@ describe("t341 verification command consent", () => {
       const decision = cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
       expect(decision.code, decision.out).toBe(0);
       submitCommandChoice(dir, session, choice);
-      const challenge = readVerificationCommandChallenge(dir, session);
-      const response = readVerificationCommandResponse(dir, session);
+      const challenge = readProtectedQuestion(dir, session);
+      const response = readProtectedResponse(dir, session);
       expect(challenge).not.toBeNull();
       expect(response?.choice).toBe(choice);
       const shard = seededAuditShard(dir);
@@ -712,14 +717,14 @@ describe("t341 verification command consent", () => {
         fs.chmodSync(shard, 0o644);
       }
       expect(readFileSync(shard, "utf-8")).toBe(before);
-      expect(readVerificationCommandChallenge(dir, session)).toEqual(challenge);
-      expect(readVerificationCommandResponse(dir, session)).toEqual(response);
+      expect(readProtectedQuestion(dir, session)).toEqual(challenge);
+      expect(readProtectedResponse(dir, session)).toEqual(response);
       const retry = cli(dir, "log", answer);
       expect(retry.code, retry.out).toBe(0);
       const event = choice === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
       expect(JSON.parse(retry.out).emitted).toBe(event);
-      expect(readVerificationCommandChallenge(dir, session)).toBeNull();
-      expect(readVerificationCommandResponse(dir, session)).toBeNull();
+      expect(readProtectedQuestion(dir, session)).toBeNull();
+      expect(readProtectedResponse(dir, session)).toBeNull();
       expect(cli(dir, "log", answer).code).not.toBe(0);
       const receipts = readAuditShardEvents(dir).filter((row) => row.event === event);
       expect(receipts).toHaveLength(1);
@@ -823,7 +828,6 @@ describe("t341 verification command consent", () => {
     const answer = ["answer", ...identity, "--session", "t341-session-B", "--details", "Approve"];
     const refused = cli(dir, "log", answer, env);
     expect(refused.code).not.toBe(0);
-    expect(refused.out).toContain("this prompt and session");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
     submitCommandChoice(dir, "t341-session-B", "Approve", env);
     expect(cli(dir, "log", answer, env).code).toBe(0);
@@ -838,10 +842,10 @@ describe("t341 verification command consent", () => {
     const answer = ["answer", ...identity, "--details", "Approve"];
     expect(cli(dir, "log", decision, env).code).toBe(0);
     submitCommandChoice(dir, "t341-command", "Approve", env);
-    const previous = readVerificationCommandResponse(dir, "t341-command")!;
+    const previous = readProtectedResponse(dir, "t341-command")!;
     expect(cli(dir, "log", decision, env).code).toBe(0);
     expect(cli(dir, "log", answer, env).code).not.toBe(0);
-    writeVerificationCommandResponse(dir, previous);
+    writeProtectedResponse(dir, previous);
     expect(cli(dir, "log", answer, env).code).not.toBe(0);
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
     submitCommandChoice(dir, "t341-command", "Approve", env);
@@ -1022,7 +1026,8 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     const dir = project(true);
     expect(pass(dir, "skeleton").human_required).toBe(true);
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("exact");
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow("human");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow();
+    expect(approvals(dir)).toEqual([]);
     human(dir, "skeleton");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "approve", "t341-checkpoint")).toThrow("exact");
     const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
@@ -1099,7 +1104,8 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     approveConstructionCheckpoint(dir, "alpha", "unit");
     pass(dir, "unit", "beta");
     approveConstructionCheckpoint(dir, "beta", "unit");
-    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow("human");
+    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow();
+    expect(readAuditShardEvents(dir).filter((entry) => entry.event === "GATE_REJECTED")).toEqual([]);
     human(dir, "unit", "Request Changes");
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request changes", "Fix alpha", "t341-checkpoint")).toThrow("exact");
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", " ", "t341-checkpoint")).toThrow("reason");
@@ -1203,22 +1209,22 @@ describe("t341 response-bound checkpoint decisions", () => {
       expect(cli(pd, "bolt", [...route("unit", id), "--action", "ask"], env).code).toBe(0);
       submitCommandChoice(pd, id, "Approve", env);
     }
-    const previous = readCheckpointApprovalChallenge(pd, session)!;
-    const response = readCheckpointApprovalResponse(pd, session)!;
+    const previous = readProtectedQuestion(pd, session)!;
+    const response = readProtectedResponse(pd, session)!;
     const checked = verifyConstructionCheckpoint(pd, "alpha", "unit");
     expect(checked.verified).toBe(true);
     expect(checked.fingerprint).toBe(first.fingerprint);
     expect(checked.verification!.id).not.toBe(first.verification!.id);
     for (const id of [session, "another-checkpoint-session"]) {
-      expect(readCheckpointApprovalChallenge(pd, id)).toBeNull();
-      expect(readCheckpointApprovalResponse(pd, id)).toBeNull();
+      expect(readProtectedQuestion(pd, id)).toBeNull();
+      expect(readProtectedResponse(pd, id)).toBeNull();
       submitCommandChoice(pd, id, "Approve", env);
-      expect(readCheckpointApprovalResponse(pd, id)).toBeNull();
+      expect(readProtectedResponse(pd, id)).toBeNull();
       expect(cli(pd, "bolt", [...route("unit", id), "--action", "approve", "--user-input", "Approve"], env).code).not.toBe(0);
     }
     // Restoring the retired mailbox cannot turn the old proof into current consent.
-    writeCheckpointApprovalChallenge(pd, previous);
-    writeCheckpointApprovalResponse(pd, response);
+    writeFileSync(join(pd, protectedQuestionRelativePath(pd, session)), JSON.stringify(previous));
+    writeProtectedResponse(pd, response);
     expect(cli(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"], env).code).not.toBe(0);
     expect(approvals(pd)).toEqual([]);
     expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).toBe(0);
@@ -1232,9 +1238,9 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).toBe(0);
     writeCheck(pd, "process.exit(1);\n");
     expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(false);
-    expect(readCheckpointApprovalChallenge(pd, session)).toBeNull();
+    expect(readProtectedQuestion(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "Approve", env);
-    expect(readCheckpointApprovalResponse(pd, session)).toBeNull();
+    expect(readProtectedResponse(pd, session)).toBeNull();
     expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).not.toBe(0);
   }, 30_000);
 
@@ -1257,8 +1263,8 @@ describe("t341 response-bound checkpoint decisions", () => {
     const approved = decide();
     expect(approved.code, approved.out).toBe(0);
     expect(JSON.parse(approved.out).approved).toBe(true);
-    expect(readCheckpointApprovalChallenge(pd, session)).toBeNull();
-    expect(readCheckpointApprovalResponse(pd, session)).toBeNull();
+    expect(readProtectedQuestion(pd, session)).toBeNull();
+    expect(readProtectedResponse(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "hello", env);
     expect(decide().code).not.toBe(0);
     expect(approvals(pd)).toHaveLength(1);
@@ -1274,9 +1280,9 @@ describe("t341 response-bound checkpoint decisions", () => {
     const approve = () => cli(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"], env);
     ask();
     submitCommandChoice(pd, session, "Approve", env);
-    const old = readCheckpointApprovalResponse(pd, session)!;
+    const old = readProtectedResponse(pd, session)!;
     ask();
-    writeCheckpointApprovalResponse(pd, old);
+    writeProtectedResponse(pd, old);
     expect(approve().code).not.toBe(0);
     submitCommandChoice(pd, session, "Approve", env);
     writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
@@ -1310,7 +1316,7 @@ describe("t341 response-bound checkpoint decisions", () => {
     }
     expect(approvals(pd)).toEqual([]);
     expect(approveConstructionCheckpoint(pd, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
-    expect(readCheckpointApprovalResponse(pd, "t341-checkpoint")).toBeNull();
+    expect(readProtectedResponse(pd, "t341-checkpoint")).toBeNull();
   }, 30_000);
 
   test("presence bypass never replaces a response and rejection requires its own choice", () => {
@@ -1327,7 +1333,7 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(reject().code).not.toBe(0);
     submitCommandChoice(pd, session, "Request Changes", env);
     expect(reject().code).toBe(0);
-    expect(readCheckpointApprovalResponse(pd, session)).toBeNull();
+    expect(readProtectedResponse(pd, session)).toBeNull();
     expect(readAuditShardEvents(pd).filter((row) => row.event === "GATE_REJECTED")).toHaveLength(1);
   }, 30_000);
 
@@ -1342,13 +1348,10 @@ describe("t341 response-bound checkpoint decisions", () => {
       if (identity === first) submitCommandChoice(pd, session, "Approve", env);
     }
     const activePolicy = order === "verification-first";
-    expect(readVerificationCommandChallenge(pd, session) !== null).toBe(!activePolicy);
-    expect(readConstructionPolicyChallenge(pd, session) !== null).toBe(activePolicy);
-    expect(readVerificationCommandResponse(pd, session)).toBeNull();
-    expect(readConstructionPolicyResponse(pd, session)).toBeNull();
+    expect(readProtectedQuestion(pd, session)?.kind).toBe(activePolicy ? "construction-policy" : "verification-command");
+    expect(readProtectedResponse(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "Approve", env);
-    expect(readVerificationCommandResponse(pd, session) !== null).toBe(!activePolicy);
-    expect(readConstructionPolicyResponse(pd, session) !== null).toBe(activePolicy);
+    expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
     const answer = (identity: string[]) => cli(pd, "log", ["answer", ...identity, "--details", "Approve"], env);
     // Try the retired question both before and after consuming the active one.
     expect(answer(first).code).not.toBe(0);
@@ -1358,5 +1361,164 @@ describe("t341 response-bound checkpoint decisions", () => {
     const receipts = readAuditShardEvents(pd).filter((row) => ["VERIFICATION_COMMAND_RECORDED", "CONSTRUCTION_POLICY_RECORDED"].includes(row.event));
     expect(receipts.map((row) => row.event)).toEqual([activePolicy ? "CONSTRUCTION_POLICY_RECORDED" : "VERIFICATION_COMMAND_RECORDED"]);
     expect(humanActedSinceGate(pd)).toBe(false);
+  }, 30_000);
+});
+
+describe("t341 protected question interleaving", () => {
+  const session = "protected-interleaving";
+  const env = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" };
+  const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "bun test", "--session", session];
+  const prompt = "Use this exact verification command?";
+  const ask = (pd: string) => {
+    const result = cli(pd, "log", ["decision", ...identity, "--decision", prompt, "--options", "Approve,Request Changes"], env);
+    expect(result.code, result.out).toBe(0);
+    return JSON.parse(result.out) as { challengeFile: string; challengeId: string };
+  };
+  const answer = (pd: string) => cli(pd, "log", ["answer", ...identity, "--details", "Approve"], env);
+  const receipts = (pd: string) => readAuditShardEvents(pd).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED");
+
+  test.each(["same-session", "unknown-session", "lifecycle-gate"])("%s withdraws the pending question before an unrelated Approve", (interleaving) => {
+    const pd = project();
+    if (interleaving === "lifecycle-gate") {
+      writeFileSync(seededStateFile(pd), readFileSync(seededStateFile(pd), "utf-8").replace(
+        "## Stage Progress", "## Stage Progress\n### INCEPTION PHASE\n- [-] delivery-planning — EXECUTE",
+      ));
+    }
+    ask(pd);
+    // An unrelated session's consent is retained only when the new question has
+    // a known owner. A gate or unresolved owner retires every session's mailbox.
+    const other = mintProtectedQuestion(pd, { kind: "verification-command", session: "other", target: { commandSha256: "a".repeat(64) } });
+    submitCommandChoice(pd, "other", "Approve", env);
+    if (interleaving === "lifecycle-gate") {
+      const gate = cli(pd, "state", ["gate-start", "delivery-planning"], {
+        ...env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",
+      });
+      expect(gate.code, gate.out).toBe(0);
+      expect(readAuditShardEvents(pd).some((row) => row.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(row.block, "Stage") === "delivery-planning")).toBe(true);
+    } else {
+      if (interleaving === "unknown-session") expect(resolveSessionIdFromAncestry(pd)).toBeNull();
+      const unrelated = cli(pd, "log", ["decision", "--stage", "code-generation", "--decision", "Approve the unrelated naming proposal?",
+        ...(interleaving === "same-session" ? ["--session", session] : [])], env);
+      expect(unrelated.code, unrelated.out).toBe(0);
+    }
+    expect(readProtectedQuestion(pd, session)).toBeNull();
+    expect(readProtectedQuestion(pd, "other")?.challengeId ?? null).toBe(interleaving === "same-session" ? other.challengeId : null);
+    expect(readProtectedResponse(pd, "other")?.choice ?? null).toBe(interleaving === "same-session" ? "Approve" : null);
+    submitCommandChoice(pd, session, "Approve", env);
+    expect(readProtectedResponse(pd, session)).toBeNull();
+    const refused = answer(pd);
+    expect(refused.code, refused.out).not.toBe(0);
+    expect(refused.out).toContain("verification-command");
+    expect(receipts(pd)).toEqual([]);
+    ask(pd);
+    submitCommandChoice(pd, session, "Approve", env);
+    const accepted = answer(pd);
+    expect(accepted.code, accepted.out).toBe(0);
+    expect(receipts(pd)).toHaveLength(1);
+  }, 30_000);
+
+  test("rendered question text binds picker replies; absent text falls back to the exclusive question", () => {
+    const pd = project();
+    const submit = (toolInput?: unknown) => {
+      const result = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+        cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+        input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: session,
+          tool_input: toolInput, tool_response: { answers: { choice: "Approve" } } }),
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    };
+    const decision = ask(pd);
+    expect(decision.challengeFile).toBe(protectedQuestionRelativePath(pd, session));
+    expect(decision.challengeId).toMatch(/^[a-f0-9]{32}$/);
+    for (const input of [
+      { questions: [{ question: "Approve the unrelated proposal?" }] },
+      { question: `${prompt} ` },
+      { questions: [{ question: "Unrelated?" }, { question: prompt }] },
+    ]) {
+      submit(input);
+      expect(readProtectedResponse(pd, session)).toBeNull();
+      expect(answer(pd).code).not.toBe(0);
+    }
+    expect(receipts(pd)).toEqual([]);
+    for (const input of [{ questions: [{ question: prompt }] }, { question: prompt }, undefined]) {
+      ask(pd);
+      submit(input);
+      expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
+      const accepted = answer(pd);
+      expect(accepted.code, accepted.out).toBe(0);
+    }
+    expect(receipts(pd)).toHaveLength(3);
+  }, 30_000);
+
+  test("Codex retains rendered question text when forwarding a structured selection", () => {
+    const pd = project();
+    const adapter = join(AIDLC_SRC, "../../codex/.codex/hooks/aidlc-codex-adapter.ts");
+    ask(pd);
+    for (const question of ["An unrelated question?", prompt]) {
+      const submitted = childProcess.spawnSync(process.execPath, [adapter, "record-human-turn"], {
+        cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+        input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "request_user_input", session_id: session,
+          tool_input: { questions: [{ id: "choice", question, options: [{ label: "Approve" }, { label: "Request Changes" }] }] },
+          tool_response: JSON.stringify({ answers: { choice: { answers: ["Approve"] } } }) }),
+      });
+      expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
+      if (question !== prompt) {
+        expect(readProtectedResponse(pd, session)).toBeNull();
+        expect(answer(pd).code).not.toBe(0);
+        expect(receipts(pd)).toEqual([]);
+      }
+    }
+    const accepted = answer(pd);
+    expect(accepted.code, accepted.out).toBe(0);
+    expect(receipts(pd)).toHaveLength(1);
+  }, 30_000);
+
+  test("Plan Approval and protected questions replace each other's challenge and response; conflicts record neither", () => {
+    const pd = project();
+    const plan: PlanApprovalRuntimeChallenge = {
+      version: 1, session, challengeId: "plan-challenge", targetId: "stage:code-generation", intentId: "intent",
+      runFloor: "floor", fingerprint: "sha256:plan", questionsFile: "questions.md", promptSha256: "sha256:prompt",
+      directiveEpoch: "epoch", sourceFloor: "source", markerRevision: 1, plannedSourceSha256: "sha256:source",
+      options: ["Approve Plan", "Request Changes"], requireExactOptionLabels: true, hashedOptionLabels: false,
+    };
+    writePlanApprovalChallenge(pd, plan);
+    writePlanApprovalResponse(pd, { version: 1, session, challengeId: plan.challengeId, choice: "Approve Plan", responseSha256: "a".repeat(64) });
+    ask(pd);
+    expect(readPlanApprovalChallenge(pd, session)).toBeNull();
+    expect(readPlanApprovalResponse(pd, session)).toBeNull();
+    submitCommandChoice(pd, session, "Approve", env);
+    expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
+    writePlanApprovalChallenge(pd, plan);
+    expect(readProtectedQuestion(pd, session)).toBeNull();
+    expect(readProtectedResponse(pd, session)).toBeNull();
+    submitCommandChoice(pd, session, "Approve Plan", env);
+    expect(readPlanApprovalResponse(pd, session)?.choice).toBe("Approve Plan");
+    // Ordinary decisions deliberately do not withdraw mature Plan Approval.
+    const ordinary = cli(pd, "log", ["decision", "--stage", "code-generation", "--decision", "Another question?", "--session", session], env);
+    expect(ordinary.code, ordinary.out).toBe(0);
+    expect(readPlanApprovalChallenge(pd, session)?.challengeId).toBe(plan.challengeId);
+    ask(pd);
+    writeFileSync(join(pd, planApprovalChallengeRelativePath(pd, session)), JSON.stringify(plan));
+    submitCommandChoice(pd, session, "Approve", env);
+    expect(readPlanApprovalChallenge(pd, session)).toBeNull();
+    expect(readPlanApprovalResponse(pd, session)).toBeNull();
+    expect(readProtectedQuestion(pd, session)).toBeNull();
+    expect(readProtectedResponse(pd, session)).toBeNull();
+    expect(answer(pd).code).not.toBe(0);
+    expect(receipts(pd)).toEqual([]);
+  }, 30_000);
+
+  test("target digests canonicalize nested keys but bind content and ordered members", () => {
+    const pd = project();
+    const target = { units: ["alpha", "beta"], commandSha256s: { beta: "b", alpha: "a" } };
+    mintProtectedQuestion(pd, { kind: "checkpoint-approval", session, target });
+    submitCommandChoice(pd, session, "Approve", env);
+    const reordered = { commandSha256s: { alpha: "a", beta: "b" }, units: ["alpha", "beta"] };
+    expect(protectedTargetDigest(reordered)).toBe(protectedTargetDigest(target));
+    for (const changed of [{ ...target, units: ["beta", "alpha"] }, { ...target, commandSha256s: { alpha: "changed", beta: "b" } }]) {
+      expect(() => requireProtectedResponse(pd, session, {
+        kind: "checkpoint-approval", targetDigest: protectedTargetDigest(changed), choice: "Approve",
+      })).toThrow("--action ask");
+    }
   }, 30_000);
 });

@@ -1,5 +1,5 @@
 /** Human review of a completed native swarm batch, independent of its driver. */
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { relative } from "node:path";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { loadConstructionEvidence, type ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -15,9 +15,11 @@ import {
   findStageBySlug,
   getField,
   hasUnsafeSingleLineCharacter,
-  consumeCheckpointApprovalChallenge,
-  requireCheckpointApprovalResponse,
-  writeCheckpointApprovalChallenge,
+  consumeProtectedQuestion,
+  withdrawProtectedQuestions,
+  requireProtectedResponse,
+  protectedTargetDigest,
+  mintProtectedQuestion,
   intentRepos,
   isAutonomousMode,
   isNonAnswer,
@@ -261,15 +263,15 @@ export function askSwarmCheckpoint(pd: string, batch: number, units: string[], s
     const current = snapshot(pd, batch, units);
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
     if (!current.result.ready) throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
-    writeCheckpointApprovalChallenge(pd, {
-      version: 1, session, challengeId: randomUUID(), target: approvalTarget(current.result, current.commandSha256s),
-      options: ["approve", "request changes"].map((option) => createHash("sha256").update(option).digest("hex")) as [string, string],
-    });
+    withdrawProtectedQuestions(pd, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Swarm Batch Approval", Stage: STAGE, "Batch number": String(batch),
       Units: current.result.units.join(", "), Fingerprint: current.result.fingerprint,
       Session: session, Options: "Approve,Request Changes",
     }, pd, selection.intent, selection.space);
+    mintProtectedQuestion(pd, {
+      kind: "checkpoint-approval", session, target: approvalTarget(current.result, current.commandSha256s),
+    });
     return current.result;
   });
 }
@@ -307,7 +309,9 @@ export function approveSwarmCheckpoint(
     const humanRequired = current.result.human_required || userInput !== undefined;
     if (humanRequired) {
       if (userInput !== "Approve") throw new Error('Swarm checkpoint requires the exact "Approve" choice.');
-      requireCheckpointApprovalResponse(pd, approvalTarget(current.result, current.commandSha256s), session, userInput);
+      requireProtectedResponse(pd, session, {
+        kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: userInput,
+      });
     } else if (current.result.approved) {
       return current.result;
     }
@@ -317,7 +321,7 @@ export function approveSwarmCheckpoint(
       ...(humanRequired ? { Session: session } : {}),
       ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
     }, pd, selection.intent, selection.space);
-    if (humanRequired) consumeCheckpointApprovalChallenge(pd, session);
+    if (humanRequired) consumeProtectedQuestion(pd, session);
     return snapshot(pd, batch, units).result;
   });
 }
@@ -333,7 +337,9 @@ export function rejectSwarmCheckpoint(
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
-    requireCheckpointApprovalResponse(pd, approvalTarget(current.result, current.commandSha256s), session, userInput);
+    requireProtectedResponse(pd, session, {
+      kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: userInput,
+    });
     const after = recheck(pd, batch, units, current, selection.root, false);
     appendAuditEntries(after.result.units.map((unit) => ({
       eventType: "GATE_REJECTED",
@@ -343,7 +349,7 @@ export function rejectSwarmCheckpoint(
         "User Input": userInput, Reason: reason, Feedback: reason,
       },
     })), pd, selection.intent, selection.space);
-    consumeCheckpointApprovalChallenge(pd, session);
+    consumeProtectedQuestion(pd, session);
     return snapshot(pd, batch, units).result;
   });
 }

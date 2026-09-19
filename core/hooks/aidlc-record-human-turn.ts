@@ -50,8 +50,12 @@
 // a separate behaviour with its own tests. Reviewers who want the marker
 // suppressed too should say so — it is a one-line follow-on, not a silent choice.
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
-  activeProtectedChallengeKind,
+  clearPlanApprovalChallenge,
+  planApprovalChallengeRelativePath,
+  protectedQuestionRelativePath,
+  withdrawProtectedQuestions,
   consumeSharedDirectiveAsk,
   humanTurnMintAllowed,
   markHumanTurn,
@@ -63,9 +67,7 @@ import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
-  recordVerificationCommandHumanResponse,
-  recordConstructionPolicyHumanResponse,
-  recordCheckpointApprovalHumanResponse,
+  recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 
 function extractResponseText(value: unknown): string {
@@ -118,6 +120,18 @@ function extractResponseText(value: unknown): string {
   return "";
 }
 
+function extractQuestionText(value: unknown): string | null {
+  if (value === null || typeof value !== "object") return null;
+  const input = value as Record<string, unknown>;
+  if (Array.isArray(input.questions)) {
+    // A protected question is asked alone. Never pair an arbitrary first answer
+    // with a matching question elsewhere in a multi-question payload.
+    if (input.questions.length !== 1) return "";
+    return extractQuestionText(input.questions[0]);
+  }
+  return typeof input.question === "string" ? input.question : null;
+}
+
 export async function run(input: string): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -125,6 +139,7 @@ try {
     if (humanTurnMintAllowed()) {
       let sessionId = "";
       let humanResponseText = "";
+      let questionText: string | null = null;
       // The break-glass phrase counts only when the human TYPED it: the prompt
       // text of a UserPromptSubmit payload that names no tool. A picked option
       // (AskUserQuestion PostToolUse, Codex request_user_input, any adapter's
@@ -140,8 +155,11 @@ try {
           message?: unknown;
           tool_response?: unknown;
           toolResponse?: unknown;
+          tool_input?: unknown;
+          toolInput?: unknown;
         };
         if (typeof parsed.session_id === "string") sessionId = parsed.session_id.trim();
+        questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
         for (const candidate of [
           parsed.prompt,
           parsed.user_prompt,
@@ -170,21 +188,16 @@ try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
           if (sessionId && humanResponseText) {
-            const kind = activeProtectedChallengeKind(projectDir, sessionId);
-            switch (kind) {
-              case "verification-command":
-                recordVerificationCommandHumanResponse(projectDir, sessionId, humanResponseText);
-                break;
-              case "construction-policy":
-                recordConstructionPolicyHumanResponse(projectDir, sessionId, humanResponseText);
-                break;
-              case "checkpoint-approval":
-                recordCheckpointApprovalHumanResponse(projectDir, sessionId, humanResponseText);
-                break;
-              default:
-                // With no active challenge, retain the legacy recovery phrase.
-                recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText);
-                break;
+            const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
+            const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
+            if (plan && protectedQuestion) {
+              clearPlanApprovalChallenge(projectDir, sessionId);
+              withdrawProtectedQuestions(projectDir, sessionId);
+            } else if (protectedQuestion) {
+              recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
+            } else {
+              // With no active challenge, retain the legacy recovery phrase.
+              recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText);
             }
           }
           if (sessionId && typedPrompt) {

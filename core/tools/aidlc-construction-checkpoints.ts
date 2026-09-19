@@ -22,10 +22,11 @@ import {
   freshReviewReceipts,
   getField,
   hasUnsafeSingleLineCharacter,
-  consumeCheckpointApprovalChallenge,
-  clearCheckpointApprovalChallenges,
-  requireCheckpointApprovalResponse,
-  writeCheckpointApprovalChallenge,
+  consumeProtectedQuestion,
+  withdrawProtectedQuestions,
+  requireProtectedResponse,
+  protectedTargetDigest,
+  mintProtectedQuestion,
   isAutonomousMode,
   constructionCheckpointsApply,
   isNonAnswer,
@@ -467,7 +468,7 @@ export function verifyConstructionCheckpoint(
   kind: ConstructionCheckpointKind,
 ): ConstructionCheckpoint {
   const before = locked(projectDir, () => {
-    clearCheckpointApprovalChallenges(projectDir);
+    withdrawProtectedQuestions(projectDir, "*");
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
     const authorization = current.verificationCommand;
@@ -578,15 +579,15 @@ export function askConstructionCheckpoint(
     if (!current.result.ready || !current.result.verified) {
       throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
     }
-    writeCheckpointApprovalChallenge(projectDir, {
-      version: 1, session, challengeId: randomUUID(), target: approvalTarget(current),
-      options: ["approve", "request changes"].map((option) => createHash("sha256").update(option).digest("hex")) as [string, string],
-    });
+    withdrawProtectedQuestions(projectDir, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Construction Unit Approval", Unit: unit, Kind: kind,
       Stage: current.result.stages.at(-1)!, Fingerprint: current.result.fingerprint,
       Session: session, Options: "Approve,Request Changes",
     }, projectDir);
+    mintProtectedQuestion(projectDir, {
+      kind: "checkpoint-approval", session, target: approvalTarget(current),
+    });
     return current.result;
   });
 }
@@ -607,7 +608,9 @@ export function approveConstructionCheckpoint(
     const humanRequired = current.result.human_required || userInput !== undefined;
     if (humanRequired) {
       if (userInput !== "Approve") throw new Error('Construction checkpoint requires the exact "Approve" choice.');
-      requireCheckpointApprovalResponse(projectDir, approvalTarget(current), session, userInput);
+      requireProtectedResponse(projectDir, session, {
+        kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: userInput,
+      });
     } else if (current.result.approved) {
       return current.result;
     }
@@ -625,7 +628,7 @@ export function approveConstructionCheckpoint(
       ...(humanRequired ? { Session: session } : {}),
       ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
     }, projectDir);
-    if (humanRequired) consumeCheckpointApprovalChallenge(projectDir, session);
+    if (humanRequired) consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);
   });
 }
@@ -648,7 +651,9 @@ export function rejectConstructionCheckpoint(
     if (!current.result.enabled || current.result.stages.length === 0) {
       throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
     }
-    requireCheckpointApprovalResponse(projectDir, approvalTarget(current), session, userInput);
+    requireProtectedResponse(projectDir, session, {
+      kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: userInput,
+    });
     const rechecked = snapshot(projectDir, unit, kind);
     if (current.root !== rechecked.root || current.result.fingerprint !== rechecked.result.fingerprint) {
       throw new Error("Construction checkpoint evidence changed before rejection.");
@@ -658,7 +663,7 @@ export function rejectConstructionCheckpoint(
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
     }, projectDir);
-    consumeCheckpointApprovalChallenge(projectDir, session);
+    consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);
   });
 }

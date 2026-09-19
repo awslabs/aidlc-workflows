@@ -17,19 +17,16 @@ import {
   maximalAttemptEvents,
   verificationCommandDetails,
   readVerificationCommandFile,
-  verificationCommandChallengeRelativePath,
-  writeVerificationCommandChallenge,
-  readVerificationCommandChallenge,
-  readVerificationCommandResponse,
-  consumeVerificationCommandChallenge,
+  protectedQuestionRelativePath,
+  mintProtectedQuestion,
+  protectedTargetDigest,
+  requireProtectedResponse,
+  consumeProtectedQuestion,
+  withdrawProtectedQuestions,
+  resolveSessionIdFromAncestry,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
   validConstructionPolicyChange,
-  constructionPolicyChallengeRelativePath,
-  writeConstructionPolicyChallenge,
-  readConstructionPolicyChallenge,
-  readConstructionPolicyResponse,
-  consumeConstructionPolicyChallenge,
   CONSTRUCTION_POLICY_CHECKPOINT,
   CONSTRUCTION_POLICY_RECOVERY,
   checkSummaryConfirmationEvidence,
@@ -127,8 +124,7 @@ import type {
   GuardRefusal,
   TeamUnitGateResolution,
   PlanApprovalRuntimeChallenge,
-  VerificationCommandRuntimeChallenge,
-  ConstructionPolicyRuntimeChallenge,
+  ProtectedQuestion,
   ReviewClass,
   ReviewRecord,
   ReviewVerdict,
@@ -347,6 +343,7 @@ function handlePlanApprovalBatch(
     withAuditLock(pd, () => {
       if (action === "decision") {
         const challenge = recordPlanApprovalBatchChallenge(pd, flags["batch-file"], session, (batch) => {
+          withdrawProtectedQuestions(pd, session);
           emitAudit(pd, "DECISION_RECORDED", {
             Stage: flags.stage,
             Checkpoint: PLAN_APPROVAL_CHECKPOINT,
@@ -536,45 +533,19 @@ function handleDecision(args: string[]): void {
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
-  let verificationChallenge: VerificationCommandRuntimeChallenge | null = null;
-  let policyChallenge: ConstructionPolicyRuntimeChallenge | null = null;
+  let protectedQuestion: ProtectedQuestion | null = null;
   try {
-    if (policyFields) {
-      policyChallenge = withAuditLock(pd, () => {
-        const challenge: ConstructionPolicyRuntimeChallenge = {
-          version: 1,
-          session: fields.Session,
-          challengeId: createHash("sha256").update(randomBytes(32))
-            .update(JSON.stringify([fields.Field, fields.Value]), "utf-8").digest("hex"),
-          field: fields.Field,
-          value: fields.Value,
-          options: ["approve", "request changes"].map((option) =>
-            createHash("sha256").update(option, "utf-8").digest("hex"),
-          ) as [string, string],
-        };
-        writeConstructionPolicyChallenge(pd, challenge);
-        emitAudit(pd, "DECISION_RECORDED", fields);
-        return challenge;
-      });
-    } else
-    if (verificationCommand) {
-      verificationChallenge = withAuditLock(pd, () => {
-        const challenge: VerificationCommandRuntimeChallenge = {
-          version: 1,
-          session: fields.Session,
-          challengeId: randomBytes(32).toString("hex"),
-          commandSha256: verificationCommand.sha256,
-          options: ["approve", "request changes"].map((option) =>
-            createHash("sha256").update(option, "utf-8").digest("hex"),
-          ) as [string, string],
-        };
-        writeVerificationCommandChallenge(pd, challenge);
-        emitAudit(pd, "DECISION_RECORDED", fields);
-        return challenge;
-      });
-    } else {
+    protectedQuestion = withAuditLock(pd, () => {
+      withdrawProtectedQuestions(pd, flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*");
       emitAudit(pd, "DECISION_RECORDED", fields);
-    }
+      if (!policyFields && !verificationCommand) return null;
+      return mintProtectedQuestion(pd, {
+        kind: policyFields ? "construction-policy" : "verification-command",
+        session: fields.Session,
+        target: policyFields ? { field: fields.Field, value: fields.Value } : { commandSha256: verificationCommand!.sha256 },
+        promptDigest: createHash("sha256").update(flags.decision, "utf-8").digest("hex"),
+      });
+    });
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
@@ -616,18 +587,13 @@ function handleDecision(args: string[]): void {
             challengeFile: planApprovalChallengeRelativePath(pd, challenge.session),
           }
         : {}),
-      ...(verificationChallenge !== null
-        ? {
-            command: verificationCommand!.command,
-            command_sha256: verificationChallenge.commandSha256,
-            challengeId: verificationChallenge.challengeId,
-            challengeFile: verificationCommandChallengeRelativePath(pd, verificationChallenge.session),
-          }
+      ...(verificationCommand !== null
+        ? { command: verificationCommand.command, command_sha256: verificationCommand.sha256 }
         : {}),
-      ...(policyChallenge !== null
+      ...(protectedQuestion !== null
         ? {
-            challengeId: policyChallenge.challengeId,
-            challengeFile: constructionPolicyChallengeRelativePath(pd, policyChallenge.session),
+            challengeId: protectedQuestion.challengeId,
+            challengeFile: protectedQuestionRelativePath(pd, protectedQuestion.session),
           }
         : {}),
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
@@ -1084,18 +1050,16 @@ function handleAnswer(args: string[]): void {
       if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256, fields.Session)) {
         error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
       }
-      const challenge = readVerificationCommandChallenge(pd, fields.Session);
-      const response = readVerificationCommandResponse(pd, fields.Session);
-      // Like Plan Approval, the presence bypass never bypasses the exact
-      // hook-recorded response. Autonomy cannot choose a verification command.
-      if (!challenge || challenge.commandSha256 !== verificationCommand.sha256 ||
-        !response || response.challengeId !== challenge.challengeId || response.choice !== flags.details) {
-        error("Verification command requires the actual offered choice from this prompt and session: a matching challenge, Command SHA-256, and hook-recorded response for --details. " + VERIFICATION_COMMAND_RECOVERY);
-      }
+      // Neither presence bypass nor autonomy supplies the hook-recorded choice.
+      requireProtectedResponse(pd, fields.Session, {
+        kind: "verification-command",
+        targetDigest: protectedTargetDigest({ commandSha256: verificationCommand.sha256 }),
+        choice: flags.details,
+      });
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
       if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
-      consumeVerificationCommandChallenge(pd, fields.Session);
+      consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage, command_sha256: verificationCommand.sha256 }));
       return;
     }
@@ -1104,17 +1068,16 @@ function handleAnswer(args: string[]): void {
       if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
         error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
       }
-      const challenge = readConstructionPolicyChallenge(pd, fields.Session);
-      const response = readConstructionPolicyResponse(pd, fields.Session);
-      if (!challenge || challenge.field !== fields.Field || challenge.value !== fields.Value ||
-        !response || response.challengeId !== challenge.challengeId || response.choice !== flags.details) {
-        error("Construction policy requires the actual offered choice from this prompt and session: a matching field/value challenge and hook-recorded response for --details. " + CONSTRUCTION_POLICY_RECOVERY);
-      }
+      requireProtectedResponse(pd, fields.Session, {
+        kind: "construction-policy",
+        targetDigest: protectedTargetDigest({ field: fields.Field, value: fields.Value }),
+        choice: flags.details,
+      });
       const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
       // Append first: a failed append leaves the human's one-shot answer retryable.
       if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", fields);
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
-      consumeConstructionPolicyChallenge(pd, fields.Session);
+      consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "construction-policy", stage: flags.stage }));
       return;
     }

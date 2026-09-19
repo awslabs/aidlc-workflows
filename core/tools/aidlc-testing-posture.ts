@@ -46,9 +46,7 @@ import {
   readPlanApprovalReceipt,
   readPlanApprovalResponse,
   readPlanApprovalViolation,
-  readVerificationCommandChallenge,
-  readCheckpointApprovalChallenge,
-  readConstructionPolicyChallenge,
+  readProtectedQuestion,
   readRegularFileNoFollowOrThrow,
   recordDir,
   recordFileTargetOrThrow,
@@ -90,9 +88,7 @@ import {
   writePlanApprovalOverrideRequest,
   writePlanApprovalReceipt,
   writePlanApprovalResponse,
-  writeVerificationCommandResponse,
-  writeConstructionPolicyResponse,
-  writeCheckpointApprovalResponse,
+  writeProtectedResponse,
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
   type ActiveDirectiveMarker,
@@ -2310,62 +2306,22 @@ export function recordPlanApprovalHumanResponse(
   });
 }
 
-export function recordVerificationCommandHumanResponse(
-  projectDir: string,
-  session: string,
-  responseText: string,
+export function recordProtectedHumanResponse(
+  projectDir: string, session: string, responseText: string, questionText: string | null,
 ): { recorded: boolean } {
   return withAuditLock(projectDir, () => {
-    const challenge = readVerificationCommandChallenge(projectDir, session);
-    if (!challenge) return { recorded: false };
-    const choice = offeredCheckpointChoice(challenge.options, responseText, "Approve", true);
+    const question = readProtectedQuestion(projectDir, session);
+    if (!question) return { recorded: false };
+    if (question.promptDigest !== undefined && questionText !== null &&
+      createHash("sha256").update(questionText, "utf-8").digest("hex") !== question.promptDigest) {
+      return { recorded: false };
+    }
+    const choice = offeredCheckpointChoice(
+      question.options, responseText, "Approve", true, question.kind !== "verification-command",
+    );
     if (!choice) return { recorded: false };
-    writeVerificationCommandResponse(projectDir, {
-      version: 1,
-      session,
-      challengeId: challenge.challengeId,
-      choice,
-      responseSha256: createHash("sha256")
-        .update(responseText.trim(), "utf-8")
-        .digest("hex"),
-    });
-    return { recorded: true };
-  });
-}
-
-export function recordConstructionPolicyHumanResponse(
-  projectDir: string,
-  session: string,
-  responseText: string,
-): { recorded: boolean } {
-  return withAuditLock(projectDir, () => {
-    const challenge = readConstructionPolicyChallenge(projectDir, session);
-    if (!challenge) return { recorded: false };
-    const choice = offeredCheckpointChoice(challenge.options, responseText, "Approve", true, true);
-    if (!choice) return { recorded: false };
-    writeConstructionPolicyResponse(projectDir, {
-      version: 1,
-      session,
-      challengeId: challenge.challengeId,
-      choice,
-      responseSha256: createHash("sha256")
-        .update(responseText.trim(), "utf-8")
-        .digest("hex"),
-    });
-    return { recorded: true };
-  });
-}
-
-export function recordCheckpointApprovalHumanResponse(
-  projectDir: string, session: string, responseText: string,
-): { recorded: boolean } {
-  return withAuditLock(projectDir, () => {
-    const challenge = readCheckpointApprovalChallenge(projectDir, session);
-    if (!challenge) return { recorded: false };
-    const choice = offeredCheckpointChoice(challenge.options, responseText, "Approve", true, true);
-    if (!choice) return { recorded: false };
-    writeCheckpointApprovalResponse(projectDir, {
-      version: 1, session, challengeId: challenge.challengeId, choice,
+    writeProtectedResponse(projectDir, {
+      version: 1, session, challengeId: question.challengeId, choice,
       responseSha256: createHash("sha256").update(responseText.trim(), "utf-8").digest("hex"),
     });
     return { recorded: true };
