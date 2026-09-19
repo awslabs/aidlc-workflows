@@ -30,6 +30,11 @@
 //      mirror — editing one side alone turns this file red.
 //   6. INSTALL TOLERANCE — an install whose plugin selection disables a core
 //      stage still runs `ars`: priors validate against the unfiltered graph.
+//   7. STAGE-AUTHORED PRIORS — a stage the shipped priors do not name (a
+//      plugin stage) is screened from the `ars:` block compiled into its
+//      graph node (targets/cost/role/project_types), the shipped entry wins
+//      when both exist, a stage with neither stays a `no-prior` row, and a
+//      stage-side cost with no evThresholds entry exits 1 naming the stage.
 //
 // Mechanism: MIXED — in-process imports for the arithmetic/band/schema pins,
 // spawns for the CLI exit-code rows (cli). Priors fault-injection rides the
@@ -383,6 +388,152 @@ describe("t258 ars CLI (spawn)", () => {
       const r2 = runArs(SCORE_FLAGS, { AIDLC_STAGE_GRAPH: renamedPath });
       expect(r2.status).toBe(1);
       expect(r2.stderr).toContain("stages.market-research is not in the compiled stage graph");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("t258 stage-authored priors (spawn)", () => {
+  // The shipped priors name every core stage and nothing else. A plugin stage
+  // carries the same facts in its own frontmatter `ars:` block, which compile
+  // copies onto the node; the subcommand reads it when the file has no entry.
+  // Synthetic nodes are cloned from a shipped node so every required graph
+  // field is present; only slug/number/plugin/ars change.
+  type Node = Record<string, unknown> & { slug: string; ars?: unknown };
+  const shippedGraph = (): Node[] => JSON.parse(readFileSync(STAGE_GRAPH_PATH, "utf-8"));
+  const clone = (base: string, slug: string, number: string, ars?: unknown): Node => {
+    const src = shippedGraph().find((s) => s.slug === base);
+    if (!src) throw new Error(`fixture: shipped graph has no ${base}`);
+    const node: Node = { ...src, slug, number, plugin: "t258-plugin", requires_stage: [] };
+    if (ars !== undefined) node.ars = ars;
+    return node;
+  };
+  const writeGraph = (dir: string, name: string, extra: Node[], mutate?: (g: Node[]) => Node[]): string => {
+    const graph = mutate ? mutate(shippedGraph()) : shippedGraph();
+    const path = join(dir, name);
+    writeFileSync(path, JSON.stringify([...graph, ...extra]));
+    return path;
+  };
+  const rows = (stdout: string) =>
+    (JSON.parse(stdout) as { evScreen: Array<Record<string, unknown>>; screenGrid: Record<string, string> });
+
+  test("a plugin stage with an ars: block is screened by its own targets/cost; one without stays no-prior", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      const graphPath = writeGraph(dir, "graph.json", [
+        clone("build-and-test", "t258-screened", "3.90", { targets: ["csu"], cost: 4 }),
+        clone("build-and-test", "t258-unprior", "3.91"),
+      ]);
+      const env = { AIDLC_STAGE_GRAPH: graphPath };
+      const high = runArs(["--iae", "0", "--csu", "0.8", "--ve", "0", "--r", "0", "--ua", "0"], env);
+      expect(high.status, high.stderr).toBe(0);
+      const r = rows(high.stdout);
+      const screened = r.evScreen.find((x) => x.stage === "t258-screened");
+      expect(screened?.decision).toBe("EXECUTE");
+      expect(screened?.screen).toBe("component");
+      expect(screened?.priorSource).toBe("stage");
+      expect(screened?.targets).toEqual(["csu"]);
+      expect(screened?.cost).toBe(4);
+      expect(screened?.reason).toBe("reduces CSU=0.80 > threshold 0.4 (cost 4)");
+      expect(r.screenGrid["t258-screened"]).toBe("EXECUTE");
+      const unprior = r.evScreen.find((x) => x.stage === "t258-unprior");
+      expect(unprior?.decision).toBe("SKIP");
+      expect(unprior?.screen).toBe("no-prior");
+      expect(unprior?.priorSource).toBeNull();
+      expect(unprior?.reason).toBe(
+        "no entry in ars-priors.json and no ars: block on the stage - not screenable"
+      );
+      // Core rows keep their provenance and their numbers.
+      expect(r.evScreen.find((x) => x.stage === "intent-capture")?.priorSource).toBe("shipped");
+      expect(r.evScreen.find((x) => x.stage === "build-and-test")?.priorSource).toBe("shipped");
+
+      const low = runArs(["--iae", "0", "--csu", "0.3", "--ve", "0", "--r", "0", "--ua", "0"], env);
+      expect(low.status, low.stderr).toBe(0);
+      const skipped = rows(low.stdout).evScreen.find((x) => x.stage === "t258-screened");
+      expect(skipped?.decision).toBe("SKIP");
+      expect(skipped?.reason).toBe("max target CSU=0.30 <= threshold 0.4 (cost 4)");
+
+      // --completed outranks the stage-side screen exactly as it does the
+      // shipped one; the synthetic slug is a known graph stage.
+      const done = runArs(
+        ["--iae", "0", "--csu", "0.3", "--ve", "0", "--r", "0", "--ua", "0", "--completed", "t258-screened"],
+        env
+      );
+      expect(done.status, done.stderr).toBe(0);
+      expect(rows(done.stdout).evScreen.find((x) => x.stage === "t258-screened")?.screen).toBe("completed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("role and project_types on the stage behave like their priors-file twins", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      const graphPath = writeGraph(dir, "graph.json", [
+        clone("build-and-test", "t258-core", "3.92", { targets: [], cost: 5, role: "core" }),
+        clone("build-and-test", "t258-structural", "3.93", { targets: ["csu"], cost: 3, role: "structural" }),
+        clone("build-and-test", "t258-brownfield", "3.94", {
+          targets: ["csu"],
+          cost: 4,
+          project_types: ["brownfield"],
+        }),
+        clone("build-and-test", "t258-unscreenable", "3.95", { targets: ["ve"], cost: null }),
+      ]);
+      const env = { AIDLC_STAGE_GRAPH: graphPath };
+      const scores = ["--iae", "0", "--csu", "0.8", "--ve", "0.9", "--r", "0", "--ua", "0"];
+      const any = rows(runArs(scores, env).stdout);
+      expect(any.evScreen.find((x) => x.stage === "t258-core")?.screen).toBe("core");
+      expect(any.screenGrid["t258-core"]).toBe("EXECUTE");
+      expect(any.evScreen.find((x) => x.stage === "t258-structural")?.screen).toBe("structural");
+      expect(any.screenGrid["t258-structural"]).toBe("SKIP");
+      expect(any.evScreen.find((x) => x.stage === "t258-brownfield")?.screen).toBe("component");
+      expect(any.screenGrid["t258-brownfield"]).toBe("EXECUTE");
+      expect(any.evScreen.find((x) => x.stage === "t258-unscreenable")?.screen).toBe("no-cost-prior");
+      expect(any.screenGrid["t258-unscreenable"]).toBe("SKIP");
+
+      const greenfield = rows(runArs([...scores, "--project-type", "greenfield"], env).stdout);
+      const row = greenfield.evScreen.find((x) => x.stage === "t258-brownfield");
+      expect(row?.decision).toBe("SKIP");
+      expect(row?.screen).toBe("project-type");
+      expect(row?.reason).toContain("restricts it to brownfield projects");
+      expect(rows(runArs([...scores, "--project-type", "brownfield"], env).stdout).screenGrid["t258-brownfield"]).toBe(
+        "EXECUTE"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the shipped priors entry wins over a stage-side ars: block on the same slug", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      // market-research ships {targets: [iae], cost: 2}; a node-side block
+      // claiming it is not screenable must not change the screen.
+      const graphPath = writeGraph(dir, "graph.json", [], (g) =>
+        g.map((s) => (s.slug === "market-research" ? { ...s, ars: { targets: [], cost: null } } : s))
+      );
+      const r = runArs(SCORE_FLAGS, { AIDLC_STAGE_GRAPH: graphPath });
+      expect(r.status, r.stderr).toBe(0);
+      const row = rows(r.stdout).evScreen.find((x) => x.stage === "market-research");
+      expect(row?.priorSource).toBe("shipped");
+      expect(row?.screen).toBe("component");
+      expect(row?.targets).toEqual(["iae"]);
+      expect(row?.cost).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a stage-side cost with no evThresholds entry exits 1 naming the stage (never a silent screen)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      const graphPath = writeGraph(dir, "graph.json", [
+        clone("build-and-test", "t258-bad-cost", "3.96", { targets: ["csu"], cost: 9 }),
+      ]);
+      const r = runArs(SCORE_FLAGS, { AIDLC_STAGE_GRAPH: graphPath });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("stage t258-bad-cost: ars.cost 9 has no evThresholds entry in ars-priors.json");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

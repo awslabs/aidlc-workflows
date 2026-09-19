@@ -100,6 +100,12 @@ export interface StageEntry {
   consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string }>;
   requires_stage?: string[];
   scopes?: string[];
+  // Composer screening prior authored on the stage (the frontmatter twin of one
+  // tools/data/ars-priors.json entry, for stages that file does not name -
+  // plugin stages). Compiled verbatim; `aidlc-graph ars` reads it when the
+  // priors file has no entry for the slug. aidlc-stage-schema.ts owns the
+  // narrow enum types; this shape is the trust-boundary view of the JSON.
+  ars?: { targets: string[]; cost: number | null; role?: string; project_types?: string[] };
   inputs?: string;
   outputs?: string;
   for_each?: string;
@@ -27036,6 +27042,7 @@ export function parseStageFrontmatter(
     if (key === CONSUMES_KEY) continue;
     if (key === WHEN_KEY) continue;
     if (key === "produces_kinds") continue; // parsed below; the scalar loop would stamp it ""
+    if (key === "ars") continue; // nested map parsed below (arsField)
     if (ARRAY_KEYS.has(key)) continue;
     // optional_produces and required_sections are presence-gated array fields
     // parsed below; skip them here so the scalar loop does not stamp them with
@@ -27131,6 +27138,16 @@ export function parseStageFrontmatter(
       const inline = fm.match(/^when:\s*\{\s*([a-z][a-z0-9-]*)\s*:\s*([^}]+?)\s*\}\s*$/m);
       obj.when = inline ? { [inline[1]]: inline[2].trim() } : scalarField(fm, WHEN_KEY);
     }
+  }
+
+  // `ars` — nested map of composer screening priors (targets/cost, optional
+  // role/project_types): the frontmatter twin of one ars-priors.json stage
+  // entry, authored on stages the shipped file does not name (plugin stages).
+  // Assembled in canonical child order so parse → emit → parse round-trips
+  // byte-for-byte; a non-map value is kept raw so the validator rejects the
+  // shape loudly. Only assigned when the key was discovered.
+  if (topLevelKeys.has("ars")) {
+    obj.ars = arsField(fm);
   }
 
   return obj;
@@ -27376,6 +27393,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "requires_stage",
     "sensors",
     "scopes",
+    "ars",
     "inputs",
     "outputs",
   ] as const;
@@ -27397,6 +27415,23 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
       for (const [name, kinds] of entries) {
         if (!Array.isArray(kinds)) continue;
         lines.push(`  ${name}: [${(kinds as unknown[]).map((k) => String(k)).join(", ")}]`);
+      }
+    } else if (key === "ars") {
+      // The composer screening prior: a nested map whose lists are inline.
+      // Children are emitted in the order arsField assembled them (canonical:
+      // targets, cost, role, project_types) so parse, emit, parse round-trips.
+      if (!isPlainObject(v)) continue;
+      lines.push("ars:");
+      for (const [child, value] of Object.entries(v)) {
+        if (Array.isArray(value)) {
+          lines.push(`  ${child}: [${(value as unknown[]).map((x) => String(x)).join(", ")}]`);
+        } else if (value === null) {
+          lines.push(`  ${child}: null`);
+        } else if (typeof value === "number") {
+          lines.push(`  ${child}: ${value}`);
+        } else {
+          lines.push(`  ${child}: ${emitScalar(String(value))}`);
+        }
       }
     } else if (key === "consumes") {
       if (!Array.isArray(v)) continue;
@@ -27447,6 +27482,58 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
 
   lines.push("---");
   return `${lines.join("\n")}\n`;
+}
+
+// Nested-map parser for the `ars:` frontmatter block - the stage-side twin of
+// one tools/data/ars-priors.json entry:
+//
+//   ars:
+//     targets: [ve, csu]
+//     cost: 4
+//     role: structural            # optional
+//     project_types: [brownfield] # optional
+//
+// `targets` and `project_types` are INLINE lists only (mirrors
+// mapOfListsField's strictness); `cost` is a number or the literal `null`;
+// `role` is a bare or quoted scalar. A value that does not fit is kept as the
+// raw string and an unknown child key is kept under its own name, so the
+// schema validator (aidlc-stage-schema.ts) rejects each with a field-level
+// message instead of the parser dropping it. Known keys are assembled in
+// canonical order (targets, cost, role, project_types) regardless of authored
+// order so emitStageFrontmatter round-trips the block byte-identically. A bare
+// `ars: <scalar>` with no indented block returns that scalar for the same
+// reject-loudly reason.
+function arsField(fm: string): unknown {
+  const blockRe = /^ars:[ \t]*\r?\n((?:[ \t]+[a-z_][a-z0-9_]*[ \t]*:[^\n]*(?:\r?\n|$))+)/m;
+  const m = fm.match(blockRe);
+  if (!m) return scalarField(fm, "ars");
+  const raw: Record<string, string> = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    if (line.trim() === "") continue;
+    const entry = line.match(/^\s+([a-z_][a-z0-9_]*)\s*:\s*(.*?)\s*$/);
+    if (!entry) {
+      throw new Error(`Malformed ars entry in frontmatter: ${line.trim()}`);
+    }
+    raw[entry[1]] = entry[2];
+  }
+  const inlineList = (v: string): unknown =>
+    v.startsWith("[") && v.endsWith("]") ? parseInlineDepsList(v) : v;
+  const unquote = (v: string): string => {
+    const q = v.match(/^"(.*)"$/) ?? v.match(/^'(.*)'$/);
+    return q ? q[1] : v;
+  };
+  const out: Record<string, unknown> = {};
+  if ("targets" in raw) out.targets = inlineList(raw.targets);
+  if ("cost" in raw) {
+    const v = raw.cost;
+    out.cost = v === "null" || v === "~" ? null : /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+  }
+  if ("role" in raw) out.role = unquote(raw.role);
+  if ("project_types" in raw) out.project_types = inlineList(raw.project_types);
+  for (const [k, v] of Object.entries(raw)) {
+    if (!(k in out)) out[k] = v;
+  }
+  return out;
 }
 
 // Map-of-lists parser for the produces_kinds: frontmatter block. Matches an

@@ -261,6 +261,36 @@ describe("t314 standalone plugin validator", () => {
     expect(rules).toContain("stage-frontmatter");
   });
 
+  test("b: a malformed ars: block is a stage-schema finding naming the field", () => {
+    const root = fixture();
+    const stage = join(root, "stages", "construction", "fixture-plugin-stage.md");
+    writeFileSync(
+      stage,
+      readFileSync(stage, "utf-8").replace(
+        "inputs: none\n",
+        "ars:\n  targets: [ve, mars]\n  cost: 9\ninputs: none\n",
+      ),
+    );
+    const findings = validatePluginRoot(root).errors.filter(
+      (finding) => finding.rule === "stage-schema",
+    );
+    expect(findings.length).toBeGreaterThan(0);
+    const messages = findings.map((finding) => finding.message).join("\n");
+    expect(messages).toContain("ars.targets[1] must be one of iae | csu | ve | r | ua");
+    expect(messages).toContain("ars.cost must be null or an integer 1..5, got number");
+    // A well-formed block validates green.
+    writeFileSync(
+      stage,
+      readFileSync(stage, "utf-8").replace(
+        "ars:\n  targets: [ve, mars]\n  cost: 9\n",
+        "ars:\n  targets: [ve]\n  cost: 4\n",
+      ),
+    );
+    expect(
+      validatePluginRoot(root).errors.filter((finding) => finding.rule === "stage-schema"),
+    ).toHaveLength(0);
+  });
+
   test("stages enforce agent references, artifact namespaces, and non-empty bodies", () => {
     const root = fixture();
     const stage = join(
