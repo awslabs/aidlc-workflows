@@ -3064,6 +3064,19 @@ export function computeArs(
         screen: "no-cost-prior",
         reason: "no cost prior in the shipped table - not numerically screenable; human judgment at the gate",
       });
+    } else if (p.targets.length === 0) {
+      // A costed prior that names no component is legal (the priors schema and
+      // the stage schema both allow an empty list) but can never clear its
+      // threshold: pass 1 scored it 0 and decided SKIP. Say so instead of
+      // reducing over an empty array, which would throw and take every `ars`
+      // call on the install down with it.
+      const threshold = priors.evThresholds[String(p.cost)];
+      evScreen.push({
+        ...base,
+        threshold,
+        screen: "component",
+        reason: `no target component - nothing can clear threshold ${threshold} (cost ${p.cost}); mechanical default SKIP, human judgment at the gate`,
+      });
     } else {
       const maxSym = p.targets.reduce((a, b) => (scores[a] >= scores[b] ? a : b));
       const maxTarget = scores[maxSym];

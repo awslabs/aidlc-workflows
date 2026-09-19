@@ -525,6 +525,44 @@ describe("t258 stage-authored priors (spawn)", () => {
     }
   });
 
+  test("a costed prior with no target component renders a SKIP row instead of throwing", () => {
+    // Both schemas allow `targets: []` beside a numeric cost with no role.
+    // Pass 1 scores it 0 and decides SKIP; the renderer must not reduce over
+    // the empty list (a TypeError there fails every `ars` call on the install).
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      const graphPath = writeGraph(dir, "graph.json", [
+        clone("build-and-test", "t258-no-targets", "3.97", { targets: [], cost: 4 }),
+        clone("build-and-test", "t258-no-targets-cost1", "3.98", { targets: [], cost: 1 }),
+      ]);
+      const r = runArs(["--iae", "1", "--csu", "1", "--ve", "1", "--r", "1", "--ua", "1"], {
+        AIDLC_STAGE_GRAPH: graphPath,
+      });
+      expect(r.status, r.stderr).toBe(0);
+      const out = rows(r.stdout);
+      const row = out.evScreen.find((x) => x.stage === "t258-no-targets");
+      expect(row?.decision).toBe("SKIP");
+      expect(row?.screen).toBe("component");
+      expect(row?.priorSource).toBe("stage");
+      expect(row?.targets).toEqual([]);
+      expect(row?.maxTargetScore).toBeNull();
+      expect(row?.threshold).toBe(0.4);
+      expect(row?.reason).toBe(
+        "no target component - nothing can clear threshold 0.4 (cost 4); mechanical default SKIP, human judgment at the gate"
+      );
+      expect(out.screenGrid["t258-no-targets"]).toBe("SKIP");
+      // cost 1 has threshold 0 and `0 > 0` is false: still SKIP, still rendered.
+      expect(out.screenGrid["t258-no-targets-cost1"]).toBe("SKIP");
+      expect(out.evScreen.find((x) => x.stage === "t258-no-targets-cost1")?.reason).toContain(
+        "no target component - nothing can clear threshold 0 (cost 1)"
+      );
+      // The table renders one row per stage, the two synthetic ones included.
+      expect(JSON.parse(r.stdout).tables.stageDecisions.split("\n")).toHaveLength(out.evScreen.length + 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a stage-side cost with no evThresholds entry exits 1 naming the stage (never a silent screen)", () => {
     const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
     try {

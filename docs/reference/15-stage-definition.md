@@ -517,6 +517,10 @@ Two rules keep the shipped table authoritative:
   never changes under a stage-side edit. Core stages therefore declare no
   `ars:` — their priors stay in the file, where the persona's cost table
   documents them.
+- **An empty `targets` never executes mechanically.** `targets: []` beside a
+  numeric cost is legal (the priors file uses it with a `role`), but without a
+  `role` nothing can clear the threshold: the row is rendered as SKIP with a
+  reason that says so, for the human to weigh at the gate.
 - **A cost must have a threshold.** The schema pins `cost` to the `1..5` scale
   the composer persona documents; the `ars` subcommand additionally checks that
   the value has an `evThresholds` entry in the priors file it loaded and exits 1
