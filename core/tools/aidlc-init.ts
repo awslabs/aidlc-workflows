@@ -127,6 +127,7 @@ import {
   harnessOwnsModelAccess,
   availableScopeNames,
   completionInstruction,
+  copyChannelSourceHint,
   detectAwsCredentials,
   discoverInstalledPluginNames,
   effectiveProjectFlagValues,
@@ -295,6 +296,7 @@ const CHOICE_VALUE_FLAGS = new Set([
   "--clear-bypass",
   "--completions",
   "--default-scope",
+  "--from",
   "--harness",
   "--hook-debug",
   "--mcp",
@@ -2412,6 +2414,7 @@ function validateChoiceArgs(
       ])
     : new Set([
         "--completions",
+        "--from",
         "--harness",
         "--mcp",
         "--plan-token",
@@ -2476,6 +2479,7 @@ function choiceHelp(section: ChoiceSection): string {
         "  --plugins <comma-separated-installed-names|all>",
         "  --mcp <defaults|none>",
         "  --completions <bash|zsh|fish|powershell|none>",
+        "  --from <dir-or-tgz>   source bytes for a copy-channel projection (the runtime/<harness>/ root you copied from, or a checkout's dist/<harness>/ tree); a native install needs no --from",
         "",
         "--yes confirms but never implies MCP consent. Without an explicit answer, MCP consent records none.",
       ];
@@ -2510,7 +2514,7 @@ function choiceHelp(section: ChoiceSection): string {
 
 function choicePipelineArgv(argv: readonly string[]): string[] {
   const out: string[] = [];
-  const keptValues = new Set(["--harness", "--plan-token", "--project-dir"]);
+  const keptValues = new Set(["--from", "--harness", "--plan-token", "--project-dir"]);
   const keptBare = new Set([
     "--dry-run",
     "--json",
@@ -6809,25 +6813,26 @@ export async function main(
       !from &&
       /(harness .+ is not installed|no installed harness runtime is available)/.test(rawMessage),
     );
-    // A Bun-invoking projection has no installed runtime to refresh from. The
-    // two real options are the native command, or the explicit `--from` refresh
-    // that the doctor row, setup map, and trust issue already render, pointing
-    // at the bytes the project was copied from. Re-copying alone would not make
-    // a rerun succeed, so it is not offered as one.
-    const copiedRefresh = copiedHarness
-      ? workspaceShellRefreshCommand(copiedHarness.harnessDir, copiedHarness.distribution)
+    // A Bun-invoking projection has no installed runtime to refresh from, and
+    // both commands that need source bytes here, the root refresh and
+    // `config project`, accept `--from`. So the remedy is the same command
+    // again with `--from` naming the bytes the project was copied from; the
+    // native command is the other way out. Re-copying alone would not make a
+    // rerun succeed, so it is not offered as one.
+    const copiedSource = copiedHarness
+      ? copyChannelSourceHint(copiedHarness.distribution)
       : null;
-    const message = copiedRefreshWithoutSource && copiedRefresh
+    const message = copiedRefreshWithoutSource && copiedSource
       ? `This copy-channel project already contains ${copiedHarness?.harnessDir}, but refreshing project files needs release source bytes. ` +
-        `Install the native aidlc command and rerun this command, or refresh from the bytes you copied with \`${copiedRefresh}\`.`
+        `Rerun this command with --from ${copiedSource}, or install the native aidlc command and rerun it without --from.`
       : rawMessage;
     emitResult(failure(
       message,
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
         ? EXIT.usage
         : EXIT.integrity,
-      copiedRefreshWithoutSource && copiedRefresh
-        ? `install the native aidlc command and rerun this command, or run ${copiedRefresh}`
+      copiedRefreshWithoutSource && copiedSource
+        ? `rerun this command with --from ${copiedSource}`
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness
