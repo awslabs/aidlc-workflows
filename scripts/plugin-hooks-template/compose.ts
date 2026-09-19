@@ -2100,17 +2100,20 @@ try {
   // ordering guard. A stage THIS compose is adding has no row yet (the compiler
   // seeds it past its phase max), so an absent number is meaningful, not an
   // error. An unreadable or missing graph reads every stage as unpinned.
-  const pinnedNumber = (() => {
+  const installedNumbers = (() => {
     const numbers = new Map<string, string>();
+    let readable = false;
     try {
       const rows = JSON.parse(readFileSync(join(HARNESS_DIR, "tools", "data", "stage-graph.json"), "utf-8")) as Array<{ slug?: string; number?: string }>;
       for (const row of rows) if (row.slug && row.number) numbers.set(row.slug, row.number);
-    } catch { /* no installed graph yet */ }
-    return (slug: string): [number, number] | null => {
-      const [prefix, index] = (numbers.get(slug) ?? "").split(".").map((n) => parseInt(n, 10));
-      return Number.isFinite(prefix) && Number.isFinite(index) ? [prefix, index] : null;
-    };
+      readable = true;
+    } catch { /* absent or unreadable graph: ordering inside a phase cannot be verified */ }
+    return { readable, numbers };
   })();
+  const pinnedNumber = (slug: string): [number, number] | null => {
+    const [prefix, index] = (installedNumbers.numbers.get(slug) ?? "").split(".").map((n) => parseInt(n, 10));
+    return Number.isFinite(prefix) && Number.isFinite(index) ? [prefix, index] : null;
+  };
   for (const phase of contribPhases) {
     const phaseDir = join(contribRoot, phase);
     let files: string[];
@@ -2287,6 +2290,14 @@ try {
         if (depPhase !== targetPhase) {
           if (depPhase < targetPhase) return true;
           recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" is in a later phase than ${target}; an edge must point at an earlier stage; dropped`);
+          return false;
+        }
+        // Same phase: ordering is decided by pinned numbers, so it needs the
+        // installed graph. Without a readable graph the edge is unverifiable —
+        // dropped rather than merged blind into a compile that would roll the
+        // whole compose back.
+        if (!installedNumbers.readable) {
+          recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" is a same-phase edge and the installed stage graph is unreadable, so its ordering cannot be verified; dropped`);
           return false;
         }
         const depNumber = pinnedNumber(dep);

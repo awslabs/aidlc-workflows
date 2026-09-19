@@ -1013,6 +1013,39 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(sidecarPath)).toBe(false);
   });
 
+  test("adds.requires_stage without a readable installed graph keeps cross-phase edges and drops same-phase ones", () => {
+    // Same-phase ordering is decided by pinned numbers, which live in the
+    // installed stage-graph.json. When that file is unreadable the edge cannot
+    // be verified and is dropped; a cross-phase edge is decided by the phase
+    // directories alone and still merges.
+    const scope = [
+      "---", "name: syn-edge-nograph", "plugin: syn-edge-nograph",
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope carrying the plugin identity", "skeleton: off", "---", "",
+      "# syn-edge-nograph", "",
+    ].join("\n");
+    const contrib = [
+      "---", "target: build-and-test", "plugin: syn-edge-nograph",
+      "adds:", "  requires_stage:", "    - nfr-requirements", "    - domain-design",
+      "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-edge-nograph", {
+      "scopes/syn-edge-nograph.md": scope,
+      "contributions/construction/build-and-test.md": contrib,
+    }, ".claude", (_proj, harnessDir) => {
+      rmSync(join(harnessDir, "tools", "data", "stage-graph.json"));
+    });
+    const fm = readFileSync(stageSourcePath(proj, "construction", "build-and-test"), "utf-8")
+      .match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+    const edges = fm.match(/^requires_stage:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    expect(edges).toContain("- domain-design\n");
+    expect(edges).not.toContain("- nfr-requirements\n");
+    expect(drops).toContain('adds.requires_stage "nfr-requirements" is a same-phase edge and the installed stage graph is unreadable');
+    expect(drops).not.toContain("compile failed");
+    // Compose recompiled the graph it could not read.
+    expect(stage(proj, "build-and-test")?.requires_stage).toContain("domain-design");
+  });
+
   test("adds.requires_stage that cannot hold is dropped-with-log, not merged", () => {
     // Four entries that must all be refused: an unknown slug, a same-phase
     // stage numbered AFTER the target, a stage this very compose adds (it seeds
