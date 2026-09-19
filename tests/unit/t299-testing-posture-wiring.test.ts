@@ -24,6 +24,7 @@ import {
   parseTestingContract,
   questionsFileApprovalFingerprint,
   questionsFileApproved,
+  questionsFileHasPendingPlanApproval,
   renderTestingContract,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -761,6 +762,29 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
       "",
     ].join("\n");
     expect(questionsFileApprovalFingerprint(sibling)).toBe(fingerprint);
+
+    // Safety: a sub-heading may not turn a pending gate into an approval.
+    // A numbered heading is the next question however deeply it was nested,
+    // and a prose sub-heading may only FILL tags the section lacks, never
+    // replace ones it already carried.
+    const pendingThen = (subheading: string) =>
+      [
+        "## Plan Approval",
+        "",
+        "A. Approve Plan",
+        "B. Request Changes",
+        "[Answer]:",
+        "",
+        subheading,
+        "[Answer]: A. Approve Plan",
+        `[Approval Fingerprint]: ${fingerprint}`,
+        "",
+      ].join("\n");
+    for (const subheading of ["### 5. Follow-up", "### Follow-up", "## Other question"]) {
+      expect(questionsFileApproved(pendingThen(subheading)), subheading).toBe(false);
+      expect(questionsFileHasPendingPlanApproval(pendingThen(subheading)), subheading)
+        .toBe(true);
+    }
 
     // The numbered form puts the label under the heading, so the section it
     // opens has that heading's depth and its own sub-headings stay inside.
