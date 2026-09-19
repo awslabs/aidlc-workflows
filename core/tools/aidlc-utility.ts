@@ -125,7 +125,7 @@ import {
   getField,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
-  hooksHealthDir,
+  hooksHealthReadDir,
   isAutonomousMode,
   isPlainObject,
   isTeamUnitOwnership,
@@ -3738,7 +3738,10 @@ export async function collectDoctorReport(
   const heartbeatEntries = liveness.heartbeatEntries;
   const heartbeatDirExists = liveness.healthDirExists;
   const hasHookFiredContent = liveness.hasHookFiredContent;
-  const healthDir = hooksHealthDir(projectDir);
+  // The drops scan below is a read, so it follows the same legacy fallback the
+  // heartbeat read uses: a record from before the engine-dir move keeps both
+  // files under the legacy name until the next hook fires.
+  const healthDir = hooksHealthReadDir(projectDir);
   if (heartbeatEntries.length > 0) {
     if (liveness.stale) {
       results.push({
