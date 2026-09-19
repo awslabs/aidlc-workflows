@@ -161,6 +161,7 @@ import {
   harnessDir,
   unitGateStatus,
 } from "../tools/aidlc-lib.ts";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -1127,14 +1128,17 @@ function runEngineNextDirective(
   // marker it would refresh the engine mtime first and the answer would be `no`
   // forever: tier 3 would look implemented and never fire. markEngineTouch() is a
   // no-op when it sees this env var (aidlc-lib.ts).
+  // Native installs ship no Bun: the binary carries the runtime and runs this
+  // hook in-process, so a bare "bun" child is an ENOENT that throws before the
+  // null-means-fail-open branch below and leaves the stop unenforced. Route
+  // through the dispatcher helper, which names the compiled executable when
+  // there is one and Bun's own absolute path otherwise.
   const proc = Bun.spawnSync({
-    cmd: [
-      "bun",
+    cmd: aidlcEngineCommand(
+      "orchestrate",
+      ["next", "--project-dir", projectDir],
       enginePath,
-      "next",
-      "--project-dir",
-      projectDir,
-    ],
+    ),
     stdout: "pipe",
     stderr: "pipe",
     timeout: ENGINE_TIMEOUT_MS,
