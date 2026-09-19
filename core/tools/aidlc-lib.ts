@@ -15469,7 +15469,7 @@ function readSyncBufferedBytes(
   return bytes;
 }
 
-function gitTreeLeafEntries(
+export function gitTreeLeafEntries(
   repoDir: string,
   commit: string,
 ): GitTreeLeafEntry[] | null {
@@ -15519,15 +15519,17 @@ function gitTreeLeafEntries(
     }
     const pathBytes = record.subarray(tab + 1);
     const path = pathBytes.toString("utf-8");
+    // Git paths may originate on POSIX but be materialized on Windows. Reject
+    // Windows separators, streams, devices, and aliases on every platform.
     if (
       path.length === 0 ||
       !Buffer.from(path, "utf-8").equals(pathBytes) ||
       isAbsolute(path) ||
-      /^[A-Za-z]:\//.test(path) ||
-      path.startsWith("//") ||
+      /[\\\0:]/.test(path) ||
       path
         .split("/")
-        .some((part) => part.length === 0 || part === "." || part === "..") ||
+        .some((part) => part.length === 0 || part === "." || part === ".." ||
+          /[. ]$/.test(part) || /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(part)) ||
       seen.has(path)
     ) {
       return null;
@@ -15546,8 +15548,11 @@ function materializeRawGitTree(
   root: string,
   entries: readonly GitTreeLeafEntry[],
 ): boolean {
+  const checkoutRoot = resolvePath(root);
+  const privateRoot = dirname(checkoutRoot);
   const blobs = entries.filter((entry) => entry.mode !== "160000");
-  const batchPath = join(dirname(root), "cat-file.batch");
+  const batchPath = resolvePath(privateRoot, "cat-file.batch");
+  if (batchPath === privateRoot || !pathIsWithinRoot(privateRoot, batchPath)) return false;
   let batchFd: number | undefined;
   try {
     batchFd = openSync(batchPath, "w+");
@@ -15591,7 +15596,8 @@ function materializeRawGitTree(
       ) {
         return false;
       }
-      const target = join(root, entry.path);
+      const target = resolvePath(checkoutRoot, entry.path);
+      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return false;
       mkdirSync(dirname(target), { recursive: true });
       if (entry.mode === "120000") {
         const linkBytes = readSyncBufferedBytes(reader, size, 64 * 1024);
@@ -15616,7 +15622,9 @@ function materializeRawGitTree(
     }
     for (const entry of entries) {
       if (entry.mode !== "160000") continue;
-      mkdirSync(join(root, entry.path), { recursive: true });
+      const target = resolvePath(checkoutRoot, entry.path);
+      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return false;
+      mkdirSync(target, { recursive: true });
     }
     return true;
   } catch {
@@ -18948,7 +18956,12 @@ export function readCommittedUnitSourceManifest(
     const common = gitDir && gitCommonDirectory(gitDir);
     const entries = gitTreeLeafEntries(sourceRepoDir, commit);
     if (!common || !entries || !materializeRawGitTree(sourceRepoDir, checkoutDir, entries)) {
-      return { ok: false, reason: "immutable reviewed Source Commit is unavailable" };
+      return {
+        ok: false,
+        reason: "immutable reviewed Source Commit is unavailable or has unsafe paths; " +
+          "restore the reviewed commit, or rename unsafe paths with `git mv` and commit them, " +
+          `then rerun \`aidlc-swarm check ${unit}\` before native convergence`,
+      };
     }
     // A private index/HEAD gives ignore, path-mode and symlink validation the
     // reviewed tree, without registering a worktree or consulting mutable HEAD.

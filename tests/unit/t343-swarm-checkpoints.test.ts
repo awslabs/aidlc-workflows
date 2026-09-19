@@ -4,6 +4,7 @@
 // covers: subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, audit:SWARM_UNIT_CONVERGED
 // covers: function:askSwarmCheckpoint, function:requireProtectedResponse
 // covers: function:withdrawProtectedQuestions
+// covers: function:gitTreeLeafEntries
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -30,6 +31,7 @@ import {
   currentSwarmSourceOpeningFingerprint,
   findStageBySlug,
   gitCommitSourceListing,
+  gitTreeLeafEntries,
   intentRepos,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
@@ -635,6 +637,82 @@ describe("t343 completed swarm batch checkpoints", () => {
       expect(resolveSwarmCheckpoint(pd, 1, BATCH).errors.join(" ")).toContain("claimed source differs");
     }, 30_000,
   );
+
+  test("raw Git trees reject nonportable paths before immutable manifest materialization", () => {
+    const pd = fixture();
+    const rawGit = (args: string[], input?: string): string => {
+      const result = spawnSync("git", ["-C", pd, ...args], { input, encoding: "utf-8" });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    const blob = rawGit(["hash-object", "-w", "--stdin"], "export const alpha = 1;\n");
+    const symlink = rawGit(["hash-object", "-w", "--stdin"], "../../outside-target");
+    const nested = rawGit(["mktree", "-z"], `100644 blob ${blob}\talpha.ts\0`);
+    const src = rawGit(["mktree", "-z"], `040000 tree ${nested}\tnested\0`);
+    const safeTree = rawGit(["mktree", "-z"], `040000 tree ${src}\tsrc\0`);
+    const safeCommit = rawGit(["commit-tree", safeTree, "-m", "ordinary nested source"]);
+    const cases: { commit: string; path: string; ok: boolean }[] = [
+      { commit: safeCommit, path: "src/nested/alpha.ts", ok: true },
+    ];
+    const unsafePaths = [
+      "..\\..\\escape.txt", "a\\b.txt", "mixed/..\\x", "nul", "con.txt",
+      "nested/PrN.log", "AUX", "COM1", "com9.ext", "LPT1", "lpt9.ext",
+      "trail.", "nested/trail ", "file:stream", "C:drive-relative", "C:\\absolute",
+      "\\\\server\\share", "\\rooted",
+    ];
+    for (const path of unsafePaths) {
+      for (const mode of ["100644", "120000", "160000"] as const) {
+        const parts = path.split("/");
+        const leaf = parts.pop()!;
+        const type = mode === "160000" ? "commit" : "blob";
+        const oid = mode === "160000" ? safeCommit : mode === "120000" ? symlink : blob;
+        let entry = `${mode} ${type} ${oid}\t${leaf}\0`;
+        while (parts.length) {
+          const tree = rawGit(["mktree", "-z"], entry);
+          entry = `040000 tree ${tree}\t${parts.pop()}\0`;
+        }
+        const tree = rawGit(["mktree", "-z"], `040000 tree ${src}\tsrc\0${entry}`);
+        const commit = rawGit(["commit-tree", tree, "-m", "unsafe raw tree"]);
+        cases.push({ commit, path: `${mode} ${path}`, ok: false });
+      }
+    }
+    const scratch = join(pd, ".aidlc", "manifest-path-safety");
+    mkdirSync(scratch, { recursive: true });
+    const sentinel = join(scratch, "cat-file.batch");
+    writeFileSync(sentinel, "existing temporary sibling\n");
+    const before = readdirSync(scratch).sort();
+    const driver = join(pd, ".aidlc", "manifest-path-safety.ts");
+    writeFileSync(driver, `
+import { readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { gitTreeLeafEntries, readCommittedUnitSourceManifest } from ${JSON.stringify(join(AIDLC_SRC, "tools", "aidlc-lib.ts"))};
+const cases = ${JSON.stringify(cases)};
+const bytes = Buffer.from(JSON.stringify({
+  stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "src/nested/alpha.ts" }],
+}));
+const before = JSON.stringify(readdirSync(tmpdir()).sort());
+for (const { commit, path, ok } of cases) {
+  const entries = gitTreeLeafEntries(${JSON.stringify(pd)}, commit);
+  if ((entries !== null) !== ok) throw new Error("tree path validation: " + path);
+  const result = readCommittedUnitSourceManifest(${JSON.stringify(pd)}, commit, false, "code-generation", "alpha", bytes);
+  if (result.ok !== ok) throw new Error("manifest validation: " + path + " " + JSON.stringify(result));
+  if (result.ok && result.listing.get("\\0src/nested/alpha.ts") !== ${JSON.stringify(`100644 ${createHash("sha256").update("export const alpha = 1;\n").digest("hex")}`)}) {
+    throw new Error("nested source bytes did not materialize");
+  }
+  if (JSON.stringify(readdirSync(tmpdir()).sort()) !== before) throw new Error("escaped or uncleaned path: " + path);
+}
+`);
+    const result = Bun.spawnSync([process.execPath, driver], {
+      cwd: pd, env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(readdirSync(scratch).sort()).toEqual(before);
+    expect(readFileSync(sentinel, "utf-8")).toBe("existing temporary sibling\n");
+    expect(gitTreeLeafEntries(pd, safeCommit)).toEqual([
+      { mode: "100644", oid: blob, path: "src/nested/alpha.ts" },
+    ]);
+  }, 30_000);
 
   test("immutable manifest initialization stays private with ambient GIT_DIR", () => {
     const pd = fixture();
