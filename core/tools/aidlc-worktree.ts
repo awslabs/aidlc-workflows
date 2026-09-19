@@ -2847,6 +2847,7 @@ function parkAttempt(
       });
       if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
       const includedRegularPaths = new Set<string>();
+      const regularPathBytes: Buffer[] = [];
       const nonUtf8Paths: Buffer[] = [];
       for (let start = 0; start < listed.stdout.length;) {
         const end = listed.stdout.indexOf(0, start);
@@ -2856,6 +2857,7 @@ function parkAttempt(
         if (!/^100(?:644|755) /.test(record.subarray(0, 7).toString("ascii"))) continue;
         const tab = record.indexOf(0x09);
         if (tab === -1) throw new Error("cannot parse a parked regular-file index entry");
+        regularPathBytes.push(record.subarray(tab + 1));
         const pathBytes = record.subarray(tab + 1, -1);
         const path = pathBytes.toString();
         if (Buffer.from(path).equals(pathBytes)) includedRegularPaths.add(path);
@@ -2883,6 +2885,41 @@ function parkAttempt(
             throw new Error(`cannot park filtered file with a non-UTF-8 name: ${JSON.stringify(path.toString("latin1"))}; rename it or remove its filter`);
           }
           start = valueEnd + 1;
+        }
+      }
+      // working-tree-encoding re-encodes on add like a clean filter but is not a
+      // filter, so the shared filteredRawIndexEntries helper does not see it.
+      if (regularPathBytes.length > 0) {
+        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "working-tree-encoding"], {
+          cwd: wtPath,
+          env: { ...process.env, ...env },
+          stdin: Buffer.concat(regularPathBytes),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        if (attrs.exitCode !== 0) throw new Error(`git check-attr failed: ${attrs.stderr.toString().trim() || `exit ${attrs.exitCode}`}`);
+        const unspecified = Buffer.from("unspecified");
+        const unset = Buffer.from("unset");
+        for (let start = 0; start < attrs.stdout.length;) {
+          const pathEnd = attrs.stdout.indexOf(0, start);
+          const attrEnd = pathEnd === -1 ? -1 : attrs.stdout.indexOf(0, pathEnd + 1);
+          const valueEnd = attrEnd === -1 ? -1 : attrs.stdout.indexOf(0, attrEnd + 1);
+          if (valueEnd === -1) throw new Error("invalid parked path attributes");
+          const pathBytes = attrs.stdout.subarray(start, pathEnd);
+          const value = attrs.stdout.subarray(attrEnd + 1, valueEnd);
+          start = valueEnd + 1;
+          if (value.equals(unspecified) || value.equals(unset)) continue;
+          const path = pathBytes.toString();
+          if (!Buffer.from(path).equals(pathBytes)) {
+            throw new Error(`cannot park encoded file with a non-UTF-8 name: ${JSON.stringify(pathBytes.toString("latin1"))}; rename it or remove its working-tree-encoding attribute`);
+          }
+          const indexed = requireGit(["ls-files", "-s", "-z", "--", path], wtPath, env);
+          const mode = indexed.slice(0, indexed.indexOf(" "));
+          if (!/^100(?:644|755)$/.test(mode)) {
+            throw new Error(`cannot resolve the index mode for encoded path ${path}`);
+          }
+          const raw = requireGit(["hash-object", "-w", "--no-filters", "--", path], wtPath, env);
+          requireGit(["update-index", "--cacheinfo", mode, raw, path], wtPath, env);
         }
       }
       const rawEntries = filteredRawIndexEntries(wtPath, idx, includedRegularPaths);

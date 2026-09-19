@@ -829,6 +829,37 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       });
     }
 
+    test.skipIf(process.platform === "win32")("discard and restore preserve working-tree-encoding bytes for tracked and untracked files", () => {
+      const proj = setupLifecycleProject();
+      const slug = "working-tree-encoding";
+      const wt = worktreeDir(proj, slug);
+      writeFileSync(join(proj, ".gitattributes"), "*.ps1 working-tree-encoding=UTF-16LE\n");
+      writeFileSync(join(proj, "script.ps1"), Buffer.from("Write-Output 'original'\n", "utf16le"));
+      gitInitMain(proj);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const trackedBytes = Buffer.from("Write-Output 'modified café'\n", "utf16le");
+      const untrackedBytes = Buffer.from("Write-Output 'new résumé'\n", "utf16le");
+      writeFileSync(join(wt, "script.ps1"), trackedBytes);
+      writeFileSync(join(wt, "new.ps1"), untrackedBytes);
+
+      const aborted = runBolt(
+        proj, "abort", "--name", "Working Tree Encoding Bolt", "--slug", slug,
+        "--reason", "retain UTF-16LE bytes", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
+      const parked = spawnSync("git", ["cat-file", "blob", `${parkedRef}/head:script.ps1`], { cwd: proj });
+      expect(parked.status).toBe(0);
+      expect(parked.stdout).toEqual(trackedBytes);
+
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const recovery = JSON.parse(restored.out) as { worktree_path: string; raw_bytes: boolean };
+      expect(recovery.raw_bytes).toBe(true);
+      expect(readFileSync(join(recovery.worktree_path, "script.ps1"))).toEqual(trackedBytes);
+      expect(readFileSync(join(recovery.worktree_path, "new.ps1"))).toEqual(untrackedBytes);
+    });
+
     test.skipIf(process.platform === "win32")("discard refuses a filtered non-UTF-8 filename before removing the live attempt", () => {
       const proj = setupLifecycleProject();
       const slug = "non-utf8-filtered";

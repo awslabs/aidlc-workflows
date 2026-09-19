@@ -753,7 +753,7 @@ Audit-of-intent semantics apply to side-effects whose outcome cannot be checked 
 
 Discard snapshots tracked and untracked, non-ignored working-tree content with a
 temporary Git index and `commit-tree`. Regular files with configured clean filters
-retain raw bytes, bypassing clean filters. A regular file whose name is not valid
+or `working-tree-encoding` retain raw bytes, bypassing those transformations. A regular file whose name is not valid
 UTF-8 and carries a `filter`, `text`, `eol`, `ident`, or `working-tree-encoding`
 attribute (neither unspecified nor unset) cannot be parked: discard refuses before removing anything, leaving the
 live attempt intact rather than parking altered bytes; rename the file or remove
