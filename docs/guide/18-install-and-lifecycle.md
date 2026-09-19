@@ -523,7 +523,9 @@ bytes remain valid.
 
 On a Bedrock-oriented harness `unchanged` is always the second answer, and it
 becomes the default once something is recorded, so re-entering the section never
-silently rewrites a region or profile you already set. It names what it keeps,
+silently rewrites a region or profile you already set, and choosing
+`amazon-bedrock` again leads with the recorded region, profile, and opencode
+answer as the prompt defaults. It names what it keeps,
 records nothing, and still reaches the mark-done prompts, so a pending action
 can be cleared without re-answering.
 

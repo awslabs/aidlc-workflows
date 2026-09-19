@@ -605,4 +605,42 @@ describe("t296 first-run config setup walk", () => {
       expect(quiet.stdout.trimEnd().split(/\r?\n/), section).toEqual([line]);
     }
   }, 120_000);
+
+  test("re-entering providers and choosing amazon-bedrock keeps the recorded region and profile on Enter", () => {
+    const path = project("aidlc-t296-provider-reentry-");
+    const env = hookPathEnv("aidlc", true, {
+      AWS_ACCESS_KEY_ID: "test-access",
+      AWS_SECRET_ACCESS_KEY: "test-secret",
+    });
+    const walk = run(
+      scaffoldArgs(path),
+      path,
+      env,
+      "\nproject\n1\nbalanced\n\nus-west-2\ndev\ny\n",
+    );
+    expect(walk.status, walk.stdout + walk.stderr).toBe(0);
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toEqual(
+      expect.objectContaining({ region: "us-west-2", profile: "dev" }),
+    );
+    // Menu: 1 (amazon-bedrock, not the default `unchanged`); region: Enter;
+    // profile: Enter; the mark-done loop asks nothing because the only pending
+    // action is already done; then the apply confirmation.
+    const reentry = run(
+      ["config", "providers", "--project-dir", path],
+      path,
+      env,
+      "1\n\n\ny\n",
+    );
+    expect(reentry.status, reentry.stdout + reentry.stderr).toBe(0);
+    // The prompts lead with the recorded answer, not detection or the default
+    // chain, so what is displayed is what Enter keeps.
+    expect(reentry.stdout).toContain("AWS region [us-west-2]:");
+    expect(reentry.stdout).toContain("AWS profile [dev]:");
+    expect(reentry.stdout).toContain("Using amazon-bedrock in us-west-2 with dev.");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toEqual(
+      expect.objectContaining({ region: "us-west-2", profile: "dev" }),
+    );
+    expect(readFileSync(join(path, ".claude", "settings.json"), "utf-8"))
+      .toContain('"AWS_REGION": "us-west-2"');
+  }, 90_000);
 });
