@@ -12,11 +12,11 @@
 // to avoid the dev-worktree-vs-bolt-worktree clash. Run from the main repo
 // checkout.
 
-import { spawnSync } from "node:child_process";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
@@ -217,19 +217,41 @@ function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): s
   return null;
 }
 
-// --- Sibling-worktree detection ---
+// --- Nested-worktree detection ---
 //
-// `aidlc-worktree` must run from the main repo checkout, not from a sibling
-// worktree (e.g. `.claude/worktrees/<dev>/`). The main checkout is the
-// directory whose `.git` is the same as `git rev-parse --git-common-dir`'s
-// parent. macOS symlinks `/var → /private/var`, so canonicalise both sides
-// via `realpathSync` before comparing.
+// `aidlc-worktree` must not run from a checkout NESTED INSIDE the main repo
+// checkout's working tree — the `.aidlc/worktrees/<bolt>` (or legacy
+// `.claude/worktrees/<dev>`) shape the error names. Creating a Bolt worktree from
+// there would place one worktree inside another's tracked tree, which is exactly
+// what "Bolt worktrees are siblings of the main checkout, not nested" forbids.
+// The main checkout is the directory whose `.git` is `git rev-parse
+// --git-common-dir`'s parent. macOS symlinks `/var → /private/var`, so
+// canonicalise both sides via `realpathSync` before comparing.
+//
+// A linked worktree that lives OUTSIDE the main checkout is ALLOWED (#567). The
+// one-worktree-per-branch layout is ordinary, and nothing about it breaks the
+// invariant above: git registers such a worktree under the same common dir (so
+// `gitCommonDirHash` and the creating-repo binding are unchanged), the Bolt
+// worktrees it creates hang off ITS root rather than inside anyone else's tree,
+// and `--base` / the merge target stay bound to the invoking checkout — which is
+// the property that keeps a unit forking from the branch holding approved work
+// rather than from whatever the main checkout happens to have checked out.
 //
 // P7 (multi-repo): the guard is RE-ANCHORED to the TARGET repo's checkout. When
 // `--repo <name>` selects a sibling repo, `repoCwd` is that repo dir and every
-// git probe runs there — so "must run from the main checkout" is evaluated against
-// the sibling repo, not the (non-git) workspace root. Absent `--repo` (legacy
-// single-repo), `repoCwd` is the projectDir and the behaviour is unchanged.
+// git probe runs there — so the nesting test is evaluated against the sibling
+// repo, not the (non-git) workspace root. Absent `--repo` (legacy single-repo),
+// `repoCwd` is the projectDir and the behaviour is unchanged.
+
+// True when `child` is strictly inside `parent` (never for equal paths). A leading
+// `..` segment on a separator boundary means outside, not a `..foo` directory name.
+function isNestedInside(parent: string, child: string): boolean {
+  if (child === parent) return false;
+  const rel = relative(parent, child);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+  return true;
+}
+
 function assertNotSiblingWorktree(repoCwd?: string): void {
   const top = runGit(["rev-parse", "--show-toplevel"], repoCwd);
   if (!top.ok) {
@@ -245,9 +267,9 @@ function assertNotSiblingWorktree(repoCwd?: string): void {
   const commonAbs = resolve(cwdTop, commonRaw);
   const mainCheckout = canonicalise(dirname(commonAbs));
 
-  if (cwdTop !== mainCheckout) {
+  if (cwdTop !== mainCheckout && isNestedInside(mainCheckout, cwdTop)) {
     error(
-      `aidlc-worktree must run from the main repo checkout, not from a sibling worktree at ${cwdTop}. Bolt worktrees are siblings of the main checkout, not nested.`
+      `aidlc-worktree must run from the main repo checkout or a worktree outside it, not from a worktree nested inside it at ${cwdTop}. Bolt worktrees are siblings of the main checkout, not nested.`
     );
   }
 }
@@ -2812,7 +2834,8 @@ function parkAttempt(
   let stamp = baseStamp;
   for (let suffix = 2; occupied.has(stamp); suffix++) stamp = `${baseStamp}-${suffix}`;
   const ref = `refs/aidlc/parked/${slug}/${stamp}`;
-  const requireGit = (args: string[], cwd = repoCwd, env?: NodeJS.ProcessEnv): string => {
+  const objectEnv = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const requireGit = (args: string[], cwd = repoCwd, env: NodeJS.ProcessEnv = objectEnv): string => {
     const result = runGit(args, cwd, env);
     if (!result.ok) throw new Error(result.stderr.trim() || `git ${args[0]} exited ${result.code}`);
     return result.stdout.trim();
@@ -2824,6 +2847,7 @@ function parkAttempt(
     // An internal snapshot must not depend on the user's identity or mutate the
     // live index/branch. Seed tracked paths before add so ignored tracked files survive.
     const env = {
+      ...objectEnv,
       GIT_INDEX_FILE: idx,
       GIT_AUTHOR_NAME: "AI-DLC",
       GIT_AUTHOR_EMAIL: "aidlc@localhost",
@@ -2837,12 +2861,88 @@ function parkAttempt(
       // Clean filters may transform dirty bytes; the park must hold the exact
       // bytes that `worktree remove --force` is about to destroy.
       // Symlinks and gitlinks stay exactly as `git add -A` staged them.
+      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+        cwd: wtPath,
+        env: { ...process.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
       const includedRegularPaths = new Set<string>();
-      for (const record of requireGit(["ls-files", "-s", "-z"], wtPath, env).split("\0")) {
-        if (!/^100(?:644|755) /.test(record)) continue;
-        const tab = record.indexOf("\t");
+      const regularPathBytes: Buffer[] = [];
+      const nonUtf8Paths: Buffer[] = [];
+      for (let start = 0; start < listed.stdout.length;) {
+        const end = listed.stdout.indexOf(0, start);
+        if (end === -1) throw new Error("invalid parked index entry");
+        const record = listed.stdout.subarray(start, end + 1);
+        start = end + 1;
+        if (!/^100(?:644|755) /.test(record.subarray(0, 7).toString("ascii"))) continue;
+        const tab = record.indexOf(0x09);
         if (tab === -1) throw new Error("cannot parse a parked regular-file index entry");
-        includedRegularPaths.add(record.slice(tab + 1));
+        regularPathBytes.push(record.subarray(tab + 1));
+        const pathBytes = record.subarray(tab + 1, -1);
+        const path = pathBytes.toString();
+        if (Buffer.from(path).equals(pathBytes)) includedRegularPaths.add(path);
+        else nonUtf8Paths.push(record.subarray(tab + 1));
+      }
+      if (nonUtf8Paths.length > 0) {
+        // String-based attribute/hash helpers cannot address these filenames.
+        // Ask Git with the original NUL-terminated bytes before trusting add's blobs.
+        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "filter", "text", "eol", "ident", "working-tree-encoding"], {
+          cwd: wtPath,
+          env: { ...process.env, ...env },
+          stdin: Buffer.concat(nonUtf8Paths),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        if (attrs.exitCode !== 0) throw new Error(`git check-attr failed: ${attrs.stderr.toString().trim() || `exit ${attrs.exitCode}`}`);
+        for (let start = 0; start < attrs.stdout.length;) {
+          const pathEnd = attrs.stdout.indexOf(0, start);
+          const attrEnd = pathEnd === -1 ? -1 : attrs.stdout.indexOf(0, pathEnd + 1);
+          const valueEnd = attrEnd === -1 ? -1 : attrs.stdout.indexOf(0, attrEnd + 1);
+          if (valueEnd === -1) throw new Error("invalid parked path attributes");
+          const value = attrs.stdout.subarray(attrEnd + 1, valueEnd).toString();
+          if (value !== "unspecified" && value !== "unset") {
+            const path = attrs.stdout.subarray(start, pathEnd);
+            throw new Error(`cannot park filtered file with a non-UTF-8 name: ${JSON.stringify(path.toString("latin1"))}; rename it or remove its filter`);
+          }
+          start = valueEnd + 1;
+        }
+      }
+      // working-tree-encoding re-encodes on add like a clean filter but is not a
+      // filter, so the shared filteredRawIndexEntries helper does not see it.
+      if (regularPathBytes.length > 0) {
+        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "working-tree-encoding"], {
+          cwd: wtPath,
+          env: { ...process.env, ...env },
+          stdin: Buffer.concat(regularPathBytes),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        if (attrs.exitCode !== 0) throw new Error(`git check-attr failed: ${attrs.stderr.toString().trim() || `exit ${attrs.exitCode}`}`);
+        const unspecified = Buffer.from("unspecified");
+        const unset = Buffer.from("unset");
+        for (let start = 0; start < attrs.stdout.length;) {
+          const pathEnd = attrs.stdout.indexOf(0, start);
+          const attrEnd = pathEnd === -1 ? -1 : attrs.stdout.indexOf(0, pathEnd + 1);
+          const valueEnd = attrEnd === -1 ? -1 : attrs.stdout.indexOf(0, attrEnd + 1);
+          if (valueEnd === -1) throw new Error("invalid parked path attributes");
+          const pathBytes = attrs.stdout.subarray(start, pathEnd);
+          const value = attrs.stdout.subarray(attrEnd + 1, valueEnd);
+          start = valueEnd + 1;
+          if (value.equals(unspecified) || value.equals(unset)) continue;
+          const path = pathBytes.toString();
+          if (!Buffer.from(path).equals(pathBytes)) {
+            throw new Error(`cannot park encoded file with a non-UTF-8 name: ${JSON.stringify(pathBytes.toString("latin1"))}; rename it or remove its working-tree-encoding attribute`);
+          }
+          const indexed = requireGit(["ls-files", "-s", "-z", "--", path], wtPath, env);
+          const mode = indexed.slice(0, indexed.indexOf(" "));
+          if (!/^100(?:644|755)$/.test(mode)) {
+            throw new Error(`cannot resolve the index mode for encoded path ${path}`);
+          }
+          const raw = requireGit(["hash-object", "-w", "--no-filters", "--", path], wtPath, env);
+          requireGit(["update-index", "--cacheinfo", mode, raw, path], wtPath, env);
+        }
       }
       const rawEntries = filteredRawIndexEntries(wtPath, idx, includedRegularPaths);
       if (rawEntries === null) throw new Error("cannot compare raw bytes for filtered paths");
@@ -2870,6 +2970,8 @@ function parkAttempt(
     commit = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
   }
   if (commit !== "-") requireGit(["update-ref", `${ref}/head`, commit, ""]);
+  if (dirExists) requireGit(["update-ref", `${ref}/snapshot`, commit, ""]);
+  if (!dirExists && branchExists) requireGit(["update-ref", `${ref}/branch-tip`, commit, ""]);
   // Copy every source ref before audit/removal. Originals remain intact if any
   // copy fails; their compare-and-delete runs only after successful teardown.
   for (const source of retained) {
@@ -3083,8 +3185,52 @@ function parkedRepoCwd(
   return parkedRepos[0].cwd;
 }
 
+/** Validate Git's relative path without decoding the bytes used for filesystem IO. */
+export function restoreDestination(
+  rootRealpath: Buffer,
+  pathBytes: Buffer,
+): { destination: Buffer; parent: Buffer } {
+  // Decode only for lexical checks: filenames may contain arbitrary non-UTF-8 bytes.
+  const path = pathBytes.toString();
+  const root = rootRealpath.toString();
+  if (!path || pathBytes.includes(0) || isAbsolute(path) ||
+      path.split("/").includes("..") ||
+      !resolve(root, path).startsWith(`${root}${sep}`)) {
+    throw new Error(`refusing parked path outside the restore checkout: ${JSON.stringify(path)}`);
+  }
+  const destination = Buffer.concat([rootRealpath, Buffer.from(sep), pathBytes]);
+  const slash = pathBytes.lastIndexOf(0x2f);
+  const parent = slash === -1 ? rootRealpath : destination.subarray(0, rootRealpath.length + 1 + slash);
+  return { destination, parent };
+}
+
+/** Check existing prefixes before recursive mkdir can follow a symlink outside the checkout. */
+export function assertNoSymlinkedAncestor(rootRealpath: Buffer, parent: Buffer): void {
+  for (let end = rootRealpath.length + 1; end <= parent.length; end++) {
+    if (end !== parent.length && parent[end] !== 0x2f && parent[end] !== sep.charCodeAt(0)) continue;
+    const ancestor = parent.subarray(0, end);
+    const stat = lstatSync(ancestor, { throwIfNoEntry: false });
+    if (!stat) return;
+    if (stat.isSymbolicLink()) {
+      throw new Error(`refusing symlinked parked parent: ${JSON.stringify(ancestor.toString())}`);
+    }
+  }
+}
+
+/** Reject symlinked parents, including aliases whose targets remain inside the checkout. */
+export function assertParentInsideCheckout(rootRealpath: Buffer, parent: Buffer): void {
+  const isSeparator = (byte: number): boolean => byte === 0x2f || byte === sep.charCodeAt(0);
+  const inside = (path: Buffer): boolean => path.equals(rootRealpath) ||
+    (path.subarray(0, rootRealpath.length).equals(rootRealpath) && isSeparator(path[rootRealpath.length]));
+  if (!inside(parent) || !inside(realpathSync(parent, { encoding: "buffer" }))) {
+    throw new Error(`refusing parked parent outside the restore checkout: ${JSON.stringify(parent.toString())}`);
+  }
+  assertNoSymlinkedAncestor(rootRealpath, parent);
+}
+
 function handleRestore(args: string[]): void {
-  const flags = parseFlags(args);
+  // --raw is a bare boolean; parseFlags handles only value-bearing flags.
+  const flags = parseFlags(args.filter((arg) => arg !== "--raw"));
   const slug = validateSlug(flags.slug);
   validateParkedStamp(flags.parked);
   const pd = resolveProjectDir(projectDir);
@@ -3107,8 +3253,105 @@ function handleRestore(args: string[]): void {
   if (existsSync(wtPath) || runGit(["rev-parse", "--verify", `refs/heads/${branch}`], repoCwd).ok) {
     errorWithSlug(slug, `already restored at ${wtPath}`);
   }
-  const added = runGit(["worktree", "add", "-b", branch, wtPath, head.oid], repoCwd);
-  if (!added.ok) errorWithSlug(slug, `git worktree add failed: ${added.stderr.trim() || `exit ${added.code}`}`);
+  let restoreMode: "snapshot" | "branch-tip" | "legacy-snapshot" | "legacy-branch-tip" | "raw-requested";
+  if (args.includes("--raw")) {
+    restoreMode = "raw-requested";
+  } else if (refs.some(({ ref }) => ref === `${parkedRef}/snapshot`)) {
+    restoreMode = "snapshot";
+  } else if (refs.some(({ ref }) => ref === `${parkedRef}/branch-tip`)) {
+    restoreMode = "branch-tip";
+  } else {
+    // Legacy parks have only /head for both shapes. Only tool-authored snapshot
+    // commits contain working-tree bytes; ordinary branch tips need checkout conversions.
+    const identity = runGit(["log", "-1", "--format=%an%x00%ae%x00%s", head.oid], repoCwd, { GIT_NO_REPLACE_OBJECTS: "1" });
+    if (!identity.ok) errorWithSlug(slug, `cannot classify parked head: ${identity.stderr.trim() || `exit ${identity.code}`}`);
+    const [author, email, subject] = identity.stdout.split("\0");
+    restoreMode = author === "AI-DLC" && email === "aidlc@localhost" && subject?.startsWith(`aidlc: parked bolt-${slug} at `)
+      ? "legacy-snapshot" : "legacy-branch-tip";
+  }
+  const raw = restoreMode !== "branch-tip" && restoreMode !== "legacy-branch-tip";
+  const added = runGit(["worktree", "add", ...(raw ? ["--no-checkout"] : []), "-b", branch, wtPath, head.oid], repoCwd);
+  if (!added.ok) {
+    errorWithSlug(slug, `git worktree add failed: ${added.stderr.trim() || `exit ${added.code}`}${raw ? "" : "; --raw bypasses checkout filters"}`);
+  }
+  let materialized = 0;
+  if (raw) {
+    const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
+    try {
+      const indexed = runGit(["read-tree", head.oid], wtPath, env);
+      if (!indexed.ok) throw new Error(`git read-tree failed: ${indexed.stderr.trim() || `exit ${indexed.code}`}`);
+      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+        cwd: wtPath,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
+      const symlinkConfig = runGit(["config", "--bool", "core.symlinks"], wtPath, env);
+      if (!symlinkConfig.ok && symlinkConfig.code !== 1) {
+        throw new Error(`git config core.symlinks failed: ${symlinkConfig.stderr.trim() || `exit ${symlinkConfig.code}`}`);
+      }
+      const symlinks = symlinkConfig.stdout.trim() !== "false";
+      const rootRealpath = realpathSync(Buffer.from(wtPath), { encoding: "buffer" });
+      const umask = process.umask();
+      for (let start = 0; start < listed.stdout.length;) {
+        const end = listed.stdout.indexOf(0, start);
+        if (end === -1) throw new Error("invalid parked index entry");
+        const entry = listed.stdout.subarray(start, end);
+        start = end + 1;
+        const tab = entry.indexOf(0x09);
+        const match = /^([0-7]{6}) ([0-9a-f]{40,64}) 0$/.exec(entry.subarray(0, tab).toString("ascii"));
+        if (tab === -1 || !match) throw new Error("invalid parked index entry");
+        const [, mode, sha] = match;
+        const pathBytes = entry.subarray(tab + 1);
+        const { destination, parent } = restoreDestination(rootRealpath, pathBytes);
+        if (mode !== "100644" && mode !== "100755" && mode !== "120000" && mode !== "160000") {
+          throw new Error(`unsupported parked index mode ${mode} for ${JSON.stringify(pathBytes.toString())}`);
+        }
+        assertNoSymlinkedAncestor(rootRealpath, parent);
+        mkdirSync(parent, { recursive: true });
+        assertParentInsideCheckout(rootRealpath, parent);
+        if (mode === "160000") {
+          mkdirSync(destination);
+          continue;
+        }
+        if (mode === "120000") {
+          // Only symlink targets are small enough to buffer in memory.
+          const blob = Bun.spawnSync(["git", "cat-file", "blob", sha], {
+            cwd: wtPath,
+            env,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          if (blob.exitCode !== 0) {
+            throw new Error(`git cat-file failed for ${JSON.stringify(pathBytes.toString())}: ${blob.stderr.toString().trim() || `exit ${blob.exitCode}`}`);
+          }
+          if (symlinks) symlinkSync(blob.stdout, destination);
+          else writeFileSync(destination, blob.stdout, { flag: "wx" });
+        } else {
+          const fd = openSync(destination, "wx");
+          let blob: SpawnSyncReturns<Buffer>;
+          try {
+            blob = spawnSync("git", ["cat-file", "blob", sha], {
+              cwd: wtPath,
+              env,
+              stdio: ["ignore", fd, "pipe"],
+            });
+          } finally {
+            closeSync(fd);
+          }
+          if (blob.status !== 0) {
+            rmSync(destination, { force: true });
+            throw new Error(`git cat-file failed for ${JSON.stringify(pathBytes.toString())}: ${blob.stderr?.toString().trim() || blob.error?.message || `exit ${blob.status}`}`);
+          }
+          if (mode === "100755") chmodSync(destination, 0o777 & ~umask);
+        }
+        materialized++;
+      }
+    } catch (e) {
+      errorWithSlug(slug, `raw restore failed: ${errorMessage(e)}; partial checkout left in place at ${wtPath}`);
+    }
+  }
   console.log(JSON.stringify({
     restored: true,
     slug,
@@ -3116,6 +3359,9 @@ function handleRestore(args: string[]): void {
     worktree_path: wtPath,
     branch,
     reviewed_source_refs: refs.filter(({ ref }) => ref.startsWith(`${parkedRef}/reviewed-source/`)).length,
+    ...(raw ? { materialized } : {}),
+    raw_bytes: raw,
+    restore_mode: restoreMode,
   }));
 }
 

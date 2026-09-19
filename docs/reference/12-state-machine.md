@@ -630,7 +630,7 @@ Pre-registered for v0.4.0; the three `WORKTREE_*` rows ship with `aidlc-worktree
 |---|---|---|
 | `WORKTREE_CREATED` | `tools/aidlc-worktree.ts` | Audit-first per-Bolt creation records the immutable Base commit, `Base Source Listing`, and portable creating-repo selector (`Repo`, `-` for root); private worktree metadata also binds the canonical Git common-dir. Swarm prepare additionally stamps intent/Unit/batch/stage/floor provenance (subcommand: `create`) |
 | `WORKTREE_MERGED` | `tools/aidlc-worktree.ts` | Bolt's worktree merged back to main on gate approval (subcommand: `merge`) |
-| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Bolt's recoverable working-tree snapshot and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission; `Parked ref` records that namespace prefix and `Parked commit` the snapshot commit (`-` when only reviewed refs remain). The live checkout and branch are then removed (subcommand: `discard`) |
+| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission; `Parked ref` records that namespace prefix and `Parked commit` the snapshot commit or branch tip (`-` when only reviewed refs remain). The live checkout and branch are then removed (subcommand: `discard`) |
 | `STATE_FORKED` | `tools/aidlc-state.ts` | State file forked to worktree on Bolt start (subcommand: `fork`) |
 | `STATE_MERGED` | `tools/aidlc-state.ts` | Worktree's state merged back to main on gate approval; alphabetical-slug tiebreak as defence-in-depth (subcommand: `merge`) |
 | `AUDIT_FORKED` | `tools/aidlc-audit.ts` (`audit-fork`) | Audit log forked to worktree on Bolt start; audit-of-intent — emit precedes the byte-copy |
@@ -753,15 +753,41 @@ Audit-of-intent semantics apply to side-effects whose outcome cannot be checked 
 
 Discard snapshots tracked and untracked, non-ignored working-tree content with a
 temporary Git index and `commit-tree`. Regular files with configured clean filters
-retain raw bytes, bypassing clean filters. All parked copies must exist before
+or `working-tree-encoding` retain raw bytes, bypassing those transformations. A regular file whose name is not valid
+UTF-8 and carries a `filter`, `text`, `eol`, `ident`, or `working-tree-encoding`
+attribute (neither unspecified nor unset) cannot be parked: discard refuses before removing anything, leaving the
+live attempt intact rather than parking altered bytes; rename the file or remove
+its attributes to proceed. Such names without these attributes park normally.
+All parked copies must exist before
 `WORKTREE_DISCARDED` can be emitted; if parking or audit emission fails, teardown
 does not start. The row's `Parked ref` names
 `refs/aidlc/parked/<slug>/<UTC-YYYYMMDDTHHMMSSZ[-N]>`, whose `/head` points to
 `Parked commit` and whose `/reviewed-source/<commit>` refs preserve the reviewed
-source evidence. `aidlc engine worktree restore --slug <slug>` recovers the
-snapshot in an isolated restored checkout; `worktree purge` explicitly removes
-parked refs. Neither command adds an audit event, and neither repurposes the
-live Bolt path or branch.
+source evidence. When only the branch remains, `/head` preserves its ordinary
+committed blobs and a matching `/branch-tip` marker is created. Snapshot parks
+instead have a `/snapshot` marker pointing to the same commit as `/head`.
+`aidlc engine worktree restore --slug <slug>` recovers the attempt in an isolated
+restored checkout. It checks the bare `--raw` flag first, then `/snapshot`, then
+`/branch-tip`. Legacy parks have neither marker for either shape: an unmarked
+head is a snapshot only if its commit author is exactly `AI-DLC`, its email is
+`aidlc@localhost`, and its subject starts with `aidlc: parked bolt-<slug> at `.
+The identity check ignores Git replacement objects; all other unmarked heads
+are branch tips. Snapshots and explicit `--raw` write parked blobs byte-exact
+without smudge/process filters or working-tree-encoding conversions; regular-file
+blobs stream directly to disk and only symlink targets are buffered. Branch tips
+use Git's ordinary checkout, applying filters and encoding conversions; a
+required failing filter fails the restore with Git's message.
+JSON `restore_mode` reports `raw-requested`, `snapshot`, `branch-tip`,
+`legacy-snapshot`, or `legacy-branch-tip`, respectively. `raw_bytes` is `true`
+for byte-exact materialization and `false` for ordinary Git checkout;
+`materialized` counts regular files and symlinks only in raw mode and is absent
+for ordinary checkout. Raw-restored filtered paths may show as modified
+under their own filter. Submodule gitlinks become empty directories;
+submodule checkouts are not restored. Git's eol/`text=auto` normalization during
+parking is the explicit limit: CRLF bytes normalized at park time are not
+recoverable. `worktree purge` explicitly removes all parked refs, including the
+`/snapshot` or `/branch-tip` marker. Neither command
+adds an audit event, and neither repurposes the live Bolt path or branch.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
 

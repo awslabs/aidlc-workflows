@@ -128,6 +128,54 @@ describe("t299 (1) additive methodology resolution", () => {
     expect(contract.ordering).toBe("tests first, then implementation.");
   });
 
+  // Markdown authors and formatters wrap long bullets onto an indented
+  // continuation line. The Ordering that reaches the fingerprinted contract
+  // must be the whole sentence, not the first physical line of it - the
+  // shipped org.md default is itself written that way.
+  test("a wrapped Ordering bullet reaches the contract whole", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "- **Methodology**: bdd",
+        "- **Ordering**: write Gherkin scenarios from acceptance criteria first,",
+        "  then implement each layer until scenarios pass.",
+        "- **Coverage**: 80% line coverage before merge.",
+      ].join("\n"),
+    });
+    expect(contract.methodology).toBe("bdd");
+    expect(contract.source).toBe("team");
+    expect(contract.ordering).toBe(
+      "write Gherkin scenarios from acceptance criteria first, then implement each layer until scenarios pass.",
+    );
+
+    const shipped = resolve({
+      org: extractMarkdownSection(read(ORG_REL), "## Testing Posture"),
+    });
+    expect(shipped.source).toBe("org");
+    expect(shipped.ordering).toBe(
+      "implement each applicable testable layer, then write and run that layer's tests.",
+    );
+  });
+
+  test("nested notes and sibling fields beneath a Methodology bullet do not become its value", () => {
+    for (const tail of ["  - Use bun test.", "  + Use bun test.", "  1. Use bun test.", "  > Use bun test."]) {
+      const contract = resolve({
+        org: ORG,
+        team: ["- **Methodology**: tdd", tail, "- **Ordering**: tests first."].join("\n"),
+      });
+      expect(contract.methodology).toBe("tdd");
+      expect(contract.source).toBe("team");
+      expect(contract.ordering).toBe("tests first.");
+    }
+
+    const plain = resolve({
+      org: ORG,
+      team: "  Methodology: tdd\n  Ordering: tests first.",
+    });
+    expect(plain.methodology).toBe("tdd");
+    expect(plain.ordering).toBe("tests first.");
+  });
+
   test("multi-line comments cannot affirm a methodology", () => {
     const contract = resolve({
       org: ORG,

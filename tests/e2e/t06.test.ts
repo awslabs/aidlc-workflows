@@ -37,7 +37,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -50,7 +50,11 @@ const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 
 const fixtures: string[] = [];
+// Worktrees created OUTSIDE a fixture's tree: cleanupWorktreeFixture prunes a
+// fixture's own children, so these are removed here.
+const outsideWorktrees: string[] = [];
 afterAll(() => {
+  for (const w of outsideWorktrees) rmSync(w, { recursive: true, force: true });
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
@@ -61,14 +65,13 @@ function freshFixture(): string {
   return p;
 }
 
-/** Add a real sibling worktree at <fixture>/.claude/worktrees/dev-slug on a
- *  new dev-branch, mirroring the .sh's
- *  `git -C "$fixture" worktree add -q "$SIBLING" -b dev-branch`. */
-function addSibling(fixture: string): string {
-  const sibling = join(fixture, ".claude", "worktrees", "dev-slug");
+/** Add a real sibling worktree at <fixture>/<relativePath> on a new branch,
+ *  mirroring the .sh's nested-worktree setup. */
+function addSibling(fixture: string, relativePath: string, branch: string): string {
+  const sibling = join(fixture, relativePath);
   const r = spawnSync(
     "git",
-    ["-C", fixture, "worktree", "add", "-q", sibling, "-b", "dev-branch"],
+    ["-C", fixture, "worktree", "add", "-q", sibling, "-b", branch],
     { encoding: "utf-8" },
   );
   if (r.status !== 0) {
@@ -125,7 +128,7 @@ const wtPath = (dir: string, slug: string): string =>
 describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibling-rejection.sh, plan 3)", () => {
   test("1-3: create from inside a sibling worktree is rejected pre-audit with the main-checkout error", () => {
     const fixture = freshFixture();
-    const sibling = addSibling(fixture);
+    const sibling = addSibling(fixture, join(".claude", "worktrees", "dev-slug"), "dev-branch");
 
     // Run aidlc-worktree create from INSIDE the sibling worktree.
     const r = create(sibling, sibling, ["--slug", "demo", "--base", "main"]);
@@ -139,6 +142,62 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(boltSlugRows(sibling)).not.toContain("demo");
     expect(boltSlugRows(fixture)).not.toContain("demo");
     expect(existsSync(wtPath(sibling, "demo"))).toBe(false);
+    expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
+  }, 30000);
+
+  // #567: the rule is NESTING, not "is a linked worktree". A worktree that lives
+  // OUTSIDE the main checkout is the ordinary one-worktree-per-branch layout and
+  // is allowed — the case above stays refused because it is nested INSIDE the
+  // fixture's working tree. The Bolt lands under the INVOKING worktree and
+  // `--base feature-x` resolves as given. Branch refs are shared across worktrees;
+  // the feature branch is deliberately one commit ahead of `main` so the selected
+  // base is distinguishable from the main checkout's HEAD.
+  test("4: create from a worktree OUTSIDE the main checkout is allowed and places the Bolt under the invoking worktree", () => {
+    const fixture = freshFixture();
+    // Commit the workspace shell so it travels into the new worktree (the fixture
+    // seeds it after its own seed commit, which is why the nested case above has
+    // no record).
+    const git = (cwd: string, ...args: string[]): string => {
+      const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
+      if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr?.trim()}`);
+      return r.stdout ?? "";
+    };
+    git(fixture, "add", "--", "aidlc");
+    git(fixture, "commit", "-qm", "seed aidlc workspace shell");
+
+    const outside = `${fixture}-feature`;
+    outsideWorktrees.push(outside);
+    git(fixture, "worktree", "add", "-q", outside, "-b", "feature-x");
+    writeFileSync(join(outside, "feature.txt"), "approved work\n");
+    git(outside, "add", "--", "feature.txt");
+    git(outside, "commit", "-qm", "work the main checkout does not have");
+
+    const featureHead = git(outside, "rev-parse", "HEAD").trim();
+    const mainHead = git(fixture, "rev-parse", "HEAD").trim();
+    expect(featureHead).not.toBe(mainHead); // fixture precondition
+
+    const r = create(outside, outside, ["--slug", "demo", "--base", "feature-x"]);
+
+    expect(r.status, r.out).toBe(0);
+    expect(existsSync(wtPath(outside, "demo"))).toBe(true);
+    // The Bolt starts at the explicit `--base feature-x`, NOT the main checkout's HEAD.
+    const boltHead = git(wtPath(outside, "demo"), "rev-parse", "HEAD").trim();
+    expect(boltHead).toBe(featureHead);
+    expect(boltHead).not.toBe(mainHead);
+  }, 30000);
+
+  // Pin the segment-boundary rule: a `..` PREFIX in a directory name is not an
+  // escape from the main checkout. A worktree named `..dev` is still nested
+  // INSIDE the fixture's working tree and must be refused before creating a Bolt.
+  test("5: a nested worktree whose directory name starts with '..' is still refused", () => {
+    const fixture = freshFixture();
+    const nested = addSibling(fixture, "..dev", "dotdot-dev-branch");
+
+    const r = create(nested, nested, ["--slug", "demo", "--base", "main"]);
+
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("must run from the main repo checkout");
+    expect(existsSync(wtPath(nested, "demo"))).toBe(false);
     expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
   }, 30000);
 });

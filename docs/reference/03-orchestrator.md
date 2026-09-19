@@ -351,7 +351,7 @@ sequenceDiagram
     participant AU as audit/ shard
 
     O->>A: 1. Apply load-steering parts, then read inline_context_paths
-    Note over A: Rules arrive as content; persona and knowledge remain path-loaded
+    Note over A: Rules arrive as content - persona and knowledge remain path-loaded
 
     O->>SF: 2. Read stage file
     Note over SF: directive.stage_file
@@ -549,7 +549,7 @@ sequenceDiagram
     end
     UB-->>O: Unit B artifacts + summary
     UC-->>O: Unit C artifacts + summary
-    O->>O: BOLT_COMPLETED per Unit/worktree; SWARM_COMPLETED closes the batch
+    O->>O: BOLT_COMPLETED per Unit/worktree - SWARM_COMPLETED closes the batch
     Note over O,U: Swarm presents one Code Generation stage gate after the FINAL batch.
 
     O->>O: All Units done → run 3.6 Build and Test, then 3.7 CI Pipeline

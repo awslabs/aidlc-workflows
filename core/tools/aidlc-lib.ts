@@ -28148,13 +28148,34 @@ export interface ChangeControlResolution {
 // both memory sections read the same grammar.
 export function structuredField(section: string, field: string): string | null {
   const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = section.match(
-    new RegExp(
-      `^[ \\t]*(?:[-*][ \\t]*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?[ \\t]*:[ \\t]*(.+?)[ \\t]*$`,
-      "im",
-    ),
+  const lines = section.split(/\r?\n/);
+  const head = new RegExp(
+    `^([ \\t]*)(?:[-*][ \\t]*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?[ \\t]*:[ \\t]*(.*?)[ \\t]*$`,
+    "i",
   );
-  return match?.[1].trim() || null;
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(head);
+    if (!match) continue;
+    const headIndent = match[1].length;
+    const parts = [match[2].trim()];
+    // A wrapped value continues on lines indented deeper than its head until
+    // a blank line, a line at the head's indentation or shallower (the next
+    // paragraph), a line that is itself a `Field:` head (the next field), or a
+    // line opening another block: a list item of any marker, a heading, a
+    // blockquote, a table row, or a fence. Markdown authors and formatters
+    // wrap long bullets this way; the value is the joined prose.
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      const indent = (line.match(/^[ \t]*/)?.[0] ?? "").length;
+      if (indent <= headIndent || !/\S/.test(line)) break;
+      if (/^[ \t]*(?:[-*+][ \t]|\d+[.)][ \t]|[>#|]|```|~~~)/.test(line)) break;
+      if (/^[ \t]*(?:\*\*)?[A-Za-z][\w-]*(?:[ \t]+[\w-]+){0,2}(?:\*\*)?[ \t]*:(?:[ \t]|$)/.test(line)) break;
+      parts.push(line.trim());
+    }
+    const value = parts.filter(Boolean).join(" ");
+    return value || null;
+  }
+  return null;
 }
 
 // The visible body of one `## Heading` memory section: headings hidden in HTML
