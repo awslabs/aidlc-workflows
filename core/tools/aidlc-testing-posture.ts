@@ -1384,37 +1384,52 @@ function latestPlanApproval(body: string): {
   let latestAnswerLine: number | null = null;
   let latestFingerprint: string | null = null;
   let latestPlannedSource: string | null = null;
+  // The heading depth that opened the section. A section runs until a heading
+  // at the same depth or shallower, which is how a Markdown section ends;
+  // a deeper heading is a subsection of it. Closing on ANY heading let a
+  // sub-heading written inside the section hide the [Answer] and
+  // [Approval Fingerprint] below it, and the resulting null fingerprint was
+  // then reported as a fingerprint mismatch.
+  let planApprovalDepth = 0;
+
+  const openPlanApproval = (depth: number): void => {
+    inPlanApproval = true;
+    planApprovalDepth = depth;
+    awaitingNumberedQuestionText = false;
+    foundPlanApproval = true;
+    latestAnswer = null;
+    latestAnswerLine = null;
+    latestFingerprint = null;
+    latestPlannedSource = null;
+  };
 
   const visible = visibleMarkdownLines(body);
   for (let index = 0; index < visible.length; index++) {
     const line = visible[index];
     const heading = line.match(MARKDOWN_HEADING_RE);
     if (heading) {
+      const depth = heading[1].length;
       const headingText = heading[2].trim();
-      inPlanApproval = isPlanApprovalLabel(
-        headingText.replace(QUESTION_PREFIX_RE, ""),
-      );
-      awaitingNumberedQuestionText =
-        !inPlanApproval && NUMBERED_QUESTION_HEADING_RE.test(headingText);
-      if (inPlanApproval) {
-        foundPlanApproval = true;
-        latestAnswer = null;
-        latestAnswerLine = null;
-        latestFingerprint = null;
-        latestPlannedSource = null;
+      if (isPlanApprovalLabel(headingText.replace(QUESTION_PREFIX_RE, ""))) {
+        openPlanApproval(depth);
+        continue;
       }
+      if (inPlanApproval && depth > planApprovalDepth) {
+        // A subsection of the open Plan Approval section: its body still
+        // belongs to that section.
+        awaitingNumberedQuestionText = false;
+        continue;
+      }
+      inPlanApproval = false;
+      awaitingNumberedQuestionText = NUMBERED_QUESTION_HEADING_RE.test(headingText);
+      if (awaitingNumberedQuestionText) planApprovalDepth = depth;
       continue;
     }
     if (awaitingNumberedQuestionText && line.trim().length > 0) {
       awaitingNumberedQuestionText = false;
-      inPlanApproval = isPlanApprovalLabel(line);
-      if (inPlanApproval) {
-        foundPlanApproval = true;
-        latestAnswer = null;
-        latestAnswerLine = null;
-        latestFingerprint = null;
-        latestPlannedSource = null;
-      }
+      // The numbered form puts the label on the line after the heading, so the
+      // section it opens has that heading's depth.
+      if (isPlanApprovalLabel(line)) openPlanApproval(planApprovalDepth);
     }
     if (!inPlanApproval) continue;
     const answer = line.match(ANSWER_TAG_RE);
