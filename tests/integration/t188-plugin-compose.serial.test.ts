@@ -442,6 +442,18 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     );
     writeFileSync(pluginModifiedStage, pluginModifiedBefore);
 
+    // A recorded requires_stage edge whose dependency no longer exists in the
+    // incoming distribution is stripped from the installed file and NOT
+    // re-created; the fixture's live edge (nfr-design) survives the upgrade.
+    const cursorSidecarPath = join(cursorProject, ".cursor", "tools", "data", "plugin-contrib-test-pro.json");
+    const cursorSidecar = JSON.parse(readFileSync(cursorSidecarPath, "utf-8")) as Record<string, { requires_stage?: string[] }>;
+    cursorSidecar["build-and-test"].requires_stage = [...(cursorSidecar["build-and-test"].requires_stage ?? []), "syn-stale-dependency"];
+    writeFileSync(cursorSidecarPath, `${JSON.stringify(cursorSidecar, null, 2)}\n`);
+    writeFileSync(
+      pluginModifiedStage,
+      readFileSync(pluginModifiedStage, "utf-8").replace(/^(requires_stage:\n(?: {2}- .+\n)*)/m, "$1  - syn-stale-dependency\n"),
+    );
+
     const reinstall = spawnSync(
       BUN,
       [join(upgradedDist, "install.ts"), cursorProject],
@@ -459,6 +471,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "test-pro-branch-coverage-instructions",
     );
     expect(pluginModifiedAfter).toContain("Step 8a (test-pro)");
+    expect(pluginModifiedAfter).toContain("- nfr-design\n");
+    expect(pluginModifiedAfter).not.toContain("syn-stale-dependency");
     expect(pluginModifiedAfter).not.toBe(pluginModifiedBefore);
     const graphAfterReinstall = JSON.parse(
       readFileSync(
