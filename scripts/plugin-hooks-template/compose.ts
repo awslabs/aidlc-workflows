@@ -1595,6 +1595,13 @@ function findStageFile(slug: string): string | null {
   return null;
 }
 
+// Personas are a flat directory; a contribution under contributions/agents/
+// targets one by its slug (the file stem, which equals the frontmatter name).
+function findAgentFile(slug: string): string | null {
+  const p = join(HARNESS_DIR, "agents", `${slug}.md`);
+  return existsSync(p) ? p : null;
+}
+
 // Read half: a single frontmatter split (LF/CRLF tolerant) shared by every read
 // in this file — after the three-file fold there is one parser here, not two, so
 // a robustness fix lands once (review #8). Contribution frontmatter is a distinct
@@ -1745,6 +1752,20 @@ function locateAnchor(content: string, anchor: string, target: string): number {
     const from = m.index! + m[0].length;
     const next = content.slice(from).search(/^## /m);
     return next === -1 ? content.length : from + next;
+  }
+  if (anchor === "after-preflight") {
+    // Personas: right after the delegated-knowledge preflight the packager
+    // injects at build time — its marker line and the one paragraph below it.
+    const m = content.match(/^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m);
+    if (!m) { recordDrop(`contribution to ${target}: anchor "after-preflight" — no delegated-knowledge preflight block found (the target must be a persona); prose dropped`); return -1; }
+    return m.index! + m[0].length;
+  }
+  if (anchor === "end-of-body") {
+    // The end of the authored body. Reviewer personas end with knowledge the
+    // packager absorbs at build time; the fragment lands before that section
+    // so the absorbed text stays last.
+    const absorbed = content.indexOf("\n---\n\n<!-- Absorbed at build time");
+    return absorbed === -1 ? content.length : absorbed;
   }
   recordDrop(`contribution to ${target}: unknown anchor "${anchor}"`);
   return -1;
@@ -2115,6 +2136,11 @@ try {
       // contribution — log it (a present-but-unknown target is already logged
       // below; a missing one was a silent bare continue).
       if (!target) { recordDrop(`contribution "${file}" has no parseable frontmatter target: — skipped (check for a BOM, a leading blank line, or a missing target: key)`); continue; }
+      // The target is interpolated into a path under the harness dir, so it
+      // must be a bare slug: no separators, no traversal. A contribution can
+      // only ever reach <harness>/aidlc-common/stages/<phase>/<slug>.md or
+      // <harness>/agents/<slug>.md.
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(target)) { recordDrop(`contribution "${file}" has an invalid target "${target}" (a stage or agent slug: lowercase letters, digits and dashes); skipped`); continue; }
       const plugin = frontmatterScalar(content, "plugin") ?? "";
       // `bundle:` was the pre-rename ownership key. It is dead, not aliased —
       // drop-log with the fix named so a stale plugin tree fails visibly
@@ -2133,11 +2159,21 @@ try {
         );
         continue;
       }
-      const stageFile = findStageFile(target);
-      if (!stageFile) { recordDrop(`contribution "${file}" targets missing stage "${target}"`); continue; }
+      // A contribution under contributions/agents/ targets a core persona
+      // (<harness>/agents/<slug>.md) instead of a stage. Personas take prose
+      // fragments only: their frontmatter is identity and tier, so the
+      // structural adds.* surfaces have no meaning there and are ignored
+      // with an advisory drop rather than merged into the wrong shape.
+      const isAgentContribution = phase === "agents";
+      const stageFile = isAgentContribution ? findAgentFile(target) : findStageFile(target);
+      if (!stageFile) { recordDrop(`contribution "${file}" targets missing ${isAgentContribution ? "agent" : "stage"} "${target}"`); continue; }
 
       // structural: adds.produces / adds.sensors / adds.consumes
-      const addsBlock = fm.match(/^adds:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m)?.[1] ?? "";
+      const declaredAdds = fm.match(/^adds:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m)?.[1] ?? "";
+      if (isAgentContribution && declaredAdds.trim() !== "") {
+        recordDrop(`contribution to ${target}: agent contributions carry prose fragments only; adds.* has no meaning on a persona and was ignored`, "advisory");
+      }
+      const addsBlock = isAgentContribution ? "" : declaredAdds;
       // Drop-log a parse shortfall, mirroring the consumes parser: the block
       // regex stops at the first non-4-space entry, so a mis-indented line
       // silently truncated the list (entries after it vanished with no log).

@@ -1057,9 +1057,14 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
       throw new Error(`${sidecar}: ownership sidecar is invalid: ${errorMessage(error)}`);
     }
   }
+  // Stage sources and personas both carry composed content: structural adds
+  // and fragments on stages, fragments only on personas.
   const stagesRoot = join(stagedProject, harnessDir, "aidlc-common", "stages");
-  if (existsSync(stagesRoot)) {
-    for (const path of regularFiles(stagesRoot).filter((value) => value.endsWith(".md"))) {
+  const personasRoot = join(stagedProject, harnessDir, "agents");
+  const composedFiles = [...regularFiles(stagesRoot), ...regularFiles(personasRoot)]
+    .filter((value) => value.endsWith(".md"));
+  if (composedFiles.length > 0) {
+    for (const path of composedFiles) {
       const before = readFileSync(path, "utf-8");
       let after = before;
       const record = records[basename(path, ".md")];

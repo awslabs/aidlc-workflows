@@ -294,6 +294,18 @@ function pluginRuntimeState(targetRoot: string): PluginRuntimeState {
   } catch {
     // Existing sidecar/graph evidence remains usable.
   }
+  // Personas carry compose-time prose fragments too (contributions/agents/).
+  const agentsDir = join(targetRoot, ".cursor", "agents");
+  try {
+    for (const path of filesUnder(agentsDir)) {
+      if (!path.endsWith(".md")) continue;
+      if (!readFileSync(path, "utf-8").includes("<!-- plugin:")) continue;
+      state.composed = true;
+      stageState(basename(path, ".md"));
+    }
+  } catch {
+    // Stage evidence above still applies.
+  }
   return state;
 }
 
@@ -632,6 +644,17 @@ function locateAnchor(content: string, anchor: string): number {
     const from = heading.index! + heading[0].length;
     const next = content.slice(from).search(/^## /m);
     return next === -1 ? content.length : from + next;
+  }
+  // Persona anchors (contributions/agents/): after the delegated-knowledge
+  // preflight block the packager injects, and the end of the authored body
+  // before knowledge absorbed into a reviewer persona.
+  if (anchor === "after-preflight") {
+    const preflight = content.match(/^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m);
+    return preflight ? preflight.index! + preflight[0].length : -1;
+  }
+  if (anchor === "end-of-body") {
+    const absorbed = content.indexOf("\n---\n\n<!-- Absorbed at build time");
+    return absorbed === -1 ? content.length : absorbed;
   }
   return -1;
 }
@@ -1065,7 +1088,8 @@ export async function install(targetDir: string): Promise<void> {
       let pluginBase: Buffer | undefined;
       let rebuiltPluginStage = false;
       const pluginStage =
-        rel.startsWith(".cursor/aidlc-common/stages/") && rel.endsWith(".md")
+        (rel.startsWith(".cursor/aidlc-common/stages/") || rel.startsWith(".cursor/agents/")) &&
+        rel.endsWith(".md")
           ? pluginRuntime.stages.get(basename(rel, ".md"))
           : undefined;
       if (targetBytes && pluginStage) {
