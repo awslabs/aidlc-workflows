@@ -157,6 +157,25 @@ describe("t299 (1) additive methodology resolution", () => {
     );
   });
 
+  test("nested notes and sibling fields beneath a Methodology bullet do not become its value", () => {
+    for (const tail of ["  - Use bun test.", "  + Use bun test.", "  1. Use bun test.", "  > Use bun test."]) {
+      const contract = resolve({
+        org: ORG,
+        team: ["- **Methodology**: tdd", tail, "- **Ordering**: tests first."].join("\n"),
+      });
+      expect(contract.methodology).toBe("tdd");
+      expect(contract.source).toBe("team");
+      expect(contract.ordering).toBe("tests first.");
+    }
+
+    const plain = resolve({
+      org: ORG,
+      team: "  Methodology: tdd\n  Ordering: tests first.",
+    });
+    expect(plain.methodology).toBe("tdd");
+    expect(plain.ordering).toBe("tests first.");
+  });
+
   test("multi-line comments cannot affirm a methodology", () => {
     const contract = resolve({
       org: ORG,

@@ -264,6 +264,23 @@ describe("t333 (2) the grammar", () => {
     expect(structuredField("Ordering:\n  tests first.", "Ordering")).toBe("tests first.");
   });
 
+  // These layouts were already accepted before wrapped values were supported.
+  // Nested notes, sibling fields, and new blocks are not part of the field;
+  // only wrapped prose belongs to its value.
+  test("a field value ends at the next item of any marker, a sibling field, or a block", () => {
+    expect(structuredField("- **Ordering**: custom:\n  1. scenarios\n  2. implement", "Ordering")).toBe("custom:");
+    expect(structuredField("- **Ordering**: a\n  + sub", "Ordering")).toBe("a");
+    expect(structuredField("- **Ordering**: a\n  > quoted", "Ordering")).toBe("a");
+    expect(structuredField("- **Ordering**: a\n  | x | y |", "Ordering")).toBe("a");
+    expect(structuredField("- **Ordering**: a\n  ```\n  code\n  ```", "Ordering")).toBe("a");
+    const plain = "  Methodology: tdd\n  Ordering: tests first.";
+    expect(structuredField(plain, "Methodology")).toBe("tdd");
+    expect(structuredField(plain, "Ordering")).toBe("tests first.");
+    expect(structuredField("Methodology: tdd\n  Ordering: tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("  - **Ordering**: long\n    wrapped", "Ordering")).toBe("long wrapped");
+    expect(structuredField("- **Mode**: strict\n  1. Require reapproval when inputs move.", "Mode")).toBe("strict");
+  });
+
   test("the section body ignores commented headings and commented lines", () => {
     const content = [
       "# Team",
@@ -323,6 +340,15 @@ describe("t333 (3) resolution precedence", () => {
       expect(resolved.memoryStrict?.path).toBe(memoryFile(proj, layer));
       expect(resolved.intent?.value).toBe("relaxed");
     }
+  });
+
+  test("a Mode line followed by a nested list still declares its value", () => {
+    const { proj } = project("classic");
+    declareMemoryMode(proj, "team", "strict\n  + Strict here holds for every intent.");
+    expect(memoryChangeControlDeclarations(proj)).toEqual([
+      { layer: "team", path: memoryFile(proj, "team"), value: "strict" },
+    ]);
+    expect(resolveChangeControl(proj).value).toBe("strict");
   });
 
   test("memory relaxed and an absent section have no effect", () => {
