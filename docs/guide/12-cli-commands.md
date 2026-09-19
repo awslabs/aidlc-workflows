@@ -680,7 +680,7 @@ AI-DLC doctor
 
 Machine
   warn  Runtime hook PATH: bun is interactive-only at /home/user/.bun/bin/bun
-        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. Install Bun, then add ~/.bun/bin to the login-independent environment used by the harness, not only .zshrc or .bash_profile.
+        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. Install Bun, then add ~/.bun/bin to the login-independent PATH the harness inherits (the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf), not only .zshrc or .bash_profile.
   warn  Update: update check unavailable while offline
         fix: run `bun .claude/tools/aidlc.ts update --check`
   ok    4 checks passed

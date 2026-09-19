@@ -395,8 +395,9 @@ The runtime probe derives a login-independent hook PATH (Windows Machine and
 User `Path`; macOS `getconf PATH` plus `/etc/paths` and `/etc/paths.d`; Linux
 `getconf PATH` plus the `PATH` lines of `/etc/environment`, `ENV_PATH` in
 `/etc/login.defs`, and `environment.d`), resolves only the commands required by
-the installed hook bytes, and probes the selected harness CLI. The recorded absolute paths are diagnostic evidence, not rewritten hook
-commands: host allowlists and Codex trust hashes bind the bare command prefix.
+the installed hook bytes, and probes the selected harness CLI. The recorded
+absolute paths are diagnostic evidence, not rewritten hook commands: host
+allowlists and Codex trust hashes bind the bare command prefix.
 
 Provider detection reads local AWS environment, profile, credential, role, and
 SSO-cache evidence only. Bedrock region and profile answers are applied to the
