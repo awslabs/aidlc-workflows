@@ -420,6 +420,21 @@ const SEED_SETTINGS = {
   // directly), and the core handleApprove ledger check is covered deterministically by
   // the t188 unit test. Trusting the command is what lets the block hook RUN at all.
   "kiroAgent.trustedCommands": ["*"],
+  // ISOLATION, and load-bearing for whether this journey finishes at all. A
+  // fresh user-data-dir does NOT isolate the agent's tool surface: Kiro still
+  // reads the developer's global ~/.kiro/settings/mcp.json, so the launched
+  // instance inherited every MCP server on the machine. On this one that was 7
+  // servers and 131 tools, and Kiro itself renders a warning saying that many
+  // tools degrade agent tool selection. The journey then spent 36 minutes
+  // making no progress. Disabling MCP for the generated seed makes the run
+  // depend on the engine and the hooks under test, not on whatever servers a
+  // developer happens to have configured.
+  "kiroAgent.configureMCP": "Disabled",
+  // Autopilot so the agent executes its own steps instead of waiting on a
+  // per-action confirmation the driver would have to chase. This test asserts
+  // the ENGINE refuses a fabricated approval; it must not also be a test of
+  // whether someone clicks through Kiro's autonomy prompts.
+  "kiroAgent.agentAutonomy": "Autopilot",
 } as const;
 
 /** Build a minimal Kiro IDE user-data-dir under `dir` that skips first-run onboarding,
