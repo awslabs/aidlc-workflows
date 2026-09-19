@@ -349,10 +349,11 @@ re-checked.`).
 > `aidlc-swarm.ts prepare` step for that Unit with the original batch/base/repo
 > arguments. The fresh worktree and `BOLT_STARTED` boundary reset review
 > accounting without claiming convergence. Never synthesize `GATE_REJECTED`.
-> The discard parks tracked files, non-ignored untracked files, and reviewed
-> source refs before removing the live checkout and branch. Recover the parked
-> work with `{{INVOKE}} engine worktree restore --slug <slug>`; restoration uses
-> a separate checkout and does not reinstate the old review authority.
+> The discard parks tracked files and non-ignored untracked files (or the
+> remaining branch tip when the checkout is gone) plus reviewed source refs
+> before removing the live checkout and branch. The returned `restore_hint`
+> recovers the parked work in a separate checkout without reinstating the old
+> review authority.
 >
 > **After a successful retry discard.** After the `--discard` abort succeeds and
 > confirms the old attempt was parked, but before rerunning `prepare`, use this
@@ -360,10 +361,17 @@ re-checked.`).
 > use `I`, never implying a human remedy choice that did not happen. Do not
 > announce a saved snapshot if the abort failed or did not park an attempt.
 >
-> **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings. If you want the previous attempt back, ask me to restore it."
+> Select `[saved-files text]` from the returned `parked_mode`:
 >
-> If the human later asks for that attempt back, run
-> `{{INVOKE}} engine worktree restore --slug <slug>` with the saved attempt's slug.
+> - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+> - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+> - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+>
+> **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+>
+> If the human later asks for that attempt back, the conductor must execute the
+> saved abort result's `restore_hint` verbatim, preserving its exact attempt and
+> repository selectors rather than rebuilding a slug-only command.
 > After restoration succeeds, announce the returned restored path plainly:
 > **SAY:** "I restored the previous attempt at [returned restored path]."
 > Restoration does not resume the old attempt or make its review current.

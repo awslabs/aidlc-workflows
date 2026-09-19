@@ -775,8 +775,12 @@ does not start. The row's `Parked ref` names
 source evidence. When only the branch remains, `/head` preserves its ordinary
 committed blobs and a matching `/branch-tip` marker is created. Snapshot parks
 instead have a `/snapshot` marker pointing to the same commit as `/head`.
-`aidlc engine worktree restore --slug <slug>` recovers the attempt in an isolated
-restored checkout. It checks the bare `--raw` flag first, then `/snapshot`, then
+Discard JSON retains `parked_ref` and `parked_commit` and adds `parked_stamp`
+(the exact stamp), `parked_mode` (`snapshot` or `branch-tip`), and `parked_repo`
+(`null` for the project root, otherwise the sibling repository name).
+`aidlc engine worktree restore --slug <slug> --parked <stamp>` recovers that
+exact attempt in an isolated restored checkout; omit `--parked` to select the
+latest saved head. It checks the bare `--raw` flag first, then `/snapshot`, then
 `/branch-tip`. Legacy parks have neither marker for either shape: an unmarked
 head is a snapshot only if its commit author is exactly `AI-DLC`, its email is
 `aidlc@localhost`, and its subject starts with `aidlc: parked bolt-<slug> at `.
@@ -804,23 +808,39 @@ for the slug; `--parked` selects one exact stamp. `--older-than` accepts
 nonnegative finite days, including fractions, and selects only attempts strictly
 older than the threshold. The age comes from the UTC `YYYYMMDDTHHMMSSZ` timestamp
 in the stamp, independent of any `-N` collision suffix and of commit dates; an
-attempt exactly at the threshold is retained. `--parked` and `--older-than` are
-mutually exclusive. Purge refuses while a corresponding restored checkout exists
+attempt exactly at the threshold is retained. A strict shared calendar parser
+rejects impossible dates and times instead of normalizing them. Age-filtered
+purge preserves unparseable stamps and lists them in `skipped_unparseable`.
+Success JSON always includes that array, empty unless `--older-than` skips
+unparseable stamps; exact-stamp or all-stamp purge can remove them.
+`--parked` and `--older-than` are mutually exclusive. Purge refuses while a
+corresponding restored checkout exists
 or is registered with Git, including moved checkouts. Restore and purge accept
 `--repo <name>` for an existing sibling Git repository or `--repo .` for the
 project root, independently of the current intent's repo list. Neither command
 adds an audit event or repurposes the live Bolt path or branch.
 
 Successful `bolt abort` JSON echoes the supplied `--reason` in `reason`; its
-audit row still records `Reason: aborted`. The success result includes
-`parked_ref`, or `null` if no recovery namespace was saved. A non-null
-`parked_ref` also produces `restore_hint`, rendered by
-`aidlcToolInvocation("worktree") + " restore --slug " + slug`, and the exact
-`parked_excludes: ["ignored files", "eol/text=auto normalization"]`. Those two
-fields are absent otherwise. The hint uses the native or source invocation
-prefix for the installed channel. This changes no abort arguments, command
-admission, or human-consent requirement. Restoring files later never revives the
-aborted lifecycle or its review authority.
+audit row still records `Reason: aborted`. Without `--discard`, the result has
+no `parked_*` fields or `restore_hint`. With `--discard`, it echoes the saved
+descriptor's `parked_ref`, `parked_stamp`, `parked_mode`, and `parked_repo`.
+The exact `restore_hint` is the installed channel's native or source worktree
+invocation plus ` restore --slug <slug> --parked <stamp>`, followed by
+` --repo <name>` only when `parked_repo` is non-null. Snapshot mode reports
+`parked_excludes: ["ignored files", "eol/text=auto normalization"]`; branch-tip
+mode reports `["uncommitted files (no working tree existed)"]` instead.
+
+If a saved namespace is known but its discard descriptor is missing, the
+fallback retains `parked_ref`, sets `parked_stamp`, `parked_mode`, and
+`parked_repo` to `null`, and returns a slug-only hint with the snapshot-style
+exclusions. Unknown mode does not establish that a snapshot was saved, so the
+conductor must not make that claim. If no namespace was saved, all four
+descriptor fields are `null`, and `restore_hint` and `parked_excludes` are absent.
+When the human asks for the attempt back, the conductor must execute the saved
+`restore_hint` verbatim instead of reconstructing a latest-attempt command.
+This changes no abort arguments, command admission, or human-consent
+requirement. Restoring files later never revives the aborted lifecycle or its
+review authority.
 
 Doctor lists saved `/head` entries informationally, with slug, exact stamp, age
 in days, marker mode (`snapshot`, `branch-tip`, or `legacy`), canonical restored
@@ -829,6 +849,9 @@ checkout existence, and exact rendered restore/purge commands using
 warnings nor failures. `legacy` in this inventory leaves commit-identity
 classification to restore. A moved checkout may not appear as restored in the
 inventory, but purge still checks its Git registration.
+Doctor and age-filtered purge use the same strict stamp parser; impossible
+dates or times produce `age_days: null` in doctor's JSON and `unknown` in human
+output rather than a normalized age.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
 

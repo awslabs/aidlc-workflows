@@ -256,7 +256,7 @@ execute the returned command unchanged. `aidlc engine worktree restore --slug
 <slug>` recovers that parked work in `.aidlc/restored/bolt-<slug>-<stamp>` on
 `restore/bolt-<slug>-<stamp>`, without overwriting a new live Bolt or reviving
 the old attempt's review authority.
-The [recovery walkthrough](../../guide/15-troubleshooting.md#a-bolt-attempt-was-set-aside--getting-the-files-back)
+The [recovery walkthrough](../../guide/15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
 explains what was set aside, the exclusions, exact restore selection, and
 informational doctor listings and purge options.
 

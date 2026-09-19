@@ -479,17 +479,19 @@ describe("t77 — abort", () => {
     expect(audit.includes("**Reason**: aborted")).toBe(true);
   });
 
-  test("abort default stdout reports discarded:false [.sh T22]", () => {
+  test("abort default reports discarded:false without parked fields [.sh T22]", () => {
     const proj = track(setupV7Project("preserved"));
     const r = runBolt([
       "abort", "--name", "Preserved", "--slug", "preserved",
       "--reason", "preserve test", "--project-dir", proj,
     ]);
+    expect(r.status, r.out).toBe(0);
     expect(r.out).toContain('"discarded":false');
     const parsed = JSON.parse(r.out.trim());
     expect(parsed.discarded).toBe(false);
     expect(parsed.reason).toBe("preserve test");
     expect(parsed).not.toHaveProperty("restore_hint");
+    expect(Object.keys(parsed).filter((key) => key.startsWith("parked_"))).toEqual([]);
   });
 
   test("default abort (no --discard) preserves the worktree directory [.sh T28]", () => {

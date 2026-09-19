@@ -74,6 +74,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  cpSync,
   createReadStream,
   existsSync,
   lstatSync,
@@ -130,6 +131,13 @@ function runWorktree(proj: string, ...args: string[]): RunResult {
     encoding: "utf-8",
     cwd: proj,
   });
+  return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+}
+
+/** Execute the printed recovery command against the fixture's installed tools. */
+function runRestoreHint(proj: string, hint: string): RunResult {
+  cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+  const res = spawnSync(hint, { shell: true, encoding: "utf-8", cwd: proj });
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
@@ -486,7 +494,6 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
 
     test("L3: abort without --discard preserves worktree directory [.sh T9]", () => {
       expect(abortRes.status).toBe(0);
-      expect(JSON.parse(abortRes.out).parked_ref).toBeNull();
       expect(existsSync(wt)).toBe(true);
     });
 
@@ -584,7 +591,6 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(aborted.status).toBe(0);
       const result = JSON.parse(aborted.out);
       expect(result.reason).toBe("restart after review");
-      expect(result.restore_hint).toBe(`bun .claude/tools/aidlc-worktree.ts restore --slug ${slug}`);
       expect(result.parked_excludes).toEqual(["ignored files", "eol/text=auto normalization"]);
       const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
       expect(parkedRef).toMatch(/^refs\/aidlc\/parked\/recoverable\/\d{8}T\d{6}Z(?:-[1-9]\d*)?$/);
@@ -651,7 +657,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(proj, "worktree", "remove", "--force", restoredPath).status).toBe(0);
       const purged = runWorktree(proj, "purge", "--slug", slug);
       expect(purged.status).toBe(0);
-      expect(JSON.parse(purged.out)).toEqual({ purged: 3, slug, stamps: [stamp] });
+      expect(JSON.parse(purged.out)).toEqual({ purged: 3, slug, stamps: [stamp], skipped_unparseable: [] });
       expect(git(proj, "for-each-ref", "--format=%(refname)", `refs/aidlc/parked/${slug}/`).stdout).toBe("");
       const noAttempt = runWorktree(proj, "restore", "--slug", slug);
       expect(noAttempt.status).not.toBe(0);
@@ -665,6 +671,124 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(existsSync(join(wt, "committed.txt"))).toBe(false);
       expect(existsSync(join(wt, "untracked.bin"))).toBe(false);
     }, 30_000);
+
+    test("abort recovery hint selects its exact snapshot after another same-slug park", () => {
+      const proj = setupLifecycleProject();
+      const slug = "exact-hint";
+      const wt = worktreeDir(proj, slug);
+      writeFileSync(join(proj, "saved.txt"), "base bytes\n");
+      gitInitMain(proj);
+
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      writeFileSync(join(wt, "saved.txt"), "first parked attempt\n");
+      const first = runWorktree(proj, "discard", "--slug", slug);
+      expect(first.status, first.out).toBe(0);
+      const firstPark = JSON.parse(first.out);
+
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const savedBytes = "second parked attempt, named by the abort hint\n";
+      writeFileSync(join(wt, "saved.txt"), savedBytes);
+      const aborted = runBolt(
+        proj, "abort", "--name", "Exact Hint", "--slug", slug,
+        "--reason", "retain this attempt", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const parked = JSON.parse(aborted.out);
+      const stamp = parked.parked_ref.split("/").at(-1);
+      const commit = git(proj, "rev-parse", `${parked.parked_ref}/head`).stdout.trim();
+      expect(parked.parked_ref).not.toBe(firstPark.parked_ref);
+
+      // A saved hint must not drift to a newer attempt when it is executed later.
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      writeFileSync(join(wt, "saved.txt"), "third parked attempt, not the requested recovery\n");
+      const later = runWorktree(proj, "discard", "--slug", slug);
+      expect(later.status, later.out).toBe(0);
+      const laterPark = JSON.parse(later.out);
+      expect(laterPark.parked_ref).not.toBe(parked.parked_ref);
+
+      const restored = runRestoreHint(proj, parked.restore_hint);
+      expect(restored.status, restored.out).toBe(0);
+      const recovery = JSON.parse(restored.out);
+      expect(recovery.parked_ref).toBe(parked.parked_ref);
+      expect(readFileSync(join(recovery.worktree_path, "saved.txt"), "utf-8")).toBe(savedBytes);
+      expect(git(recovery.worktree_path, "rev-parse", "HEAD").stdout.trim()).toBe(commit);
+      expect(parked).toMatchObject({
+        parked_stamp: stamp,
+        parked_mode: "snapshot",
+        parked_repo: null,
+        parked_excludes: ["ignored files", "eol/text=auto normalization"],
+        restore_hint: `bun .claude/tools/aidlc-worktree.ts restore --slug ${slug} --parked ${stamp}`,
+      });
+      expect(laterPark).toMatchObject({
+        parked_stamp: laterPark.parked_ref.split("/").at(-1),
+        parked_commit: git(proj, "rev-parse", `${laterPark.parked_ref}/head`).stdout.trim(),
+        parked_mode: "snapshot",
+        parked_repo: null,
+      });
+    }, 30_000);
+
+    test("abort recovery hint selects the sibling when the same slug is parked in the root", () => {
+      const proj = setupLifecycleProject();
+      const slug = "sibling-hint";
+      const wt = worktreeDir(proj, slug);
+      writeFileSync(join(proj, "saved.txt"), "root base\n");
+      gitInitMain(proj);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      writeFileSync(join(wt, "saved.txt"), "root parked attempt\n");
+      const rootDiscard = runWorktree(proj, "discard", "--slug", slug);
+      expect(rootDiscard.status, rootDiscard.out).toBe(0);
+      const rootPark = JSON.parse(rootDiscard.out);
+
+      const sibling = join(proj, "api");
+      mkdirSync(sibling);
+      writeFileSync(join(sibling, "saved.txt"), "sibling base\n");
+      gitInitMain(sibling);
+      const created = runWorktree(proj, "create", "--slug", slug, "--base", "main", "--repo", "api");
+      expect(created.status, created.out).toBe(0);
+      const savedBytes = "sibling parked attempt\n";
+      writeFileSync(join(wt, "saved.txt"), savedBytes);
+      // Abort resolves the creating repository without requiring a new argv flag.
+      const aborted = runBolt(
+        proj, "abort", "--name", "Sibling Hint", "--slug", slug,
+        "--reason", "recover from the creating repository", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const parked = JSON.parse(aborted.out);
+      const stamp = parked.parked_ref.split("/").at(-1);
+      const commit = git(sibling, "rev-parse", `${parked.parked_ref}/head`).stdout.trim();
+
+      const restored = runRestoreHint(proj, parked.restore_hint);
+      expect(restored.status, restored.out).toBe(0);
+      const recovery = JSON.parse(restored.out);
+      expect(readFileSync(join(recovery.worktree_path, "saved.txt"), "utf-8")).toBe(savedBytes);
+      expect(git(recovery.worktree_path, "rev-parse", "HEAD").stdout.trim()).toBe(commit);
+      expect(parked).toMatchObject({
+        parked_stamp: stamp,
+        parked_mode: "snapshot",
+        parked_repo: "api",
+        parked_excludes: ["ignored files", "eol/text=auto normalization"],
+        restore_hint: `bun .claude/tools/aidlc-worktree.ts restore --slug ${slug} --parked ${stamp} --repo api`,
+      });
+      expect(git(proj, "show", `${rootPark.parked_ref}/head:saved.txt`).stdout).toBe("root parked attempt\n");
+    }, 30_000);
+
+    test("purge --older-than preserves February 31 refs and reports skipped_unparseable", () => {
+      const proj = setupLifecycleProject();
+      const slug = "impossible-date";
+      const stamp = "20260231T000000Z";
+      const ref = `refs/aidlc/parked/${slug}/${stamp}/head`;
+      gitInitMain(proj);
+      const head = git(proj, "rev-parse", "HEAD").stdout.trim();
+      expect(git(proj, "update-ref", ref, head).status).toBe(0);
+
+      const purged = runWorktree(proj, "purge", "--slug", slug, "--older-than", "0");
+      expect(purged.status, purged.out).toBe(0);
+      expect(git(proj, "show-ref", "--verify", "--quiet", ref).status, purged.out).toBe(0);
+      expect(git(proj, "rev-parse", "--verify", ref).stdout.trim()).toBe(head);
+      expect(JSON.parse(purged.out)).toEqual({
+        purged: 0, slug, stamps: [], skipped_unparseable: [stamp],
+      });
+    });
 
     test("purge --older-than deletes only old stamps, ignoring their collision suffix", () => {
       const proj = setupLifecycleProject();
@@ -682,14 +806,14 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
 
       const purged = runWorktree(proj, "purge", "--slug", slug, "--older-than", "30");
       expect(purged.status, purged.out).toBe(0);
-      expect(JSON.parse(purged.out)).toEqual({ purged: 2, slug, stamps: [oldStamp] });
+      expect(JSON.parse(purged.out)).toEqual({ purged: 2, slug, stamps: [oldStamp], skipped_unparseable: [] });
       expect(git(proj, "for-each-ref", "--format=%(refname)", `${oldRef}/`).stdout).toBe("");
       expect(git(proj, "for-each-ref", "--format=%(refname)", `${freshRef}/`).stdout.trim().split("\n")).toEqual([
         `${freshRef}/head`, `${freshRef}/snapshot`,
       ]);
       const noOldParks = runWorktree(proj, "purge", "--slug", slug, "--older-than", "30");
       expect(noOldParks.status, noOldParks.out).toBe(0);
-      expect(JSON.parse(noOldParks.out)).toEqual({ purged: 0, slug, stamps: [] });
+      expect(JSON.parse(noOldParks.out)).toEqual({ purged: 0, slug, stamps: [], skipped_unparseable: [] });
     });
 
     test("purge rejects conflicting selectors and invalid ages before deleting refs", () => {
@@ -745,7 +869,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         expect(git(cwd, "worktree", "remove", "--force", path).status).toBe(0);
         const purged = runWorktree(proj, "purge", "--slug", slug, "--parked", stamp, "--repo", selector);
         expect(purged.status, purged.out).toBe(0);
-        expect(JSON.parse(purged.out)).toEqual({ purged: 1, slug, stamps: [stamp] });
+        expect(JSON.parse(purged.out)).toEqual({ purged: 1, slug, stamps: [stamp], skipped_unparseable: [] });
         expect(git(cwd, "show-ref", "--verify", "--quiet", ref).status).toBe(1);
       }
     });
@@ -1294,7 +1418,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       }
     });
 
-    test("branch-only partial cleanup still parks and restores the unmerged tip", () => {
+    test("abort branch-tip recovery hint restores an unmerged tip after worktree removal", () => {
       const proj = setupLifecycleProject();
       const slug = "branch-only";
       const wt = worktreeDir(proj, slug);
@@ -1305,25 +1429,36 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(wt, "commit", "-q", "-m", "branch-only work").status).toBe(0);
       const head = git(wt, "rev-parse", "HEAD").stdout.trim();
       expect(git(proj, "worktree", "remove", "--force", wt).status).toBe(0);
-      const discarded = runWorktree(proj, "discard", "--slug", slug);
-      expect(discarded.status).toBe(0);
-      const parked = JSON.parse(discarded.out) as { parked_ref: string; parked_commit: string };
-      expect(parked.parked_commit).toBe(head);
+      expect(existsSync(wt)).toBe(false);
+      const aborted = runBolt(
+        proj, "abort", "--name", "Branch Tip Hint", "--slug", slug,
+        "--reason", "recover the remaining branch", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const parked = JSON.parse(aborted.out);
+      const stamp = parked.parked_ref.split("/").at(-1);
       expect(git(proj, "rev-parse", "--verify", `${parked.parked_ref}/head`).stdout.trim()).toBe(head);
       expect(git(proj, "rev-parse", "--verify", `${parked.parked_ref}/branch-tip`).stdout.trim()).toBe(head);
       expect(git(proj, "show-ref", "--verify", "--quiet", `refs/heads/bolt-${slug}`).status).toBe(1);
-      const restored = runWorktree(proj, "restore", "--slug", slug);
-      expect(restored.status).toBe(0);
+      const restored = runRestoreHint(proj, parked.restore_hint);
+      expect(restored.status, restored.out).toBe(0);
       const recovery = JSON.parse(restored.out) as { worktree_path: string; reviewed_source_refs: number };
       expect(JSON.parse(restored.out).raw_bytes).toBe(false);
       expect(JSON.parse(restored.out).restore_mode).toBe("branch-tip");
       expect(recovery.reviewed_source_refs).toBe(0);
       expect(git(recovery.worktree_path, "rev-parse", "HEAD").stdout.trim()).toBe(head);
       expect(readFileSync(join(recovery.worktree_path, "committed.txt"), "utf-8")).toBe("survives checkout removal\n");
+      expect(parked.parked_excludes).toEqual(["uncommitted files (no working tree existed)"]);
+      expect(parked).toMatchObject({
+        parked_stamp: stamp,
+        parked_mode: "branch-tip",
+        parked_repo: null,
+        restore_hint: `bun .claude/tools/aidlc-worktree.ts restore --slug ${slug} --parked ${stamp}`,
+      });
       expect(git(proj, "worktree", "remove", "--force", recovery.worktree_path).status).toBe(0);
       const purged = runWorktree(proj, "purge", "--slug", slug);
       expect(purged.status, purged.out).toBe(0);
-      expect(JSON.parse(purged.out)).toEqual({ purged: 2, slug, stamps: [parked.parked_ref.split("/").at(-1)!] });
+      expect(JSON.parse(purged.out)).toEqual({ purged: 2, slug, stamps: [parked.parked_ref.split("/").at(-1)!], skipped_unparseable: [] });
       expect(git(proj, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
     });
 
@@ -1450,6 +1585,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         purged: 1,
         slug,
         stamps: [parked.parked_ref.split("/").at(-1)],
+        skipped_unparseable: [],
       });
       expect(git(proj, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
     });
@@ -1487,7 +1623,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(proj, "worktree", "remove", "--force", olderRecovery.worktree_path).status).toBe(0);
       const purged = runWorktree(proj, "purge", "--slug", slug, "--parked", olderStamp);
       expect(purged.status).toBe(0);
-      expect(JSON.parse(purged.out)).toEqual({ purged: 1, slug, stamps: [olderStamp] });
+      expect(JSON.parse(purged.out)).toEqual({ purged: 1, slug, stamps: [olderStamp], skipped_unparseable: [] });
       expect(git(proj, "show-ref", "--verify", "--quiet", `${olderRef}/head`).status).toBe(1);
       expect(git(proj, "rev-parse", "--verify", `${newerRef}/head`).stdout.trim()).toBe(newerCommit);
       expect(readFileSync(join(latestRecovery.worktree_path, "latest.txt"), "utf-8")).toBe("numeric suffix ten\n");

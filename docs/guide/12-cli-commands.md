@@ -1642,6 +1642,26 @@ selector independently of the current intent's repo list; this does not change
 the selectors for live worktree create/discard commands. Use `--intent` /
 `--space` when needed to resolve workspace context.
 
+Prefer the successful discard abort's returned `restore_hint` for recovering
+that attempt: execute it verbatim. Its exact form is the installed worktree
+invocation plus ` restore --slug <slug> --parked <stamp>`, with
+` --repo <name>` appended only for a sibling repository. `worktree discard`
+retains `parked_ref` and `parked_commit` and adds `parked_stamp`, `parked_mode`
+(`snapshot` or `branch-tip`), and `parked_repo` (`null` for the project root,
+otherwise the sibling name). `bolt abort --discard` echoes `parked_ref`,
+`parked_stamp`, `parked_mode`, and `parked_repo` alongside the hint.
+
+For `snapshot`, abort reports
+`parked_excludes: ["ignored files", "eol/text=auto normalization"]`. For
+`branch-tip`, it reports `["uncommitted files (no working tree existed)"]`:
+only committed work could be kept. If a saved namespace is known but its
+discard descriptor is unavailable, the fallback sets `parked_stamp`,
+`parked_mode`, and `parked_repo` to `null`, returns a slug-only hint, and keeps
+the snapshot-style exclusions. That fallback can select a later attempt and
+does not establish that a snapshot was saved. If no namespace was saved, all
+four descriptor fields are `null`, with no hint or exclusions. Abort without
+`--discard` has no `parked_*` fields or `restore_hint`.
+
 Restore creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
 `restore/bolt-<slug>-<stamp>`. It never touches a live
 `.aidlc/worktrees/bolt-<slug>` checkout or `bolt-<slug>` branch, resumes the
@@ -1675,7 +1695,7 @@ to inspect or copy the files you need.
 
 For a Bun-based copy install, replace `aidlc engine worktree` with
 `bun .claude/tools/aidlc-worktree.ts`, substituting your harness directory for
-`.claude`. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside--getting-the-files-back)
+`.claude`. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
 for the recovery walkthrough and [State Machine](../reference/12-state-machine.md)
 for the snapshot contract.
 
@@ -1692,11 +1712,17 @@ nonnegative finite days, including fractions, and selects only stamps strictly
 older than that threshold. Age is computed from the UTC `YYYYMMDDTHHMMSSZ`
 portion of the stamp, ignoring any `-N` collision suffix; commit dates do not
 affect it. `--parked` and `--older-than` cannot be combined.
+The shared strict calendar parser rejects impossible dates and times rather
+than normalizing them. With `--older-than`, unparseable stamps survive and
+appear in `skipped_unparseable`; an attempt exactly at the threshold also
+survives. Exact-stamp or all-stamp purge can remove unparseable stamps.
 
 Purge refuses while any selected attempt has a restored checkout, including a
 checkout moved elsewhere. Remove that checkout explicitly first. It never
 removes a live Bolt checkout or branch. Success JSON is
-`{purged: <number-of-refs>, slug, stamps: [...]}`; the count is refs, not attempts.
+`{purged: <number-of-refs>, slug, stamps: [...], skipped_unparseable: [...]}`;
+the count is refs, not attempts. `skipped_unparseable` is always present, empty
+unless `--older-than` skips unparseable stamps.
 Restore and purge add no audit events.
 
 `/aidlc --doctor` and `aidlc doctor` show a **Parked attempts** informational
@@ -1706,6 +1732,8 @@ Each entry includes slug, exact stamp, age in days, mode (`snapshot`,
 restore/purge commands. Commands include `--parked <stamp>` and, when the slug
 exists in several repositories, `--repo <name>` or `--repo .`. A moved checkout
 may not show as restored in doctor, but purge still checks its Git registration.
+Doctor uses the same strict stamp parser: impossible dates and times have
+`age_days: null` in JSON and show `unknown` in human-readable output.
 These entries do not produce warnings or failures. Use the copy-install prefix
 documented for restore when running purge without the native command.
 

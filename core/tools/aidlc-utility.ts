@@ -95,6 +95,7 @@ import {
   formatCeremony,
   parseCeremonySetting,
   parseCeremonyStateLine,
+  parseParkedStampInstant,
   resolveCeremony,
   scopeCeremonyDefault,
   type ChangeControlMemoryDeclaration,
@@ -2605,11 +2606,10 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
       const [, slug, stamp] = match;
       if (validateBoltSlug(slug) !== null || (slugs !== null && !slugs.has(slug))) continue;
       const prefix = ref.slice(0, -"/head".length);
-      const timestamp = `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(9, 11)}:${stamp.slice(11, 13)}:${stamp.slice(13, 15)}Z`;
-      const milliseconds = Date.parse(timestamp);
-      const ageDays = Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === timestamp.replace("Z", ".000Z")
-        ? Math.max(0, Math.floor((now - milliseconds) / 86_400_000))
-        : null;
+      const milliseconds = parseParkedStampInstant(stamp);
+      const ageDays = milliseconds === null
+        ? null
+        : Math.max(0, Math.floor((now - milliseconds) / 86_400_000));
       const restoredPath = resolve(projectDir, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
       const selector = (reposBySlug.get(slug)?.size ?? 0) > 1 ? ` --repo ${repo ?? "."}` : "";
       const args = `--slug ${slug} --parked ${stamp}${selector}`;

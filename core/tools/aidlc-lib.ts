@@ -10557,6 +10557,25 @@ export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
 }
 
+/** Parse a parked-attempt stamp without normalizing impossible calendar dates. */
+export function parseParkedStampInstant(stamp: string): number | null {
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-[2-9]|-[1-9]\d+)?$/.exec(stamp);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const instant = new Date(Date.UTC(year, month, day, hour, minute, second));
+  // Date.UTC treats years 00–99 as 1900–1999; restore the literal year and date.
+  if (year < 100) instant.setUTCFullYear(year, month, day);
+  if (instant.getUTCFullYear() !== year || instant.getUTCMonth() !== month ||
+    instant.getUTCDate() !== day || instant.getUTCHours() !== hour ||
+    instant.getUTCMinutes() !== minute || instant.getUTCSeconds() !== second) return null;
+  return instant.getTime();
+}
+
 export function resolveAuditProjectPath(
   projectDir: string,
   recordedPath: string,

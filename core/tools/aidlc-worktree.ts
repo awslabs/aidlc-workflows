@@ -37,6 +37,7 @@ import {
   listIntentDirs,
   listSpaces,
   maximalAttemptEvents,
+  parseParkedStampInstant,
   parseSourceListing,
   readAllAuditShards,
   readAuditShardEvents,
@@ -339,14 +340,6 @@ function validateStrategy(strategy: string | undefined): string {
 // failure (multi-repo intent without --repo, or an out-of-set name) errors before
 // any audit emit. `flags.intent`/`flags.space` select the intent whose repo set is
 // consulted (same selector the audit emit threads).
-function resolveRepoCwd(
-  pd: string,
-  flags: Record<string, string>,
-  slug: string,
-): string {
-  return resolveRepoTarget(pd, flags, slug).cwd;
-}
-
 function resolveRepoTarget(
   pd: string,
   flags: Record<string, string>,
@@ -2897,6 +2890,12 @@ function validateParkedStamp(stamp: string | undefined): void {
   }
 }
 
+interface ParkedAttempt {
+  ref: string;
+  commit: string;
+  mode: "snapshot" | "branch-tip";
+}
+
 function parkAttempt(
   repoCwd: string,
   slug: string,
@@ -2905,7 +2904,7 @@ function parkAttempt(
   registered: boolean,
   branchExists: boolean,
   retained: RetainedSourceRef[],
-): { ref: string; commit: string } {
+): ParkedAttempt {
   const baseStamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
   const occupied = new Set(parkedSourceRefs(repoCwd, slug).map(({ ref }) => parkedStamp(ref)));
   let stamp = baseStamp;
@@ -3044,16 +3043,18 @@ function parkAttempt(
   } else if (branchExists) {
     commit = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
   }
-  if (commit !== "-") requireGit(["update-ref", `${ref}/head`, commit, ""]);
-  if (dirExists) requireGit(["update-ref", `${ref}/snapshot`, commit, ""]);
-  if (!dirExists && branchExists) requireGit(["update-ref", `${ref}/branch-tip`, commit, ""]);
+  const mode = dirExists ? "snapshot" : "branch-tip";
+  if (commit !== "-") {
+    requireGit(["update-ref", `${ref}/head`, commit, ""]);
+    requireGit(["update-ref", `${ref}/${mode}`, commit, ""]);
+  }
   // Copy every source ref before audit/removal. Originals remain intact if any
   // copy fails; their compare-and-delete runs only after successful teardown.
   for (const source of retained) {
     const sourceCommit = source.ref.slice(source.ref.lastIndexOf("/") + 1);
     requireGit(["update-ref", `${ref}/reviewed-source/${sourceCommit}`, source.oid, ""]);
   }
-  return { ref, commit };
+  return { ref, commit, mode };
 }
 
 // --- Subcommand: discard ---
@@ -3138,8 +3139,9 @@ function handleDiscard(args: string[]): void {
     );
   }
   // P7: anchor every git op to the target sibling repo (or projectDir for legacy).
-  const repoCwd =
-    creatingRepo === null ? pd : resolveRepoCwd(pd, flags, slug);
+  const { cwd: repoCwd, repo: parkedRepo } = creatingRepo === null
+    ? { cwd: pd, repo: null }
+    : resolveRepoTarget(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
 
   const branchName = `bolt-${slug}`;
@@ -3175,7 +3177,7 @@ function handleDiscard(args: string[]): void {
           ? captureCodeGenerationDiscardApproval(pd, wtPath, identity.unit) : null;
       })()
     : null;
-  let parked: { ref: string; commit: string };
+  let parked: ParkedAttempt;
   try {
     parked = parkAttempt(repoCwd, slug, wtPath, dirExists, registered, branchExists, retained);
   } catch (e) {
@@ -3227,6 +3229,9 @@ function handleDiscard(args: string[]): void {
       audit_timestamp: auditTs,
       parked_ref: parked.ref,
       parked_commit: parked.commit,
+      parked_stamp: parkedStamp(parked.ref),
+      parked_mode: parked.mode,
+      parked_repo: parkedRepo,
     })
   );
 }
@@ -3479,15 +3484,16 @@ function handlePurge(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   const repoCwd = parkedRepoCwd(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
+  const skippedUnparseable = new Set<string>();
   const refs = parkedSourceRefs(repoCwd, slug).filter(({ ref }) => {
     const stamp = parkedStamp(ref);
     if (flags.parked !== undefined && stamp !== flags.parked) return false;
     if (cutoff === undefined) return true;
-    if (!PARKED_STAMP_RE.test(stamp)) return false;
-    const timestamp = Date.parse(stamp.slice(0, 16).replace(
-      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
-      "$1-$2-$3T$4:$5:$6Z",
-    ));
+    const timestamp = parseParkedStampInstant(stamp);
+    if (timestamp === null) {
+      skippedUnparseable.add(stamp);
+      return false;
+    }
     return timestamp < cutoff;
   });
   const stamps = [...new Set(refs.map(({ ref }) => parkedStamp(ref)))].sort((a, b) =>
@@ -3505,7 +3511,12 @@ function handlePurge(args: string[]): void {
   }
   const cleanupError = deleteRetainedSourceRefs(repoCwd, refs);
   if (cleanupError) errorWithSlug(slug, `parked ref cleanup failed: ${cleanupError}`);
-  console.log(JSON.stringify({ purged: refs.length, slug, stamps }));
+  console.log(JSON.stringify({
+    purged: refs.length,
+    slug,
+    stamps,
+    skipped_unparseable: [...skippedUnparseable].sort(),
+  }));
 }
 
 // --- Subcommand: list ---

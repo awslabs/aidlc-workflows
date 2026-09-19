@@ -611,6 +611,20 @@ describe("t83 doctor parked attempts", () => {
     expect(out).toContain(attempt.purge_command);
   }, 30000);
 
+  test("February 31 parked stamps have null age_days and an unknown human age", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    const stamp = "20260231T000000Z";
+    parkHead(proj, "impossible-date", stamp, "snapshot");
+
+    const result = JSON.parse(runDoctor(proj, ["--json"]).out);
+    expect(result.data.parked_attempts).toEqual([
+      expect.objectContaining({ slug: "impossible-date", stamp, age_days: null }),
+    ]);
+    const { out } = runDoctor(proj, []);
+    expect(out).toContain(`impossible-date / ${stamp} (repo ., age unknown days, mode snapshot)`);
+  }, 30000);
+
   test("same-slug root and sibling attempts retain modes, restored presence, and repository selectors", () => {
     const proj = freshProject();
     const sibling = join(proj, "api");

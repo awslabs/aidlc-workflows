@@ -330,12 +330,12 @@ When Code Generation returns failure, **always halt and present the halt-and-ask
 
 This ordinary Abort pauses Construction without discarding its checkout. When
 a stale-review recovery command explicitly includes `--discard`, abort instead
-parks the Bolt's tracked and non-ignored untracked files plus reviewed source
-refs, then removes the live checkout and branch. Obtain the human's selection
-before executing the unchanged returned command. The parked work is recoverable
-with `{{INVOKE}} engine worktree restore --slug <slug>` in an isolated restored
-checkout; restoring files does not resume the aborted Bolt or revive its review
-authority.
+parks the Bolt's tracked and non-ignored untracked files (or its remaining branch
+tip when the checkout is gone) plus reviewed source refs, then removes the live
+checkout and branch. Obtain the human's selection before executing the unchanged
+returned command. The returned `restore_hint` recovers the parked work in an
+isolated restored checkout; restoring files does not resume the aborted Bolt or
+revive its review authority.
 
 **After a successful discard.** Only after the `--discard` abort succeeds and
 confirms the attempt was parked, and before starting the replacement attempt,
@@ -345,10 +345,17 @@ use `I` when no human remedy choice was involved (including an automatic
 loop-back). Do not announce a saved snapshot if the abort failed or did not
 park an attempt.
 
-**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because [reason], and I'm starting a new attempt. I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings. If you want the previous attempt back, ask me to restore it."
+Select `[saved-files text]` from the returned `parked_mode`:
 
-If the human later asks for that attempt back, run
-`{{INVOKE}} engine worktree restore --slug <slug>` with the saved attempt's slug.
+- `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+- `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because [reason], and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+If the human later asks for that attempt back, the conductor must execute the
+saved abort result's `restore_hint` verbatim, preserving its exact attempt and
+repository selectors rather than rebuilding a slug-only command.
 After restoration succeeds, announce the returned restored path plainly:
 **SAY:** "I restored the previous attempt at [returned restored path]."
 This does not resume the old attempt or make its review current.

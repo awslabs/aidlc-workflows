@@ -273,12 +273,18 @@ The orchestrator's halt-and-ask quotes the `detail` field verbatim. See `aidlc-c
   "reason": "agent-discard",
   "parked_ref": "refs/aidlc/parked/<bolt-slug>/20260518T123456Z",
   "parked_commit": "<snapshot-commit>",
+  "parked_stamp": "20260518T123456Z",
+  "parked_mode": "snapshot",
+  "parked_repo": null,
   "audit_timestamp": "2026-05-18T12:34:56Z"
 }
 ```
 
 If the checkout, branch, and reviewed source refs are already gone (idempotent path), `emitted` is `null` and `reason` is `already-discarded` — no audit event is re-emitted.
-That already-discarded response has no `parked_ref` or `parked_commit` fields.
+That already-discarded response has no `parked_*` fields. A new discard keeps
+`parked_ref` and `parked_commit` and adds the exact `parked_stamp`, `parked_mode`
+(`snapshot` or `branch-tip`), and `parked_repo` (`null` for the project root,
+otherwise the sibling repository name).
 
 Discard snapshots tracked files and non-ignored untracked files with a temporary
 index and `commit-tree`; ignored untracked files are not backed up. Before audit
@@ -293,17 +299,27 @@ refs remain, `parked_commit` is `"-"`; there is no `/head` to restore.
 ### Abort response (success)
 
 `bolt abort` success JSON includes `emitted: "BOLT_FAILED"`, the supplied
-`--reason` text in `reason`, `failed_bolt`, `slug`, `discarded`, and `parked_ref`.
-Without a saved recovery namespace, `parked_ref` is `null`. With one, the response
-also includes `restore_hint` (the rendered `aidlcToolInvocation("worktree")`
-prefix plus ` restore --slug <slug>`) and
-`parked_excludes: ["ignored files", "eol/text=auto normalization"]`. These two
-fields are absent when `parked_ref` is `null`. The audit row still uses
-`Reason: aborted`; the success JSON preserves the caller's reason instead.
+`--reason` text in `reason`, `failed_bolt`, `slug`, and `discarded`. Without
+`--discard`, it has no `parked_*` fields or `restore_hint`. With `--discard`, it
+echoes the returned `parked_ref`, `parked_stamp`, `parked_mode`, and `parked_repo`.
+The exact `restore_hint` is the rendered `aidlcToolInvocation("worktree")`
+prefix plus ` restore --slug <slug> --parked <stamp>`, with ` --repo <name>`
+appended only when `parked_repo` is non-null. Snapshot mode reports
+`parked_excludes: ["ignored files", "eol/text=auto normalization"]`; branch-tip
+mode reports `["uncommitted files (no working tree existed)"]` instead.
+
+If a saved namespace is known but its discard descriptor is missing, the
+fallback has a non-null `parked_ref`, `parked_stamp: null`, `parked_mode: null`,
+and `parked_repo: null`, with a slug-only `restore_hint` and the snapshot-style
+exclusions. This unknown mode does not justify claiming a snapshot was saved.
+If no namespace was saved, all four descriptor fields are `null`, with no
+`restore_hint` or `parked_excludes`. The audit row still uses `Reason: aborted`;
+the success JSON preserves the caller's reason instead.
 Do not change the abort command or its human-consent requirement. Tell the human
-the attempt was **set aside**; on a later request, invoke
-`{{INVOKE}} engine worktree restore --slug <bolt-slug>` and announce its returned
-`worktree_path` plainly.
+the attempt was **set aside**. For branch-tip mode, say: "I kept its committed
+work; there were no uncommitted files to save." On a later restore request, the
+conductor must execute the saved result's `restore_hint` verbatim and announce
+its returned `worktree_path` plainly.
 
 ### Restore or purge set-aside work
 
@@ -340,7 +356,7 @@ Raw-restored filtered paths may appear modified under their own filter. Submodul
 gitlinks become empty directories, not restored submodule checkouts. Git's
 eol/`text=auto` normalization during parking remains a limit: normalized CRLF
 bytes cannot be recovered. Together with ignored untracked files, this is the
-explicit `parked_excludes` boundary; tracked files matching ignore patterns
+explicit snapshot-mode `parked_excludes` boundary; tracked files matching ignore patterns
 remain included. A regular file with a non-UTF-8 name and a `filter`, `text`,
 `eol`, `ident`, or `working-tree-encoding` attribute (neither unspecified nor
 unset) cannot currently be parked; discard refuses before teardown with:
@@ -355,10 +371,14 @@ With no selector it removes every stamp for the slug; `--parked` selects one
 exact stamp. `--older-than` accepts nonnegative finite days, including fractions,
 and selects only attempts strictly older than the threshold. Age comes from the
 UTC `YYYYMMDDTHHMMSSZ` portion of the stamp, not its numeric `-N` collision suffix
-or a commit date. The two selectors are mutually exclusive. Purge refuses while
-any corresponding restored checkout exists or remains registered with Git,
-including moved checkouts. Its JSON is
-`{purged: <number-of-refs>, slug, stamps: [...]}`.
+or a commit date. The shared strict calendar parser rejects impossible dates
+and times rather than normalizing them; age-filtered purge retains unparseable
+stamps and reports them in `skipped_unparseable: [stamps]`. The two selectors
+are mutually exclusive. Purge refuses while any corresponding restored checkout
+exists or remains registered with Git, including moved checkouts. Its JSON is
+`{purged: <number-of-refs>, slug, stamps: [...], skipped_unparseable: [...]}`.
+`skipped_unparseable` is always present and is empty unless `--older-than`
+retains unparseable stamps; exact-stamp and all-stamp purges can remove them.
 For restore and purge, `--repo <name>` selects an existing sibling Git repository
 and `--repo .` selects the project root, independently of the current intent's
 repo list. These selectors do not change live create/discard behavior.
@@ -367,7 +387,9 @@ Doctor lists entries with a saved `/head` informationally, not as warnings or
 failures: slug, stamp, age in days, marker mode (`snapshot`, `branch-tip`, or
 `legacy`), existence of the canonical restored checkout, and rendered restore
 and purge commands for the exact stamp and repository. A moved checkout may not
-show as restored there, but purge still checks its Git registration. Restore and
+show as restored there, but purge still checks its Git registration. Doctor and
+purge share the strict stamp parser: impossible dates or times have
+`age_days: null` in doctor's JSON and `unknown` in human-readable output. Restore and
 purge add no audit events. See `aidlc-shared/worktree-info-schema.md` for the JSON
 examples and recovery contract.
 

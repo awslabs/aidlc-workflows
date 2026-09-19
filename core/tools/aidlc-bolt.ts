@@ -833,6 +833,9 @@ function handleAbort(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   const useDiscard = booleans.has("discard");
   let parkedRef: string | null = null;
+  let parkedStamp: string | null = null;
+  let parkedMode: "snapshot" | "branch-tip" | null = null;
+  let parkedRepo: string | null = null;
 
   // Discard-FIRST when --discard set, audit-AFTER. If we emitted BOLT_FAILED
   // (Reason: aborted) before discard and discard then timed out / errored,
@@ -861,8 +864,15 @@ function handleAbort(args: string[]): void {
     try {
       const discarded = JSON.parse(result.stdout);
       if (typeof discarded?.parked_ref === "string") parkedRef = discarded.parked_ref;
+      if (typeof discarded?.parked_stamp === "string" &&
+        (discarded.parked_mode === "snapshot" || discarded.parked_mode === "branch-tip") &&
+        (discarded.parked_repo === null || typeof discarded.parked_repo === "string")) {
+        parkedStamp = discarded.parked_stamp;
+        parkedMode = discarded.parked_mode;
+        parkedRepo = discarded.parked_repo;
+      }
     } catch {
-      // Older sibling versions or no-op output may not carry a parked ref.
+      // Older sibling versions or no-op output may not carry a recovery descriptor.
     }
   }
 
@@ -890,10 +900,17 @@ function handleAbort(args: string[]): void {
       failed_bolt: flags.name,
       slug: flags.slug,
       discarded: useDiscard,
-      parked_ref: parkedRef,
+      ...(useDiscard ? {
+        parked_ref: parkedRef,
+        parked_stamp: parkedStamp,
+        parked_mode: parkedMode,
+        parked_repo: parkedRepo,
+      } : {}),
       ...(parkedRef === null ? {} : {
-        restore_hint: `${aidlcToolInvocation("worktree")} restore --slug ${flags.slug}`,
-        parked_excludes: ["ignored files", "eol/text=auto normalization"],
+        restore_hint: `${aidlcToolInvocation("worktree")} restore --slug ${flags.slug}${parkedStamp === null ? "" : ` --parked ${parkedStamp}`}${parkedRepo === null ? "" : ` --repo ${parkedRepo}`}`,
+        parked_excludes: parkedMode === "branch-tip"
+          ? ["uncommitted files (no working tree existed)"]
+          : ["ignored files", "eol/text=auto normalization"],
       }),
     })
   );

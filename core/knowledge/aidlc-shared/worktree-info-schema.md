@@ -75,19 +75,37 @@ pointing to that same commit. If the checkout is already gone but its branch
 remains, `/head` instead preserves the branch tip, whose blobs are ordinary
 committed forms, with a `/branch-tip` marker pointing to the same commit.
 New parks with `/head` create exactly one of these two markers. `/reviewed-source/<commit>` preserves each
-reviewed source ref. The discard JSON adds `parked_ref` (the namespace prefix,
-not its `/head` ref) and `parked_commit` (the snapshot commit or branch tip). If
+reviewed source ref. The discard JSON keeps `parked_ref` (the namespace prefix,
+not its `/head` ref) and `parked_commit` (the snapshot commit or branch tip), and
+adds `parked_stamp` (the exact stamp), `parked_mode` (`snapshot` or `branch-tip`),
+and `parked_repo` (`null` for the project root, otherwise the sibling repository
+name). If
 only reviewed source refs remain to park, `parked_commit` is `"-"` and no `/head`
 exists to restore.
-The already-discarded response is unchanged and has neither field.
+The already-discarded response is unchanged and has no `parked_*` fields.
 
-Successful `bolt abort` JSON echoes the supplied `--reason` text in `reason`
-and includes `parked_ref`, or `null` when no parking result exists. A non-null
-`parked_ref` additionally includes `restore_hint` (the `worktree restore`
-command rendered with this install's own tool prefix) and the exact
-`parked_excludes` array `["ignored files", "eol/text=auto normalization"]`.
-Both additional fields are absent when `parked_ref` is `null`. A result for an
-attempt that was set aside looks like:
+Successful `bolt abort` JSON echoes the supplied `--reason` text in `reason`.
+Without `--discard`, it has no `parked_*` fields or `restore_hint`. With
+`--discard` and a saved namespace, it echoes the discard descriptor's
+`parked_ref`, `parked_stamp`, `parked_mode`, and `parked_repo`.
+Its `restore_hint` is the install's rendered worktree invocation plus
+` restore --slug <slug> --parked <stamp>`, with ` --repo <name>` appended only
+when `parked_repo` is non-null. This selects the exact saved attempt, not a
+later attempt with the same slug. The `parked_excludes` array follows the mode:
+
+| `parked_mode` | `parked_excludes` |
+|---|---|
+| `snapshot` | `["ignored files", "eol/text=auto normalization"]` |
+| `branch-tip` | `["uncommitted files (no working tree existed)"]` |
+
+If a saved namespace is known but its discard descriptor is missing, the
+fallback reports `parked_stamp`, `parked_mode`, and `parked_repo` as `null`, a
+slug-only `restore_hint` without exact stamp or repository selectors, and the
+snapshot-style exclusions. Unknown mode does not establish that a snapshot was
+saved; do not make a saved-files claim from this fallback. With `--discard` but
+no saved namespace, `parked_ref`, `parked_stamp`, `parked_mode`, and `parked_repo`
+are all `null`, and `restore_hint` and `parked_excludes` are absent. A result with
+a snapshot descriptor looks like:
 
 ```json
 {
@@ -97,19 +115,22 @@ attempt that was set aside looks like:
   "slug": "onboarding-wizard",
   "discarded": true,
   "parked_ref": "refs/aidlc/parked/onboarding-wizard/20260918T123456Z",
-  "restore_hint": "{{INVOKE}} engine worktree restore --slug onboarding-wizard",
+  "parked_stamp": "20260918T123456Z",
+  "parked_mode": "snapshot",
+  "parked_repo": null,
+  "restore_hint": "{{INVOKE}} engine worktree restore --slug onboarding-wizard --parked 20260918T123456Z",
   "parked_excludes": ["ignored files", "eol/text=auto normalization"]
 }
 ```
 
-`restore_hint` selects the latest saved attempt for the slug; use
-`--parked <stamp>` to recover the exact stamp in `parked_ref`. The audit
-`BOLT_FAILED` field remains `Reason: aborted`;
-only the success JSON reason echoes the caller's text. Abort arguments and the
-human-consent requirement are unchanged. In spoken text, call this attempt
-**set aside**, not deleted or completed; on a later restore request, run
-`{{INVOKE}} engine worktree restore --slug <slug>` and announce the returned
-`worktree_path` plainly.
+The audit `BOLT_FAILED` field remains `Reason: aborted`; only the success JSON
+reason echoes the caller's text. Abort arguments and the human-consent
+requirement are unchanged. In spoken text, call this attempt **set aside**, not
+deleted or completed. For `snapshot`, describe the saved tracked and non-ignored
+untracked files and the exclusions above. For `branch-tip`, say: "I kept its
+committed work; there were no uncommitted files to save." On a later restore
+request, the conductor must execute the saved result's `restore_hint` verbatim
+and announce the returned `worktree_path` plainly.
 
 ### Restore a set-aside attempt
 
@@ -205,9 +226,11 @@ Purge compare-deletes all parked refs for the slug, just the selected stamp
 when `--parked` is supplied, or only attempts strictly older than the
 `--older-than <days>` threshold. Days must be nonnegative and finite; fractions
 are accepted. The timestamp is the UTC `YYYYMMDDTHHMMSSZ` part of the stamp,
-independent of any `-N` collision suffix and of commit dates. An attempt exactly
-at the age threshold is retained. `--older-than` and `--parked` are mutually
-exclusive.
+independent of any `-N` collision suffix and of commit dates. The shared strict
+calendar parser rejects impossible dates and times rather than normalizing
+them. With `--older-than`, unparseable stamps are retained and reported in
+`skipped_unparseable: [stamps]`. An attempt exactly at the age threshold is
+retained. `--older-than` and `--parked` are mutually exclusive.
 
 Purge refuses if any corresponding restored checkout still exists or is
 registered with Git, including a moved checkout; remove that checkout explicitly
@@ -218,9 +241,14 @@ branch. The JSON reports the number of refs deleted, not the number of snapshots
 {
   "purged": 3,
   "slug": "onboarding-wizard",
-  "stamps": ["20260918T123456Z"]
+  "stamps": ["20260918T123456Z"],
+  "skipped_unparseable": []
 }
 ```
+
+`skipped_unparseable` is always present; it is empty unless `--older-than`
+retains unparseable stamps. Without an age filter, explicit-stamp and all-stamp
+purges can remove those stamps. The `stamps` list contains only selected stamps.
 
 Restore and purge emit no new audit events; the Worktree taxonomy stays at seven.
 
@@ -249,6 +277,8 @@ The public doctor's JSON exposes `data.parked_attempts`, an array of objects:
 | `restored_path`, `restored_exists` | Canonical restore path and whether it exists |
 | `restore_command`, `purge_command` | Rendered commands for this exact stamp and repository |
 
+Doctor uses the same strict calendar parser as age-filtered purge, so an
+impossible date or time yields `age_days: null` and human-readable `unknown`.
 The rounded display age is informational; purge compares the timestamp against
 the exact `--older-than` threshold rather than rounding the elapsed age.
 

@@ -84,8 +84,8 @@ attempts strictly older than a nonnegative finite number of days. Age uses the
 stamp's UTC timestamp, ignoring its `-N` collision suffix; the two selectors are
 mutually exclusive. Purge refuses while a matching restored checkout exists,
 including one moved elsewhere. Doctor lists saved attempts informationally with
-their exact restore and purge commands. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside--getting-the-files-back)
-for the recovery walkthrough and [CLI Commands](12-cli-commands.md#aidlc-engine-worktree-purge--remove-recovery-refs)
+their exact restore and purge commands. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
+for the recovery walkthrough and [CLI Commands](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs)
 for the flags.
 
 Normal scoped `next`, lifecycle, review, and gate work is offline-first. Network
