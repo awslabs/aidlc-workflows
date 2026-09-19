@@ -645,6 +645,17 @@ function locateAnchor(content: string, anchor: string): number {
     const next = content.slice(from).search(/^## /m);
     return next === -1 ? content.length : from + next;
   }
+  // Persona anchors (contributions/agents/): after the delegated-knowledge
+  // preflight block the packager injects, and the end of the authored body
+  // before knowledge absorbed into a reviewer persona.
+  if (anchor === "after-preflight") {
+    const preflight = content.match(/^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m);
+    return preflight ? preflight.index! + preflight[0].length : -1;
+  }
+  if (anchor === "end-of-body") {
+    const absorbed = content.indexOf("\n---\n\n<!-- Absorbed at build time");
+    return absorbed === -1 ? content.length : absorbed;
+  }
   return -1;
 }
 

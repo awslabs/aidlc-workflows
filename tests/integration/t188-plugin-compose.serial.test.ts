@@ -1785,10 +1785,18 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(heading).toBeGreaterThan(-1);
     expect(open).toBeGreaterThan(heading);
     if (nextHeading !== -1) expect(open).toBeLessThan(nextHeading);
+    // The mandatory read-out sits right after the injected preflight paragraph
+    // and before the persona's own title.
+    const preflight = persona.indexOf("<!-- aidlc-delegated-knowledge-preflight -->");
+    const readout = persona.indexOf("<!-- plugin:test-pro:after-preflight:90:");
+    const title = persona.indexOf("\n# ");
+    expect(readout).toBeGreaterThan(preflight);
+    expect(readout).toBeLessThan(title);
     const sidecar = JSON.parse(
       readFileSync(join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json"), "utf-8"),
     );
     expect(sidecar["aidlc-quality-agent"]?.fragments).toEqual([
+      expect.objectContaining({ anchor: "after-preflight", order: 90 }),
       expect.objectContaining({ anchor: "in:Collaboration", order: 100 }),
     ]);
   });

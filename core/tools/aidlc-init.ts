@@ -3541,6 +3541,17 @@ function anchorOffset(content: string, anchor: string): number {
     const next = content.slice(from).search(/^## /m);
     return next < 0 ? content.length : from + next;
   }
+  // Persona anchors (contributions/agents/): after the delegated-knowledge
+  // preflight block the packager injects (marker line + one paragraph), and the
+  // end of the authored body, before knowledge absorbed into a reviewer persona.
+  if (anchor === "after-preflight") {
+    const preflight = /^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m.exec(content);
+    return preflight ? (preflight.index ?? 0) + preflight[0].length : -1;
+  }
+  if (anchor === "end-of-body") {
+    const absorbed = content.indexOf("\n---\n\n<!-- Absorbed at build time");
+    return absorbed < 0 ? content.length : absorbed;
+  }
   return -1;
 }
 
