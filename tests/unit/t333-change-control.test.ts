@@ -279,6 +279,12 @@ describe("t333 (2) the grammar", () => {
     expect(structuredField("Methodology: tdd\n  Ordering: tests first.", "Methodology")).toBe("tdd");
     expect(structuredField("  - **Ordering**: long\n    wrapped", "Ordering")).toBe("long wrapped");
     expect(structuredField("- **Mode**: strict\n  1. Require reapproval when inputs move.", "Mode")).toBe("strict");
+    // A sibling head is recognised as the reader recognises it: the space after the colon is optional; a URL scheme is prose.
+    expect(structuredField("Methodology: tdd\n  Ordering:tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("Methodology: tdd\n  Ordering:tests first.", "Ordering")).toBe("tests first.");
+    expect(structuredField("- **Mode**: strict\n  **Reason**:compliance", "Mode")).toBe("strict");
+    expect(structuredField("- **Ordering**: a,\n  then run https://x.y/z first", "Ordering")).toBe("a, then run https://x.y/z first");
+    expect(structuredField("- **Ordering**: a,\n  then file://share/tests", "Ordering")).toBe("a, then file://share/tests");
   });
 
   test("the section body ignores commented headings and commented lines", () => {

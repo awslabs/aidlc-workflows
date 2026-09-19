@@ -2345,7 +2345,7 @@ export function evaluateCodeGenerationApproval(
     }
     if (!empty.contractValid) {
       empty.reason =
-        "the approved Testing Contract is stale because memory, scope, test strategy, or project type changed";
+        "the approved Testing Contract is stale because memory, scope, test strategy, project type, or the installed AIDLC version changed";
       return empty;
     }
     if (!empty.approved) {

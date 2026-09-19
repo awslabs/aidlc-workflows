@@ -28160,16 +28160,18 @@ export function structuredField(section: string, field: string): string | null {
     const parts = [match[2].trim()];
     // A wrapped value continues on lines indented deeper than its head until
     // a blank line, a line at the head's indentation or shallower (the next
-    // paragraph), a line that is itself a `Field:` head (the next field), or a
-    // line opening another block: a list item of any marker, a heading, a
-    // blockquote, a table row, or a fence. Markdown authors and formatters
-    // wrap long bullets this way; the value is the joined prose.
+    // paragraph), a `Field:` head recognised as the reader recognises it
+    // (optional bold, one to three words, a colon with or without a space after
+    // it; a URL scheme like `scheme://` is not a field), or a line opening
+    // another block: a list item of any marker, a heading, a blockquote, a table
+    // row, or a fence. Markdown authors and formatters wrap long bullets this
+    // way; the value is the joined prose.
     for (let j = i + 1; j < lines.length; j++) {
       const line = lines[j];
       const indent = (line.match(/^[ \t]*/)?.[0] ?? "").length;
       if (indent <= headIndent || !/\S/.test(line)) break;
       if (/^[ \t]*(?:[-*+][ \t]|\d+[.)][ \t]|[>#|]|```|~~~)/.test(line)) break;
-      if (/^[ \t]*(?:\*\*)?[A-Za-z][\w-]*(?:[ \t]+[\w-]+){0,2}(?:\*\*)?[ \t]*:(?:[ \t]|$)/.test(line)) break;
+      if (/^[ \t]*(?:\*\*)?[A-Za-z][\w-]*(?:[ \t]+[\w-]+){0,2}(?:\*\*)?[ \t]*:(?!\/\/)/.test(line)) break;
       parts.push(line.trim());
     }
     const value = parts.filter(Boolean).join(" ");
