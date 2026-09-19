@@ -74,6 +74,7 @@ function fileInventory(root: string, relative = ""): string[] {
 interface GraphStage {
   slug?: string;
   ars?: { targets: string[]; cost: number | null; role?: string; project_types?: string[] };
+  scopes?: string[];
   produces?: string[];
   consumes?: Array<{ artifact?: string; required?: boolean }>;
   sensors_applicable?: Array<{ id?: string }>;
@@ -722,6 +723,16 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // composer's mechanical screen listed every plugin stage as `no-prior`.
     expect(stage(project, "test-pro-integration")?.ars).toEqual({ targets: ["ve", "r"], cost: 4 });
     expect(stage(project, "test-pro-full-suite")?.ars).toEqual({ targets: ["ve"], cost: 5 });
+    // The block sits below the stage's block-style lists: the hand-rolled
+    // parser keeps only the contiguous items of a list, so a nested map
+    // inserted mid-list would silently drop the scopes after it.
+    expect([...(stage(project, "test-pro-integration")?.scopes ?? [])].sort()).toEqual(
+      ["classic", "enterprise", "feature", "mvp", "test-pro-validation", "workshop"],
+    );
+    expect([...(stage(project, "test-pro-full-suite")?.scopes ?? [])].sort()).toEqual([
+      "enterprise",
+      "test-pro-validation",
+    ]);
     const env = { ...process.env };
     delete env.AIDLC_PROJECT_DIR;
     delete env.AIDLC_STAGE_GRAPH;
