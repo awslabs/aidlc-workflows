@@ -282,10 +282,11 @@ That already-discarded response has no `parked_ref` or `parked_commit` fields.
 
 Discard snapshots tracked files and non-ignored untracked files with a temporary
 index and `commit-tree`; ignored untracked files are not backed up. Before audit
-emission, it parks `/head` and `/reviewed-source/<commit>` refs below the
-`parked_ref` namespace. If the checkout is already gone but its branch remains,
-`/head` holds that branch tip instead, with a matching `/branch-tip` marker
-created only for this branch-only park. Only then does it remove the live checkout and
+emission, it parks `/head`, a `/snapshot` marker pointing to the same commit,
+and `/reviewed-source/<commit>` refs below the `parked_ref` namespace. If the
+checkout is already gone but its branch remains, `/head` holds that branch tip
+instead, with a matching `/branch-tip` marker rather than `/snapshot`.
+Only then does it remove the live checkout and
 branch and compare-delete the original reviewed source refs. If only reviewed
 refs remain, `parked_commit` is `"-"`; there is no `/head` to restore.
 
@@ -300,17 +301,22 @@ orders those suffixes numerically. Restore creates
 touching the live `.aidlc/worktrees/bolt-<slug>` path or `bolt-<slug>` branch.
 It does not resume the aborted lifecycle or restore active review authority.
 Its JSON is `{restored: true, slug, parked_ref, worktree_path, branch,
-reviewed_source_refs, raw_bytes}` with `materialized` added only in raw mode.
+reviewed_source_refs, raw_bytes, restore_mode}` with `materialized` added only in raw mode.
 `reviewed_source_refs` counts retained parked reviewed refs, which are not copied into the active namespace.
-`raw_bytes: true` means byte-exact materialization: `/branch-tip` is absent or the
-bare `--raw` flag was supplied. Unmarked legacy snapshots therefore restore raw
-by default. This mode bypasses smudge/process filters and streams
-regular-file blobs directly to disk; only symlink targets are buffered.
+Classification checks the bare `--raw` flag first (`restore_mode: "raw-requested"`),
+then `/snapshot` (`"snapshot"`), then `/branch-tip` (`"branch-tip"`). Legacy parks
+have neither marker for either shape. An unmarked head is a snapshot only if the
+commit author is exactly `AI-DLC`, its email is `aidlc@localhost`, and its subject
+starts with `aidlc: parked bolt-<slug> at ` (`"legacy-snapshot"`); otherwise it is
+a branch tip (`"legacy-branch-tip"`). The identity check ignores Git replacement objects.
+Snapshots and explicit `--raw` report `raw_bytes: true`, bypass smudge/process
+filters and working-tree-encoding conversions, and stream regular-file blobs
+directly to disk; only symlink targets are buffered.
 `materialized` counts regular files plus symbolic links written, excluding submodule gitlinks.
-With `/branch-tip` present and no `--raw`, branch-only parks restore through Git's
-ordinary checkout, applying filters, and report `raw_bytes: false`. A required failing
-filter fails the restore with Git's message; `--raw` bypasses filters after any
-remaining restore checkout and branch have been removed.
+Both branch-tip modes use Git's ordinary checkout, applying filters and encoding
+conversions, and report `raw_bytes: false`. A required failing filter fails the
+restore with Git's message; `--raw` bypasses conversions after any remaining
+restore checkout and branch have been removed.
 
 Symbolic links are materialized as symlinks when `core.symlinks` is unset or true;
 with `core.symlinks=false`, a mode-120000 entry is written as a regular file whose

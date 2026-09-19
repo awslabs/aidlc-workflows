@@ -2948,6 +2948,7 @@ function parkAttempt(
     commit = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
   }
   if (commit !== "-") requireGit(["update-ref", `${ref}/head`, commit, ""]);
+  if (dirExists) requireGit(["update-ref", `${ref}/snapshot`, commit, ""]);
   if (!dirExists && branchExists) requireGit(["update-ref", `${ref}/branch-tip`, commit, ""]);
   // Copy every source ref before audit/removal. Originals remain intact if any
   // copy fails; their compare-and-delete runs only after successful teardown.
@@ -3230,9 +3231,23 @@ function handleRestore(args: string[]): void {
   if (existsSync(wtPath) || runGit(["rev-parse", "--verify", `refs/heads/${branch}`], repoCwd).ok) {
     errorWithSlug(slug, `already restored at ${wtPath}`);
   }
-  const raw = args.includes("--raw") || !runGit(["rev-parse", "--verify", `${parkedRef}/branch-tip`], repoCwd).ok;
-  // Unmarked heads include legacy snapshots and hold working-tree bytes.
-  // Only marked branch tips need Git's checkout conversions unless --raw is explicit.
+  let restoreMode: "snapshot" | "branch-tip" | "legacy-snapshot" | "legacy-branch-tip" | "raw-requested";
+  if (args.includes("--raw")) {
+    restoreMode = "raw-requested";
+  } else if (refs.some(({ ref }) => ref === `${parkedRef}/snapshot`)) {
+    restoreMode = "snapshot";
+  } else if (refs.some(({ ref }) => ref === `${parkedRef}/branch-tip`)) {
+    restoreMode = "branch-tip";
+  } else {
+    // Legacy parks have only /head for both shapes. Only tool-authored snapshot
+    // commits contain working-tree bytes; ordinary branch tips need checkout conversions.
+    const identity = runGit(["log", "-1", "--format=%an%x00%ae%x00%s", head.oid], repoCwd, { GIT_NO_REPLACE_OBJECTS: "1" });
+    if (!identity.ok) errorWithSlug(slug, `cannot classify parked head: ${identity.stderr.trim() || `exit ${identity.code}`}`);
+    const [author, email, subject] = identity.stdout.split("\0");
+    restoreMode = author === "AI-DLC" && email === "aidlc@localhost" && subject?.startsWith(`aidlc: parked bolt-${slug} at `)
+      ? "legacy-snapshot" : "legacy-branch-tip";
+  }
+  const raw = restoreMode !== "branch-tip" && restoreMode !== "legacy-branch-tip";
   const added = runGit(["worktree", "add", ...(raw ? ["--no-checkout"] : []), "-b", branch, wtPath, head.oid], repoCwd);
   if (!added.ok) {
     errorWithSlug(slug, `git worktree add failed: ${added.stderr.trim() || `exit ${added.code}`}${raw ? "" : "; --raw bypasses checkout filters"}`);
@@ -3324,6 +3339,7 @@ function handleRestore(args: string[]): void {
     reviewed_source_refs: refs.filter(({ ref }) => ref.startsWith(`${parkedRef}/reviewed-source/`)).length,
     ...(raw ? { materialized } : {}),
     raw_bytes: raw,
+    restore_mode: restoreMode,
   }));
 }
 

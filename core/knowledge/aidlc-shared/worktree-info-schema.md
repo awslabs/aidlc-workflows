@@ -70,10 +70,11 @@ bytes, bypassing those transformations.
 
 The parked namespace is `refs/aidlc/parked/<slug>/<stamp>`, where `stamp` is UTC
 `YYYYMMDDTHHMMSSZ`, with a numeric `-N` suffix for collisions. `/head` points to
-the snapshot commit with its raw working-tree blobs. If the checkout is already
-gone but its branch remains, `/head` instead preserves the branch tip, whose
-blobs are ordinary committed forms; only this branch-only park creates a
-`/branch-tip` ref pointing to the same commit. `/reviewed-source/<commit>` preserves each
+the snapshot commit with its raw working-tree blobs, with a `/snapshot` marker
+pointing to that same commit. If the checkout is already gone but its branch
+remains, `/head` instead preserves the branch tip, whose blobs are ordinary
+committed forms, with a `/branch-tip` marker pointing to the same commit.
+New parks with `/head` create exactly one of these two markers. `/reviewed-source/<commit>` preserves each
 reviewed source ref. The discard JSON adds `parked_ref` (the namespace prefix,
 not its `/head` ref) and `parked_commit` (the snapshot commit or branch tip). If
 only reviewed source refs remain to park, `parked_commit` is `"-"` and no `/head`
@@ -98,12 +99,17 @@ creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
 not resume an aborted Bolt or reinstate its review authority. Parked reviewed
 source refs remain in the parked namespace, not copied back into active refs.
 
-A park without `/branch-tip`, including legacy unmarked snapshots, restores its
-blobs byte-exact without running smudge/process filters. A branch-only park
-(`/branch-tip` present) instead uses Git's ordinary checkout, including its
-filters; a required failing filter fails the restore with Git's error. The bare
-`--raw` flag bypasses checkout filters and writes the stored blobs byte-exact for
-any park, including marked branch tips. Regular-file blobs stream directly to disk rather than
+Restore decides its mode in order: the bare `--raw` flag writes stored blobs
+byte-exact for any park; otherwise `/snapshot` selects byte-exact materialization,
+then `/branch-tip` selects Git's ordinary checkout. Legacy parks have neither
+marker for either shape. An unmarked head is a snapshot only when its commit
+author is exactly `AI-DLC`, its email is `aidlc@localhost`, and its subject starts
+with `aidlc: parked bolt-<slug> at `; all other unmarked heads use ordinary
+checkout. This identity check reads the original commit, ignoring Git replacement
+objects. Byte-exact materialization bypasses smudge/process filters and
+working-tree-encoding conversions. Ordinary checkout applies these conversions;
+a required failing filter fails the restore with Git's error.
+Regular-file blobs stream directly to disk rather than
 being buffered in memory; only symlink targets are buffered. Raw-restored paths
 may show as modified under their own filter.
 Executable files retain their modes. Symbolic links are materialized as symlinks
@@ -126,7 +132,8 @@ be parked; discard refuses before teardown instead of altering bytes.
   "branch": "restore/bolt-onboarding-wizard-20260918T123456Z",
   "reviewed_source_refs": 1,
   "materialized": 12,
-  "raw_bytes": true
+  "raw_bytes": true,
+  "restore_mode": "snapshot"
 }
 ```
 
@@ -138,6 +145,16 @@ links written, excluding submodule gitlinks. A namespace without `/head` is not
 restorable. A raw materialization failure leaves the partial checkout in place
 and reports its path. Before retrying a failed Git checkout with `--raw`, remove
 any remaining restore checkout and its `restore/bolt-<slug>-<stamp>` branch.
+
+`restore_mode` records why that behavior was selected:
+
+| Value | Selection | `raw_bytes` |
+|---|---|---|
+| `raw-requested` | Explicit `--raw`, overriding markers and legacy identity | `true` |
+| `snapshot` | `/snapshot` marker present | `true` |
+| `branch-tip` | `/branch-tip` marker present, without `/snapshot` | `false` |
+| `legacy-snapshot` | Neither marker; tool-authored snapshot identity matches | `true` |
+| `legacy-branch-tip` | Neither marker; snapshot identity does not match | `false` |
 
 ### Purge parked refs
 

@@ -615,6 +615,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         reviewed_source_refs: 1,
         materialized: expect.any(Number),
         raw_bytes: true,
+        restore_mode: "snapshot",
       });
       expect(auditEvents(proj)).toEqual(auditBeforeRecovery);
       expect(readFileSync(join(restoredPath, "committed.txt"), "utf-8")).toBe("unmerged Bolt commit\n");
@@ -646,7 +647,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(proj, "worktree", "remove", "--force", restoredPath).status).toBe(0);
       const purged = runWorktree(proj, "purge", "--slug", slug);
       expect(purged.status).toBe(0);
-      expect(JSON.parse(purged.out)).toEqual({ purged: 2, slug, stamps: [stamp] });
+      expect(JSON.parse(purged.out)).toEqual({ purged: 3, slug, stamps: [stamp] });
       expect(git(proj, "for-each-ref", "--format=%(refname)", `refs/aidlc/parked/${slug}/`).stdout).toBe("");
       const noAttempt = runWorktree(proj, "restore", "--slug", slug);
       expect(noAttempt.status).not.toBe(0);
@@ -695,6 +696,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(restored.status).toBe(0);
       const { worktree_path: restoredPath } = JSON.parse(restored.out) as { worktree_path: string };
       expect(JSON.parse(restored.out).raw_bytes).toBe(true);
+      expect(JSON.parse(restored.out).restore_mode).toBe("snapshot");
       expect(readFileSync(join(restoredPath, "notes.lossy"), "utf-8")).toBe(trackedBytes);
       expect(readFileSync(join(restoredPath, "scratch.lossy"), "utf-8")).toBe(untrackedBytes);
       expect(readFileSync(join(restoredPath, "plain.txt"), "utf-8")).toBe(plainBytes);
@@ -816,16 +818,15 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         expect(discarded.status, discarded.out).toBe(0);
         const { parked_ref: parkedRef } = JSON.parse(discarded.out) as { parked_ref: string };
         // Legacy parks predate discriminator refs; retain only the raw snapshot head.
-        for (const marker of ["snapshot", "branch-tip"]) {
-          expect(git(proj, "update-ref", "-d", `${parkedRef}/${marker}`).status).toBe(0);
-        }
+        expect(git(proj, "update-ref", "-d", `${parkedRef}/snapshot`).status).toBe(0);
         expect(git(proj, "for-each-ref", "--format=%(refname)", `${parkedRef}/`).stdout.trim()).toBe(`${parkedRef}/head`);
 
         const restored = runWorktree(proj, "restore", "--slug", slug);
         expect(restored.status, restored.out).toBe(0);
-        const recovery = JSON.parse(restored.out) as { worktree_path: string; raw_bytes: boolean };
+        const recovery = JSON.parse(restored.out) as { worktree_path: string; raw_bytes: boolean; restore_mode: string };
         expect(readFileSync(join(recovery.worktree_path, "notes.lossy"), "utf-8")).toBe(dirtyBytes);
         expect(recovery.raw_bytes).toBe(true);
+        expect(recovery.restore_mode).toBe("legacy-snapshot");
       });
     }
 
@@ -1173,6 +1174,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(restored.status).toBe(0);
       const recovery = JSON.parse(restored.out) as { worktree_path: string; reviewed_source_refs: number };
       expect(JSON.parse(restored.out).raw_bytes).toBe(false);
+      expect(JSON.parse(restored.out).restore_mode).toBe("branch-tip");
       expect(recovery.reviewed_source_refs).toBe(0);
       expect(git(recovery.worktree_path, "rev-parse", "HEAD").stdout.trim()).toBe(head);
       expect(readFileSync(join(recovery.worktree_path, "committed.txt"), "utf-8")).toBe("survives checkout removal\n");
@@ -1183,44 +1185,64 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(proj, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
     });
 
-    test.skipIf(process.platform === "win32")("branch-only restore applies checkout filters unless --raw is supplied", () => {
-      const proj = setupLifecycleProject();
-      const slug = "branch-only-smudge";
-      const wt = worktreeDir(proj, slug);
-      gitInitMain(proj);
-      expect(git(proj, "config", "filter.lossy.clean", "cat").status).toBe(0);
-      expect(git(proj, "config", "filter.lossy.smudge", "tr a-z A-Z").status).toBe(0);
-      writeFileSync(join(proj, ".gitattributes"), "*.lossy filter=lossy\n");
-      writeFileSync(join(proj, "notes.lossy"), "original lowercase notes\n");
-      expect(git(proj, "add", ".gitattributes", "notes.lossy").status).toBe(0);
-      expect(git(proj, "commit", "-q", "-m", "seed checkout filter").status).toBe(0);
-      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
-      const committedBytes = "committed lowercase branch notes\n";
-      writeFileSync(join(wt, "notes.lossy"), committedBytes);
-      expect(git(wt, "add", "notes.lossy").status).toBe(0);
-      expect(git(wt, "commit", "-q", "-m", "branch-only filtered work").status).toBe(0);
-      rmSync(wt, { recursive: true, force: true });
-      expect(git(proj, "worktree", "prune").status).toBe(0);
-      const discarded = runWorktree(proj, "discard", "--slug", slug);
-      expect(discarded.status, discarded.out).toBe(0);
-      const { parked_ref: parkedRef } = JSON.parse(discarded.out) as { parked_ref: string };
-      const stamp = parkedRef.split("/").at(-1)!;
+    for (const legacy of [false, true]) {
+      test.skipIf(process.platform === "win32")(`${legacy ? "legacy unmarked" : "marked"} branch-only restore applies checkout filters and encoding unless --raw is supplied`, () => {
+        const proj = setupLifecycleProject();
+        const slug = "branch-only-smudge";
+        const wt = worktreeDir(proj, slug);
+        gitInitMain(proj);
+        expect(git(proj, "config", "filter.lossy.clean", "cat").status).toBe(0);
+        expect(git(proj, "config", "filter.lossy.smudge", "tr a-z A-Z").status).toBe(0);
+        writeFileSync(join(proj, ".gitattributes"), "*.lossy filter=lossy\n*.ps1 working-tree-encoding=UTF-16LE\n");
+        writeFileSync(join(proj, "notes.lossy"), "original lowercase notes\n");
+        const script = "Write-Output 'café'\n";
+        const scriptBytes = Buffer.from(script, "utf16le");
+        writeFileSync(join(proj, "script.ps1"), scriptBytes);
+        expect(git(proj, "add", ".gitattributes", "notes.lossy", "script.ps1").status).toBe(0);
+        expect(git(proj, "commit", "-q", "-m", "seed checkout filter and encoding").status).toBe(0);
+        expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+        const committedBytes = "committed lowercase branch notes\n";
+        writeFileSync(join(wt, "notes.lossy"), committedBytes);
+        expect(git(wt, "add", "notes.lossy").status).toBe(0);
+        expect(git(wt, "commit", "-q", "-m", "branch-only filtered work").status).toBe(0);
+        rmSync(wt, { recursive: true, force: true });
+        expect(git(proj, "worktree", "prune").status).toBe(0);
+        const discarded = runWorktree(proj, "discard", "--slug", slug);
+        expect(discarded.status, discarded.out).toBe(0);
+        const { parked_ref: parkedRef } = JSON.parse(discarded.out) as { parked_ref: string };
+        const stamp = parkedRef.split("/").at(-1)!;
+        if (legacy) {
+          expect(git(proj, "update-ref", "-d", `${parkedRef}/branch-tip`).status).toBe(0);
+          expect(git(proj, "for-each-ref", "--format=%(refname)", `${parkedRef}/`).stdout.trim()).toBe(`${parkedRef}/head`);
+        }
 
-      const restored = runWorktree(proj, "restore", "--slug", slug, "--parked", stamp);
-      expect(restored.status, restored.out).toBe(0);
-      const recovery = JSON.parse(restored.out) as { worktree_path: string; branch: string; raw_bytes: boolean };
-      expect(readFileSync(join(recovery.worktree_path, "notes.lossy"), "utf-8")).toBe(committedBytes.toUpperCase());
-      expect(recovery.raw_bytes).toBe(false);
-      expect(JSON.parse(restored.out)).not.toHaveProperty("materialized");
-      expect(git(proj, "worktree", "remove", "--force", recovery.worktree_path).status).toBe(0);
-      expect(git(proj, "branch", "-D", recovery.branch).status).toBe(0);
+        const restored = runWorktree(proj, "restore", "--slug", slug, "--parked", stamp);
+        expect(restored.status, restored.out).toBe(0);
+        const recovery = JSON.parse(restored.out) as { worktree_path: string; branch: string; raw_bytes: boolean; restore_mode: string };
+        expect({
+          notes: readFileSync(join(recovery.worktree_path, "notes.lossy"), "utf-8"),
+          script: readFileSync(join(recovery.worktree_path, "script.ps1")),
+          raw_bytes: recovery.raw_bytes,
+          restore_mode: recovery.restore_mode,
+        }).toEqual({
+          notes: committedBytes.toUpperCase(),
+          script: scriptBytes,
+          raw_bytes: false,
+          restore_mode: legacy ? "legacy-branch-tip" : "branch-tip",
+        });
+        expect(recovery).not.toHaveProperty("materialized");
+        expect(git(proj, "worktree", "remove", "--force", recovery.worktree_path).status).toBe(0);
+        expect(git(proj, "branch", "-D", recovery.branch).status).toBe(0);
 
-      const rawRestore = runWorktree(proj, "restore", "--raw", "--slug", slug, "--parked", stamp);
-      expect(rawRestore.status, rawRestore.out).toBe(0);
-      const rawRecovery = JSON.parse(rawRestore.out) as { worktree_path: string; raw_bytes: boolean };
-      expect(readFileSync(join(rawRecovery.worktree_path, "notes.lossy"), "utf-8")).toBe(committedBytes);
-      expect(rawRecovery.raw_bytes).toBe(true);
-    });
+        const rawRestore = runWorktree(proj, "restore", "--raw", "--slug", slug, "--parked", stamp);
+        expect(rawRestore.status, rawRestore.out).toBe(0);
+        const rawRecovery = JSON.parse(rawRestore.out) as { worktree_path: string; raw_bytes: boolean; restore_mode: string };
+        expect(readFileSync(join(rawRecovery.worktree_path, "notes.lossy"), "utf-8")).toBe(committedBytes);
+        expect(readFileSync(join(rawRecovery.worktree_path, "script.ps1"))).toEqual(Buffer.from(script));
+        expect(rawRecovery.raw_bytes).toBe(true);
+        expect(rawRecovery.restore_mode).toBe("raw-requested");
+      });
+    }
 
     test.skipIf(process.platform === "win32")("branch-only restore reports required filter failures and --raw bypasses them", () => {
       const proj = setupLifecycleProject();

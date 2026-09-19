@@ -765,21 +765,28 @@ does not start. The row's `Parked ref` names
 `Parked commit` and whose `/reviewed-source/<commit>` refs preserve the reviewed
 source evidence. When only the branch remains, `/head` preserves its ordinary
 committed blobs and a matching `/branch-tip` marker is created. Snapshot parks
-have no `/branch-tip`. `aidlc engine worktree restore --slug <slug>` recovers the
-attempt in an isolated restored checkout. Without `/branch-tip`, including legacy
-unmarked snapshots, it writes parked blobs byte-exact without smudge/process filters;
-regular-file blobs stream directly to disk and only symlink targets are buffered.
-With `/branch-tip`, restore uses Git's ordinary checkout, applying filters; a
-required failing filter fails the restore with Git's message. The bare `--raw`
-flag bypasses filters and writes stored blobs byte-exact even with `/branch-tip`.
-JSON `raw_bytes` reports the mode (`true` for byte-exact, `false` for ordinary Git
-checkout); `materialized` counts regular files and symlinks only in raw mode and
-is absent for ordinary checkout. Raw-restored filtered paths may show as modified
+instead have a `/snapshot` marker pointing to the same commit as `/head`.
+`aidlc engine worktree restore --slug <slug>` recovers the attempt in an isolated
+restored checkout. It checks the bare `--raw` flag first, then `/snapshot`, then
+`/branch-tip`. Legacy parks have neither marker for either shape: an unmarked
+head is a snapshot only if its commit author is exactly `AI-DLC`, its email is
+`aidlc@localhost`, and its subject starts with `aidlc: parked bolt-<slug> at `.
+The identity check ignores Git replacement objects; all other unmarked heads
+are branch tips. Snapshots and explicit `--raw` write parked blobs byte-exact
+without smudge/process filters or working-tree-encoding conversions; regular-file
+blobs stream directly to disk and only symlink targets are buffered. Branch tips
+use Git's ordinary checkout, applying filters and encoding conversions; a
+required failing filter fails the restore with Git's message.
+JSON `restore_mode` reports `raw-requested`, `snapshot`, `branch-tip`,
+`legacy-snapshot`, or `legacy-branch-tip`, respectively. `raw_bytes` is `true`
+for byte-exact materialization and `false` for ordinary Git checkout;
+`materialized` counts regular files and symlinks only in raw mode and is absent
+for ordinary checkout. Raw-restored filtered paths may show as modified
 under their own filter. Submodule gitlinks become empty directories;
 submodule checkouts are not restored. Git's eol/`text=auto` normalization during
 parking is the explicit limit: CRLF bytes normalized at park time are not
 recoverable. `worktree purge` explicitly removes all parked refs, including the
-`/branch-tip` marker. Neither command
+`/snapshot` or `/branch-tip` marker. Neither command
 adds an audit event, and neither repurposes the live Bolt path or branch.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
