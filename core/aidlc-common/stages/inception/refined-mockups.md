@@ -63,6 +63,7 @@ Create `<record>/inception/refined-mockups/refined-mockups-questions.md` with qu
 - What interaction patterns are needed (modals, inline edits, wizards, progressive disclosure)?
 - What states must each screen handle (loading, empty, error, success, partial)?
 - Does the design align with the existing design system / component library?
+- What brand assets, design system, or aesthetic references already exist, and who is the audience (the inputs to the design read)?
 - What accessibility requirements apply (WCAG level)?
 - What responsive breakpoints are needed?
 - For APIs: what does the developer experience look like?
@@ -75,7 +76,7 @@ Validate design decisions against user stories and requirements for consistency.
 
 ### Step 4: Generate Artifacts
 
-Create mid-to-high fidelity mockups (per user story/screen), interaction specification document (use `{{HARNESS_DIR}}/knowledge/aidlc-design-agent/component-spec-template.md` as the format for component-level specifications), design system mapping, responsive behavior specification, and accessibility compliance checklist.
+Create mid-to-high fidelity mockups (per user story/screen), interaction specification document (use `{{HARNESS_DIR}}/knowledge/aidlc-design-agent/component-spec-template.md` as the format for component-level specifications), design system mapping (opening with the design read and carrying the foundation token table from `{{HARNESS_DIR}}/knowledge/aidlc-design-agent/visual-design-foundations.md`), responsive behavior specification, and accessibility compliance checklist.
 
 For non-UI: create API developer experience specification.
 
