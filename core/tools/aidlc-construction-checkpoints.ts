@@ -65,7 +65,7 @@ import {
 export type ConstructionCheckpointKind = "unit" | "skeleton";
 
 export interface ConstructionCheckpointProof {
-  version: 3;
+  version: 4;
   id: string;
   kind: ConstructionCheckpointKind;
   unit: string;
@@ -80,6 +80,8 @@ export interface ConstructionCheckpointProof {
   stderr_bytes: number;
   stdout_sha256: string;
   stderr_sha256: string;
+  stdout_tail: string;
+  stderr_tail: string;
   error: string | null;
   evidence_unchanged: boolean;
   verified: boolean;
@@ -107,6 +109,7 @@ export interface ConstructionCheckpoint {
 const PROOF_DIR = ".aidlc-construction-checkpoints";
 const CHECK_TIMEOUT_MS = 120_000;
 const CHECK_OUTPUT_BYTES = 1024 * 1024;
+const CHECK_OUTPUT_TAIL_BYTES = 2048;
 const EMPTY_OUTPUT_SHA256 = createHash("sha256").update("").digest("hex");
 
 export function checkpointPolicyEnabled(stateContent: string): boolean {
@@ -200,7 +203,7 @@ function readProof(root: string, path: string): ConstructionCheckpointProof | nu
     const proof = JSON.parse(bytes.toString("utf-8")) as ConstructionCheckpointProof;
     if (
       proof === null || typeof proof !== "object" ||
-      proof.version !== 3 || typeof proof.id !== "string" ||
+      proof.version !== 4 || typeof proof.id !== "string" ||
       typeof proof.fingerprint !== "string" ||
       typeof proof.command_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(proof.command_sha256) ||
       typeof proof.command_label !== "string" || !proof.command_label.trim() ||
@@ -209,6 +212,8 @@ function readProof(root: string, path: string): ConstructionCheckpointProof | nu
       typeof proof.started_at !== "string" ||
       !Number.isSafeInteger(proof.stdout_bytes) || proof.stdout_bytes < 0 ||
       !Number.isSafeInteger(proof.stderr_bytes) || proof.stderr_bytes < 0 ||
+      typeof proof.stdout_tail !== "string" || proof.stdout_tail.length > CHECK_OUTPUT_TAIL_BYTES ||
+      typeof proof.stderr_tail !== "string" || proof.stderr_tail.length > CHECK_OUTPUT_TAIL_BYTES ||
       typeof proof.stdout_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(proof.stdout_sha256) ||
       typeof proof.stderr_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(proof.stderr_sha256)
     ) return null;
@@ -462,6 +467,16 @@ function requireReady(result: ConstructionCheckpoint): void {
   if (!result.ready) throw new Error(`Construction checkpoint is not ready: ${result.errors.join(" ")}`);
 }
 
+function outputTail(output: Buffer | null): string {
+  if (output === null) return "";
+  let start = Math.max(0, output.length - CHECK_OUTPUT_TAIL_BYTES);
+  if (start > 0) {
+    // A byte-bounded tail may start inside a UTF-8 code point.
+    while (start < output.length && (output[start]! & 0xc0) === 0x80) start++;
+  }
+  return output.subarray(start).toString("utf-8").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "\ufffd");
+}
+
 export function verifyConstructionCheckpoint(
   projectDir: string,
   unit: string,
@@ -476,12 +491,13 @@ export function verifyConstructionCheckpoint(
       throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + VERIFICATION_COMMAND_RECOVERY);
     }
     const proof: ConstructionCheckpointProof = {
-      version: 3, id: randomUUID(), kind, unit, fingerprint: current.result.fingerprint,
+      version: 4, id: randomUUID(), kind, unit, fingerprint: current.result.fingerprint,
       command_sha256: authorization.sha256, command_label: authorization.label,
       started_at: new Date().toISOString(), finished_at: null,
       exit_code: null, signal: null, error: null,
       stdout_bytes: 0, stderr_bytes: 0,
       stdout_sha256: EMPTY_OUTPUT_SHA256, stderr_sha256: EMPTY_OUTPUT_SHA256,
+      stdout_tail: "", stderr_tail: "",
       evidence_unchanged: false, verified: false,
     };
     // Starting a new check revokes an earlier pass, including after a crash.
@@ -505,6 +521,7 @@ export function verifyConstructionCheckpoint(
     stdout_bytes: check.stdout?.length ?? 0, stderr_bytes: check.stderr?.length ?? 0,
     stdout_sha256: createHash("sha256").update(check.stdout ?? "").digest("hex"),
     stderr_sha256: createHash("sha256").update(check.stderr ?? "").digest("hex"),
+    stdout_tail: outputTail(check.stdout), stderr_tail: outputTail(check.stderr),
     error: check.error?.message ?? null,
   };
   return withAuditLock(projectDir, () => {

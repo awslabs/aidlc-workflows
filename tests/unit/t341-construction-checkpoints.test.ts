@@ -302,13 +302,13 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("not ready");
   });
 
-  test("runs the authorized command and persists its digest and label, not raw command or output", () => {
+  test("persists bounded diagnostics and full output digests, and a failed check revokes approval", () => {
     const dir = project();
     const verified = pass(dir);
     const rawProof = readFileSync(verified.proof_path, "utf-8");
     const proof = JSON.parse(rawProof);
     const output = "integrated check passed\n";
-    expect(proof.version).toBe(3);
+    expect(proof.version).toBe(4);
     expect(proof).not.toHaveProperty("command");
     expect(proof.command_sha256).toBe(authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))!.sha256);
     expect(proof.command_label).toBe(verified.verification_command);
@@ -317,36 +317,46 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(verified.verification!.stdout_bytes).toBe(Buffer.byteLength(output));
     expect(verified.verification!.stderr_bytes).toBe(0);
     expect(verified.verification!.stderr_sha256).toBe(createHash("sha256").update("").digest("hex"));
-    expect(rawProof).not.toContain(output.trim());
-    expect(JSON.stringify(verified)).not.toContain(output.trim());
+    expect(verified.verification!.stdout_tail).toBe(output);
+    expect(verified.verification!.stderr_tail).toBe("");
     expect(verified.proof_path).toStartWith(join(seededRecordDir(dir), ".aidlc-construction-checkpoints"));
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
-    const marker = `SECRET_MARKER_${randomUUID()}`;
-    recordCommand(dir, writeCheck(dir, `console.log('${marker}'); console.error('${marker}'); process.exit(7);\n`));
+    const marker = `FAILURE_MARKER_${randomUUID()}`;
+    const diagnostic = "discarded output prefix\n" + "x".repeat(10 * 1024) + `\x1b[31m${marker}\n`;
+    recordCommand(dir, writeCheck(dir,
+      `process.stdout.write(${JSON.stringify(diagnostic)});\n` +
+      `process.stderr.write(${JSON.stringify(diagnostic)}); process.exitCode = 7;\n`));
     const failed = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(failed.verified).toBe(false);
     expect(failed.approved).toBe(false);
     expect(failed.verification!.exit_code).toBe(7);
-    expect(failed.verification!.stderr_bytes).toBeGreaterThan(0);
-    expect(failed.verification!.stdout_sha256).toBe(createHash("sha256").update(`${marker}\n`).digest("hex"));
+    expect(failed.verification!.stdout_bytes).toBe(Buffer.byteLength(diagnostic));
+    expect(failed.verification!.stderr_bytes).toBe(Buffer.byteLength(diagnostic));
+    expect(failed.verification!.stdout_sha256).toBe(createHash("sha256").update(diagnostic).digest("hex"));
     expect(failed.verification!.stderr_sha256).toBe(failed.verification!.stdout_sha256);
-    expect(JSON.stringify(failed)).not.toContain(marker);
-    expect(readFileSync(failed.proof_path, "utf-8")).not.toContain(marker);
+    for (const tail of [failed.verification!.stdout_tail, failed.verification!.stderr_tail]) {
+      expect(tail.length).toBeLessThanOrEqual(2048);
+      expect(tail).toBe("x".repeat(2048 - marker.length - 6) + `\ufffd[31m${marker}\n`);
+      expect(tail).not.toContain("\x1b");
+    }
+    expect(failed.verification!.stderr_tail).toContain(marker);
+    const status = cli(dir, "bolt", ["checkpoint", "--action", "status", "--unit", "alpha", "--kind", "unit"]);
+    expect(status.code, status.out).toBe(0);
+    expect(JSON.parse(status.out).verification.stderr_tail).toBe(failed.verification!.stderr_tail);
+    expect(readFileSync(failed.proof_path, "utf-8")).not.toContain("discarded output prefix");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint")).toThrow("Verify");
     for (const cmd of ["", " \n\t", "a".repeat(1025), "echo\0bad"]) {
       expect(() => verificationCommandDetails(cmd)).toThrow("nonblank");
     }
   }, 60_000);
 
-  test.each([1, 2])("legacy v%i proofs revoke verification and prior approval without throwing", (version) => {
+  test.each([1, 2, 3])("legacy v%i proofs revoke verification and prior approval without throwing", (version) => {
     const dir = project();
     const verified = pass(dir);
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
-    const proof = {
-      ...verified.verification!, version, command: "exit 0",
-    };
+    const proof = { ...verified.verification!, version, stdout_tail: undefined, stderr_tail: undefined };
     writeFileSync(verified.proof_path, JSON.stringify(proof));
     const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
     expect(current.ready).toBe(true);
@@ -355,9 +365,22 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(current.verification).toBeNull();
   }, 30_000);
 
+  test("missing, non-string, and oversized proof tails invalidate verification", () => {
+    const dir = project();
+    const verified = pass(dir);
+    for (const field of ["stdout_tail", "stderr_tail"]) {
+      for (const value of [undefined, null, "x".repeat(2049)]) {
+        writeFileSync(verified.proof_path, JSON.stringify({ ...verified.verification!, [field]: value }));
+        const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
+        expect(current.verified).toBe(false);
+        expect(current.verification).toBeNull();
+      }
+    }
+  }, 30_000);
+
   test("output summaries bind captured bytes without lossy UTF-8 decoding", () => {
     const dir = project();
-    const stdout = Buffer.from([0x61, 0xc3, 0xa9, 0xff, 0x00, 0x0a]);
+    const stdout = Buffer.from([0x61, 0xc3, 0xa9, 0xff, 0x00, 0x09, 0x0d, 0x7f, 0xc2, 0x85, 0x0a]);
     const stderr = Buffer.from([0xfe, 0x0a]);
     recordCommand(dir, writeCheck(dir,
       `process.stdout.write(Buffer.from(${JSON.stringify([...stdout])}));\n` +
@@ -368,6 +391,24 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(verified.verification!.stderr_bytes).toBe(stderr.length);
     expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update(stdout).digest("hex"));
     expect(verified.verification!.stderr_sha256).toBe(createHash("sha256").update(stderr).digest("hex"));
+    expect(verified.verification!.stdout_tail).toBe("aé\ufffd\ufffd\t\ufffd\ufffd\ufffd\n");
+    expect(verified.verification!.stderr_tail).toBe("\ufffd\n");
+  }, 30_000);
+
+  test("tails truncate bytes at UTF-8 boundaries while preserving complete multibyte output", () => {
+    const dir = project();
+    const stdoutSuffix = "é".repeat(1022) + "\n";
+    const stdout = "\u{1f642}" + stdoutSuffix;
+    const stderr = "€" + "x".repeat(2045);
+    recordCommand(dir, writeCheck(dir,
+      `process.stdout.write(${JSON.stringify(stdout)});\n` +
+      `process.stderr.write(${JSON.stringify(stderr)});\n`));
+    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(verified.verified).toBe(true);
+    expect(verified.verification!.stdout_tail).toBe(stdoutSuffix);
+    expect(verified.verification!.stderr_tail).toBe(stderr);
+    expect(verified.verification!.stdout_bytes).toBe(Buffer.byteLength(stdout));
+    expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update(stdout).digest("hex"));
   }, 30_000);
 
   test.skipIf(process.platform === "win32" || !fs.existsSync("/bin/bash"))(
@@ -473,7 +514,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
 });
 
 describe("t341 tool-owned checkpoint verification receipts", () => {
-  test("a hand-written v3 proof cannot approve a checkpoint without its verifier receipt", () => {
+  test("a hand-written v4 proof cannot approve a checkpoint without its verifier receipt", () => {
     const dir = project();
     recordCommand(dir, "exit 0");
     const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
@@ -481,10 +522,11 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
     const timestamp = new Date().toISOString();
     mkdirSync(join(seededRecordDir(dir), ".aidlc-construction-checkpoints", "alpha"), { recursive: true });
     writeFileSync(current.proof_path, JSON.stringify({
-      version: 3, id: randomUUID(), kind: "unit", unit: "alpha", fingerprint: current.fingerprint,
+      version: 4, id: randomUUID(), kind: "unit", unit: "alpha", fingerprint: current.fingerprint,
       command_sha256: verificationCommandDetails("exit 0").sha256, command_label: "exit 0",
       started_at: timestamp, finished_at: timestamp, exit_code: 0, signal: null,
       stdout_bytes: 0, stderr_bytes: 0, stdout_sha256: emptyDigest, stderr_sha256: emptyDigest,
+      stdout_tail: "", stderr_tail: "",
       error: null, evidence_unchanged: true, verified: true,
     }));
     const forged = resolveConstructionCheckpoint(dir, "alpha", "unit");

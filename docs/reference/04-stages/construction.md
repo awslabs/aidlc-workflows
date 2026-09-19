@@ -136,13 +136,19 @@ prompt, then reports `awaiting-approval` and `approved` without invented user
 input. Other completion gates follow `human_completion_required`; the legacy
 path without policy retains its existing human-gate procedure.
 
-Version-3 checkpoint proofs retain the command's `command_sha256` and full
-canonical command in `command_label`, plus exit status and stdout/stderr byte
-counts and SHA-256 digests; neither the proof file nor checkpoint CLI JSON
-retains raw check output. Diagnostics use the same authorized project check,
-not a newly chosen command. Legacy version-1 and version-2 proofs require
-re-verification before the Unit can be approved. `GATE_APPROVED` binds
-`Verification Command SHA-256` to the proof's digest.
+Version-4 checkpoint proofs retain the command's `command_sha256` and full
+canonical command in `command_label`, plus exit status, full stdout/stderr byte
+counts and SHA-256 digests, and the last 2 KiB of each stream in `stdout_tail` and
+`stderr_tail`. These tails also appear in checkpoint CLI JSON. They are decoded
+as UTF-8 after dropping a leading partial multibyte sequence, with control
+characters other than newline and tab replaced by U+FFFD; full output is not
+retained. Project check commands must not print secrets: tails are not
+secret-redacted. Use the tails to explain a failure; any further diagnostics use
+the same authorized project check, not a newly chosen command. Legacy version-1
+through version-3 proofs require re-verification with
+`aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>`
+before the Unit can be approved. `GATE_APPROVED` binds `Verification Command SHA-256`
+to the proof's digest.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
 proof file cannot verify a Unit.

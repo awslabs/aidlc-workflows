@@ -1443,13 +1443,18 @@ Only one protected question may be open per session. Asking any new question
 protected questions one at a time and wait for the answer before anything else.
 A withdrawn question must be asked again.
 
-The version-3 proof and CLI JSON retain `command_sha256` and the full canonical
-command in `command_label`, plus exit status and captured stdout/stderr byte
-counts and SHA-256 digests, never raw output. Approval binds `Verification Command SHA-256`
-on `GATE_APPROVED` to the proof's `command_sha256`. When diagnostics are needed,
-use the same authorized project check, not a newly chosen command. Version-1 and
-version-2 proofs are unverified after upgrading; authorize the recorded command
-and run `checkpoint --action verify` again before approval.
+The version-4 proof and CLI JSON retain `command_sha256` and the full canonical
+command in `command_label`, plus exit status, full captured stdout/stderr byte
+counts and SHA-256 digests, and the last 2 KiB of each stream in `stdout_tail` and
+`stderr_tail`. Tails are decoded as UTF-8 after dropping a leading partial
+multibyte sequence; control characters other than newline and tab are replaced
+with U+FFFD. Full output is not retained. Project check commands must not print
+secrets: these diagnostic tails are not secret-redacted. Approval binds
+`Verification Command SHA-256` on `GATE_APPROVED` to the proof's `command_sha256`.
+Use the tails to explain a failure; if more diagnostics are needed, use the same
+authorized project check, not a newly chosen command. Version-1 through version-3
+proofs are unverified after upgrading; authorize the recorded command and run
+`checkpoint --action verify` again before approval.
 
 ### `aidlc engine swarm check` / `finalize` - verify native worktrees
 
