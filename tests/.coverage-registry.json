@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1053,
+    "total": 1042,
     "enumeratedByClass": {
-      "function": 733,
+      "function": 722,
       "audit": 102,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 434,
+      "function": 436,
       "audit": 63,
       "scope": 11,
       "stage": 11,
@@ -1355,13 +1355,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:activeProtectedChallengeKind",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:activeSpace",
       "minMechanism": "none",
       "coveredBy": [
@@ -2170,22 +2163,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:clearCheckpointApprovalChallenges",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t341-construction-checkpoints.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:clearClaimGeneration",
       "minMechanism": "none",
       "coveredBy": [
@@ -2563,28 +2540,7 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:constructionPolicyChallengeRelativePath",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:constructionSkeletonOn",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:consumeCheckpointApprovalChallenge",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:consumeConstructionPolicyChallenge",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2615,6 +2571,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:consumeProtectedQuestion",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:consumersOf",
       "minMechanism": "none",
       "coveredBy": [
@@ -2640,13 +2603,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:consumeVerificationCommandChallenge",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3355,6 +3311,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t314-source-freshness-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:gitTreeLeafEntries",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4817,7 +4785,7 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:mintProtectedChallenge",
+      "unitId": "function:mintProtectedQuestion",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -5434,6 +5402,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:protectedQuestionRelativePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:protectedTargetDigest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:READ_ONLY_FLAGS",
       "minMechanism": "none",
       "coveredBy": [
@@ -5528,20 +5515,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:readCheckpointApprovalChallenge",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:readCheckpointApprovalResponse",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:readClaimGenerations",
       "minMechanism": "none",
       "coveredBy": [
@@ -5563,20 +5536,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:readConstructionPolicyChallenge",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:readConstructionPolicyResponse",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5705,6 +5664,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readProtectedQuestion",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readProtectedResponse",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5869,13 +5842,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:readVerificationCommandChallenge",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:readVerificationCommandFile",
       "minMechanism": "none",
       "coveredBy": [
@@ -5885,13 +5851,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:readVerificationCommandResponse",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -6241,11 +6200,11 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:requireCheckpointApprovalResponse",
+      "unitId": "function:requireLiveClaimForTeamUnit",
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "file": "tests/integration/t325-team-unit-claims.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6253,11 +6212,15 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:requireLiveClaimForTeamUnit",
+      "unitId": "function:requireProtectedResponse",
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8351,13 +8314,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:verificationCommandChallengeRelativePath",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:verificationCommandDetails",
       "minMechanism": "none",
       "coveredBy": [
@@ -8402,6 +8358,22 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:withdrawProtectedQuestions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8637,20 +8609,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:writeCheckpointApprovalChallenge",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:writeCheckpointApprovalResponse",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:writeClaimGeneration",
       "minMechanism": "none",
       "coveredBy": [
@@ -8660,20 +8618,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:writeConstructionPolicyChallenge",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:writeConstructionPolicyResponse",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -8768,6 +8712,13 @@
     {
       "unitClass": "function",
       "unitId": "function:writePlanApprovalViolation",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeProtectedResponse",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -8916,20 +8867,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:writeVerificationCommandChallenge",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:writeVerificationCommandResponse",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
