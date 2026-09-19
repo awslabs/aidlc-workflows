@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
@@ -243,12 +243,12 @@ function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): s
 // repo, not the (non-git) workspace root. Absent `--repo` (legacy single-repo),
 // `repoCwd` is the projectDir and the behaviour is unchanged.
 
-// True when `child` is strictly inside `parent` (never for equal paths). Compares
-// on a separator boundary so `/x/repo-feature` is NOT read as inside `/x/repo`.
+// True when `child` is strictly inside `parent` (never for equal paths). A leading
+// `..` segment on a separator boundary means outside, not a `..foo` directory name.
 function isNestedInside(parent: string, child: string): boolean {
   if (child === parent) return false;
   const rel = relative(parent, child);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
   return true;
 }
 
