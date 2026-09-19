@@ -699,6 +699,66 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
     expect(questionsFileApprovalFingerprint(questions)).toBe(fingerprint);
   });
 
+  // The section runs to the next heading at its own depth or shallower, the way
+  // a Markdown section ends. Closing it on ANY heading let a sub-heading written
+  // inside the section hide the [Answer] and [Approval Fingerprint] beneath it,
+  // and the resulting null fingerprint surfaced as a fingerprint mismatch -
+  // an error naming a cause that was not the condition.
+  test("a sub-heading inside Plan Approval does not end the section", () => {
+    const fingerprint = `sha256:v3:${"a".repeat(64)}`;
+    const withSubheading = (subheading: string) =>
+      [
+        "## Plan Approval",
+        "",
+        "Approve the plan before code generation proceeds.",
+        "",
+        subheading,
+        "The plan touches three files.",
+        "",
+        `[Approval Fingerprint]: ${fingerprint}`,
+        "[Answer]: Approve Plan",
+        "",
+      ].join("\n");
+
+    for (const subheading of ["### Scope", "#### Scope", "###### Scope"]) {
+      expect(questionsFileApprovalFingerprint(withSubheading(subheading)), subheading)
+        .toBe(fingerprint);
+      expect(questionsFileApproved(withSubheading(subheading)), subheading).toBe(true);
+    }
+
+    // A heading at the section's own depth still ends it: that is the next
+    // question, and its answer is not the plan's.
+    const sibling = [
+      "## Plan Approval",
+      "",
+      `[Approval Fingerprint]: ${fingerprint}`,
+      "[Answer]: Approve Plan",
+      "",
+      "## Testing Posture",
+      "",
+      `[Approval Fingerprint]: sha256:v3:${"c".repeat(64)}`,
+      "[Answer]: tdd",
+      "",
+    ].join("\n");
+    expect(questionsFileApprovalFingerprint(sibling)).toBe(fingerprint);
+
+    // The numbered form puts the label under the heading, so the section it
+    // opens has that heading's depth and its own sub-headings stay inside.
+    const numbered = [
+      "### 3.",
+      "Plan Approval",
+      "",
+      "#### Scope",
+      "three files",
+      "",
+      `[Approval Fingerprint]: ${fingerprint}`,
+      "[Answer]: Approve Plan",
+      "",
+    ].join("\n");
+    expect(questionsFileApprovalFingerprint(numbered)).toBe(fingerprint);
+    expect(questionsFileApproved(numbered)).toBe(true);
+  });
+
   test("a memory change after approval invalidates the unit contract", () => {
     const project = mkdtempSync(join(tmpdir(), "t299-contract-"));
     try {
