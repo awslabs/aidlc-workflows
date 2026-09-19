@@ -264,8 +264,12 @@ inside the dispatch event's own `PreToolUse`..`PostToolUse` window — so the
 adapter opens a delegation window on the dispatch's `PreToolUse`, closes it on
 the matching `PostToolUse`, and attributes what happens in between. That is what
 gives `reviewer-scope` and `state-transition-guard` the persona they enforce
-against. When two different personas are delegated in parallel, the acting one
-cannot be determined and the adapter says so rather than guessing.
+against. When two different personas are delegated in parallel, the window alone
+cannot say which one is acting, and the two guards diverge because they need
+different things. `state-transition-guard` needs only presence, so every inflight
+name is forwarded and it still enforces. `reviewer-scope` needs identity, so the
+adapter resolves it from the reviewer dispatch record and records the attribution
+as a drop, accepting a possible false refusal as the safer direction.
 
 `aidlc-session-end` has no registration: Kiro's `Stop` trigger fires at the end
 of every assistant turn, not at conversation close, so registering it would

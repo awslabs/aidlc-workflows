@@ -2042,7 +2042,8 @@ if (target === "state-transition-guard") {
   // Every inflight name is forwarded rather than one being chosen, and that is
   // sound HERE precisely because this guard needs presence rather than identity -
   // see the longer note at reviewer-scope, which needs the opposite and therefore
-  // declines under the same ambiguity.
+  // resolves the identity from the dispatch record instead of forwarding all of
+  // them.
   const delegates = inflightDelegates(ide.sessionId?.trim() || rememberedKiroIdeSessionId());
   const result = runCoreHook("state-transition-guard", {
     hook_event_name: "PreToolUse",
