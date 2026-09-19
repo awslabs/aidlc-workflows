@@ -14497,12 +14497,35 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".ruff_cache",
   ".tox",
   ".venv",
+  "__pycache__",
   "node_modules",
   "venv",
 ] as const;
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS = new Set<string>(
   SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES,
 );
+
+// Tool-managed byproduct FILES that never carry human-authored source: OS
+// metadata (.DS_Store) and coverage databases (.coverage, plus pytest-cov
+// parallel-mode `.coverage.<host>.<pid>` files) rewritten by any test or
+// coverage run. The directory denylist above cannot catch them (they live at
+// the workspace root or beside real source), and their churn drifts the
+// source fingerprint for changes no human made — invalidating review
+// receipts mid-request and making stage completion unsatisfiable
+// (#1099 / #1218 / #1224 / #1034). An explicit `.aidlc-source-paths.json`
+// registration still opts a path back in (the walk checks the registry
+// before skipping), so a team that genuinely treats one of these names as
+// source keeps a sanctioned escape.
+const SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES = new Set<string>([
+  ".DS_Store",
+  ".coverage",
+]);
+function sourceFingerprintHardExcludedFile(name: string): boolean {
+  return (
+    SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES.has(name) ||
+    name.startsWith(".coverage.")
+  );
+}
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
   SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES.map(
     (name) => `:(glob)**/${name}/**`,
@@ -16982,6 +17005,12 @@ function filesystemSourceIdentity(
           continue;
         }
         if (stat.isFile()) {
+          if (
+            sourceFingerprintHardExcludedFile(entry.name) &&
+            !registeredPathIncludes(childRegistryRel)
+          ) {
+            continue;
+          }
           if (
             sourceOnly &&
             !childRegisteredOnly &&
