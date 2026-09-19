@@ -434,6 +434,91 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings).toEqual([]);
   });
 
+  test("the issue #1118 confirmation shape matches: numbered entry, leading tag, wrapped, bullet options", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed for all international purchases over the annual threshold. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n1. [assumption] A procurement reviewer may be needed for all international\n   purchases over the annual threshold.\n\n- A. Accept assumptions\n- B. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  for (const [boundary, line] of [
+    ["thematic break", "***"],
+    ["heading", "### Options"],
+    ["table row", "| Option | Meaning |"],
+    ["html block", "<div>Choose one.</div>"],
+  ]) {
+    test(`a ${boundary} directly under a confirmation entry ends it, as it does in the deliverable`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "stakeholder-map.md",
+        "None.",
+        "- A procurement reviewer may be needed. [assumption]",
+      );
+      const questionsPath = join(dir, "intent-capture-questions.md");
+      writeFileSync(
+        questionsPath,
+        `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n${line}\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+        "utf-8",
+      );
+      const result = run(dir, "intent-capture-questions.md");
+      expect(result.pass).toBe(true);
+      expect(result.findings).toEqual([]);
+    });
+  }
+
+  test("option lines and the answer tag directly under the last entry are not assumption text", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\nA. Accept assumptions\nB. Convert to follow-up questions\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("a wrapped confirmation entry does not accept a retained assumption equal to its first line", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n  Legal review stays optional.\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "retained assumption is not listed in ## Assumption Confirmation",
+    );
+  });
+
   for (const answer of [
     "A. Accept assumptions? No",
     "A. Accept assumptions with caveats",
