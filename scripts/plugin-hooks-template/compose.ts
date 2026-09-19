@@ -2136,6 +2136,11 @@ try {
       // contribution — log it (a present-but-unknown target is already logged
       // below; a missing one was a silent bare continue).
       if (!target) { recordDrop(`contribution "${file}" has no parseable frontmatter target: — skipped (check for a BOM, a leading blank line, or a missing target: key)`); continue; }
+      // The target is interpolated into a path under the harness dir, so it
+      // must be a bare slug: no separators, no traversal. A contribution can
+      // only ever reach <harness>/aidlc-common/stages/<phase>/<slug>.md or
+      // <harness>/agents/<slug>.md.
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(target)) { recordDrop(`contribution "${file}" has an invalid target "${target}" (a stage or agent slug: lowercase letters, digits and dashes); skipped`); continue; }
       const plugin = frontmatterScalar(content, "plugin") ?? "";
       // `bundle:` was the pre-rename ownership key. It is dead, not aliased —
       // drop-log with the fix named so a stale plugin tree fails visibly

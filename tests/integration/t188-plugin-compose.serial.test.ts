@@ -1863,6 +1863,38 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(sidecarPath)).toBe(false);
   });
 
+  test("a contribution target that is not a bare slug is refused before any path is built", () => {
+    // The target is interpolated into a harness path; a traversal string
+    // must never reach the filesystem, for a persona or a stage target.
+    const scope = [
+      "---", "name: syn-traversal", "plugin: syn-traversal",
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope carrying the plugin identity", "skeleton: off", "---", "",
+      "# syn-traversal", "",
+    ].join("\n");
+    const escapee = [
+      "---", "target: ../aidlc-common/stages/construction/build-and-test", "plugin: syn-traversal",
+      "fragments:", "  - anchor: end-of-body", "    order: 100",
+      "---", "",
+      "## fragment: end-of-body", "", "must never land", "",
+    ].join("\n");
+    const stageEscapee = [
+      "---", "target: ../../agents/aidlc-architect-agent", "plugin: syn-traversal",
+      "fragments:", "  - anchor: end-of-steps", "    order: 100",
+      "---", "",
+      "## fragment: end-of-steps", "", "must never land either", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-traversal", {
+      "scopes/syn-traversal.md": scope,
+      "contributions/agents/escapee.md": escapee,
+      "contributions/construction/stage-escapee.md": stageEscapee,
+    });
+    expect(drops).toContain('has an invalid target "../aidlc-common/stages/construction/build-and-test"');
+    expect(drops).toContain('has an invalid target "../../agents/aidlc-architect-agent"');
+    expect(readFileSync(stageSourcePath(proj, "construction", "build-and-test"), "utf-8")).not.toContain("must never land");
+    expect(readFileSync(join(proj, ".claude", "agents", "aidlc-architect-agent.md"), "utf-8")).not.toContain("must never land");
+  });
+
   test("re-running compose does not duplicate fragments", () => {
     const rerun = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
       cwd: project,
