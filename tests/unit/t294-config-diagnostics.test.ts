@@ -300,7 +300,12 @@ describe("t294 runtime diagnostics", () => {
     );
     writeFileSync(
       join(root, "etc", "environment.d", "50-site.conf"),
-      ["PATH=$PATH:/opt/from-environment-d/bin\nPATH=/opt/foo/bin$", "{PATH:+:$PATH}\n"].join(""),
+      [
+        "PATH=$PATH:/opt/from-environment-d/bin\nPATH=/opt/foo/bin$",
+        "{PATH:+:$PATH}\nTOOLCHAIN=gcc\nPATH=/opt/$TOOLCHAIN/bin:$PATH\nPATH=/opt/x$",
+        "{PATH}\nPATH=$",
+        "{PATH:+$PATH:}/opt/lead/bin\n",
+      ].join(""),
     );
     writeFileSync(
       join(home, ".config", "environment.d", "10-user.conf"),
@@ -327,13 +332,20 @@ describe("t294 runtime diagnostics", () => {
       "/opt/from-environment-d/bin",
       "/opt/from-user-environment-d/bin",
       "/opt/foo/bin",
+      "/opt/lead/bin",
       join(home, ".local", "bin"),
       join(home, "bin"),
     ]));
     // ENV_SUPATH is root's path, not a login-independent user PATH; $PATH
     // references, expression fragments, quotes, and comments never survive as entries.
     expect(entries).not.toContain("/sbin");
-    expect(entries.filter((entry) => /["#${}]/.test(entry) || entry === "+")).toEqual([]);
+    expect(entries.filter((entry) =>
+      /["#${}]/.test(entry)
+      || entry === "+"
+      || entry === "/opt//bin"
+      || entry === "/opt/bin"
+      || entry === "/opt/x"
+    )).toEqual([]);
     expect(new Set(entries).size).toBe(entries.length);
 
     // Without those sources the same layout is invisible to the baseline.
@@ -419,6 +431,31 @@ describe("t294 runtime diagnostics", () => {
     expect(bare.binaries.find((item) => item.name === "aidlc")?.status).toBe(
       "interactive-only",
     );
+
+    // Blanking an unresolved variable must not expose an unrelated executable.
+    const unresolvedHome = temp("aidlc-t294-system-home-unresolved-");
+    const toolchainRoot = temp("aidlc-t294-toolchain-");
+    mkdirSync(join(toolchainRoot, "bin"));
+    writeExecutable(join(toolchainRoot, "bin", "aidlc"));
+    mkdirSync(join(unresolvedHome, ".config", "environment.d"), { recursive: true });
+    writeFileSync(
+      join(unresolvedHome, ".config", "environment.d", "10-user.conf"),
+      `TOOLCHAIN=gcc\nPATH=${toolchainRoot}/$TOOLCHAIN/bin:$PATH\n`,
+    );
+    const unresolved = probeRuntime(project, ".claude", "claude", {
+      ...options,
+      systemRoot: temp("aidlc-t294-system-root-unresolved-"),
+      home: unresolvedHome,
+    });
+    expect({
+      status: unresolved.binaries.find((item) => item.name === "aidlc")?.status,
+      toolchainEntries: unresolved.baselinePath.split(":").filter((entry) =>
+        entry.startsWith(toolchainRoot)
+      ),
+    }).toEqual({
+      status: "interactive-only",
+      toolchainEntries: [],
+    });
   });
 
   test("runtime remediation names only the PATH surfaces the platform probe reads", () => {

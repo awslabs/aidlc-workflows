@@ -608,7 +608,8 @@ export function deriveNonInteractivePath(
 }
 
 // pam_env and login.defs values are literal; environment.d expands HOME and
-// removes other variable references before splitting the PATH entries.
+// removes separator-carrying PATH splices. Entries with unresolved variables
+// are discarded: blanking them would manufacture directories.
 function pathAssignments(
   path: string,
   kind: "pam-env" | "login-defs" | "environment-d",
@@ -642,8 +643,8 @@ function pathAssignments(
     if (kind === "environment-d") {
       value = value
         .replace(/\$\{HOME\}|\$HOME(?![A-Za-z0-9_])/g, () => home)
-        .replace(/\$\{[^}]*\}/g, "")
-        .replace(/\$[A-Za-z_][A-Za-z0-9_]*/g, "");
+        .replace(/\$\{PATH:\+:[^}]*\}/g, "")
+        .replace(/\$\{PATH:\+[^}]*:\}/g, "");
     }
     for (const entry of value.split(":")) {
       const trimmed = entry.trim();
