@@ -957,3 +957,106 @@ describe("adversarial edge cases", () => {
     expect("condition" in obj).toBe(true);
   });
 });
+
+// ============================================================
+// Optional `ars:` block — the stage-authored composer screening prior
+// ============================================================
+describe("optional ars block (composer screening prior)", () => {
+  // A stage the shipped tools/data/ars-priors.json does not name (a plugin
+  // stage) declares the same four facts in its own frontmatter. The parser
+  // assembles the nested map in canonical child order; the schema validates
+  // it like one priors-file entry.
+  const ARS_FULL = `---
+slug: test
+phase: ideation
+execution: ALWAYS
+condition: x
+lead_agent: aidlc-product-agent
+mode: inline
+ars:
+  targets: [ve, csu]
+  cost: 4
+  role: structural
+  project_types: [brownfield]
+inputs: a
+outputs: b
+---
+`;
+  const withArs = (block: string): string =>
+    ALL_ABSENT.replace("inputs: a\n", `${block}inputs: a\n`);
+
+  test("full block parses into a nested object", () => {
+    const obj = parseStageFrontmatter(ARS_FULL) as Record<string, unknown>;
+    expect(obj.ars).toEqual({
+      targets: ["ve", "csu"],
+      cost: 4,
+      role: "structural",
+      project_types: ["brownfield"],
+    });
+    expect(parseAndValidate(ARS_FULL)).toBe("VALID");
+  });
+
+  test("absent -> key not in object", () => {
+    const obj = parseStageFrontmatter(ALL_ABSENT) as Record<string, unknown>;
+    expect("ars" in obj).toBe(false);
+  });
+
+  test("minimal block: empty targets + null cost (the priors file's own initialization shape)", () => {
+    const yaml = withArs("ars:\n  targets: []\n  cost: null\n  role: initialization\n");
+    const obj = parseStageFrontmatter(yaml) as Record<string, unknown>;
+    expect(obj.ars).toEqual({ targets: [], cost: null, role: "initialization" });
+    expect(parseAndValidate(yaml)).toBe("VALID");
+  });
+
+  test("round-trip parse -> emit -> parse -> EQ, whatever the authored child order", () => {
+    expect(roundtrip(ARS_FULL)).toBe("EQ");
+    const reordered = withArs("ars:\n  project_types: [greenfield]\n  cost: 2\n  targets: [iae]\n");
+    expect(roundtrip(reordered)).toBe("EQ");
+    const emitted = emitStageFrontmatter(parseStageFrontmatter(reordered) as Record<string, unknown>);
+    // Canonical child order on emit: targets, cost, role, project_types.
+    expect(emitted).toContain("ars:\n  targets: [iae]\n  cost: 2\n  project_types: [greenfield]\n");
+  });
+
+  test("a bare scalar is rejected as a non-object", () => {
+    expect(parseAndValidate(withArs("ars: yes\n"))).toContain("ars must be object, got string");
+  });
+
+  test("unknown child key, duplicate + unknown target, bad cost, bad role each name their field", () => {
+    const yaml = withArs(
+      "ars:\n  targets: [ve, ve, mars]\n  cost: high\n  role: boss\n  weight: 3\n"
+    );
+    const out = parseAndValidate(yaml);
+    expect(out).toContain('ars has unknown key "weight"; allowed: targets | cost | role | project_types');
+    expect(out).toContain('ars.targets[1] repeats "ve"');
+    expect(out).toContain("ars.targets[2] must be one of iae | csu | ve | r | ua, got string");
+    expect(out).toContain("ars.cost must be null or an integer 1..5, got string");
+    expect(out).toContain("ars.role must be one of initialization | core | phase-gate | structural, got string");
+  });
+
+  test("targets and cost are required; cost stays on the 1..5 scale", () => {
+    expect(parseAndValidate(withArs("ars:\n  role: core\n"))).toContain(
+      "ars.targets is required (an empty list is allowed)|ars.cost is required (null marks a stage that is not numerically screenable)"
+    );
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 7\n"))).toContain(
+      "ars.cost must be null or an integer 1..5, got number"
+    );
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 2.5\n"))).toContain(
+      "ars.cost must be null or an integer 1..5, got number"
+    );
+    // A block-list value is not silently mis-read: it fails the list check.
+    expect(parseAndValidate(withArs("ars:\n  targets:\n    - ve\n  cost: 2\n"))).toContain(
+      "ars.targets must be a list, got string"
+    );
+  });
+
+  test("project_types must be a non-empty, duplicate-free subset of brownfield | greenfield", () => {
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 2\n  project_types: []\n"))).toContain(
+      "ars.project_types must be a non-empty list, got array"
+    );
+    const out = parseAndValidate(
+      withArs("ars:\n  targets: [ve]\n  cost: 2\n  project_types: [brownfield, brownfield, mars]\n")
+    );
+    expect(out).toContain('ars.project_types[1] repeats "brownfield"');
+    expect(out).toContain("ars.project_types[2] must be one of brownfield | greenfield, got string");
+  });
+});

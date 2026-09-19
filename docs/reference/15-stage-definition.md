@@ -481,6 +481,51 @@ Classic enables sensors and learnings and disables summary confirmation;
 stage approvals, Plan Approval, human-turn
 authority, audit, and team write protection remain in force.
 
+### `ars`
+
+Optional. The stage's **composer screening prior** — the same four facts as
+one entry of `tools/data/ars-priors.json`, written in the stage's own
+frontmatter:
+
+```yaml
+ars:
+  targets: [ve, r]            # ARS components the stage reduces: iae | csu | ve | r | ua
+  cost: 4                     # 1 (trivial) .. 5 (heavy); null = never numerically screened
+  role: structural            # optional: initialization | core | phase-gate | structural
+  project_types: [brownfield] # optional: mirror a condition: that restricts the project kind
+```
+
+Why it exists: the adaptive composer's expected-value screen (`aidlc-graph ars`,
+see [CLI commands](../guide/12-cli-commands.md)) decides EXECUTE/SKIP per stage
+from a cost prior and the components the stage targets. Those priors ship as
+data in `tools/data/ars-priors.json`, which names every core stage and nothing
+else — a plugin cannot edit that file, so before this field every plugin stage
+landed in the screen as a `no-prior` row ("not screenable") that the composer
+could only decide by judgment. `ars:` moves the prior next to the stage it
+describes: the schema validates it like a priors-file entry, `aidlc-graph
+compile` copies it onto the compiled node verbatim, and the `ars` subcommand
+reads it whenever the priors file has no entry for the slug. The screen
+semantics are identical to the file's — `role: core` always executes, `role:
+structural` and a `null` cost are "human judgment at the gate", `project_types`
+screens the stage out on the other project kind, and a `--completed` stage
+outranks everything.
+
+Two rules keep the shipped table authoritative:
+
+- **The priors file wins.** When a slug has both a file entry and an `ars:`
+  block, the file entry is used and the block is ignored, so core screening
+  never changes under a stage-side edit. Core stages therefore declare no
+  `ars:` — their priors stay in the file, where the persona's cost table
+  documents them.
+- **A cost must have a threshold.** The schema pins `cost` to the `1..5` scale
+  the composer persona documents; the `ars` subcommand additionally checks that
+  the value has an `evThresholds` entry in the priors file it loaded and exits 1
+  naming the stage otherwise — never a silent screen against a missing threshold.
+
+Each screen row reports where its prior came from (`priorSource`: `shipped`,
+`stage`, or `null` for a `no-prior` row), so a composer reading the table can
+tell a shipped number from a plugin-authored one.
+
 ---
 
 ## Relationship to agent frontmatter

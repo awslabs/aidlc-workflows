@@ -105,7 +105,15 @@ import {
   type SensorManifest,
   validateSensorManifest,
 } from "./aidlc-sensor-schema.ts";
-import { type StageFrontmatter, validateStageFrontmatter } from "./aidlc-stage-schema.ts";
+import {
+  ARS_COMPONENT_KEYS,
+  ARS_PROJECT_TYPE_KEYS,
+  type ArsComponentKey,
+  type ArsProjectTypeKey,
+  type StageArsPrior,
+  type StageFrontmatter,
+  validateStageFrontmatter,
+} from "./aidlc-stage-schema.ts";
 
 // --- Types ---
 
@@ -178,6 +186,13 @@ export interface GraphStage extends StageEntry {
   // identically. Lives on stage YAML, round-trips through parse/emit, and is
   // transposed into the compiled grid (scope-grid.json) at compile time.
   scopes?: string[];
+  // ars is the stage-authored composer screening prior (targets + cost,
+  // optional role/project_types) - the frontmatter twin of one
+  // tools/data/ars-priors.json entry, for stages that file does not name
+  // (plugin stages). Optional; core stages never carry it. Lives on stage
+  // YAML, round-trips through parse/emit, and compiles into stage-graph.json
+  // verbatim; computeArs reads it when the priors file has no entry.
+  ars?: StageArsPrior;
   inputs: string;
   outputs: string;
   for_each?: string;
@@ -822,6 +837,7 @@ const FIELD_ORDER = [
   "requires_stage",
   "sensors",
   "scopes",
+  "ars",
   "reviewer",
   "review_artifact",
   "reviewer_max_iterations",
@@ -2549,6 +2565,9 @@ function buildGraphStage(
   if (parsed.workspace_requires !== undefined) {
     stage.workspace_requires = parsed.workspace_requires;
   }
+  if (parsed.ars !== undefined) {
+    stage.ars = parsed.ars;
+  }
   if (parsed.optional_produces !== undefined) {
     stage.optional_produces = parsed.optional_produces;
   }
@@ -2668,12 +2687,14 @@ function printSlugs(stages: GraphStage[]): void {
 // documentation of that file, not the source. The composite stays an
 // ADVISORY index: nothing deterministic routes on it.
 
-const ARS_COMPONENTS = ["iae", "csu", "ve", "r", "ua"] as const;
-export type ArsComponent = (typeof ARS_COMPONENTS)[number];
+// The component symbols and project types are shared with the stage schema
+// (a stage's own `ars:` block is validated against the same lists).
+const ARS_COMPONENTS = ARS_COMPONENT_KEYS;
+export type ArsComponent = ArsComponentKey;
 type ArsBand = "LOW" | "MED" | "HIGH";
 type ArsDecision = "EXECUTE" | "SKIP" | "COMPLETED";
-const ARS_PROJECT_TYPES = ["brownfield", "greenfield"] as const;
-type ArsProjectType = (typeof ARS_PROJECT_TYPES)[number];
+const ARS_PROJECT_TYPES = ARS_PROJECT_TYPE_KEYS;
+type ArsProjectType = ArsProjectTypeKey;
 
 /** IEEE summation of the weighted terms can land a hair under an exact
  *  half-point - 0.75 + 12.45 + 7.3 evaluates to 20.499999999999996, which
@@ -2719,6 +2740,9 @@ export interface ArsScreenRow {
     | "no-cost-prior"
     | "no-prior"
     | "completed";
+  // Where the row's prior came from: the shipped priors file, the stage's own
+  // `ars:` frontmatter block (plugin stages), or nowhere (`no-prior`).
+  priorSource: "shipped" | "stage" | null;
   targets: ArsComponent[];
   cost: number | null;
   maxTargetScore: number | null;
@@ -2922,10 +2946,37 @@ export function computeArs(
     projectType !== undefined &&
     p?.projectTypes !== undefined &&
     !p.projectTypes.includes(projectType);
+  // A stage the shipped priors do not name may carry its own prior in its
+  // frontmatter (`ars:` - plugin stages; docs/reference/15-stage-definition.md).
+  // The shipped entry wins when both exist, so core screening never changes
+  // under a stage-side edit. The node's cost is checked against the loaded
+  // evThresholds here because the stage schema validates the block's shape,
+  // not its coupling to this file - and a cost with no threshold would
+  // otherwise decide EXECUTE/SKIP against `undefined`, silently.
+  type StagePrior = ArsPriors["stages"][string];
+  const priorOf = new Map<string, { prior: StagePrior; source: "shipped" | "stage" }>();
+  for (const s of graph) {
+    const shipped = priors.stages[s.slug];
+    if (shipped !== undefined) {
+      priorOf.set(s.slug, { prior: shipped, source: "shipped" });
+      continue;
+    }
+    if (s.ars === undefined) continue;
+    if (s.ars.cost !== null && !(String(s.ars.cost) in (priors.evThresholds ?? {}))) {
+      throw new Error(
+        `stage ${s.slug}: ars.cost ${String(s.ars.cost)} has no evThresholds entry in ars-priors.json.`
+      );
+    }
+    const prior: StagePrior = { targets: s.ars.targets, cost: s.ars.cost };
+    if (s.ars.role !== undefined) prior.role = s.ars.role;
+    if (s.ars.project_types !== undefined) prior.projectTypes = s.ars.project_types;
+    priorOf.set(s.slug, { prior, source: "stage" });
+  }
+
   const decisionOf = new Map<string, ArsDecision>();
   const deferred = new Set<string>();
   for (const s of graph) {
-    const p = priors.stages[s.slug];
+    const p = priorOf.get(s.slug)?.prior;
     if (completedSet.has(s.slug)) {
       decisionOf.set(s.slug, "COMPLETED");
     } else if (offProjectType(p)) {
@@ -2957,12 +3008,14 @@ export function computeArs(
   // gate table shows verbatim.
   const evScreen: ArsScreenRow[] = [];
   for (const s of graph) {
-    const p = priors.stages[s.slug];
+    const resolved = priorOf.get(s.slug);
+    const p = resolved?.prior;
     const decision = decisionOf.get(s.slug) as ArsDecision;
     const base = {
       stage: s.slug,
       number: s.number,
       decision,
+      priorSource: resolved?.source ?? null,
       targets: p?.targets ?? [],
       cost: p?.cost ?? null,
       maxTargetScore: null as number | null,
@@ -2978,7 +3031,7 @@ export function computeArs(
       evScreen.push({
         ...base,
         screen: "no-prior",
-        reason: "no entry in ars-priors.json - not screenable",
+        reason: "no entry in ars-priors.json and no ars: block on the stage - not screenable",
       });
     } else if (offProjectType(p)) {
       evScreen.push({

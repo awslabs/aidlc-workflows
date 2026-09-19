@@ -512,7 +512,12 @@ A stage with cost=1 is always justified if the component is non-zero.
 
 These costs and thresholds are data, not prose: the `ars` subcommand reads
 them from `tools/data/ars-priors.json` and its output already applies this
-screen per stage. This table documents that file; edits belong there.
+screen per stage. This table documents that file; edits belong there. A
+plugin stage is not in that file: it carries the same targets/cost facts in
+its own frontmatter `ars:` block, compiled into the stage graph, and the
+subcommand screens it from there (each row's `priorSource` says `shipped` or
+`stage`). A stage with neither lands as a `no-prior` row - not numerically
+screenable; decide it by judgment at the gate.
 
 ---
 
