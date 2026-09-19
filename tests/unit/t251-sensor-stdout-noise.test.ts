@@ -22,7 +22,10 @@
 // convention.
 
 import { describe, expect, test } from "bun:test";
-import { stripStdoutNoise as stripDispatcher } from "../../core/tools/aidlc-sensor.ts";
+import {
+  sensorTakesFilePath,
+  stripStdoutNoise as stripDispatcher,
+} from "../../core/tools/aidlc-sensor.ts";
 import { stripStdoutNoise as stripLinter } from "../../core/tools/aidlc-sensor-linter.ts";
 
 // A realistic package-manager banner printed before the wrapped tool's JSON.
@@ -76,5 +79,43 @@ describe("t251 linter stdout-noise stripping (eslint array, startChar '[')", () 
   test("clean JSON is returned byte-for-byte unchanged", () => {
     const clean = `${JSON.stringify([{ errorCount: 1, messages: [] }])}\n`;
     expect(stripLinter(clean, "[")).toBe(clean);
+  });
+});
+
+
+// The dispatcher used to decide a sensor's path argument from a hardcoded id
+// pair, so a plugin sensor that follows the shipped code-sensor convention
+// received --output-path, exited on the unknown flag, and was recorded as a
+// pass in tens of milliseconds. The manifest's declared input_schema is the
+// only signal a plugin can reach, so routing reads it.
+describe("t251 sensor path-argument routing", () => {
+  const manifest = (input_schema?: Record<string, string>) => ({
+    id: "x",
+    kind: "deterministic" as const,
+    command: "c",
+    default_severity: "advisory" as const,
+    description: "d",
+    fire_on: "write" as const,
+    ...(input_schema ? { input_schema } : {}),
+  });
+
+  test("a declared file_path routes the file path, whoever ships the sensor", () => {
+    expect(sensorTakesFilePath(manifest({ file_path: "string" }), "chunk-validate")).toBe(true);
+    expect(sensorTakesFilePath(manifest({ file_path: "string" }), "linter")).toBe(true);
+  });
+
+  test("a declared contract without file_path routes the output path", () => {
+    const declared = { output_path: "string", stage_slug: "string" };
+    expect(sensorTakesFilePath(manifest(declared), "chunk-validate")).toBe(false);
+    // A declared contract wins over the id: the manifest is the authority.
+    expect(sensorTakesFilePath(manifest(declared), "linter")).toBe(false);
+  });
+
+  test("no declared contract falls back to the shipped code-sensor pair", () => {
+    expect(sensorTakesFilePath(manifest(), "linter")).toBe(true);
+    expect(sensorTakesFilePath(manifest(), "type-check")).toBe(true);
+    expect(sensorTakesFilePath(manifest(), "required-sections")).toBe(false);
+    expect(sensorTakesFilePath(manifest(), "chunk-validate")).toBe(false);
+    expect(sensorTakesFilePath(manifest({}), "chunk-validate")).toBe(false);
   });
 });

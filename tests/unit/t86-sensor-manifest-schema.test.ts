@@ -282,6 +282,38 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
 
   // Re-count the original migrated assertion budget. The fire/severity enum
   // cases above are additive coverage for the expanded schema.
+  // input_schema is the manifest's declared invocation contract, and the
+  // dispatcher routes a sensor's path argument on it: a sensor that declares
+  // file_path is invoked with --file-path, everything else with --output-path.
+  // The shipped six already declare exactly that split, so the parser has to
+  // surface it - a plugin has no other way to reach the routing decision.
+  test("every shipped manifest's input_schema parses, and the code sensors are the file_path pair", () => {
+    const declared = new Map<string, string[]>();
+    for (const name of SENSOR_NAMES) {
+      const manifest = parseSensorManifest(
+        readFileSync(join(AIDLC_SRC, "sensors", `aidlc-${name}.md`), "utf-8"),
+      );
+      const keys = Object.keys(manifest.input_schema ?? {});
+      expect(keys.length, `aidlc-${name}.md declares no input_schema keys`).toBeGreaterThan(0);
+      declared.set(name, keys);
+    }
+    const filePathSensors = [...declared.entries()]
+      .filter(([, keys]) => keys.includes("file_path"))
+      .map(([name]) => name)
+      .sort();
+    expect(filePathSensors).toEqual(["linter", "type-check"]);
+    for (const [name, keys] of declared) {
+      if (filePathSensors.includes(name)) continue;
+      expect(keys, `aidlc-${name}.md`).toContain("output_path");
+      expect(keys, `aidlc-${name}.md`).not.toContain("file_path");
+    }
+    // The nested list under output_schema belongs to the key above it and
+    // never leaks into the input contract.
+    expect(Object.keys(parseSensorManifest(
+      readFileSync(join(AIDLC_SRC, "sensors", "aidlc-linter.md"), "utf-8"),
+    ).input_schema ?? {})).toEqual(["file_path"]);
+  });
+
   test("covers EXACTLY 40 migrated assertions", () => {
     const PART1 = 1 + SENSOR_NAMES.length; // dir + 6 files = 7
     const PART2 = SENSOR_NAMES.length * 5; // 6 manifests × 5 checks = 30

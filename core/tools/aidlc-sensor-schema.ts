@@ -87,6 +87,11 @@ export function parseSensorManifest(raw: string): SensorManifest {
     const n = parseInt(timeout, 10);
     if (!Number.isNaN(n)) obj.timeout_seconds = n;
   }
+  // The declared invocation contract. Only the key SET is read: the values are
+  // type hints nothing consumes, while the dispatcher routes a sensor's path
+  // argument on which key it declares (file_path vs output_path).
+  const inputSchema = mappingKeys(fm, "input_schema");
+  if (inputSchema) obj.input_schema = inputSchema;
 
   // Cast-through-unknown: obj is Record<string, unknown> with the
   // shape of a SensorManifest by construction (we wrote each known
@@ -95,6 +100,29 @@ export function parseSensorManifest(raw: string): SensorManifest {
   // and throws on any field that's actually missing.
   // type-coverage:ignore-next-line — documented parseSensorManifest trust boundary
   return obj as unknown as SensorManifest;
+}
+
+// Helper: the top-level keys of a nested `<field>:` mapping in the
+// frontmatter, in declaration order. Deeper nesting (a list of objects under
+// one of those keys) belongs to the key above it and is skipped; the block
+// ends at the next unindented line.
+function mappingKeys(fm: string, field: string): Record<string, string> | undefined {
+  const lines = fm.split(/\r?\n/);
+  const head = lines.findIndex((line) => new RegExp(`^${field}[ \\t]*:[ \\t]*$`).test(line));
+  if (head < 0) return undefined;
+  const entries: Record<string, string> = {};
+  let indent: number | null = null;
+  for (let i = head + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    const width = line.length - line.trimStart().length;
+    if (width === 0) break;
+    if (indent === null) indent = width;
+    if (width !== indent) continue;
+    const entry = line.trim().match(/^([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:[ \t]*(.*)$/);
+    if (entry) entries[entry[1]] = entry[2].trim();
+  }
+  return Object.keys(entries).length > 0 ? entries : undefined;
 }
 
 // Helper: throw if obj[field] isn't a non-empty string. Centralises
