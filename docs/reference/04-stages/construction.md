@@ -169,6 +169,14 @@ Unit), skip (mark `[S]` and continue — dependents may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
 artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates"
 for the canonical specification.
+The ordinary failure-prompt Abort pauses Construction with the worktree
+preserved. A stale-review recovery abort explicitly carrying `--discard` instead
+parks tracked and non-ignored untracked files and reviewed source refs, then
+removes the live checkout and branch. After obtaining the human's selection,
+execute the returned command unchanged. `aidlc engine worktree restore --slug
+<slug>` recovers that parked work in `.aidlc/restored/bolt-<slug>-<stamp>` on
+`restore/bolt-<slug>-<stamp>`, without overwriting a new live Bolt or reviving
+the old attempt's review authority.
 
 ---
 
@@ -1085,10 +1093,12 @@ with the aidlc-devsecops-agent providing security testing expertise.
     approval of the revised plan.
 
     **Swarm cheap path:** A jump creates a new exact stage-attempt `Run floor`
-    boundary token, so stale convergence rows cannot count. Discard stale
+    boundary token, so stale convergence rows cannot count. Park/discard stale
     worktrees/branches and run a fresh `prepare`; they cannot be adopted into
-    the new attempt because `finalize` requires its current prepare stamp. Run
-    `check` first. A green Unit can skip a builder turn, but it still needs a
+    the new attempt because `finalize` requires its current prepare stamp.
+    `aidlc engine worktree restore --slug <slug>` can recover the parked work
+    separately, not its current-attempt authority. Run `check` first. A green
+    Unit can skip a builder turn, but it still needs a
     terminal current-attempt reviewer receipt in the fresh worktree before it
     enters `finalize --claimed`; `finalize` verifies that receipt's current
     artifact fingerprint as well as the attempt stamp.

@@ -2,7 +2,7 @@
 //
 // t263 - the reviewer terminal-receipt ordering (the receipt-invalidation
 // loop fix). The engine's receipt-freshness floor (verifyReviewerPrecondition)
-// invalidates a REVIEW_COMPLETED receipt when a declared produces[] artifact
+// invalidates a REVIEW_COMPLETED receipt when a reviewed output
 // is written after it - correct fail-closed behavior. But nothing in the
 // protocol told the conductor to SEQUENCE around that floor, so a live
 // conductor that applied reviewer recommendations AFTER recording the
@@ -13,7 +13,8 @@
 // The fix is choreography prose + an error nudge, pinned here in every
 // authored surface that carries it:
 //   - stage-protocol-reviewer.md §12a step 3 READY branch: the receipt is terminal,
-//     no produces[] writes after it, READY-riding suggestions are gate input
+//     no reviewed-output writes after it; summary inputs have a separate boundary.
+//     READY-riding suggestions are gate input
 //     to quote, never edits to apply (they are not grounds for NOT-READY per
 //     step 2, so they are not grounds for editing past the receipt either)
 //   - all harness SKILL.md files conditionally load that shared module
@@ -73,7 +74,7 @@ const DIST_PROTOCOL = join(
 );
 
 const ORDERING_PIN =
-  "do not write to any `produces[]` artifact between recording it and gate approval";
+  "do not write reviewed outputs between recording it and gate approval; summary-owned questions follow the separate boundary above";
 const SUGGESTION_PIN =
   "A suggestion is gate input, not a defect";
 // A READY-riding suggestion must not reorder the gate: a live control run
@@ -166,6 +167,15 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
     for (const path of [CORE_PROTOCOL, DIST_PROTOCOL]) {
       const src = readFileSync(path, "utf-8");
       expect(src).toContain(ORDERING_PIN);
+      // Writable summary inputs preserve the receipt only for confirmation
+      // bookkeeping; explicitly reviewed questions still freeze in full.
+      expect(src).toMatch(
+        /Only confirmation\s+bookkeeping preserves the review fingerprint; substantive question edits\s+invalidate its content binding even though the human Q&A write is permitted\./,
+      );
+      expect(src).toMatch(
+        /If `review_artifact` explicitly names a questions\s+artifact, it remains fully byte-bound and frozen, including its answer line\./,
+      );
+      expect(src).toContain("Without `summary_confirmation`, there is no question exception.");
       expect(src).toContain(SUGGESTION_PIN);
       expect(src).toContain(GATE_ORDER_PIN);
     }

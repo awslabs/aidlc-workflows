@@ -119,6 +119,15 @@ When Code Generation returns failure, **always halt and present the halt-and-ask
 - Skip: mark `[S]` in state with reason, proceed to next batch. Worktree at `<path>` is preserved.
 - Abort: stop Construction; user can resume later. Worktree at `<path>` is preserved.
 
+This ordinary Abort pauses Construction without discarding its checkout. When
+a stale-review recovery command explicitly includes `--discard`, abort instead
+parks the Bolt's tracked and non-ignored untracked files plus reviewed source
+refs, then removes the live checkout and branch. Obtain the human's selection
+before executing the unchanged returned command. The parked work is recoverable
+with `{{INVOKE}} engine worktree restore --slug <slug>` in an isolated restored
+checkout; restoring files does not resume the aborted Bolt or revive its review
+authority.
+
 The orchestrator runs `{{INVOKE}} engine worktree info --slug <slug>` to obtain the worktree `<path>` and `<branch_name>` deterministically before composing the halt-and-ask question. See `SKILL.md` § "Halt-and-ask failure handling" for the full tool-call sequence and the `worktree-info-schema.md` knowledge file for the JSON contract.
 
 ```question
@@ -234,7 +243,9 @@ re-dispatch by default. Before `prepare`, check for worktrees or
 mid-swarm leaves them in place): `prepare` hard-errors on collision, and
 `finalize` refuses a unit without the current attempt's prepare stamp, so
 discard the stale worktrees/branches before a fresh `prepare` — never adopt
-them into the new attempt. Do not spend a worker turn per unit: after
+them into the new attempt. Discard parks each attempt; its snapshot remains
+recoverable with `{{INVOKE}} engine worktree restore --slug <slug>` in a
+separate restored checkout, never as current-attempt evidence. Do not spend a worker turn per unit: after
 `prepare`, run
 `check <unit> --check-cmd "<the project's convergence check>"` on every unit
 FIRST. A unit already green needs no builder turn, but before putting it in
