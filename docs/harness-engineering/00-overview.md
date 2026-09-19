@@ -117,7 +117,7 @@ can rename the file or fix `name`.
 Everything a harness engineer authors lives in **`core/`** — the hand-authored,
 harness-neutral source of truth (stages under `core/aidlc-common/stages/`,
 agents under `core/agents/`, scopes, rules, sensors, knowledge, tools, hooks).
-The per-harness `dist/<harness>/` trees used for source development (`dist/claude/.claude/`,
+The per-harness `dist/<harness>/` trees used for source development (`dist/antigravity/`, `dist/claude/.claude/`,
 `dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, `dist/cursor/`,
 `dist/opencode/`, and `dist/copilot/`) are **generated**
 from `core/` plus a thin `harness/<name>/` surface. They are ignored local
