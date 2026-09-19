@@ -12,9 +12,9 @@
 // to avoid the dev-worktree-vs-bolt-worktree clash. Run from the main repo
 // checkout.
 
-import { spawnSync } from "node:child_process";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
@@ -2877,6 +2877,7 @@ function parkAttempt(
     commit = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
   }
   if (commit !== "-") requireGit(["update-ref", `${ref}/head`, commit, ""]);
+  if (dirExists) requireGit(["update-ref", `${ref}/snapshot`, commit, ""]);
   // Copy every source ref before audit/removal. Originals remain intact if any
   // copy fails; their compare-and-delete runs only after successful teardown.
   for (const source of retained) {
@@ -3134,7 +3135,8 @@ export function assertParentInsideCheckout(rootRealpath: Buffer, parent: Buffer)
 }
 
 function handleRestore(args: string[]): void {
-  const flags = parseFlags(args);
+  // --raw is a bare boolean; parseFlags handles only value-bearing flags.
+  const flags = parseFlags(args.filter((arg) => arg !== "--raw"));
   const slug = validateSlug(flags.slug);
   validateParkedStamp(flags.parked);
   const pd = resolveProjectDir(projectDir);
@@ -3157,68 +3159,86 @@ function handleRestore(args: string[]): void {
   if (existsSync(wtPath) || runGit(["rev-parse", "--verify", `refs/heads/${branch}`], repoCwd).ok) {
     errorWithSlug(slug, `already restored at ${wtPath}`);
   }
-  // Parked blobs are raw: ordinary checkout re-runs smudge/process filters,
-  // and a required failing filter would abort before any repair could run.
-  // Initialize the index and write every blob byte-exact; like bound checkouts,
-  // filtered paths may still report modified under their own filter.
-  const added = runGit(["worktree", "add", "--no-checkout", "-b", branch, wtPath, head.oid], repoCwd);
-  if (!added.ok) errorWithSlug(slug, `git worktree add failed: ${added.stderr.trim() || `exit ${added.code}`}`);
+  const raw = args.includes("--raw") || runGit(["rev-parse", "--verify", `${parkedRef}/snapshot`], repoCwd).ok;
+  // Snapshot blobs hold working-tree bytes; branch-only heads hold ordinary
+  // committed blobs and need Git's checkout conversions unless --raw is explicit.
+  const added = runGit(["worktree", "add", ...(raw ? ["--no-checkout"] : []), "-b", branch, wtPath, head.oid], repoCwd);
+  if (!added.ok) {
+    errorWithSlug(slug, `git worktree add failed: ${added.stderr.trim() || `exit ${added.code}`}${raw ? "" : "; --raw bypasses checkout filters"}`);
+  }
   let materialized = 0;
-  try {
-    const indexed = runGit(["read-tree", head.oid], wtPath);
-    if (!indexed.ok) throw new Error(`git read-tree failed: ${indexed.stderr.trim() || `exit ${indexed.code}`}`);
-    const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
-      cwd: wtPath,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
-    const symlinkConfig = runGit(["config", "--bool", "core.symlinks"], wtPath);
-    if (!symlinkConfig.ok && symlinkConfig.code !== 1) {
-      throw new Error(`git config core.symlinks failed: ${symlinkConfig.stderr.trim() || `exit ${symlinkConfig.code}`}`);
-    }
-    const symlinks = symlinkConfig.stdout.trim() !== "false";
-    const rootRealpath = realpathSync(Buffer.from(wtPath), { encoding: "buffer" });
-    const umask = process.umask();
-    for (let start = 0; start < listed.stdout.length;) {
-      const end = listed.stdout.indexOf(0, start);
-      if (end === -1) throw new Error("invalid parked index entry");
-      const entry = listed.stdout.subarray(start, end);
-      start = end + 1;
-      const tab = entry.indexOf(0x09);
-      const match = /^([0-7]{6}) ([0-9a-f]{40,64}) 0$/.exec(entry.subarray(0, tab).toString("ascii"));
-      if (tab === -1 || !match) throw new Error("invalid parked index entry");
-      const [, mode, sha] = match;
-      const pathBytes = entry.subarray(tab + 1);
-      const { destination, parent } = restoreDestination(rootRealpath, pathBytes);
-      if (mode !== "100644" && mode !== "100755" && mode !== "120000" && mode !== "160000") {
-        throw new Error(`unsupported parked index mode ${mode} for ${JSON.stringify(pathBytes.toString())}`);
-      }
-      assertNoSymlinkedAncestor(rootRealpath, parent);
-      mkdirSync(parent, { recursive: true });
-      assertParentInsideCheckout(rootRealpath, parent);
-      if (mode === "160000") {
-        mkdirSync(destination);
-        continue;
-      }
-      const blob = Bun.spawnSync(["git", "cat-file", "blob", sha], {
+  if (raw) {
+    try {
+      const indexed = runGit(["read-tree", head.oid], wtPath);
+      if (!indexed.ok) throw new Error(`git read-tree failed: ${indexed.stderr.trim() || `exit ${indexed.code}`}`);
+      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
         cwd: wtPath,
         stdout: "pipe",
         stderr: "pipe",
       });
-      if (blob.exitCode !== 0) {
-        throw new Error(`git cat-file failed for ${JSON.stringify(pathBytes.toString())}: ${blob.stderr.toString().trim() || `exit ${blob.exitCode}`}`);
+      if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
+      const symlinkConfig = runGit(["config", "--bool", "core.symlinks"], wtPath);
+      if (!symlinkConfig.ok && symlinkConfig.code !== 1) {
+        throw new Error(`git config core.symlinks failed: ${symlinkConfig.stderr.trim() || `exit ${symlinkConfig.code}`}`);
       }
-      if (mode === "120000" && symlinks) {
-        symlinkSync(blob.stdout, destination);
-      } else {
-        writeFileSync(destination, blob.stdout, { flag: "wx" });
-        if (mode === "100755") chmodSync(destination, 0o777 & ~umask);
+      const symlinks = symlinkConfig.stdout.trim() !== "false";
+      const rootRealpath = realpathSync(Buffer.from(wtPath), { encoding: "buffer" });
+      const umask = process.umask();
+      for (let start = 0; start < listed.stdout.length;) {
+        const end = listed.stdout.indexOf(0, start);
+        if (end === -1) throw new Error("invalid parked index entry");
+        const entry = listed.stdout.subarray(start, end);
+        start = end + 1;
+        const tab = entry.indexOf(0x09);
+        const match = /^([0-7]{6}) ([0-9a-f]{40,64}) 0$/.exec(entry.subarray(0, tab).toString("ascii"));
+        if (tab === -1 || !match) throw new Error("invalid parked index entry");
+        const [, mode, sha] = match;
+        const pathBytes = entry.subarray(tab + 1);
+        const { destination, parent } = restoreDestination(rootRealpath, pathBytes);
+        if (mode !== "100644" && mode !== "100755" && mode !== "120000" && mode !== "160000") {
+          throw new Error(`unsupported parked index mode ${mode} for ${JSON.stringify(pathBytes.toString())}`);
+        }
+        assertNoSymlinkedAncestor(rootRealpath, parent);
+        mkdirSync(parent, { recursive: true });
+        assertParentInsideCheckout(rootRealpath, parent);
+        if (mode === "160000") {
+          mkdirSync(destination);
+          continue;
+        }
+        if (mode === "120000") {
+          // Only symlink targets are small enough to buffer in memory.
+          const blob = Bun.spawnSync(["git", "cat-file", "blob", sha], {
+            cwd: wtPath,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          if (blob.exitCode !== 0) {
+            throw new Error(`git cat-file failed for ${JSON.stringify(pathBytes.toString())}: ${blob.stderr.toString().trim() || `exit ${blob.exitCode}`}`);
+          }
+          if (symlinks) symlinkSync(blob.stdout, destination);
+          else writeFileSync(destination, blob.stdout, { flag: "wx" });
+        } else {
+          const fd = openSync(destination, "wx");
+          let blob: SpawnSyncReturns<Buffer>;
+          try {
+            blob = spawnSync("git", ["cat-file", "blob", sha], {
+              cwd: wtPath,
+              stdio: ["ignore", fd, "pipe"],
+            });
+          } finally {
+            closeSync(fd);
+          }
+          if (blob.status !== 0) {
+            rmSync(destination, { force: true });
+            throw new Error(`git cat-file failed for ${JSON.stringify(pathBytes.toString())}: ${blob.stderr?.toString().trim() || blob.error?.message || `exit ${blob.status}`}`);
+          }
+          if (mode === "100755") chmodSync(destination, 0o777 & ~umask);
+        }
+        materialized++;
       }
-      materialized++;
+    } catch (e) {
+      errorWithSlug(slug, `raw restore failed: ${errorMessage(e)}; partial checkout left in place at ${wtPath}`);
     }
-  } catch (e) {
-    errorWithSlug(slug, `raw restore failed: ${errorMessage(e)}; partial checkout left in place at ${wtPath}`);
   }
   console.log(JSON.stringify({
     restored: true,
@@ -3227,8 +3247,8 @@ function handleRestore(args: string[]): void {
     worktree_path: wtPath,
     branch,
     reviewed_source_refs: refs.filter(({ ref }) => ref.startsWith(`${parkedRef}/reviewed-source/`)).length,
-    materialized,
-    raw_bytes: true,
+    ...(raw ? { materialized } : {}),
+    raw_bytes: raw,
   }));
 }
 

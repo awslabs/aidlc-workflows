@@ -282,30 +282,43 @@ That already-discarded response has no `parked_ref` or `parked_commit` fields.
 
 Discard snapshots tracked files and non-ignored untracked files with a temporary
 index and `commit-tree`; ignored untracked files are not backed up. Before audit
-emission, it parks `/head` and `/reviewed-source/<commit>` refs below the
-`parked_ref` namespace. Only then does it remove the live checkout and branch and
-compare-delete the original reviewed source refs. If only reviewed refs remain,
-`parked_commit` is `"-"`; there is no `/head` snapshot to restore.
+emission, it parks `/head`, the matching `/snapshot` marker, and
+`/reviewed-source/<commit>` refs below the `parked_ref` namespace. If the checkout
+is already gone but its branch remains, `/head` holds that branch tip instead,
+without a `/snapshot` marker. Only then does it remove the live checkout and
+branch and compare-delete the original reviewed source refs. If only reviewed
+refs remain, `parked_commit` is `"-"`; there is no `/head` to restore.
 
 ### Restore or purge parked work
 
 `{{INVOKE}} engine worktree restore --slug <bolt-slug> [--parked <stamp>]
-[--repo <name>] [--intent <intent>] [--space <space>]` restores the selected
-snapshot, or the latest parked `/head` when `--parked` is omitted. Stamps use UTC
+[--raw] [--repo <name>] [--intent <intent>] [--space <space>]` restores the selected
+attempt, or the latest parked `/head` when `--parked` is omitted. Stamps use UTC
 `YYYYMMDDTHHMMSSZ` with optional numeric `-N` collision suffixes; latest selection
 orders those suffixes numerically. Restore creates
 `.aidlc/restored/bolt-<slug>-<stamp>` on `restore/bolt-<slug>-<stamp>`, never
 touching the live `.aidlc/worktrees/bolt-<slug>` path or `bolt-<slug>` branch.
 It does not resume the aborted lifecycle or restore active review authority.
 Its JSON is `{restored: true, slug, parked_ref, worktree_path, branch,
-reviewed_source_refs, materialized, raw_bytes: true}`.
+reviewed_source_refs, raw_bytes}` with `materialized` added only in raw mode.
 `reviewed_source_refs` counts retained parked reviewed refs, which are not copied into the active namespace.
+`raw_bytes: true` means byte-exact materialization: `/snapshot` is present or the
+bare `--raw` flag was supplied. It bypasses smudge/process filters and streams
+regular-file blobs directly to disk; only symlink targets are buffered.
 `materialized` counts regular files plus symbolic links written, excluding submodule gitlinks.
-`raw_bytes: true` confirms byte-exact blob materialization.
+Without `/snapshot` or `--raw`, branch-only parks restore through Git's ordinary
+checkout, applying filters, and report `raw_bytes: false`. A required failing
+filter fails the restore with Git's message; `--raw` bypasses filters after any
+remaining restore checkout and branch have been removed.
 
 Symbolic links are materialized as symlinks when `core.symlinks` is unset or true;
 with `core.symlinks=false`, a mode-120000 entry is written as a regular file whose
 bytes are the link target, exactly as Git checks it out.
+Raw-restored filtered paths may appear modified under their own filter. Submodule
+gitlinks become empty directories, not restored submodule checkouts. Git's
+eol/`text=auto` normalization during parking remains a limit: normalized CRLF
+bytes cannot be recovered. A regular file with a non-UTF-8 name and an effective
+clean/process filter cannot currently be parked; discard refuses before teardown.
 
 `{{INVOKE}} engine worktree purge --slug <bolt-slug> [--parked <stamp>]
 [--repo <name>]` compare-deletes all matching parked refs (all stamps for the

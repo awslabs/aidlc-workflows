@@ -1023,7 +1023,8 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
     test("selector-free purge removes parked refs after the restore checkout is removed", () => {
       expect(purged.status, purged.out).toBe(0);
-      expect(JSON.parse(purged.stdout)).toEqual({ purged: 1, slug: "discard-repo", stamps: [stamp] });
+      // A snapshot park holds both head and snapshot refs.
+      expect(JSON.parse(purged.stdout)).toEqual({ purged: 2, slug: "discard-repo", stamps: [stamp] });
       expect(remainingRefs.status, remainingRefs.out).toBe(0);
       expect(remainingRefs.out).toBe("");
       for (const result of [missingRestore, missingPurge]) {

@@ -630,7 +630,7 @@ Pre-registered for v0.4.0; the three `WORKTREE_*` rows ship with `aidlc-worktree
 |---|---|---|
 | `WORKTREE_CREATED` | `tools/aidlc-worktree.ts` | Audit-first per-Bolt creation records the immutable Base commit, `Base Source Listing`, and portable creating-repo selector (`Repo`, `-` for root); private worktree metadata also binds the canonical Git common-dir. Swarm prepare additionally stamps intent/Unit/batch/stage/floor provenance (subcommand: `create`) |
 | `WORKTREE_MERGED` | `tools/aidlc-worktree.ts` | Bolt's worktree merged back to main on gate approval (subcommand: `merge`) |
-| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Bolt's recoverable working-tree snapshot and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission; `Parked ref` records that namespace prefix and `Parked commit` the snapshot commit (`-` when only reviewed refs remain). The live checkout and branch are then removed (subcommand: `discard`) |
+| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission; `Parked ref` records that namespace prefix and `Parked commit` the snapshot commit or branch tip (`-` when only reviewed refs remain). The live checkout and branch are then removed (subcommand: `discard`) |
 | `STATE_FORKED` | `tools/aidlc-state.ts` | State file forked to worktree on Bolt start (subcommand: `fork`) |
 | `STATE_MERGED` | `tools/aidlc-state.ts` | Worktree's state merged back to main on gate approval; alphabetical-slug tiebreak as defence-in-depth (subcommand: `merge`) |
 | `AUDIT_FORKED` | `tools/aidlc-audit.ts` (`audit-fork`) | Audit log forked to worktree on Bolt start; audit-of-intent — emit precedes the byte-copy |
@@ -762,13 +762,23 @@ All parked copies must exist before
 does not start. The row's `Parked ref` names
 `refs/aidlc/parked/<slug>/<UTC-YYYYMMDDTHHMMSSZ[-N]>`, whose `/head` points to
 `Parked commit` and whose `/reviewed-source/<commit>` refs preserve the reviewed
-source evidence. `aidlc engine worktree restore --slug <slug>` recovers the
-snapshot in an isolated restored checkout by writing the parked blobs byte-exact,
-without running smudge/process filters. The checkout may show filtered paths as
-modified under their own filter. Submodule gitlinks become empty directories;
+source evidence. Snapshot parks also create `/snapshot` pointing to the snapshot
+commit. When only the branch remains, `/head` preserves its ordinary committed
+blobs and no `/snapshot` is created. `aidlc engine worktree restore --slug <slug>`
+recovers the attempt in an isolated restored checkout. With `/snapshot` present,
+it writes the parked blobs byte-exact without running smudge/process filters;
+regular-file blobs stream directly to disk and only symlink targets are buffered.
+Without `/snapshot`, restore uses Git's ordinary checkout, applying filters; a
+required failing filter fails the restore with Git's message. The bare `--raw`
+flag bypasses filters and writes stored blobs byte-exact even without `/snapshot`.
+JSON `raw_bytes` reports the mode (`true` for byte-exact, `false` for ordinary Git
+checkout); `materialized` counts regular files and symlinks only in raw mode and
+is absent for ordinary checkout. Raw-restored filtered paths may show as modified
+under their own filter. Submodule gitlinks become empty directories;
 submodule checkouts are not restored. Git's eol/`text=auto` normalization during
 parking is the explicit limit: CRLF bytes normalized at park time are not
-recoverable. `worktree purge` explicitly removes parked refs. Neither command
+recoverable. `worktree purge` explicitly removes all parked refs, including the
+`/snapshot` marker. Neither command
 adds an audit event, and neither repurposes the live Bolt path or branch.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.

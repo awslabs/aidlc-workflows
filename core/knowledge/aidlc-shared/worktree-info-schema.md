@@ -69,18 +69,22 @@ Regular files with configured clean filters retain raw bytes, bypassing clean fi
 
 The parked namespace is `refs/aidlc/parked/<slug>/<stamp>`, where `stamp` is UTC
 `YYYYMMDDTHHMMSSZ`, with a numeric `-N` suffix for collisions. `/head` points to
-the snapshot commit, and `/reviewed-source/<commit>` preserves each reviewed
-source ref. The discard JSON adds `parked_ref` (the namespace prefix, not its
-`/head` ref) and `parked_commit` (the snapshot commit). If only reviewed source
-refs remain to park, `parked_commit` is `"-"` and no `/head` exists to restore.
+the snapshot commit, with `/snapshot` pointing to the same commit to mark its raw
+working-tree blobs. If the checkout is already gone but its branch remains,
+`/head` instead preserves the branch tip, whose blobs are ordinary committed
+forms; no `/snapshot` ref is created. `/reviewed-source/<commit>` preserves each
+reviewed source ref. The discard JSON adds `parked_ref` (the namespace prefix,
+not its `/head` ref) and `parked_commit` (the snapshot commit or branch tip). If
+only reviewed source refs remain to park, `parked_commit` is `"-"` and no `/head`
+exists to restore.
 The already-discarded response is unchanged and has neither field. Successful
 `bolt abort` JSON includes `parked_ref`, or `null` when no parking result exists;
 the abort arguments and human-consent requirement are unchanged.
 
-### Restore a parked snapshot
+### Restore a parked attempt
 
 ```
-{{INVOKE}} engine worktree restore --slug <slug> [--parked <stamp>] [--repo <name>] [--intent <intent>] [--space <space>]
+{{INVOKE}} engine worktree restore --slug <slug> [--parked <stamp>] [--raw] [--repo <name>] [--intent <intent>] [--space <space>]
 ```
 
 Without `--parked`, restore selects the latest parked `/head`, ordering timestamp
@@ -93,8 +97,14 @@ creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
 not resume an aborted Bolt or reinstate its review authority. Parked reviewed
 source refs remain in the parked namespace, not copied back into active refs.
 
-Restore writes the parked blobs byte-exact without running smudge/process
-filters; the checkout may show those paths as modified under their own filter.
+A snapshot park (`/snapshot` present) restores its blobs byte-exact without
+running smudge/process filters. A branch-only park (no `/snapshot`) instead uses
+Git's ordinary checkout, including its filters; a required failing filter fails
+the restore with Git's error. The bare `--raw` flag bypasses checkout filters and
+writes the stored blobs byte-exact for any park, including older snapshots with
+no `/snapshot` marker. Regular-file blobs stream directly to disk rather than
+being buffered in memory; only symlink targets are buffered. Raw-restored paths
+may show as modified under their own filter.
 Executable files retain their modes. Symbolic links are materialized as symlinks
 when `core.symlinks` is unset or true; with `core.symlinks=false`, a mode-120000
 entry is written as a regular file whose bytes are the link target, exactly as
@@ -102,6 +112,8 @@ Git checks it out. Submodule gitlinks become empty directories; submodule
 checkouts are not restored. Git's
 eol/`text=auto` normalization during parking is the explicit limit: CRLF bytes
 normalized at park time are not recoverable.
+A regular file with a non-UTF-8 name and an effective clean/process filter cannot
+currently be parked; discard refuses before teardown instead of altering bytes.
 
 ```json
 {
@@ -117,10 +129,13 @@ normalized at park time are not recoverable.
 ```
 
 `reviewed_source_refs` counts the retained reviewed source refs in that parked
-namespace. `materialized` counts regular files plus symbolic links written,
-excluding submodule gitlinks; `raw_bytes: true` confirms byte-exact blob
-materialization. A namespace without `/head` is not restorable. A materialization
-failure leaves the partial checkout in place and reports its path.
+namespace. `raw_bytes` is `true` for byte-exact materialization (a snapshot or
+explicit `--raw`) and `false` for Git's ordinary checkout. `materialized` is
+present only when `raw_bytes` is `true`; it counts regular files plus symbolic
+links written, excluding submodule gitlinks. A namespace without `/head` is not
+restorable. A raw materialization failure leaves the partial checkout in place
+and reports its path. Before retrying a failed Git checkout with `--raw`, remove
+any remaining restore checkout and its `restore/bolt-<slug>-<stamp>` branch.
 
 ### Purge parked refs
 
@@ -136,7 +151,7 @@ of refs deleted, not the number of snapshots:
 
 ```json
 {
-  "purged": 2,
+  "purged": 3,
   "slug": "onboarding-wizard",
   "stamps": ["20260918T123456Z"]
 }
