@@ -70,6 +70,13 @@ aidlc unit claim payments --team "Payments team"
 Run the same scoped build and `publish` commands below from that worktree. After
 main lands and pushes the candidate, return to main and discard the completed
 local worktree with `aidlc worktree discard --slug payments`.
+Discard parks tracked files, non-ignored untracked files, and reviewed source
+refs before removing the checkout and branch. To inspect that work later, run
+`aidlc engine worktree restore --slug payments`; it creates an isolated checkout
+under `.aidlc/restored/` without touching a new live `bolt-payments`. To remove
+the parked recovery refs, use `aidlc engine worktree purge --slug payments`
+(optionally `--parked <stamp>` for one snapshot); purge refuses while a matching
+restored checkout exists.
 
 Normal scoped `next`, lifecycle, review, and gate work is offline-first. Network
 access is confined to explicit claim, publish, status, pin, and merge-ref

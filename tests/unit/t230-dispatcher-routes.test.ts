@@ -1,5 +1,5 @@
 // covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -49,8 +49,10 @@ import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   cleanupTestProject,
   createTestProject,
+  seedAidlcMemory,
   seededRecordDir,
   seededStateFile,
+  seedStateFile,
 } from "../harness/fixtures.ts";
 import { setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -58,6 +60,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
 const CORE_TOOLS_DIR = join(REPO_ROOT, "core", "tools");
 const DIST_TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
+const RELEASE_TOOLS_DIR = join(REPO_ROOT, "dist-release", "claude", ".claude", "tools");
 const DISPATCHER = join(CORE_TOOLS_DIR, "aidlc.ts");
 
 type RunResult = {
@@ -499,10 +502,31 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
-      name: "config change-control maps to the change-control verb",
+      name: "config change-control maps to config-change",
       routerArgs: ["engine", "config", "set", "change-control", "relaxed"],
       tool: "aidlc-utility.ts",
-      toolArgs: ["change-control", "relaxed"],
+      toolArgs: ["config-change", "--change-control", "relaxed"],
+      fixture: true,
+    },
+    {
+      name: "config sensors maps to config-change",
+      routerArgs: ["engine", "config", "set", "sensors", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--sensors", "off"],
+      fixture: true,
+    },
+    {
+      name: "config learnings maps to config-change",
+      routerArgs: ["engine", "config", "set", "learnings", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--learnings", "off"],
+      fixture: true,
+    },
+    {
+      name: "config summary confirmation maps to config-change",
+      routerArgs: ["engine", "config", "set", "summary-confirmation", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--summary-confirmation", "off"],
       fixture: true,
     },
     {
@@ -631,6 +655,94 @@ describe("t230 dispatcher route parity", () => {
     expect(entriesUnder(join(routedProject, "aidlc", "spaces", "router-space"))).toEqual(
       entriesUnder(join(directProject, "aidlc", "spaces", "router-space")),
     );
+  });
+
+  test("config set forwards all settings and selectors without mutating unselected workflows", () => {
+    const projectDir = makeProject();
+    writeMinimalState(projectDir);
+    const currentState = readFileSync(seededStateFile(projectDir), "utf-8") +
+      "- **Review Override**: none\n" +
+      "- **Change Control**: strict (set by you)\n" +
+      "- **Sensors**: on (set by you)\n" +
+      "- **Learnings**: on (set by you)\n" +
+      "- **Summary Confirmation**: on (set by you)\n";
+    writeFileSync(seededStateFile(projectDir), currentState);
+    const selectedSpace = "ceremony-space";
+    const selectedIntent = "selected-8000000000000002";
+    const selectedSpaceDir = join(projectDir, "aidlc", "spaces", selectedSpace);
+    cpSync(join(projectDir, "aidlc", "spaces", "default"), selectedSpaceDir, { recursive: true });
+    const selectedRecord = join(selectedSpaceDir, "intents", selectedIntent);
+    cpSync(seededRecordDir(projectDir), selectedRecord, { recursive: true });
+
+    const changed = viaDispatcher([
+      "engine", "config", "set", "depth", "minimal",
+      "--test-strategy", "comprehensive", "--review", "advisory",
+      "--change-control", "relaxed", "--sensors", "off", "--learnings", "off",
+      "--summary-confirmation", "off", "--intent", selectedIntent, "--space", selectedSpace,
+    ], projectDir);
+    expect(changed.exitCode, changed.stderr.toString()).toBe(0);
+    const selectedState = readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8");
+    for (const [field, value] of [
+      ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
+      ["Change Control", "relaxed (set by you)"], ["Sensors", "off (set by you)"],
+      ["Learnings", "off (set by you)"], ["Summary Confirmation", "off (set by you)"],
+    ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);
+    const settingsAudit = readdirSync(join(selectedRecord, "audit"))
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => readFileSync(join(selectedRecord, "audit", name), "utf-8"))
+      .join("\n");
+    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|CHANGE_CONTROL_SET|CEREMONY_SET)\n/g)]
+      .map((match) => match[1]).sort()).toEqual([
+        "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET", "CHANGE_CONTROL_SET",
+        "DEPTH_CHANGED", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
+      ]);
+
+    for (const [cliKey, field, auditKey] of [
+      ["sensors", "Sensors", "sensors"],
+      ["learnings", "Learnings", "learnings"],
+      ["summary-confirmation", "Summary Confirmation", "summary_confirmation"],
+    ]) {
+      const result = viaDispatcher([
+        "engine", "config", "set", cliKey, "off",
+        "--intent", selectedIntent, "--space", selectedSpace,
+      ], projectDir);
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8"))
+        .toContain(`- **${field}**: off (set by you)`);
+      const auditDir = join(selectedRecord, "audit");
+      const audit = readdirSync(auditDir)
+        .filter((name) => name.endsWith(".md"))
+        .map((name) => readFileSync(join(auditDir, name), "utf-8"))
+        .join("\n");
+      const rows = audit.split("\n---\n").filter((row) =>
+        row.includes("**Event**: CEREMONY_SET\n") && row.includes(`**Key**: ${auditKey}\n`)
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toContain("**Old**: on\n");
+      expect(rows[0]).toContain("**New**: off\n");
+      expect(rows[0]).toContain("**Source**: you\n");
+    }
+    expect(readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8")).toBe(selectedState);
+    expect(readFileSync(seededStateFile(projectDir), "utf-8")).toBe(currentState);
+    expect(readFileSync(seededStateFile(projectDir, selectedSpace), "utf-8"))
+      .toBe(currentState);
+  });
+
+  test("public audit routes refuse forged ceremony settings", () => {
+    const projectDir = makeProject();
+    const recordBefore = entriesUnder(seededRecordDir(projectDir));
+    for (const args of [
+      ["append", "CEREMONY_SET", "--field", "Key=sensors", "--field", "New=off"],
+      ["append-batch", JSON.stringify([{ eventType: "CEREMONY_SET", fields: { Key: "sensors", New: "off" } }])],
+      ["append-raw", "Ceremony Set", "**Event**: CEREMONY_SET\n**Key**: sensors\n**New**: off"],
+    ]) {
+      const result = viaDispatcher(["engine", "audit", ...args], projectDir, {
+        AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "0",
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(`${result.stdout}${result.stderr}`).toContain("CEREMONY_SET");
+      expect(entriesUnder(seededRecordDir(projectDir))).toEqual(recordBefore);
+    }
   });
 
   test("legacy top-level engine forms are rejected", () => {
@@ -841,6 +953,15 @@ describe("t230 dispatcher route parity", () => {
     mkdirSync(join(runtime, ".git"), { recursive: true });
     mkdirSync(join(root, "bin"), { recursive: true });
     const projectDir = makeProject();
+    const registry = join(
+      projectDir,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "intents.json",
+    );
+    const registryBefore = readFileSync(registry, "utf-8");
     const env = {
       AIDLC_INSTALL_ROOT: install,
       AIDLC_BIN_DIR: join(root, "bin"),
@@ -866,10 +987,13 @@ describe("t230 dispatcher route parity", () => {
         projectDir,
         env,
       );
-      expect(result.exitCode, literal.join(" ")).toBe(0);
+      expect(result.exitCode, literal.join(" ")).toBe(1);
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        "intent-create does not accept positional arguments",
+      );
     }
     expect(existsSync(join(runtime, "aidlc", "spaces"))).toBe(false);
-    expect(existsSync(join(projectDir, "aidlc", "spaces", "default", "intents"))).toBe(true);
+    expect(readFileSync(registry, "utf-8")).toBe(registryBefore);
   });
 
   test("optional-project public commands run from a home directory that contains the machine roots", () => {
@@ -1466,6 +1590,43 @@ describe("t230 dispatcher global flag translation", () => {
   });
 });
 
+const UNEXERCISED_DELEGATES: Partial<Record<string, string>> = {
+  "aidlc-doctor.ts": "The only route has networkPolicy 'interactive-bounded'.",
+  "aidlc-init.ts": "The only route has networkPolicy 'explicit-only'.",
+  "aidlc-workspace-sync.ts": "The only route has networkPolicy 'required'.",
+};
+
+// Generalize the former four-case list: #1070's review-brief was routed and tested
+// directly, yet unreachable through the compiled dispatcher. Per-command lists
+// only guard what someone remembered to list.
+function compiledParityCases(): Array<{ tool: string; routeId: string; argv: string[] }> {
+  const cases: Array<{ tool: string; routeId: string; argv: string[] }> = [];
+  tools: for (const tool of Object.values(TOOLS)) {
+    for (const route of ROUTES) {
+      if (
+        (route.tool !== tool && route.kind !== "custom") ||
+        route.networkPolicy !== "forbidden"
+      ) continue;
+
+      const nsPrefix = route.namespace === "public" ? [] : [route.namespace];
+      const top = route.kind === "top-passthrough" ||
+        route.kind === "top-prefix" || route.kind === "top-help";
+      for (const verb of route.verbs) {
+        const argv = [
+          ...nsPrefix,
+          ...(top ? [] : [route.group]),
+          ...(verb.startsWith("<") ? [] : verb.split(" ")),
+        ];
+        const action = resolveAction(argv);
+        if (action.type !== "delegate" || action.tool !== tool) continue;
+        cases.push({ tool, routeId: route.id, argv });
+        continue tools;
+      }
+    }
+  }
+  return cases;
+}
+
 describe("t230 dispatcher dev and compiled in-process modes", () => {
   test("compiled URL detection recognizes Bun virtual roots on Unix and Windows", () => {
     expect(isCompiledModuleUrl("file:///$bunfs/root/aidlc.ts")).toBe(true);
@@ -1474,19 +1635,33 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(isCompiledModuleUrl("file:///workspace/core/tools/aidlc.ts")).toBe(false);
   });
 
-  const cases = [
-    { name: "version", args: ["version"] },
-    { name: "graph artifacts", args: ["engine", "graph", "artifacts", "--help"] },
-    { name: "sensor list", args: ["engine", "sensor", "list"] },
-    { name: "state get", args: ["engine", "state", "get"] },
-  ];
+  const cases = compiledParityCases();
 
-  for (const item of cases) {
-    test(`${item.name} imported compiled main matches spawned dev dispatcher`, () => {
+  test("every delegate is exercised or explicitly excused", () => {
+    expect(new Set([
+      ...cases.map((item) => item.tool),
+      ...Object.keys(UNEXERCISED_DELEGATES),
+    ])).toEqual(new Set(Object.values(TOOLS)));
+    expect(cases.filter((item) => UNEXERCISED_DELEGATES[item.tool])).toEqual([]);
+  });
+
+  for (const { tool, routeId, argv } of cases) {
+    const title = `${tool} via ${routeId}: imported compiled main matches spawned dev dispatcher`;
+    test(title, () => {
+      expect(resolveAction(argv)).toMatchObject({ type: "delegate", tool });
       const projectDir = makeProject();
-      const dev = viaDispatcher(item.args, projectDir, { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR });
-      const compiled = viaImportedCompiledMain(item.args, projectDir);
-      expectSameRun(compiled, dev, item.name);
+      const root = mkdtempSync(join(tmpdir(), "aidlc-t230-compiled-sandbox-"));
+      tempProjects.add(root);
+      const env = {
+        AIDLC_INSTALL_ROOT: join(root, "install"),
+        AIDLC_BIN_DIR: join(root, "bin"),
+        AIDLC_OFFLINE: "1",
+      };
+      const dev = viaDispatcher(argv, projectDir, { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR, ...env });
+      const compiled = viaImportedCompiledMain(argv, projectDir, env);
+      expect(compiled.stderr.toString()).not.toContain("has no in-process delegate");
+      expect(compiled.stderr.toString()).not.toContain("does not export main");
+      expectSameRun(compiled, dev, title);
     });
   }
 
@@ -1596,6 +1771,122 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(directive.ask_type).toBe("new-work-routing");
     expect(directive.available_intents).toHaveLength(2);
   });
+});
+
+describe("t230 native review-brief dispatch", () => {
+  let executable: string;
+  let projectDir: string;
+  let otherCwd: string;
+  let artifact: string;
+  let questions: string;
+  let finding: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeAll(() => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t230-native-"));
+    tempProjects.add(root);
+    executable = join(root, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    // Compile the release projection that build-binaries.ts ships once; the
+    // $bunfs import fixture above cannot establish that the native executable
+    // reaches its bundled delegate.
+    const built = spawnSync(
+      BUN,
+      ["build", "--compile", join(RELEASE_TOOLS_DIR, "aidlc.ts"), "--outfile", executable],
+      { cwd: REPO_ROOT, encoding: "utf-8", timeout: 60_000 },
+    );
+    if (built.error) throw built.error;
+    expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+
+    projectDir = makeProject();
+    seedAidlcMemory(projectDir);
+    seedStateFile(projectDir, "state-mid-inception.md");
+    const stageDir = join(seededRecordDir(projectDir), "inception", "requirements-analysis");
+    mkdirSync(stageDir, { recursive: true });
+    const artifactPath = join(stageDir, "requirements.md");
+    const questionsPath = join(stageDir, "requirements-analysis-questions.md");
+    artifact = relative(projectDir, artifactPath).replaceAll("\\", "/");
+    questions = relative(projectDir, questionsPath).replaceAll("\\", "/");
+    finding = `| R-01 | Minor | ${artifact} > FR-1 | Deadline is missing | Add a delivery date | New |`;
+    writeFileSync(artifactPath, [
+      "# Requirements",
+      "",
+      "## Review",
+      "",
+      "**Verdict:** NOT-READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Iteration:** 1",
+      "",
+      "### Findings",
+      "",
+      "| ID | Severity | Location | Finding | Required action | Status |",
+      "|---|---|---|---|---|---|",
+      finding,
+      "",
+    ].join("\n"));
+    writeFileSync(questionsPath, "# Questions\n\n## Q1: Delivery scope\n[Answer]: A command-line application.\n");
+
+    otherCwd = join(root, "unrelated-cwd");
+    mkdirSync(otherCwd);
+    env = {
+      // Both forms read the same generated graph; project content must still
+      // resolve from --project-dir despite both project envs pointing at cwd.
+      AIDLC_RUNTIME_HARNESS_ROOT: dirname(DIST_TOOLS_DIR),
+      AIDLC_PROJECT_DIR: otherCwd,
+      PATH: "",
+    };
+  }, 65_000);
+
+  function native(args: string[]): RunResult {
+    return run(
+      [executable, "engine", "review-brief", ...args, "--project-dir", projectDir],
+      otherCwd,
+      { ...env, AIDLC_DISPATCH_TOOLS_DIR: "" },
+    );
+  }
+
+  for (const command of ["review", "context", "summary"]) {
+    test(`${command} matches Bun output from another cwd without Bun on PATH`, () => {
+      const args = [command, "--stage", "requirements-analysis"];
+      if (command === "review") args.push("--why", "first");
+      if (command === "summary") args.push("--questions-file", questions);
+      const source = viaDispatcher(
+        ["engine", "review-brief", ...args, "--project-dir", projectDir],
+        otherCwd,
+        env,
+      );
+      expect(source.exitCode, source.stderr.toString()).toBe(0);
+      expect(source.stderr.toString()).toBe("");
+      const result = native(args);
+      expectSameRun(result, source, `native review-brief ${command}`);
+      const output = result.stdout.toString();
+      if (command === "summary") {
+        expect(output).toContain("**Stage:** Requirements Analysis");
+        expect(output).toContain(`**Confirming:** Consolidated answers in \`${questions}\``);
+        expect(output).toContain(`before generating \`${artifact}\``);
+        expect(output).toContain("**Looks correct**");
+        expect(output).toContain("**Request changes**");
+      } else {
+        expect(output).toContain(`**Review artifact:** \`${artifact}\``);
+        expect(output).toContain(finding);
+        if (command === "review") {
+          expect(output).toContain("**Stage:** Requirements Analysis");
+          expect(output).toContain("**Review outcome:** Concerns remain for your decision.");
+          expect(output).toContain("**Why now:** First review completed.");
+          expect(output).toContain("**Approve**");
+          expect(output).toContain("**Request Changes**");
+        }
+      }
+    }, 35_000);
+  }
+
+  test("missing --stage reaches the native renderer's argument error", () => {
+    const result = native(["review", "--why", "first"]);
+    expect(result.exitCode, result.stderr.toString()).toBe(1);
+    expect(result.stdout.toString()).toBe("");
+    expect(JSON.parse(result.stderr.toString())).toEqual({
+      error: "Missing --stage <slug>.",
+    });
+  }, 20_000);
 });
 
 describe("t230 dispatcher route completeness", () => {
@@ -2510,8 +2801,8 @@ describe("t230 dispatcher hook routing", () => {
     expect(res.stderr.toString("utf-8")).toBe("");
     const heartbeat = "validate-state.last";
     expect(
-      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", heartbeat)) ||
-        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", heartbeat)),
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", heartbeat)) ||
+        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", heartbeat)),
     ).toBe(true);
   });
 
@@ -2523,8 +2814,8 @@ describe("t230 dispatcher hook routing", () => {
     expect(res.stderr.toString("utf-8")).toBe("");
     const heartbeat = "review-freeze.last";
     expect(
-      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", heartbeat)) ||
-        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", heartbeat)),
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", heartbeat)) ||
+        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", heartbeat)),
     ).toBe(true);
   });
 
@@ -2564,8 +2855,8 @@ describe("t230 dispatcher hook routing", () => {
     expect(res.exitCode).toBe(0);
     expect(res.stderr.toString("utf-8")).toBe("");
     expect(
-      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
-        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", "validate-state.last")),
     ).toBe(true);
   });
 
@@ -2588,8 +2879,8 @@ describe("t230 dispatcher hook routing", () => {
       expect(res.exitCode, route.join(" ")).toBe(0);
       expect(res.stderr.toString("utf-8"), route.join(" ")).toBe("");
       expect(
-        existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
-          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+        existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", "validate-state.last")),
         route.join(" "),
       ).toBe(true);
     }
@@ -2659,8 +2950,8 @@ describe("t230 dispatcher hook routing", () => {
       expect(res.exitCode).toBe(0);
       expect(res.stderr.toString("utf-8")).toBe("");
       expect(
-        existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
-          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+        existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+          existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", "validate-state.last")),
       ).toBe(true);
     },
   );
@@ -2669,8 +2960,8 @@ describe("t230 dispatcher hook routing", () => {
     const projectDir = makeProject();
     const input = JSON.stringify({ hook_event_name: "PreCompact", cwd: projectDir });
     const health = () =>
-      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
-      existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last"));
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+      existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-engine/hooks-health", "validate-state.last"));
 
     // Ordinary callers: still the public unknown-command error, no hook runs.
     const bare = viaDispatcher(["hook", "validate-state"], projectDir, {}, input);
@@ -2713,12 +3004,12 @@ describe("t230 dispatcher hook routing", () => {
     );
     expect(hook.exitCode).toBe(0);
     expect(
-      existsSync(join(seededRecordDir(targetProject), ".aidlc-hooks-health", "validate-state.last")) ||
-        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-hooks-health", "validate-state.last")),
+      existsSync(join(seededRecordDir(targetProject), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-engine/hooks-health", "validate-state.last")),
     ).toBe(true);
     expect(
-      existsSync(join(seededRecordDir(cwdProject), ".aidlc-hooks-health", "validate-state.last")) ||
-        existsSync(join(dirname(seededRecordDir(cwdProject)), ".aidlc-hooks-health", "validate-state.last")),
+      existsSync(join(seededRecordDir(cwdProject), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(cwdProject)), ".aidlc-engine/hooks-health", "validate-state.last")),
     ).toBe(false);
 
     const statusline = viaDispatcher(
@@ -2736,11 +3027,11 @@ describe("t230 dispatcher hook routing", () => {
     expect(statusline.stdout.toString("utf-8")).not.toContain("Intent Capture");
 
     rmSync(
-      join(seededRecordDir(targetProject), ".aidlc-hooks-health", "validate-state.last"),
+      join(seededRecordDir(targetProject), ".aidlc-engine/hooks-health", "validate-state.last"),
       { force: true },
     );
     rmSync(
-      join(dirname(seededRecordDir(targetProject)), ".aidlc-hooks-health", "validate-state.last"),
+      join(dirname(seededRecordDir(targetProject)), ".aidlc-engine/hooks-health", "validate-state.last"),
       { force: true },
     );
     cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(targetProject, ".codex"), {
@@ -2758,8 +3049,8 @@ describe("t230 dispatcher hook routing", () => {
     );
     expect(adapter.exitCode).toBe(0);
     expect(
-      existsSync(join(seededRecordDir(targetProject), ".aidlc-hooks-health", "validate-state.last")) ||
-        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-hooks-health", "validate-state.last")),
+      existsSync(join(seededRecordDir(targetProject), ".aidlc-engine/hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-engine/hooks-health", "validate-state.last")),
     ).toBe(true);
   });
 });

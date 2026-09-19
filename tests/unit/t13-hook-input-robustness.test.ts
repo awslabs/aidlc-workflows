@@ -220,7 +220,7 @@ function writeState(proj: string, body: string): void {
 }
 
 function recoveryPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-recovery.md");
+  return join(seededRecordDir(proj), ".aidlc-engine/recovery.md");
 }
 
 function writeJson(filePath: string): string {

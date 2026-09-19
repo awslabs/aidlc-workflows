@@ -34,7 +34,6 @@ scopes:
   - bugfix
   - refactor
   - security-patch
-  - classic
   - workshop
   - express
 inputs: CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage
@@ -97,9 +96,8 @@ Upstream targets: `ci-config`, `quality-gates`, `infrastructure-specification`, 
 
 ## Learn
 
-Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
-under the four standard headings while working; before the approval gate,
-surface candidates with `aidlc-learnings.ts`;
-still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
-with the tool. The memory file stays in the artefact directory, and the stage
-file remains immutable.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

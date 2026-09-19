@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import {
   BUILD_VERSION_ENV,
   compareVersions,
+  nextPatchVersion,
   parseVersion,
   PREVIEW_CHANNEL,
   PREVIEW_VERSION,
@@ -43,7 +44,8 @@ const PREVIEW_RELEASE_WORKFLOW = readFileSync(
   "utf-8",
 );
 const [MAJOR, MINOR, PATCH] = AIDLC_VERSION.split(".").map(Number);
-const PREVIEW_ID = `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.1`;
+const NEXT_STABLE = nextPatchVersion(AIDLC_VERSION);
+const PREVIEW_ID = `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`;
 
 const ACCEPTED = [
   "0.0.0",
@@ -195,18 +197,19 @@ describe("t330 release version-id grammar", () => {
     }
   });
 
-  test("a build version must be the source version or a preview built from it", () => {
+  test("a build version must be the source version or its next-patch preview", () => {
     expect(releaseBuildVersion({})).toBe(AIDLC_VERSION);
     expect(releaseBuildVersion({ [BUILD_VERSION_ENV]: "" })).toBe(AIDLC_VERSION);
     expect(releaseBuildVersion({ [BUILD_VERSION_ENV]: ` ${AIDLC_VERSION} ` })).toBe(AIDLC_VERSION);
     expect(releaseBuildVersion({ [BUILD_VERSION_ENV]: PREVIEW_ID })).toBe(PREVIEW_ID);
+    expect(nextPatchVersion(AIDLC_VERSION)).toBe(`${MAJOR}.${MINOR}.${PATCH + 1}`);
     expect(() => releaseBuildVersion({ [BUILD_VERSION_ENV]: `${MAJOR}.${MINOR}.${PATCH + 1}` }))
       .toThrow(`${BUILD_VERSION_ENV} must be unset`);
     expect(() =>
       releaseBuildVersion({
-        [BUILD_VERSION_ENV]: `${MAJOR}.${MINOR}.${PATCH + 1}-preview.20260903.1`,
+        [BUILD_VERSION_ENV]: `${AIDLC_VERSION}-preview.20260903.1`,
       })
-    ).toThrow(`is not built from source version ${AIDLC_VERSION}`);
+    ).toThrow(`does not use next patch ${NEXT_STABLE} after source version ${AIDLC_VERSION}`);
     expect(() => releaseBuildVersion({ [BUILD_VERSION_ENV]: "2.7.2-rc.1" })).toThrow("invalid version");
   });
 

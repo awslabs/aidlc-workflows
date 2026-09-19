@@ -7,8 +7,8 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
@@ -126,7 +126,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -858,7 +858,7 @@ function handleAnswer(args: string[]): void {
       const positive = flags.details === "Looks correct";
       if (positive) fields[SUMMARY_AUTHORIZATION_FIELD] = authorization.id;
       // Registry first, receipt second, both under the audit lock. A registry
-      // that cannot be written (a redirected `.aidlc-summary-authorization`, a
+      // that cannot be written (a redirected `.aidlc-engine/summary-authorization`, a
       // file where the stage directory belongs, a full disk) refuses the answer
       // BEFORE any receipt exists, so the pending question and the human's turn
       // are still there for a retry once the cause is fixed. If the receipt
@@ -1332,7 +1332,8 @@ export function reviewRecoverySpentMessage(
       "not run finalize or merge it. Halt and ask the human whether to restart " +
       `the Bolt attempt. On an approved retry, return to the main workspace, run ` +
       `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
-      `--reason "stale review recovery exhausted" --discard\`, then rerun the ` +
+      `--reason "stale review recovery exhausted" --discard\`. The old attempt is ` +
+      `parked and restorable with \`${aidlcToolInvocation("worktree")} restore --slug ${slug}\`. Then rerun the ` +
       `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
       `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
       "restores one review allowance without claiming convergence. Do not " +
@@ -1647,6 +1648,79 @@ function handleReview(args: string[]): void {
     };
   };
 
+  // Requests and terminal verdicts use one summary admission contract. In
+  // particular, a Unit's gate state may differ from the global stage checkbox,
+  // and relaxed acceptance must be recorded rather than silently continued.
+  const admitReviewSummary = (
+    context: ReturnType<typeof loadContext>,
+    action: "review-request" | "review-verdict",
+    notices: string[],
+  ) => {
+    const { state, node, attempt, budget, receipts, requireRequiredArtifacts, unitResolution, mergedBoltUnits } = context;
+    const teamGate = teamUnitGateStatus(pd, state, node.slug, flags.unit);
+    const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
+      stateContent: state,
+      unit: flags.unit,
+      workflow: fields.Workflow,
+      selection: { intent, space },
+    });
+    // Verdict success already takes an authoritative artifact/source snapshot.
+    // Only a refusal needs the additional pending-request view for its remedies.
+    const pendingStatus = action === "review-request" || !summaryEvidence.ok
+      ? pendingReviewRequestStatus(pd, node, flags.unit, attempt, {
+          requireRequiredArtifacts,
+          boltDag: unitResolution ?? undefined,
+          mergedBoltUnits,
+          single: flags.single === "true",
+        })
+      : null;
+    if (receipts?.changeControlRead || summaryEvidence.changeControlRead) {
+      governedChangeControl(pd, state, { intent, space });
+      notices.push(...recordAcceptedChanges(pd, [
+        ...(receipts?.acceptedChanges ?? []),
+        ...(summaryEvidence.ok ? summaryEvidence.acceptedChanges ?? [] : []),
+      ], { intent, space }));
+    }
+    if (!summaryEvidence.ok) {
+      const message = action === "review-request"
+        ? reviewSummaryEvidenceMessage(flags.stage, summaryEvidence.message)
+        : `Cannot record a review verdict: ${summaryEvidence.message}`;
+      const snapshot = guardAttemptState(pd, state, node, {
+        ...(flags.unit ? { unit: flags.unit } : {}),
+        ...(receipts ? { receipts } : {}),
+        summaryCoverage: summaryEvidence.summaryCoverage,
+        reviewBudget: budget,
+        pendingStatus,
+        accounting: attempt,
+        requireRequiredArtifacts,
+      });
+      const evaluated = evaluateGuardRefusal({
+        code: summaryEvidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
+        blockedAction: action,
+        stage: flags.stage,
+        ...(flags.unit ? { unit: flags.unit } : {}),
+        stateContent: state,
+        invariant: summaryEvidence.refusal?.invariant ??
+          "A review requires current human-backed summary authorization and output descent.",
+        userMessage: message,
+        attempt: snapshot.attempt,
+        humanAuthority: humanAuthorityState(pd),
+        ...(teamGate ? { teamGate } : {}),
+      });
+      const refusal = summaryEvidence.refusal === undefined
+        ? evaluated
+        : {
+            ...summaryEvidence.refusal,
+            blockedAction: action,
+            state: evaluated.state,
+            userMessage: message,
+            remedies: evaluated.remedies,
+          };
+      refuseReviewGuard(pd, refusal, snapshot.attempt, snapshot.resources);
+    }
+    return { teamGate, pendingStatus };
+  };
+
   // REVIEW_REQUESTED owns its ordinal: require a positive integer, count prior
   // requests in the current attempt, and append under the same lock. This closes
   // duplicate/missing-label bypasses and makes concurrent requests serialize.
@@ -1666,7 +1740,7 @@ function handleReview(args: string[]): void {
     // the same iteration left behind is not this dispatch's review.
     const openReviewDraftSlot = (floor: string): void => {
       const slot = reviewSlot(floor, iteration);
-      // Never through a symlinked `.aidlc-reviews`: a redirected slot is not
+      // Never through a symlinked `.aidlc-engine/reviews`: a redirected slot is not
       // this record's, so the request refuses instead of clearing a path
       // outside the intent record.
       try {
@@ -1681,6 +1755,7 @@ function handleReview(args: string[]): void {
     };
     try {
       withAuditLock(pd, () => {
+        const context = loadContext(true, !retryPending);
         const {
           state,
           node,
@@ -1691,88 +1766,8 @@ function handleReview(args: string[]): void {
           requireRequiredArtifacts,
           unitResolution,
           mergedBoltUnits,
-        } = loadContext(true, !retryPending);
-        const pendingStatus = pendingReviewRequestStatus(
-          pd,
-          node,
-          flags.unit,
-          attempt,
-          {
-            requireRequiredArtifacts,
-            boltDag: unitResolution ?? undefined,
-            mergedBoltUnits,
-            single: flags.single === "true",
-          },
-        );
-        const teamGate = teamUnitGateStatus(
-          pd,
-          state,
-          node.slug,
-          flags.unit,
-        );
-        // The review request is a governed Change Control checkpoint when the
-        // receipt scan or the summary check met an input change after an
-        // approval and read the setting: resolve it again here as the mutating
-        // caller (an invalid memory value is its own error; a memory edit that
-        // moved it is recorded), then record what they accepted under relaxed.
-        // The human line rides on this command's JSON.
-        const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
-          stateContent: state,
-          unit: flags.unit,
-          workflow: fields.Workflow,
-          selection: { intent, space },
-        });
-        if (receipts?.changeControlRead || summaryEvidence.changeControlRead) {
-          governedChangeControl(pd, state, { intent, space });
-          requestChangeNotices.push(
-            ...recordAcceptedChanges(
-              pd,
-              [
-                ...(receipts?.acceptedChanges ?? []),
-                ...(summaryEvidence.ok ? summaryEvidence.acceptedChanges ?? [] : []),
-              ],
-              { intent, space },
-            ),
-          );
-        }
-        if (!summaryEvidence.ok) {
-          const message = reviewSummaryEvidenceMessage(
-            flags.stage,
-            summaryEvidence.message,
-          );
-          const guardAttempt = guardAttemptState(pd, state, node, {
-            ...(flags.unit ? { unit: flags.unit } : {}),
-            ...(receipts ? { receipts } : {}),
-            summaryCoverage: summaryEvidence.summaryCoverage,
-            reviewBudget: budget,
-            pendingStatus,
-            accounting: attempt,
-          }).attempt;
-          const evaluated = evaluateGuardRefusal({
-            code: summaryEvidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
-            blockedAction: "review-request",
-            stage: flags.stage,
-            ...(flags.unit ? { unit: flags.unit } : {}),
-            stateContent: state,
-            invariant:
-              summaryEvidence.refusal?.invariant ??
-              "A review starts only after current human-backed summary authorization.",
-            userMessage: message,
-            attempt: guardAttempt,
-            humanAuthority: humanAuthorityState(pd),
-            ...(teamGate ? { teamGate } : {}),
-          });
-          const refusal = summaryEvidence.refusal === undefined
-            ? evaluated
-            : {
-                ...summaryEvidence.refusal,
-                blockedAction: "review-request",
-                state: evaluated.state,
-                userMessage: message,
-                remedies: evaluated.remedies,
-              };
-          refuseReviewGuard(pd, refusal, guardAttempt);
-        }
+        } = context;
+        const { pendingStatus, teamGate } = admitReviewSummary(context, "review-request", requestChangeNotices);
         const expected = attempt.requestCount + 1;
         const sameSourceRecoveryScope =
           receipts?.newestSourceUnit === (flags.unit ?? null);
@@ -2076,13 +2071,20 @@ function handleReview(args: string[]): void {
             message,
           );
         }
-        if (!recoveryEligible && budget !== null && iteration > budget) {
-          refuseAttemptGuard(
-            "REVIEW_BUDGET_EXHAUSTED",
-            "Review requests do not exceed the configured attempt budget.",
-            reviewBudgetMessage(flags.stage, iteration, budget),
-          );
-        }
+        // The budget is measured against `expected` ONLY. `iteration` is the
+        // caller's claim about which pass this is, and it is validated against
+        // `expected` further down with a message that names the right ordinal.
+        // Measuring the budget against the claim instead turned a recoverable
+        // off-by-one into an unrecoverable refusal: after a gate rejection the
+        // accounting floor moves (reviewAttemptAccounting treats GATE_REJECTED as
+        // an attempt boundary), so `expected` is 1 again while a conductor that
+        // kept counting passes `--iteration 2`. On an `advisory` stage, whose
+        // budget is 1, that claim alone produced REVIEW_BUDGET_EXHAUSTED - and
+        // its guidance ("do not ask the reviewer again; include the findings in
+        // the approval summary") then routes to a gate that refuses for
+        // REVIEW_EVIDENCE_MISSING, because the revision path needs the fresh
+        // receipt the refusal just forbade. The only remedy left is a redo jump,
+        // which discards the attempt the human was mid-revision on.
         if (!recoveryEligible && budget !== null && expected > budget) {
           refuseAttemptGuard(
             "REVIEW_BUDGET_EXHAUSTED",
@@ -2169,16 +2171,19 @@ function handleReview(args: string[]): void {
   fields.Verdict = verdict;
   const reviewFileFlag = flags["review-file"];
   let recordPath: string | null = null;
+  let reviewMarkdown: string | null = null;
+  const verdictChangeNotices: string[] = [];
 
   try {
     withAuditLock(pd, () => {
+      const context = loadContext(false, false);
       const {
         node,
         attempt,
         requireRequiredArtifacts,
         unitResolution,
         mergedBoltUnits,
-      } = loadContext(false, false);
+      } = context;
       const pendingRequest = attempt.pendingRequests.get(iteration);
       if (!pendingRequest) {
         refuseReview(
@@ -2194,6 +2199,10 @@ function handleReview(args: string[]): void {
           "cannot be recovered by retrying or rebaselining; start a fresh review attempt.",
         );
       }
+      // A review can outlive a confirmation/retraction. Recheck the same
+      // summary/output admission used at request time before issuing terminal
+      // authority; an unchanged artifact snapshot alone cannot establish it.
+      admitReviewSummary(context, "review-verdict", verdictChangeNotices);
       const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
         requireRequiredArtifacts,
         boltDag: unitResolution ?? undefined,
@@ -2463,16 +2472,46 @@ function handleReview(args: string[]): void {
       if (body !== null && reviewFileFlag === undefined) {
         removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
       }
+      // A readable copy for people, beside the artifact the review is about:
+      // `<stage dir>/reviews/review-NN.md`, numbered in the order verdicts land.
+      // The JSON record stays the engine's source of truth; nothing reads the
+      // copy back, so a failure to write it never withholds the verdict.
+      if (recordBody.length > 0) {
+        try {
+          const recordRoot = recordDir(pd) as string;
+          const reviewsDirRelative = posix.join(posix.dirname(artifactKey), "reviews");
+          const reviewsDir = join(recordRoot, ...reviewsDirRelative.split("/"));
+          let next = 1;
+          if (existsSync(reviewsDir)) {
+            for (const name of readdirSync(reviewsDir)) {
+              const match = /^review-(\d+)\.md$/.exec(name);
+              if (match === null) continue;
+              const suffix = Number.parseInt(match[1], 10);
+              if (Number.isSafeInteger(suffix) && suffix >= next) {
+                next = suffix + 1;
+              }
+            }
+          }
+          const copyRelative =
+            `${reviewsDirRelative}/review-${String(next).padStart(2, "0")}.md`;
+          writeRecordFileNoFollow(recordRoot, copyRelative, recordBody);
+          reviewMarkdown = copyRelative;
+        } catch (e) {
+          console.error(`warning: the readable review copy was not written: ${errorMessage(e)}`);
+        }
+      }
     }, intent, space);
   } catch (e) {
-    if (e instanceof ReviewRefusal) error(e.message);
-    error(`Audit emission failed: ${errorMessage(e)}`);
+    if (e instanceof ReviewRefusal) error(e.message, verdictChangeNotices);
+    error(`Audit emission failed: ${errorMessage(e)}`, verdictChangeNotices);
   }
 
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,
     ...(recordPath !== null ? { reviewRecord: recordPath } : {}),
+    ...(reviewMarkdown !== null ? { reviewMarkdown } : {}),
+    ...(verdictChangeNotices.length > 0 ? { change_notices: verdictChangeNotices } : {}),
   }));
 }
 
@@ -2530,10 +2569,10 @@ export function main(argv: string[]): void {
 
 // --- Utility ---
 
-function error(msg: string): never {
+function error(msg: string, changeNotices: readonly string[] = []): never {
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-log ${process.argv.slice(2).join(" ")}`.trim();
-  emitError(pd, "aidlc-log", command, msg);
+  emitError(pd, "aidlc-log", command, msg, undefined, undefined, changeNotices);
 }
 
 if (import.meta.main) {

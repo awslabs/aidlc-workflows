@@ -4,12 +4,12 @@ Load this module when a directive names a reviewer with an effective review clas
 
 ## 12a. Reviewer Invocation
 
-If the `run-stage` directive includes a `reviewer` field (non-null), the orchestrator MUST invoke the reviewer as a **separate sub-agent** after the stage body produces its artifacts and before the §13 learnings ritual.
+If the `run-stage` directive includes a `reviewer` field (non-null), the orchestrator MUST invoke the reviewer as a **separate sub-agent** after the stage body produces its artifacts and before the §13 learnings ritual when the directive lists the `learnings` protocol module, otherwise before the approval gate.
 
 The directive's `review_class` field tells you HOW the review runs - the engine has already resolved it (stage declaration, lowered by the scope's `review_cap` and any per-run `--review` override; a `none` resolution omits the reviewer block entirely, so a directive that carries a reviewer always carries a class):
 
 - **`adversarial`** - the refute-and-repair loop below, up to `reviewer_max_iterations` passes with lead fixes between them. The default for Construction stages, where findings are machine-checkable and fix loops converge.
-- **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13, and quote the reviewer's findings VERBATIM at the approval gate for the human to triage. The bounded stale-receipt recovery below is the only exception. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
+- **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13 only when the `learnings` module is listed (otherwise directly to the approval gate), and quote the reviewer's findings VERBATIM at the approval gate for the human to triage. The bounded stale-receipt recovery below is the only exception. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
 
 ### What the user hears from this section
 
@@ -24,6 +24,43 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
 ### Flow
 
+**Reviewed outputs and summary inputs.** When a stage declares
+`summary_confirmation` (`required` or `if-present`), declared `*-questions`
+artifacts are writable human inputs. Their file manifest entry is
+`summary-input:sha256:<digest>`: after normalizing line endings,
+`summaryInputReviewFingerprint` masks only one visible summary-confirmation
+answer value (blank, `Looks correct`, or `Request changes`). Trailing comments
+and examples inside code fences remain bound. All other question
+content remains bound; an absent or ambiguous confirmation section/answer
+leaves the full normalized content bound. Missing and non-file entries remain
+distinct. Required-file presence and safe capture checks still apply, and
+snapshots retain the actual question bytes for swarm merging. Only confirmation
+bookkeeping preserves the review fingerprint; substantive question edits
+invalidate its content binding even though the human Q&A write is permitted.
+Reviewed outputs stay frozen. If `review_artifact` explicitly names a questions
+artifact, it remains fully byte-bound and frozen, including its answer line.
+Without `summary_confirmation`, there is no question exception. The reviewer
+itself still writes only its `reviewFile`.
+
+Generation requires the human's exact `[Answer]: Looks correct` at the
+consolidated-summary checkpoint and a successful matching
+`aidlc-log.ts answer` receipt. Identical reconfirmation in the same attempt
+preserves output authorization; a gate rejection alone does not withdraw it,
+although review receipts follow their own rejection boundary. Changed confirmed
+content requires fresh human confirmation, outputs regenerated or re-saved under
+that authorization, and a fresh review through normal recovery. Use the offered
+lifecycle remedy before editing frozen outputs. A summary `Request changes`
+answer withdraws active summary authorization; ask "What should change?" and
+end the turn before editing answers. Never invent an answer or treat editable
+questions as approval to change reviewed outputs or a plan.
+
+The logger rechecks summary confirmation and output admission when recording
+a terminal verdict; an unchanged review fingerprint alone is insufficient.
+Once an `if-present` flow records a summary-confirmation decision or confirmation
+in the current attempt, deleting the questions file cannot remove that
+obligation. Older question fingerprint projections may require a fresh review
+through normal recovery; do not rewrite receipts or assume a new receipt format.
+
 1. **Invoke reviewer sub-agent.** Before every dispatch, not only the first,
    record the request:
    `{{INVOKE}} engine log review --stage "<directive.stage>" --reviewer "<directive.reviewer>" --iteration <n>`;
@@ -37,13 +74,13 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    finish the named prerequisite before dispatching the reviewer.
 
    The logger captures every declared artifact through one stable file-identity
-   snapshot and binds the request to exactly those bytes, plus the current
+   snapshot and binds the request to the review manifest above, plus the current
    workspace and per-unit source fingerprints where applicable. For a per-unit
    `workspace_requires` stage it validates `source-manifest.json` and binds both
    its bytes and the currently claimed source bytes into `REVIEW_REQUESTED`; it
    refuses before dispatch when the manifest is missing or invalid. The
    successful request's JSON returns `requestId` and `reviewFile`: the
-   project-relative path, under `<record>/.aidlc-reviews/`, where this
+   project-relative path, under `<record>/.aidlc-engine/reviews/`, where this
    request's review is written. The request opens that slot (an earlier draft
    left there by an incomplete dispatch of the same iteration is removed), so
    the file the reviewer leaves is this dispatch's review and no other.
@@ -78,6 +115,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
      - For a **per-unit** stage (`directive.unit` present) these include the shared inception contracts that pin cross-unit boundaries (`components.md`, `contract-summary.md`, `unit-of-work.md`).
      - For a **workflow-level** stage with no `directive.unit` (e.g. `contract-design`), these are the upstream artifacts that justify the produced output - the unit DAG (`unit-of-work.md`, `unit-of-work-dependency.md`), the component catalogue (`components.md`), and `requirements.md` - so the reviewer can verify the contracts against the boundaries, entities, and NFRs they formalise rather than reviewing the summary in isolation.
    - The validation tools list from the stage definition's frontmatter (if any)
+   - The review-content boundary: tell the reviewer not to raise a finding whose sole subject is this stage's own review bookkeeping. Treat text as this stage's own review bookkeeping when its sole purpose is to record a review iteration, revision count or revision-round label, to list or status this stage's findings in any form including a table or a section of its own, to state the stage's own review state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`), or to name this stage's review-record path; judge the product claims instead. An inline tag naming an upstream stage's finding is provenance; a tag naming this stage's own finding is bookkeeping.
    - For a per-unit `workspace_requires` stage, the unit's
      `source-manifest.json` path and its claimed source paths. Review the
      implementation differentially at those paths rather than sweeping the
@@ -88,7 +126,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
    **Reviewer read scope.** The reviewer's scope is the current unit's artifacts plus the passed contract paths. On a per-unit stage the reviewer MUST NOT read other units' `construction/<other-unit>/` content through any tool - not by opening files, and not via grep, glob, or shell patterns that span sibling unit paths (a `construction/*/` glob is a sibling read, not a search) - except to spot-check an integration point the current unit's design explicitly names, and only the owning file, resolved via the shared contracts rather than by browsing or searching the sibling's directory. Cross-unit contract verification runs against the shared inception artifacts passed above, not against a sweep of sibling units' design prose.
 
-   **Dispatch record (per-unit stages; enforcement-capable harnesses only).** This record is required only when the current harness registers reviewer-scope PreToolUse enforcement (Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, and GitHub Copilot today). Immediately before invoking a per-unit reviewer (`directive.unit` present) on one of those harnesses, write `<record>/.aidlc-reviewer-dispatch.json`:
+   **Dispatch record (per-unit stages; enforcement-capable harnesses only).** This record is required only when the current harness registers reviewer-scope PreToolUse enforcement (Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, and GitHub Copilot today). Immediately before invoking a per-unit reviewer (`directive.unit` present) on one of those harnesses, write `<record>/.aidlc-engine/reviewer-dispatch.json`:
 
    ```json
    {"reviewer": "<directive.reviewer>", "stage": "<stage slug>", "unit": "<directive.unit>",
@@ -102,7 +140,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    review file, or one without a single canonical verdict) - return to the
    start of this step and rerun the same request command with `--retry-pending`
    immediately before dispatching again. The logger accepts it exactly once,
-   only while that exact request is unmatched and the declared artifacts and
+   only while that exact request is unmatched and the review manifest and
    workspace source exactly match the original request; it reuses those
    original fingerprints and request id instead of rebaselining current bytes,
    marks the retry in the audit, reopens the review slot, and does not consume
@@ -123,7 +161,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    - Verifies cross-unit contract claims against the passed shared inception contracts, not by sweeping or searching sibling units' design directories (no cross-unit grep or glob patterns); opens another unit's file only when the current unit's design explicitly names it as an integration point, and only that file
    - Runs any validation tools listed (via shell) and includes results in findings
    - Writes exactly ONE file: its review, at the passed `reviewFile` path. The review uses the knowledge template and contains exactly one rendered `**Verdict:** READY|NOT-READY`, one rendered `**Reviewer:** <directive.reviewer>`, and one rendered `**Iteration:** <n>` line, with its findings under `### Findings` in the template's table. It may open with the template's `## Review` heading and use H3+ subsections, but no later H1, H2, setext, or raw-HTML H1/H2 heading may open unowned top-level content. Literal headings and ownership-field examples inside fenced or inline code do not count. Step 3 treats anything else as an incomplete review.
-   - Writes NOTHING else: not the reviewed artifact, not any other `produces[]` output, not `source-manifest.json`, not a claimed source path. The bytes the reviewer was dispatched on are the bytes the verdict certifies, and the logger refuses a verdict whose artifacts changed.
+   - Writes NOTHING else: not the Q&A, not the reviewed artifact, not any other `produces[]` output, not `source-manifest.json`, not a claimed source path. The verdict certifies the dispatched reviewed output bytes and bound question content; the logger refuses a verdict whose review manifest or source binding changed.
    - Returns a response whose FIRST line is its identity marker verbatim
      (`**Reviewer:** <reviewer-agent-name>`), so the `SUBAGENT_COMPLETED` audit
      event records which reviewer ran. The reviewer's persona owns this contract.
@@ -134,7 +172,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    projects out a terminal `## Review` section left in the plan by a review
    recorded before review records existed; nothing new is written there.
 
-3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields). The logger reads the review from the request's `reviewFile` (pass `--review-file <path>` to name another file), validates it with Bun's Markdown parser (fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint ownership, and rendered Markdown or raw-HTML H1/H2 headings are section escapes), proves from one coherent snapshot that every dispatched artifact byte and the request-time source identity are unchanged, and then writes the review record `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`) (verdict, findings, reviewer, request id, artifact and source fingerprints, and the review text) in the same locked transaction as the `REVIEW_COMPLETED` row that names the record and pins its digest. The record is the review; only this command writes one, and a record edited afterwards stops being the review because its digest no longer matches. The command's JSON returns `reviewRecord`, the record's path relative to the intent record.
+3. **Read verdict.** After the reviewer returns (when the dispatch comes back before its review exists, run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for review --review-file <reviewFile>` and re-run it while it answers `status: waiting`; never a shell loop), delete `<record>/.aidlc-engine/reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields). The logger reads the review from the request's `reviewFile` (pass `--review-file <path>` to name another file), validates it with Bun's Markdown parser (fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint ownership, and rendered Markdown or raw-HTML H1/H2 headings are section escapes), rechecks current summary confirmation and output admission, proves from one coherent snapshot that the review manifest (including reviewed output bytes and bound question content) and the request-time source identity are unchanged, and then writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`) (verdict, findings, reviewer, request id, artifact and source fingerprints, and the review text) in the same locked transaction as the `REVIEW_COMPLETED` row that names the record and pins its digest. The record is the review; only this command writes one, and a record edited afterwards stops being the review because its digest no longer matches. The command's JSON returns `reviewRecord`, the record's path relative to the intent record. It also writes a readable copy of the review text for people at `<stage dir>/reviews/review-NN.md`, beside the artifact the review is about, and returns it as `reviewMarkdown`; the copy is not an artifact, nothing reads it back, and the JSON record stays the review.
 
    Anything else is an INCOMPLETE attempt, not a verdict: no review file at all (the reviewer has a hard turn cap and may have been stopped before writing it; the request opened an empty slot, so a missing file means an incomplete review on every path, first entry or revision alike), a review with no canonical verdict line or one that does not match `--verdict`, forged/missing/conflicting duplicate ownership fields, a later top-level heading, or a malformed findings table. The logger refuses these; a malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
 
@@ -143,7 +181,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    request, re-dispatch it exactly once - return to step 1 and rerun the same
    request command with `--retry-pending` immediately before dispatch. The
    logger accepts this only while the request is unmatched, has not already
-   spent its retry, and the original artifact and source bytes are unchanged;
+   spent its retry, and the original review manifest and source bytes are unchanged;
    it consumes no review iteration and never mints a new fingerprint. A valid
    unmatched request recorded before review records (or before source binding)
    may emit exactly one audit-marked `Upgrade: legacy-request` modern binding,
@@ -179,15 +217,15 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    embedded input form is removed in the next minor release. Do not write an
    embedded section; the old section stays where it is as inert content.
 
-   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses declared `produces[]`/`optional_produces[]` writes (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
+   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write reviewed outputs between recording it and gate approval; summary-owned questions follow the separate boundary above; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses writes to those reviewed `produces[]`/`optional_produces[]` outputs (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
    If a write still invalidates the receipt, what happens next is decided by
    the intent's Change Control value (`/aidlc --status` shows it). Under
    `strict`, the first request after that stale terminal evidence is exactly
    one recovery review at the next ordinal, even when an adversarial stage had
    unused normal iterations. The logger marks it `Recovery: stale-receipt`; the
-   freeze stays on throughout (the reviewer writes its review beside the
+   reviewed-output freeze stays on throughout (the reviewer writes its review beside the
    artifact, never inside it). Record either verdict as terminal, then stop
-   editing `produces[]` artifacts, `source-manifest.json`, and claimed source
+   editing reviewed outputs, `source-manifest.json`, and claimed source
    paths. Any human gate after that recovery verdict uses the required Review
    brief below with `Why now: Re-check after the artifact changed.` If that
    recovery receipt is invalidated again, request no further review. On an
@@ -231,18 +269,40 @@ Everything else in this section is silent. Nothing is said about invoking, handi
      artifact, ID, current status, and nonblank reason before recording
      `Rejected: <reason>` on `GATE_REJECTED`.
 
+   **Review bookkeeping is not artifact content.** The review record carries the
+   verdict, findings, reviewer, request id and artifact fingerprint; the ledger
+   carries the human dispositions; and `REVIEW_COMPLETED` pins the record's digest.
+   So do not copy this stage's own review history into a `produces[]` artifact, in
+   any form - a header line, a heading, a table, or a section of its own: not a
+   revision counter or revision-round label, not a list or table of which of its
+   findings a revision applied, not a finding's status, not the stage's own review
+   state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`), not a
+   review-record path. Such a copy is unverified and it goes stale by construction
+   rather than by mistake: the gate can approve while the artifact's own note still
+   says a review is pending. What the artifact says about its own subject is
+   untouched: a decision record's lifecycle status - the
+   `## Status: [Proposed | Accepted | Deprecated | Superseded by ADR-NNN]` heading an
+   ADR is told to carry - or any state the customer's own process owns, is content
+   and stays. An
+   inline provenance tag is different only when it preserves a tag already carried
+   by a consumed upstream artifact or cites an upstream stage's finding as the
+   source of a downstream claim. A tag naming this stage's own finding or review
+   iteration is review bookkeeping and is prohibited. The reviewer half of this
+   rule travels in the dispatch list above, because that is the only text a
+   dispatched reviewer receives.
+
    **On an `advisory` review, both verdicts are terminal here.** Do not
    re-invoke the lead or the reviewer during normal flow; proceed to section
    13, then present the approval gate using the required Review brief above.
    The human triages; a Request Changes at the gate is how an advisory finding
-   becomes a revision. If a `produces[]` artifact, `source-manifest.json`, or
+   becomes a revision. If a reviewed output, `source-manifest.json`, or
    claimed source path was written after the terminal receipt and voided it,
    the engine permits exactly one recovery request at the next ordinal; record
    its verdict, stop editing those same surfaces, and present the gate using
    the Review brief with `Why now: Re-check after the artifact changed.`
 
    **On an `adversarial` review**, branch on the verdict:
-   - **READY** → the receipt is terminal (above); proceed to §13 learnings ritual, then present the approval gate using the required Review brief above
+   - **READY** → the receipt is terminal (above); run the §13 learnings ritual only when `directive.protocol_modules` lists `learnings`, then present the approval gate using the required Review brief above
    - **NOT-READY** and `reviewIterations < reviewer_max_iterations` (default 2):
      - Increment review iteration counter
      - Re-invoke the stage's lead agent ALONE, dispatched per `directive.mode` (inline in your context, or as a subagent on the dispatched modes). On an ensemble stage (pipeline/mob) the room or chain is NOT re-convened - review findings are artifact defects and the lead owns the artifacts; the repair loop is lead-reviewer ping-pong (`stage-protocol-ensemble.md` §5). The builder addresses the findings and updates the artifact.
@@ -251,7 +311,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
      - Proceed to the approval gate using the required Review brief above, with the unresolved findings table and `Why now: Revision re-checked.` The separate SAY sentence for exhausted rounds remains the only narration before that gate.
 
 The reviewer also re-runs on the Part 0 revision path: when a human rejection
-leads to a revision that changes a `produces[]` artifact, re-run this step
+leads to a revision that changes a reviewed output or bound question content, re-run this step
 before reporting `revised` - the engine already treats the earlier review as
 stale (its receipt predates the revised content), and the new request binds
 the revised bytes, so step 3 cannot mistake the old review for coverage of the
@@ -266,11 +326,13 @@ re-checked.`).
 > `finalize`, and `complete-workflow`) refuses a stage that declares a reviewer
 > until the audit ledger contains a fresh `REVIEW_COMPLETED` from that reviewer.
 > Per-unit stages require one receipt for every applicable unit. A workflow
-> restart, relevant jump, gate rejection, or later write to a declared stage
-> artifact invalidates older receipts (per-unit writes invalidate only that
-> unit). After such a write, the engine permits exactly one recovery review
-> request at the next ordinal; record its verdict and stop editing `produces[]`
-> artifacts, `source-manifest.json`, and claimed source paths. Only a `READY` or
+> restart, relevant jump, or gate rejection invalidates older review receipts.
+> A later reviewed-output write or substantive question edit follows Change
+> Control above (per-unit changes affect only that unit); only confirmation
+> bookkeeping preserves the question fingerprint as described above. After a write invalidates terminal evidence under `strict`,
+> the engine permits exactly one recovery review request at the next ordinal;
+> record its verdict and stop editing reviewed outputs, `source-manifest.json`,
+> and claimed source paths. Only a `READY` or
 > `NOT-READY` verdict is
 > terminal. The precondition is hard on the review having happened and soft on
 > its verdict: a NOT-READY verdict after the iteration cap still reaches the
@@ -283,10 +345,14 @@ re-checked.`).
 > If an autonomous Unit invalidates its one recovery receipt, halt before
 > `finalize`: do not put the Unit in `--claimed`, do not merge it, and present a
 > human Retry/Abort decision through the halt-and-ask seam. On Retry, return to
-> the main workspace, abort and discard the old Bolt, then rerun the current
+> the main workspace, abort and park/discard the old Bolt, then rerun the current
 > `aidlc-swarm.ts prepare` step for that Unit with the original batch/base/repo
 > arguments. The fresh worktree and `BOLT_STARTED` boundary reset review
 > accounting without claiming convergence. Never synthesize `GATE_REJECTED`.
+> The discard parks tracked files, non-ignored untracked files, and reviewed
+> source refs before removing the live checkout and branch. Recover the parked
+> work with `{{INVOKE}} engine worktree restore --slug <slug>`; restoration uses
+> a separate checkout and does not reinstate the old review authority.
 
 ### What the reviewer does NOT do
 

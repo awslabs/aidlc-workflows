@@ -30,7 +30,7 @@
 // WORKFLOW_STARTED reset the floor (so post-rejection revisions are never
 // frozen), a below-cap adversarial NOT-READY remains nonterminal so its repair
 // loop can edit, and non-produces writes (diary, questions, contributions,
-// the reviewer's own review file under `.aidlc-reviews/`) never match.
+// the reviewer's own review file under `.aidlc-engine/reviews/`) never match.
 // Terminal NOT-READY under the effective class freezes just like READY because
 // no further review pass follows it. The reviewer never writes the artifact it
 // certifies, so the freeze has no carve-out to make for it.
@@ -72,7 +72,7 @@ import {
   isoTimestamp,
   loadStageGraph,
   parseCheckboxes,
-  producesArtifactUnit,
+  reviewedArtifactUnit,
   readAllAuditShards,
   readStateFile,
   recordHookDrop,
@@ -115,7 +115,7 @@ export interface FreezeVerdict {
 export function judgeFreeze(
   stage: Pick<
     StageEntry,
-    "slug" | "for_each" | "reviewer" | "produces" | "optional_produces"
+    "slug" | "for_each" | "reviewer" | "produces" | "optional_produces" | "review_artifact" | "summary_confirmation"
   >,
   file: string,
   recordedRepos: ReadonlySet<string>,
@@ -126,7 +126,7 @@ export function judgeFreeze(
     unitPending?: ReadonlyMap<string, { recovery: boolean }>;
   },
 ): FreezeVerdict {
-  const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+  const targetUnit = reviewedArtifactUnit(stage, file, recordedRepos);
   if (targetUnit === undefined) return { block: false }; // not this stage's artifact
   if (stage.for_each === "unit-of-work") {
     if (targetUnit !== null) {
@@ -258,12 +258,12 @@ export async function run(input: string): Promise<number> {
     const recordedRepos = new Set(intentRepos(projectDir));
     for (const stage of loadStageGraph()) {
       if (!stage.reviewer || !openSlugs.has(stage.slug)) continue;
-      // Cheap suffix pre-check via producesArtifactUnit happens inside
+      // Cheap suffix pre-check via reviewedArtifactUnit happens inside
       // judgeFreeze; the receipt scan only runs for a stage that actually
       // matched a target (freshReviewReceipts walks the whole ledger).
       let receipts: FreshReviewReceipts | null = null;
       for (const file of targets) {
-        const probe = producesArtifactUnit(stage, file, recordedRepos);
+        const probe = reviewedArtifactUnit(stage, file, recordedRepos);
         if (probe === undefined) continue;
         const reviewClass = resolveReviewClass(
           stage.review_class ?? "adversarial",

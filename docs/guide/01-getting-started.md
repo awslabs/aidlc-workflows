@@ -24,10 +24,12 @@ The installer adds the native `aidlc` command and every harness runtime. If a
 new shell cannot find `aidlc`, apply the PATH instruction printed by the
 installer.
 
-If you prefer to manage the project files manually, install the matching
-native `aidlc` command, download `aidlc-runtime-X.Y.Z.tar.gz` from the
+If you cannot install a native executable or prefer to manage the project files
+manually, install [Bun](https://bun.sh/), download
+`aidlc-copy-runtime-X.Y.Z.tar.gz` from the
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
-`runtime/<harness>/` into the project.
+the complete `runtime/<harness>/` directory into the project. The manual-copy
+path does not require the native `aidlc` command.
 
 ### 2. Configure a project
 

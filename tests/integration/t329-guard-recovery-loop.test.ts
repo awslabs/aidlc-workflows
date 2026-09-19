@@ -209,7 +209,7 @@ function project(): Project {
   appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: SESSION }, dir);
   const tool = (name: string) => join(dir, ".claude", "tools", `aidlc-${name}.ts`);
   const hook = (name: string) => join(dir, ".claude", "hooks", `aidlc-${name}.ts`);
-  const markerPath = join(record, ".aidlc-active-directive.json");
+  const markerPath = join(record, ".aidlc-engine/active-directive.json");
   const transcriptPath = join(dir, "..", `${dir.split("/").at(-1)}.transcript.jsonl`);
   const probeEnv: Record<string, string> = {
     ...(hookChildEnv(dir, SESSION, { AIDLC_STOP_HOOK_PROBE: "1" }) as Record<string, string>),
@@ -338,6 +338,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     for (const remedy of remedies) {
       expect(typeof remedy.op).toBe("string");
       expect(remedy.executableNow).toBe(true);
+      expect(remedy.interaction).toBe("human-input");
     }
     expect(remedies.some((remedy) => remedy.op === "reconfirm-summary")).toBe(true);
     expect(remedies.some((remedy) => remedy.op === "request-changes")).toBe(true);
@@ -350,7 +351,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(marker?.delivery).toBe("issued");
     expect(marker?.guard_recovery_response).toBeUndefined();
     expect(marker?.remedies).toEqual(
-      remedies.map(({ op, action }) => ({ op, action })),
+      remedies.map(({ op, action }) => ({ op, action, interaction: "human-input" })),
     );
 
     // The observer sees the same ask and publishes nothing.

@@ -60,6 +60,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$PackagedVersion = ''
+if (-not $PSBoundParameters.ContainsKey('Version') -and -not $From) {
+  $Version = $PackagedVersion
+}
 $releaseRepository = if ($env:AIDLC_RELEASE_REPOSITORY) {
   $env:AIDLC_RELEASE_REPOSITORY
 } else {

@@ -19,15 +19,15 @@
 // `echo ... |`), so neither do we.
 //
 // HOOK CONTRACT (aidlc-validate-state.ts):
-//   - Always writes the heartbeat aidlc-docs/.aidlc-hooks-health/validate-state.last
+//   - Always writes the heartbeat aidlc-docs/.aidlc-engine/hooks-health/validate-state.last
 //     (an ISO timestamp), even before the no-state-file early exit (lines 26-28).
 //   - No state file -> process.exit(0) BEFORE any WARNING / breadcrumb / audit
-//     work (line 30). So: no WARNING on stderr, no .aidlc-recovery.md.
+//     work (line 30). So: no WARNING on stderr, no .aidlc-engine/recovery.md.
 //   - State file present -> validates `## Stage Progress` + `## Current Status`
 //     (lines 36-37); missing sections print `WARNING: aidlc-state.md missing
 //     sections: <names>` on stderr (line 40) and drive the breadcrumb's
 //     `State file: INVALID — missing sections: ...` line (lines 43-45, 53).
-//   - Always (when state exists) writes aidlc-docs/.aidlc-recovery.md carrying
+//   - Always (when state exists) writes aidlc-docs/.aidlc-engine/recovery.md carrying
 //     `**Current stage**: <getField "Current Stage">` and
 //     `**State file**: valid (all required sections present)` | `INVALID — ...`
 //     (lines 47-55).
@@ -44,7 +44,7 @@
 //   - .sh Test 2  no state -> heartbeat written anyway                -> Test 2:
 //       heartbeat exists (same observable) + STRONGER: its contents are an ISO
 //       timestamp (hook line 28 writes isoTimestamp()).
-//   - .sh Test 3  no state -> no .aidlc-recovery.md breadcrumb        -> Test 3:
+//   - .sh Test 3  no state -> no .aidlc-engine/recovery.md breadcrumb        -> Test 3:
 //       breadcrumb absent (same observable).
 //   - .sh Test 4  valid mid-ideation fixture -> no WARNING            -> Test 4:
 //       res.stderr has no /WARNING/i (same observable).
@@ -55,7 +55,7 @@
 //   - .sh Test 6  state missing `## Current Status` -> WARNING names it -> Test 6:
 //       res.stderr contains "Current Status" (same observable) + STRONGER: the
 //       full canonical diagnostic line.
-//   - .sh Test 7  valid fixture -> writes .aidlc-recovery.md          -> Test 7:
+//   - .sh Test 7  valid fixture -> writes .aidlc-engine/recovery.md          -> Test 7:
 //       breadcrumb exists (same observable).
 //   - .sh Test 8  breadcrumb contains stage + "valid" status (2 grep) -> Test 8a/8b:
 //       breadcrumb contains "feasibility" AND "valid" (same observables) +
@@ -141,14 +141,14 @@ function proj(): string {
 // trail is a DIR of per-clone shards (read via the glob below).
 const statePath = (p: string): string => join(seededRecordDir(p), "aidlc-state.md");
 const recoveryPath = (p: string): string =>
-  join(seededRecordDir(p), ".aidlc-recovery.md");
+  join(seededRecordDir(p), ".aidlc-engine/recovery.md");
 // With NO state file the active-intent cursor does not resolve (a record without
 // aidlc-state.md is not honoured), so docsRoot() falls back to the bare SPACE
 // record root — the heartbeat/breadcrumb land there, not under the record.
 const heartbeatPathNoState = (p: string): string =>
-  join(intentsDirOf(p), ".aidlc-hooks-health", "validate-state.last");
+  join(intentsDirOf(p), ".aidlc-engine/hooks-health", "validate-state.last");
 const recoveryPathNoState = (p: string): string =>
-  join(intentsDirOf(p), ".aidlc-recovery.md");
+  join(intentsDirOf(p), ".aidlc-engine/recovery.md");
 
 // The shard the spawned hook resolves, computed from a clone-id we pin on disk
 // (mirrors auditShardName()'s `<host>-<clone>.md` shape). Used only by test 13,
@@ -326,7 +326,7 @@ describe("t08 aidlc-validate-state hook (migrated from t08-hook-validate-state.s
     );
   });
 
-  // --- Test 7: valid fixture -> writes .aidlc-recovery.md ---
+  // --- Test 7: valid fixture -> writes .aidlc-engine/recovery.md ---
   test("7: valid fixture -> writes recovery breadcrumb", () => {
     const p = proj();
     seedStateFile(p, "state-mid-ideation.md");

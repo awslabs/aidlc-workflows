@@ -16,7 +16,7 @@
 //      must match AND `aidlc-runtime\.ts` must NOT appear (the explicit
 //      recursion-guard reject fires FIRST, defeating composites).
 //   3. Audit-existence guard before the heartbeat write.
-//   4. Heartbeat at aidlc-docs/.aidlc-hooks-health/runtime-compile.last (only
+//   4. Heartbeat at aidlc-docs/.aidlc-engine/hooks-health/runtime-compile.last (only
 //      written once the command filter passes).
 //   5. Tail-read the LAST 3 audit blocks (split on /\n---\n/); if any carries
 //      `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|
@@ -32,7 +32,8 @@
 // with the tool modules and their dependencies (aidlc-runtime.ts, aidlc-lib.ts,
 // aidlc-settings.ts, aidlc-install-paths.ts, aidlc-distribution.ts,
 // aidlc-channel.ts, aidlc-version.ts,
-// aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-audit.ts),
+// aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-guard-operation.ts,
+// aidlc-audit.ts),
 // data/stage-graph.json, and the hook copied in, plus a minimal
 // aidlc-state.md ("- **Scope**: feature"). The COPY (not symlink) matters:
 // the hook spawns `<projectDir>/.claude/tools/aidlc-runtime.ts`, whose
@@ -154,6 +155,10 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "aidlc-runtime-paths.ts"),
   );
   copyFileSync(
+    join(SRC_TOOLS, "aidlc-guard-operation.ts"),
+    join(proj, ".claude", "tools", "aidlc-guard-operation.ts"),
+  );
+  copyFileSync(
     join(SRC_TOOLS, "aidlc-audit.ts"),
     join(proj, ".claude", "tools", "aidlc-audit.ts"),
   );
@@ -185,7 +190,7 @@ const auditPath = (proj: string): string =>
 const graphPath = (proj: string): string =>
   join(seededRecordDir(proj), "runtime-graph.json");
 const heartbeatPath = (proj: string): string =>
-  join(seededRecordDir(proj), ".aidlc-hooks-health", "rebuild-stage-graph.last");
+  join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "rebuild-stage-graph.last");
 
 interface HookResult {
   status: number;

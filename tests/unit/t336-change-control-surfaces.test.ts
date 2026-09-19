@@ -1,13 +1,12 @@
 // covers: subcommand:aidlc-graph:validate-grid, subcommand:aidlc-orchestrate:next,
-// function:validateDirective, file:skills/aidlc/SKILL.md, file:agents/aidlc-composer-agent.md,
+// function:validateDirective, file:agents/aidlc-composer-agent.md,
 // file:knowledge/aidlc-composer-agent/composing.md
 //
 // t336 - the Change Control surfaces around the composer and the conductor:
 // the validator checks the ONE value a proposal carries (and refuses a relaxed
 // proposal under a memory strict, naming the file), the compose dispatch names
-// the gate row, the seven conductor skills carry the same plain-chat
-// recognition rule and change_notices rule, the composer's persona and
-// knowledge describe the value, and `change_notices` is a legal universal
+// the gate row, the composer's persona and knowledge describe the value,
+// and `change_notices` is a legal universal
 // directive field.
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -27,7 +26,6 @@ import {
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
 const ORCHESTRATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
-const HARNESSES = ["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"];
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -125,7 +123,7 @@ describe("t336 (1) validate-grid checks the proposal's Change Control value", ()
   });
 });
 
-describe("t336 (2) the compose dispatch and the seven conductor skills", () => {
+describe("t336 (2) the compose dispatch and composer guidance", () => {
   test("the front compose dispatch names the Change Control gate row and the creation flag", () => {
     const proj = project();
     const result = spawnSync(
@@ -141,33 +139,6 @@ describe("t336 (2) the compose dispatch and the seven conductor skills", () => {
     expect(parsed.message).toContain("ONE changeControl value (strict|relaxed");
     expect(parsed.message).toContain('"Change Control: <changeControl> - <changeControlRationale>"');
     expect(parsed.message).toContain("--change-control <value>");
-  });
-
-  test("every authored skill carries the same chat recognition rule and change_notices rule", () => {
-    const rules = HARNESSES.map((harness) => {
-      const src = readFileSync(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
-      const chat = src.match(/^\*\*Change Control requests arrive in plain chat too\.\*\*.*$/m)?.[0];
-      const notices = src.match(/^\*\*Change Control notices \(the `change_notices` field\)\.\*\*.*$/m)?.[0];
-      const composer = src.match(/^Render that proposal to the human as THREE blocks.*$/m)?.[0];
-      expect(chat, harness).toBeDefined();
-      expect(notices, harness).toBeDefined();
-      expect(composer, harness).toContain(
-        'render it as its own row of the proposal ("Change Control: relaxed - a spike moves fast; a changed input is recorded and announced, not re-approved")',
-      );
-      expect(chat).toContain("When unsure whether a message is that request, ask, never guess");
-      expect(chat).toContain("change-control <strict|relaxed>");
-      expect(src).toMatch(/--test-strategy, (--review, )?--change-control, --version,/);
-      return {
-        harness,
-        // The harness directory is the one permitted difference in the chat rule.
-        chat: (chat ?? "").replace(/`bun [^ ]+\/tools\/aidlc-utility\.ts change-control/, "`bun <dir>/tools/aidlc-utility.ts change-control"),
-        notices: notices ?? "",
-      };
-    });
-    for (const rule of rules.slice(1)) {
-      expect(rule.chat, rule.harness).toBe(rules[0].chat);
-      expect(rule.notices, rule.harness).toBe(rules[0].notices);
-    }
   });
 
   test("the composer persona and knowledge describe the value and its defaults", () => {

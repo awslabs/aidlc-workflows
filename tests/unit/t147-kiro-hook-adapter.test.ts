@@ -1004,9 +1004,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("5f: defensive read and mutation shapes reach the scoped guard adapters", () => {
     const dir = scratchProject(true);
     try {
-      const healthDir = join(seededRecordDir(dir), ".aidlc-hooks-health");
+      const healthDir = join(seededRecordDir(dir), ".aidlc-engine/hooks-health");
+      mkdirSync(dirname(join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
       writeFileSync(
-        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        join(seededRecordDir(dir), ".aidlc-engine/reviewer-dispatch.json"),
         JSON.stringify({
           reviewer: "aidlc-architecture-reviewer-agent",
           stage: "nfr-design",
@@ -1145,7 +1146,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("7: write-like adapter inputs reach audit and sensors while delete stays out", () => {
     const dir = scratchProject(true);
     try {
-      const healthDir = join(seededRecordDir(dir), ".aidlc-hooks-health");
+      const healthDir = join(seededRecordDir(dir), ".aidlc-engine/hooks-health");
       const auditHeartbeat = join(healthDir, "write-audit-log.last");
       const sensorHeartbeat = join(healthDir, "run-sensors.last");
       for (const tool_name of ADAPTER_TOOL_NAMES.writes) {

@@ -118,6 +118,7 @@ import {
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -202,6 +203,21 @@ function isKiroShellTool(toolName: string): boolean {
   return toolName === "execute_bash" || toolName === "execute_pwsh" || toolName === "shell";
 }
 
+// Kiro IDE's delegation surface: `invoke_sub_agent` (generic dispatch) and
+// `subagent_<agent>` (named dispatch). `subagent_response` is excluded because it is
+// the completion shell, not a dispatch — the same exclusion the SUBAGENT_COMPLETED
+// matcher makes, for the same reason.
+//
+// A delegation call carries `name` + `prompt` and no file path, so the opaque-mutation
+// test below reads it as unattributable and refuses it. It is not: the target agent IS
+// the attribution, and the forward further down translates the call into a synthetic
+// `Task` payload for the core guard, which consults approval state properly. Naming the
+// shape here is what lets control reach that forward (#1175).
+function isKiroDelegationTool(toolName: string): boolean {
+  return toolName === "invoke_sub_agent" ||
+    (toolName.startsWith("subagent_") && toolName !== "subagent_response");
+}
+
 function upsertTestingContract(plan: string, rendered: string): string {
   const section = /(^|\n)## Testing Contract[^\n]*\n[\s\S]*?(?=\n## |\s*$)/m;
   if (section.test(plan)) {
@@ -216,10 +232,11 @@ function legacyToolCommand(
   tool: "aidlc-log.ts" | "aidlc-orchestrate.ts",
   args: string[],
 ): string[] {
-  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  return executable
-    ? [executable, "engine", tool.replace(/^aidlc-|\.ts$/g, ""), ...args]
-    : [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args];
+  return aidlcEngineCommand(
+    tool === "aidlc-log.ts" ? "log" : "orchestrate",
+    args,
+    join(HOOKS_DIR, "..", "tools", tool),
+  );
 }
 
 function runLegacyPlanTool(
@@ -1025,10 +1042,10 @@ if (target === "terminal-command-guard") {
 // shards. Fail-open (try/catch, exit 0) so a mint failure never blocks the
 // human's turn.
 //
-// The seam ALSO touches the .aidlc-human-turn marker (markHumanTurn), which is
+// The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
 // what makes the Stop hook's conversational carve-out work on this harness. The
 // IDE delivers no `transcript_path`, so the carve-out cannot read the turn
-// history; it compares this marker's mtime against .aidlc-engine-touch instead.
+// history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
 // Both writes ride this one seam so the ledger and the marker can never
 // disagree about when a human spoke. See the marker family in aidlc-lib.ts.
 // --- block: the preToolUse human-presence floor ---
@@ -1342,10 +1359,15 @@ function buildForward(): Forward {
           },
         };
       }
+      // Delegation is attributable and must NOT be treated as opaque: falling into the
+      // block below either refuses it outright or returns null (no mediation at all),
+      // and both are wrong. Excluding it here lets control reach the delegation forward,
+      // which hands a synthetic `Task` to the core guard so approval state decides.
       const opaqueMutation =
         toolName === "" ||
         (
           mutationCapableTool(toolName) &&
+          !isKiroDelegationTool(toolName) &&
           (
             Object.keys(toolArgs).length === 0 ||
             (
@@ -1911,7 +1933,7 @@ function buildForward(): Forward {
       //
       // So the core hook still runs and its side effects are what matter here:
       // the `continue-workflow.drops` carve-out record and the no-progress
-      // counter under `.aidlc-stop-hook/`. Its `{"decision":"block"}` stdout is
+      // counter under `.aidlc-engine/stop-hook/`. Its `{"decision":"block"}` stdout is
       // produced and then discarded by the host. Forwarding-loop enforcement on
       // the IDE therefore rests on the conductor's own Stop protocol, NOT on
       // this hook. (An earlier revision of this comment claimed the block
@@ -1926,7 +1948,7 @@ function buildForward(): Forward {
       // AUTONOMOUS_BLOCK_CAP=8), not the fixed 8 a still earlier revision promised.
       //
       // The absent transcript no longer leaves the conversational carve-out inert:
-      // the core hook falls back to the `.aidlc-human-turn` / `.aidlc-engine-touch`
+      // the core hook falls back to the `.aidlc-engine/human-turn` / `.aidlc-engine/engine-touch`
       // mtime comparison, and the `record-human-turn` target above writes the
       // former. On this harness that changes which record
       // `continue-workflow.drops` gets and whether the counter advances — not

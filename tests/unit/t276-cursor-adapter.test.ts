@@ -238,7 +238,8 @@ function activateReviewer(project: string): { record: string; dispatch: string }
   seedStateFile(project, "state-construction.md");
   const record = seededRecordDir(project);
   clearLedger(project);
-  const dispatch = join(record, ".aidlc-reviewer-dispatch.json");
+  const dispatch = join(record, ".aidlc-engine/reviewer-dispatch.json");
+  mkdirSync(dirname(dispatch), { recursive: true });
   writeFileSync(
     dispatch,
     JSON.stringify({
@@ -456,8 +457,9 @@ describe("t276 cursor adapter payload conversion", () => {
     // 12a step-1: the conductor's dispatch record scopes the reviewer to
     // unit-a; unit-b is a sibling.
     mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -521,7 +523,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(JSON.parse(whileDispatched.stdout).permission).toBe("deny");
 
-    rmSync(join(record, ".aidlc-reviewer-dispatch.json"));
+    rmSync(join(record, ".aidlc-engine/reviewer-dispatch.json"));
     const afterDispatch = runAdapter(
       proj,
       "guards",
@@ -654,8 +656,9 @@ describe("t276 cursor adapter payload conversion", () => {
     const record = seededRecordDir(proj);
     clearLedger(proj);
     mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -861,8 +864,9 @@ describe("t276 cursor adapter payload conversion", () => {
     const record = seededRecordDir(proj);
     clearLedger(proj);
     mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -981,8 +985,9 @@ describe("t276 cursor adapter payload conversion", () => {
     clearLedger(proj);
     const record = seededRecordDir(proj);
     mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -1088,8 +1093,9 @@ describe("t276 cursor adapter payload conversion", () => {
     clearLedger(proj);
     const unitB = join(record, "construction", "unit-b");
     mkdirSync(unitB, { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -1173,7 +1179,8 @@ describe("t276 cursor adapter payload conversion", () => {
     seedStateFile(proj, "state-construction.md");
     const record = seededRecordDir(proj);
     clearLedger(proj);
-    const dispatch = join(record, ".aidlc-reviewer-dispatch.json");
+    const dispatch = join(record, ".aidlc-engine/reviewer-dispatch.json");
+    mkdirSync(dirname(dispatch), { recursive: true });
     writeFileSync(
       dispatch,
       JSON.stringify({
@@ -1228,7 +1235,8 @@ if (import.meta.main) {
     const record = seededRecordDir(proj);
     clearLedger(proj);
     mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
-    const dispatch = join(record, ".aidlc-reviewer-dispatch.json");
+    const dispatch = join(record, ".aidlc-engine/reviewer-dispatch.json");
+    mkdirSync(dirname(dispatch), { recursive: true });
     writeFileSync(
       dispatch,
       JSON.stringify({
@@ -1287,7 +1295,7 @@ if (import.meta.main) {
 
     const quotedWrapperRemoval =
       `command rm -f ${JSON.stringify(dispatch.slice(0, -1))}''n`;
-    expect(quotedWrapperRemoval).not.toContain(".aidlc-reviewer-dispatch.json");
+    expect(quotedWrapperRemoval).not.toContain(".aidlc-engine/reviewer-dispatch.json");
     const wrapped = runAdapter(
       proj,
       "guards",
@@ -1379,7 +1387,7 @@ if (import.meta.main) {
     ];
     for (const command of dynamicRemovals) {
       expect(command).not.toContain(".aidlc-cursor-subagents");
-      expect(command).not.toContain(".aidlc-reviewer-dispatch.json");
+      expect(command).not.toContain(".aidlc-engine/reviewer-dispatch.json");
       const expansion = runAdapter(
         proj,
         "guards",
@@ -1454,8 +1462,9 @@ if (import.meta.main) {
     const record = seededRecordDir(proj);
     clearLedger(proj);
     mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -1602,8 +1611,9 @@ if (import.meta.main) {
     const record = seededRecordDir(proj);
     clearLedger(proj);
     mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -1648,7 +1658,8 @@ if (import.meta.main) {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     const record = seededRecordDir(proj);
-    const dispatch = join(record, ".aidlc-reviewer-dispatch.json");
+    const dispatch = join(record, ".aidlc-engine/reviewer-dispatch.json");
+    mkdirSync(dirname(dispatch), { recursive: true });
     writeFileSync(
       dispatch,
       JSON.stringify({
@@ -1726,7 +1737,7 @@ if (import.meta.main) {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
     const escapedDispatch = dispatch.replace("dispatch", "dispatc\\h");
-    expect(escapedDispatch).not.toContain(".aidlc-reviewer-dispatch.json");
+    expect(escapedDispatch).not.toContain(".aidlc-engine/reviewer-dispatch.json");
 
     const expanded = spawnSync("sh", ["-c", `printf '%s' ${escapedDispatch}`], {
       encoding: "utf-8",
@@ -1829,7 +1840,7 @@ if (import.meta.main) {
       "git config --global alias.pwn '!echo harmless | sh'",
     ];
     for (const command of commands) {
-      expect(command).not.toContain(".aidlc-reviewer-dispatch.json");
+      expect(command).not.toContain(".aidlc-engine/reviewer-dispatch.json");
       const evaluation = runAdapter(
         proj,
         "guards",
@@ -2923,7 +2934,7 @@ if (import.meta.main) {
     const protectedAlias = join(proj, "protected-review-alias");
     symlinkSync(record, protectedAlias, process.platform === "win32" ? "junction" : "dir");
     const aliasedRemoval =
-      `shred -u ${join(protectedAlias, ".aidlc-reviewer-dispatch.jso")}*`;
+      `shred -u ${join(protectedAlias, ".aidlc-engine/reviewer-dispatch.jso")}*`;
     const removal = runAdapter(
       proj,
       "guards",
@@ -2986,7 +2997,7 @@ if (import.meta.main) {
     const protectedTargets = [
       `${windowsGitBashPath(dispatch.slice(0, -1))}*`,
       `\\\\?\\${dispatch.slice(0, -1)}*`,
-      join(dirname(dispatch), ".AIDLC-REVIEWER-DISPATCH.JSON. "),
+      join(dirname(dispatch), "REVIEWER-DISPATCH.JSON. "),
       `${join(shortDir, basename(dispatch).slice(0, -1))}*`,
       `${shortFile.slice(0, -1)}*`,
       join(
@@ -3085,7 +3096,8 @@ if (import.meta.main) {
     expect(existsSync(project)).toBe(true);
     seedStateFile(project, "state-construction.md");
     const record = seededRecordDir(project);
-    const dispatch = join(record, ".aidlc-reviewer-dispatch.json");
+    const dispatch = join(record, ".aidlc-engine/reviewer-dispatch.json");
+    mkdirSync(dirname(dispatch), { recursive: true });
     writeFileSync(
       dispatch,
       JSON.stringify({

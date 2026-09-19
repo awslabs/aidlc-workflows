@@ -309,6 +309,79 @@ describe("t281 upstream and target verification", () => {
     expect(out.result.pass).toBe(false);
     expect(out.result.gaps).toContain("US1.2");
   });
+
+  // When a scope skips user-stories the source ids fall back from US to FR
+  // (stage prose: "otherwise enumerate every FR"), and the story map rows carry
+  // FR ids. The assignment parse has to follow the same fallback, or every FR
+  // is reported as a phantom gap even though each row maps it to a unit.
+  // NFR rows are optional, but must join when present.
+  test("units-generation joins FR rows when user-stories is skipped", () => {
+    const proj = project();
+    write(proj, "inception/requirements-analysis/requirements.md", [
+      "# Requirements",
+      "",
+      "## Functional",
+      "- FR1 Login",
+      "- FR2 Recovery",
+      "",
+      "## Non-functional",
+      "- NFR1 Latency",
+    ].join("\n"));
+    seedUnits(proj);
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Requirement | Unit ID | Directory |",
+      "|---|---|---|",
+      "| FR1 | U1 | u1-auth |",
+      "| FR2 | U2 | u2-profile |",
+      "| NFR1 | U2 | u2-profile |",
+    ].join("\n"));
+    const file = trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "U1" },
+        { id: "FR2", status: "OK", target: "u2-profile" },
+      ],
+    });
+    let out = run(proj, "units-generation", file);
+    expect(out.result.pass).toBe(true);
+    expect(out.result.gaps).toEqual([]);
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+
+    trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["FR1", "FR2", "NFR1"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "U1" },
+        { id: "FR2", status: "OK", target: "u2-profile" },
+        { id: "NFR1", status: "OK", target: "U2" },
+      ],
+    });
+    out = run(proj, "units-generation", file);
+    expect(out.result.invalid_targets).toEqual([]);
+    expect(out.result.pass).toBe(true);
+
+    // Rows that map FR2 and NFR1 to the wrong unit are still broken joins.
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Requirement | Unit ID | Directory |",
+      "|---|---|---|",
+      "| FR1 | U1 | u1-auth |",
+      "| FR2 | U1 | u1-auth |",
+      "| NFR1 | U1 | u1-auth |",
+    ].join("\n"));
+    out = run(proj, "units-generation", file);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.invalid_targets).toContain(
+      'FR2: target "u2-profile" is not mapped in unit-of-work-story-map.md',
+    );
+    expect(out.result.invalid_targets).toContain(
+      'NFR1: target "U2" is not mapped in unit-of-work-story-map.md',
+    );
+  });
 });
 
 describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
@@ -399,6 +472,78 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     const out = run(proj, "code-generation", file);
     expect(out.result.pass).toBe(false);
     expect(out.result.invalid_targets).toContain("AC1.1.2: target file does not exist: src/missing.ts");
+  });
+
+  // A zero-Unit directive (no Unit DAG: poc, bugfix, refactor, security-patch,
+  // express) writes code-generation artifacts under construction/code-generation/
+  // with no Unit segment. The sensor must resolve that stage-level location
+  // instead of refusing to derive a Unit from it.
+  test("code-generation resolves the zero-Unit stage-level location", () => {
+    const proj = project();
+    write(proj, "inception/requirements-analysis/requirements.md", [
+      "# Requirements",
+      "",
+      "## Functional",
+      "- FR1 Login",
+      "",
+      "## Non-functional",
+      "- NFR1 Security",
+    ].join("\n"));
+    write(proj, "construction/functional-design/rules.md", [
+      "# Rules",
+      "",
+      "- BR1.1 Validate credentials",
+    ].join("\n"));
+    const source = join(proj, "src", "auth.ts");
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "export const auth = true;\n");
+    const file = trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ["FR1", "NFR1", "BR1.1"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "src/auth.ts" },
+        { id: "NFR1", status: "OK", target: "src/auth.ts" },
+        { id: "BR1.1", status: "OK", target: "src/auth.ts" },
+      ],
+    });
+    let out = run(proj, "code-generation", file);
+    expect(out.result.pass).toBe(true);
+    expect(out.result.gaps).toEqual([]);
+
+    // The stage-level rules file is part of the upstream set: a file that
+    // omits BR1.1 is refused because the resolved upstream id is undeclared.
+    const partial = trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ["FR1", "NFR1"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "src/auth.ts" },
+        { id: "NFR1", status: "OK", target: "src/auth.ts" },
+      ],
+    });
+    out = run(proj, "code-generation", partial);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toContain("BR1.1");
+  });
+
+  test("code-generation rejects a stage-level location when a Unit DAG exists", () => {
+    const proj = project();
+    seedUserStories(proj);
+    seedUnits(proj);
+    const source = join(proj, "src", "auth.ts");
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "export const auth = true;\n");
+    const file = trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ["AC1.1.1", "AC1.1.2", "AC1.2.1"],
+      coverage: [
+        { id: "AC1.1.1", status: "OK", target: "src/auth.ts" },
+        { id: "AC1.1.2", status: "OK", target: "src/auth.ts" },
+        { id: "AC1.2.1", status: "OK", target: "src/auth.ts" },
+      ],
+    });
+    const out = run(proj, "code-generation", file);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain("cannot derive the construction unit");
   });
 
   test("missing file and missing output-path keep the CLI error contract", () => {

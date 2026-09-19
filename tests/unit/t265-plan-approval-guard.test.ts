@@ -1,4 +1,5 @@
 // covers: hook:aidlc-plan-approval-guard, audit:PLAN_APPROVAL_BLOCKED
+// covers: function:parseGuardRestartContinuationCommand
 //
 // t265 - code-generation's plan-before-generation ordering, enforced
 // deterministically (issue: the plan was generated AFTER the code, beside
@@ -27,7 +28,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { renderGuardOperation } from "../../core/tools/aidlc-guard-operation.ts";
 import {
   evaluatePlanApprovalDispatch,
   blockReason,
@@ -52,6 +54,8 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   acquireAuditLock,
+  GUARD_RECOVERY_ASK_TYPE,
+  readActiveDirectiveMarker,
   readAllAuditShards,
   releaseAuditLock,
   toPosix,
@@ -428,6 +432,7 @@ function scratchProject(): string {
     "aidlc-version.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
+    "aidlc-guard-operation.ts",
     "aidlc-audit.ts",
     "aidlc-log.ts",
     "aidlc-testing-posture.ts",
@@ -485,6 +490,60 @@ function seedActiveDirective(proj: string, stage: string, unit?: string): void {
     ...(unit ? { unit } : {}),
     state_sha256: stateDigest(state),
   });
+}
+
+function seedRestartRecoveryState(proj: string, current = "code-generation"): string {
+  // Reset admission resolves the real scope metadata as well as the compiled
+  // stage graph already copied by scratchProject.
+  cpSync(join(AIDLC_SRC, "scopes"), join(proj, ".claude", "scopes"), { recursive: true });
+  seedState(proj, { stage: current });
+  const path = join(proj, RECORD_REL, "aidlc-state.md");
+  const state = `${readFileSync(path, "utf-8")}
+## Stage Progress
+- [x] requirements-analysis — EXECUTE
+- [${current === "build-and-test" ? "x" : "R"}] code-generation — EXECUTE
+- [${current === "build-and-test" ? "-" : " "}] build-and-test — EXECUTE
+`;
+  writeFileSync(path, state);
+  return state;
+}
+
+function publishRestartRecovery(
+  proj: string,
+  target = "code-generation",
+  op: "redo-jump" | "restore-or-jump" = "redo-jump",
+): void {
+  const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+  writeActiveDirectiveMarker(proj, {
+    kind: "ask",
+    ask_type: GUARD_RECOVERY_ASK_TYPE,
+    stage: target,
+    state_sha256: stateDigest(state),
+    remedies: [{
+      op,
+      action: `Restart ${target}.`,
+      interaction: "command",
+      operation: { kind: "restart-stage", stage: target },
+    }, {
+      op: "request-changes",
+      action: "Ask what should change.",
+      interaction: "human-input",
+    }],
+  });
+}
+
+function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
+  const result = spawnSync(
+    BUN,
+    [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+    {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
 }
 
 function seedUnit(
@@ -920,6 +979,199 @@ describe("t265b hook lifecycle", () => {
       rmSync(proj, { recursive: true, force: true });
     }
   });
+
+  test("direct abort recovery keeps source/native admission parity without a selection marker or Plan Approval", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      // A direct log review refusal prints its ask without publishing a marker.
+      // Native admission must not require evidence that flow cannot record.
+      const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+      expect(readActiveDirectiveMarker(proj, state)).toBeNull();
+      const command = renderGuardOperation(
+        { kind: "abort-bolt", unit: "alpha-unit", slug: "alpha-attempt" },
+        { mode: "native" },
+      );
+      // The direct source entry is trusted by installed path; it need only be
+      // a real file here, since this test calls the actual hook, not the command.
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-bolt.ts"), "// fixture\n");
+      const source = renderGuardOperation(
+        { kind: "abort-bolt", unit: "alpha-unit", slug: "alpha-attempt" },
+        { mode: "source", harnessDir: ".claude" },
+      );
+      for (const exact of [command, command.replace(/^aidlc /, "aidlc.exe "), source]) {
+        const result = runHook(proj, {
+          ...BASH(exact), cwd: proj,
+        });
+        expect(result.code, `${exact}\n${result.stderr}`).toBe(0);
+      }
+      expect(readActiveDirectiveMarker(proj, state)).toBeNull();
+      for (const changed of [
+        `${command} --force`,
+        command.replace(" bolt abort ", " bolt merge "),
+        `${command}; printf code > src/inline.ts`,
+        `${command} > src/inline.ts`,
+        `PATH=. ${command}`,
+        "aidlc engine bolt abort --name alpha-unit --slug alpha-attempt --discard",
+      ]) {
+        expect(runHook(proj, BASH(changed)).code, changed).toBe(2);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, STAGE_DISPATCH(proj, "Implement the plan")).code).toBe(2);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("native redo requires the issued recovery's human selection and leaves generation closed", () => {
+    const proj = scratchProject();
+    try {
+      const state = seedRestartRecoveryState(proj);
+      const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      publishRestartRecovery(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj);
+      const selected = readActiveDirectiveMarker(proj, state);
+      expect(selected?.delivery).toBe("consumed");
+      expect(selected?.guard_recovery_response).toMatchObject({
+        selected_op: "redo-jump", status: "ready",
+      });
+      expect(selected?.guard_recovery_response?.feedback_sha256).toBeUndefined();
+
+      for (const exact of [command, command.replace(/^aidlc /, "aidlc.exe ")]) {
+        const result = runHook(proj, BASH(exact));
+        expect(result.code, `${exact}\n${result.stderr}`).toBe(0);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      expect(runHook(proj, BASH("printf code > src/inline.ts")).code).toBe(2);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+      expect(readActiveDirectiveMarker(proj, state)?.guard_recovery_response)
+        .toEqual(selected?.guard_recovery_response);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("selected native redo admits no different target, scope, direction, flags, commands or wrappers", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj);
+      publishRestartRecovery(proj);
+      recordRecoverySelection(proj);
+      const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
+      for (const changed of [
+        command.replace("code-generation", "requirements-analysis").replace("redo", "backward"),
+        command.replace("--scope poc", "--scope feature"),
+        command.replace("--direction redo", "--direction forward"),
+        command.replace("--direction redo", "--direction backward"),
+        `${command} --force`,
+        `${command} --scope feature`,
+        `${command} --project-dir other`,
+        `${command}; printf code > src/inline.ts`,
+        `${command}; true`,
+        `pwd && ${command}`,
+        `${command} > src/inline.ts`,
+        `${command} 2>&1`,
+        `${command} &`,
+        `env ${command}`,
+        `command ${command}`,
+        `sudo ${command}`,
+        `bash -c '${command}'`,
+        `(${command})`,
+        `PATH=. ${command}`,
+        `./${command}`,
+      ]) {
+        const result = runHook(proj, BASH(changed));
+        expect(result.code, `${changed}\n${result.stderr}`).toBe(2);
+      }
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("native backward recovery must match the actual current position", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj, "build-and-test");
+      publishRestartRecovery(proj, "code-generation", "restore-or-jump");
+      const command = "aidlc engine jump execute --target code-generation --direction backward --scope poc";
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj);
+      const result = runHook(proj, BASH(command));
+      expect(result.code, result.stderr).toBe(0);
+      for (const direction of ["redo", "forward"]) {
+        expect(runHook(proj, BASH(command.replace("backward", direction))).code).toBe(2);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("native reset requires current selection rather than an earlier state or another remedy", () => {
+    const proj = scratchProject();
+    try {
+      const state = seedRestartRecoveryState(proj);
+      const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
+      publishRestartRecovery(proj);
+      recordRecoverySelection(proj, "Request Changes");
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj, "Update the implementation plan.");
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+
+      publishRestartRecovery(proj);
+      recordRecoverySelection(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      recordRecoverySelection(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      recordRecoverySelection(proj, "Cancel that; keep the current attempt.");
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      writeFileSync(
+        join(proj, RECORD_REL, "aidlc-state.md"),
+        state.replace("**Scope**: poc", "**Scope**: feature"),
+      );
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      expect(runHook(proj, BASH(command.replace("--scope poc", "--scope feature"))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("native reset checks the effective plan and rejects a forward target even with a reset direction", () => {
+    const proj = scratchProject();
+    try {
+      const base = seedRestartRecoveryState(proj);
+      const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
+      for (const state of [
+        base.replace("code-generation — EXECUTE", "code-generation — SKIP"),
+        base.replace("- [R] code-generation — EXECUTE\n", ""),
+        `${base}- [R] code-generation — EXECUTE\n`,
+        base.replace("**Current Stage**: code-generation", "**Current Stage**: requirements-analysis"),
+        base.replace("**Current Stage**: code-generation", "**Current Stage**: missing-stage"),
+        base.replace("**Scope**: poc", "**Scope**: missing-scope"),
+      ]) {
+        writeFileSync(join(proj, RECORD_REL, "aidlc-state.md"), state);
+        publishRestartRecovery(proj);
+        recordRecoverySelection(proj);
+        const attempted = state.includes("**Scope**: missing-scope")
+          ? command.replace("--scope poc", "--scope missing-scope")
+          : command;
+        const result = runHook(proj, BASH(attempted));
+        expect(result.code, `${state}\n${result.stderr}`).toBe(2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   for (const published of [false, true]) {
     test(`the shipped Bun entry point permits planning ${published ? "with pending approval" : "before directive publication"}`, () => {
@@ -1365,6 +1617,168 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("a bare numeric reply reaches the offered-choice match instead of being parsed away", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(
+        codeGenerationRecordDir(proj, null),
+        "code-generation-questions.md",
+      );
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const runLog = (args: string[]) => {
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+        };
+        delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+      };
+      const identity = [
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        "plan-session",
+        "--stage-level",
+      ];
+      appendAuditEntry(
+        "SESSION_STARTED",
+        { Source: "startup", Session: "plan-session" },
+        proj,
+      );
+      expect(
+        runLog([
+          "decision",
+          ...identity,
+          "--decision",
+          "Approve this plan?",
+          "--options",
+          "Approve Plan,Request Changes",
+        ]).status,
+      ).toBe(0);
+
+      // The challenge does not require exact option labels, so "1" is an offered
+      // choice by offeredPlanApprovalChoice. The reply must survive extraction to
+      // get there: JSON-parsing it turned it into a number and reported no text.
+      const numeric = spawnSync(
+        BUN,
+        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        {
+          input: JSON.stringify({
+            hook_event_name: "UserPromptSubmit",
+            session_id: "plan-session",
+            prompt: "1",
+          }),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        },
+      );
+      expect(numeric.status).toBe(0);
+
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(
+          /\[Answer\]:\s*$/,
+          "[Answer]: Approve Plan",
+        ),
+      );
+      const approved = runLog(["answer", ...identity, "--details", "Approve Plan"]);
+      expect(
+        approved.status,
+        `${approved.stdout}\n${approved.stderr}\n${readAllAuditShards(proj)}`,
+      ).toBe(0);
+      expect(approved.stdout).toContain("PLAN_APPROVAL_RECORDED");
+
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a JSON-quoted reply still unwraps to the offered label", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(
+        codeGenerationRecordDir(proj, null),
+        "code-generation-questions.md",
+      );
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const runLog = (args: string[]) => {
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+        };
+        delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+      };
+      const identity = [
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        "plan-session",
+        "--stage-level",
+      ];
+      appendAuditEntry(
+        "SESSION_STARTED",
+        { Source: "startup", Session: "plan-session" },
+        proj,
+      );
+      expect(
+        runLog([
+          "decision",
+          ...identity,
+          "--decision",
+          "Approve this plan?",
+          "--options",
+          "Approve Plan,Request Changes",
+        ]).status,
+      ).toBe(0);
+
+      // The envelope shapes still hand over to the parse: a picker that delivers
+      // its selection as a JSON string must arrive as the label, not as the label
+      // wrapped in quotes, or it would match no offered choice.
+      const quoted = spawnSync(
+        BUN,
+        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        {
+          input: JSON.stringify({
+            hook_event_name: "UserPromptSubmit",
+            session_id: "plan-session",
+            prompt: JSON.stringify("Approve Plan"),
+          }),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        },
+      );
+      expect(quoted.status).toBe(0);
+
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(
+          /\[Answer\]:\s*$/,
+          "[Answer]: Approve Plan",
+        ),
+      );
+      const approved = runLog(["answer", ...identity, "--details", "Approve Plan"]);
+      expect(
+        approved.status,
+        `${approved.stdout}\n${approved.stderr}\n${readAllAuditShards(proj)}`,
+      ).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("Plan Approval rechecks the source floor after acquiring the audit lock", async () => {
     const proj = scratchProject();
     try {
@@ -1480,8 +1894,9 @@ describe("t265b hook lifecycle", () => {
       expect(runHook(proj, STAGE_DISPATCH(proj, "Implement")).code).toBe(2);
 
       const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+      mkdirSync(dirname(join(proj, RECORD_REL, ".aidlc-engine/active-directive.json")), { recursive: true });
       writeFileSync(
-        join(proj, RECORD_REL, ".aidlc-active-directive.json"),
+        join(proj, RECORD_REL, ".aidlc-engine/active-directive.json"),
         `${JSON.stringify({
           version: 1,
           stage: "code-generation",

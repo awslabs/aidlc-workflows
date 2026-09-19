@@ -34,7 +34,7 @@
 //   2. A NO-PROGRESS counter — consecutive blocks with no intervening workflow
 //      advance (the stable state digest and pending-directive fingerprint are both
 //      unchanged). It is persisted across the rapid-fire blocks in a transient
-//      file under aidlc-docs/.aidlc-stop-hook/. Under a no-progress ceiling
+//      file under <record>/.aidlc-engine/stop-hook/. Under a no-progress ceiling
 //      exposed as CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, once the count reaches the cap
 //      we LET GO (allow the stop). The default ceiling is run-mode aware: an
 //      unattended autonomous Construction run keeps the long ceiling (8, the
@@ -88,8 +88,8 @@
 //      the stop when the most recent genuine human prompt was answered with zero
 //      engine calls (isConversationalStop below). ONE predicate, TWO evidence
 //      sources: the harness TRANSCRIPT where the Stop payload delivers
-//      `transcript_path` (Claude, Codex), and the `.aidlc-human-turn` vs
-//      `.aidlc-engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
+//      `transcript_path` (Claude, Codex), and the `.aidlc-engine/human-turn` vs
+//      `.aidlc-engine/engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
 //      opencode — these expose no turn history to a hook at all, so the framework
 //      writes the two facts itself on the mint and engine seams). The marker path
 //      depends on the engine skipping its touch for this hook's OWN `next` probe
@@ -234,7 +234,7 @@ function blockStop(reason: string): number {
 // and the pending directive did not advance, so we increment the counter; when
 // it changes, the loop is healthy and we reset to 0.
 //
-// The file lives under the gitignored aidlc-docs/.aidlc-stop-hook/ alongside
+// The file lives under the gitignored <record>/.aidlc-engine/stop-hook/ alongside
 // the other transient framework state. It is keyed off the project dir, so it
 // is per-workflow and survives across the rapid-fire blocks within one stuck
 // turn (the blocks happen in the same project; each re-invocation re-reads it).
@@ -1043,8 +1043,8 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
 //   - MARKER mtimes (Kiro IDE, Kiro CLI, opencode): these harnesses deliver NO
 //     transcript and expose no turn history to a hook at all, so the same
 //     predicate is reconstructed from two files the framework already writes on
-//     the relevant seams — `.aidlc-human-turn` (the UserPromptSubmit mint) and
-//     `.aidlc-engine-touch` (every advancing aidlc-orchestrate invocation). A
+//     the relevant seams - `.aidlc-engine/human-turn` (the UserPromptSubmit mint) and
+//     `.aidlc-engine/engine-touch` (every advancing aidlc-orchestrate invocation). A
 //     human turn NEWER than the last engine advance is the marker spelling of
 //     "answered with zero engine calls".
 //
@@ -1121,7 +1121,7 @@ function runEngineNextDirective(
   //
   // STOP_HOOK_PROBE_ENV MARKS THIS SPAWN AS THE HOOK'S OWN PROBE, and that is
   // load-bearing for the conversational carve-out — not a debug nicety. The
-  // engine touches `.aidlc-engine-touch` on every advancing invocation, and the
+  // engine touches `.aidlc-engine/engine-touch` on every advancing invocation, and the
   // transcript-free carve-out below asks "is the last human turn newer than the
   // last engine touch?". This consultation runs on EVERY stop, so without the
   // marker it would refresh the engine mtime first and the answer would be `no`
@@ -1296,7 +1296,7 @@ try {
   /* malformed input remains fail-open */
 }
 
-// Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
+// Write a health heartbeat (mirrors the other hooks' .aidlc-engine/hooks-health beat).
 try {
   const healthDir = hooksHealthDir(projectDir);
   mkdirSync(healthDir, { recursive: true });
@@ -1614,8 +1614,8 @@ if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
 // answered the human's most recent prompt with NO workflow-engine engagement, so
 // the human was just chatting mid-workflow, allow the stop instead of nudging
 // them back into the loop. Two evidence sources for one predicate: the harness
-// transcript where it is delivered (Claude / Codex), and the `.aidlc-human-turn`
-// vs `.aidlc-engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
+// transcript where it is delivered (Claude / Codex), and the `.aidlc-engine/human-turn`
+// vs `.aidlc-engine/engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
 // opencode). Strictly gated and fail-closed (see isConversationalStop): no
 // evidence, no human prompt, ANY engine call in the responding turn, an
 // autonomous run, or any read error falls through to the cap-bounded block below,

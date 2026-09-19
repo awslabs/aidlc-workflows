@@ -76,7 +76,7 @@ import { resolveSensorScriptPath } from "../../dist/claude/.claude/tools/aidlc-s
 // P9: with no intent cursor seeded, the sensor dispatcher resolves the BARE
 // space record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/
 // intents/ for BOTH the per-clone audit SHARD (audit/<host>-<clone>.md) and the
-// detail tree (.aidlc-sensors/<stage>/...) — the flat aidlc-docs/ root is retired.
+// detail tree (.aidlc-engine/sensors/<stage>/...) - the flat aidlc-docs/ root is retired.
 // The SENSED output files still live wherever the test writes them (e.g.
 // aidlc-docs/test.md), so the dispatcher's project-relative `Output path` field
 // is unchanged. Audit reads go through readAllAuditShards (the subprocess mints
@@ -484,7 +484,7 @@ function runPassedMdReal(
     firedId: auditField(f, "SENSOR_FIRED", "Fire id"),
     passedId: auditField(f, "SENSOR_PASSED", "Fire id"),
     path: auditField(f, "SENSOR_PASSED", "Output path"),
-    detailExists: existsSync(join(recordRoot(proj), ".aidlc-sensors")),
+    detailExists: existsSync(join(recordRoot(proj), ".aidlc-engine/sensors")),
     outname,
   };
 }
@@ -522,8 +522,8 @@ function runPassedTsReal(
     passedId: auditField(f, "SENSOR_PASSED", "Fire id"),
     path: auditField(f, "SENSOR_PASSED", "Output path"),
     note: auditField(f, "SENSOR_PASSED", "Note"),
-    cacheExists: existsSync(join(recordRoot(proj), ".aidlc-sensors")),
-    detailExists: existsSync(join(recordRoot(proj), ".aidlc-sensors", stage)),
+    cacheExists: existsSync(join(recordRoot(proj), ".aidlc-engine/sensors")),
+    detailExists: existsSync(join(recordRoot(proj), ".aidlc-engine/sensors", stage)),
     subdir,
   };
 }
@@ -677,7 +677,7 @@ function runFailedMdReal(
   expect(firedId).not.toBe("");
   expect(firedId).toBe(failedId);
   expect(findings).toBe(expectedFindings);
-  expect(detailPath).toBe(`${RP}/.aidlc-sensors/${stage}/${id}-${firedId}.md`);
+  expect(detailPath).toBe(`${RP}/.aidlc-engine/sensors/${stage}/${id}-${firedId}.md`);
   expect(existsSync(join(proj, detailPath))).toBe(true);
   expect(path).toBe(`aidlc-docs/${outname}`);
 }
@@ -709,7 +709,7 @@ function runFailedTsReal(
   expect(firedId).not.toBe("");
   expect(firedId).toBe(failedId);
   expect(findings).toBe(expectedFindings);
-  expect(detailPath).toBe(`${RP}/.aidlc-sensors/${stage}/${id}-${firedId}.md`);
+  expect(detailPath).toBe(`${RP}/.aidlc-engine/sensors/${stage}/${id}-${firedId}.md`);
   expect(existsSync(join(proj, detailPath))).toBe(true);
   expect(path).toBe(`${subdir}/sample.ts`);
 }
@@ -806,8 +806,8 @@ describe("t92 Group E: script-error fall-through", () => {
     // dispatcher's mkdirSync(detailDir, {recursive:true}) throws ENOTDIR.
     const proj = makeProj();
     writeFileSync(join(proj, "aidlc-docs", "test.md"), "stub\n", "utf-8");
-    mkdirSync(join(recordRoot(proj), ".aidlc-sensors"), { recursive: true });
-    writeFileSync(join(recordRoot(proj), ".aidlc-sensors", "intent-capture"), "block\n", "utf-8");
+    mkdirSync(join(recordRoot(proj), ".aidlc-engine/sensors"), { recursive: true });
+    writeFileSync(join(recordRoot(proj), ".aidlc-engine/sensors", "intent-capture"), "block\n", "utf-8");
     const sensors = makeForkSensors("required-sections", "bun .claude/tools/aidlc-sensor-stub-fail.ts");
     fire(["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")], {
       CLAUDE_PROJECT_DIR: proj,
@@ -982,7 +982,7 @@ function runDetailShape(id: string, stage: string, matches = ""): void {
     CLAUDE_PROJECT_DIR: proj,
     AIDLC_SENSORS_DIR: sensors,
   });
-  const detailDir = join(recordRoot(proj), ".aidlc-sensors", stage);
+  const detailDir = join(recordRoot(proj), ".aidlc-engine/sensors", stage);
   // Find the single <id>-*.md detail file.
   const firedId = auditField(proj, "SENSOR_FAILED", "Fire id");
   const detail = join(detailDir, `${id}-${firedId}.md`);
@@ -1029,7 +1029,7 @@ describe("t92 Group I: detail-file collision-free", () => {
         AIDLC_SENSORS_DIR: sensors,
       });
     }
-    const detailDir = join(recordRoot(proj), ".aidlc-sensors", "intent-capture");
+    const detailDir = join(recordRoot(proj), ".aidlc-engine/sensors", "intent-capture");
     // List required-sections-*.md files in the detail dir.
     const files: string[] = existsSync(detailDir)
       ? readdirSync(detailDir).filter((n) => /^required-sections-.*\.md$/.test(n))
@@ -1434,7 +1434,7 @@ describe("t92 Group P: type-check monorepo cache placement", () => {
       ).toBe(false);
     }
 
-    const cacheDir = join(recordRoot(proj), ".aidlc-sensors");
+    const cacheDir = join(recordRoot(proj), ".aidlc-engine/sensors");
     expect(existsSync(cacheDir), "project record cache exists").toBe(true);
     const buildinfoFiles = readdirSync(cacheDir)
       .filter((name) => /^\.tsbuildinfo-[0-9a-f]{64}$/.test(name))

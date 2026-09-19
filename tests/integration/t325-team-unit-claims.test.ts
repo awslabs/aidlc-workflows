@@ -285,8 +285,8 @@ function localRuntimeSnapshot(projectDir: string): Record<string, string | null>
     join(projectDir, "aidlc", ".aidlc-unit-participant"),
     unitReleasePendingPath(projectDir, "alpha"),
     unitReleasePendingPath(projectDir, "beta"),
-    join(seededRecordDir(projectDir), ".aidlc-active-directive.json"),
-    join(seededRecordDir(projectDir), ".aidlc-steering-token-key"),
+    join(seededRecordDir(projectDir), ".aidlc-engine/active-directive.json"),
+    join(seededRecordDir(projectDir), ".aidlc-engine/steering-token-key"),
   ];
   return Object.fromEntries(
     paths.map((path) => [path, exists(path) ? readFileSync(path, "utf-8") : null]),

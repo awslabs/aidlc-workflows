@@ -6,8 +6,7 @@ harness.
 
 **Settled-swarm re-entry.** `swarm_settled: true` is a gate-only directive
 emitted after every Unit body and reviewer receipt has converged. Do not run the
-stage body, dispatch builders, or dispatch a reviewer again. Run only the
-stage-level learnings ritual and approval gate, then report the human's result.
+stage body, dispatch builders, or dispatch a reviewer again. Run the stage-level learnings ritual only when `directive.protocol_modules` lists `learnings`, then the approval gate, and report the human's result. With learnings off, go directly to the single approval gate.
 This rule is self-contained so a fresh session cannot repeat reviews after
 losing the earlier swarm conversation.
 
@@ -28,6 +27,17 @@ same merge, which performs cleanup-only reconciliation without reapplying
 source or duplicating authority. If the marker exists but
 `SWARM_SOURCE_MERGED` does not, do not retry the merge: preserve the worktree
 and follow the named stage-restart or explicit human-approved bypass remedy.
+
+**Recoverable abort/discard.** In every harness's recovery path below, aborting
+and discarding the old Bolt means park/discard: snapshot tracked and non-ignored
+untracked files and park reviewed source refs before removing the live checkout
+and branch. The conductor must obtain the human's selection and execute the
+returned recovery command unchanged. Recover parked work with
+`{{INVOKE}} engine worktree restore --slug <slug>`; it creates an isolated
+`.aidlc/restored/bolt-<slug>-<stamp>` checkout on
+`restore/bolt-<slug>-<stamp>`, never overwriting a new live Bolt. Restored artifacts
+and receipts are not current-attempt evidence; retry still requires a fresh
+`prepare` and review boundary as described below.
 
 ### Claude Code
 

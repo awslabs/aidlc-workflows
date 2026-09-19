@@ -17,7 +17,19 @@
 // unknown-key rejection per kind. The shape guard reuses isPlainObject from
 // aidlc-lib.ts.
 
-import { GUARD_REMEDY_OPS, type GuardRemedy, isPlainObject } from "./aidlc-lib.ts";
+import {
+  CEREMONY_KEYS,
+  CEREMONY_SETTINGS,
+  type CeremonyPolicy,
+  GUARD_REMEDY_OPS,
+  type GuardRemedy,
+  isPlainObject,
+} from "./aidlc-lib.ts";
+import {
+  guardOperationMatchesCommand,
+  guardOperationMatchesRemedy,
+  isGuardRecoveryOperation,
+} from "./aidlc-guard-operation.ts";
 
 // --- Public types ---
 
@@ -64,6 +76,7 @@ export const VALID_PROTOCOL_MODULES = [
   "ensemble",
   "construction",
   "swarm",
+  "learnings",
 ] as const;
 export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
 
@@ -194,6 +207,8 @@ export interface RunStageDirective {
   rules_in_context: string[];
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
+  // Engine-resolved ceremony switches apply equally to inline and dispatched work.
+  ceremony: CeremonyPolicy;
   stage_file: string;
   // Kiro IDE 0.12 has no chat/session id. The engine emits this one-time
   // capability only to the `next`/`continue` caller that owns legacy planning;
@@ -296,6 +311,7 @@ export interface DispatchSubagentDirective {
   rules_in_context: string[];
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
+  ceremony: CeremonyPolicy;
   stage_file: string;
   worker: string;
   conductor_persona?: string;
@@ -571,6 +587,7 @@ const RUN_STAGE_FIELDS = [
   "produces",
   "rules_in_context",
   "sensors_applicable",
+  "ceremony",
   "stage_file",
   "reviewer",
   "review_artifact",
@@ -994,6 +1011,7 @@ function checkRunStageShared(
   checkStringArray(o, "produces", kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
   checkStringArray(o, "sensors_applicable", kind, errors);
+  checkCeremony(o, kind, errors);
   checkString(o, "stage_file", kind, errors);
   checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
@@ -1152,6 +1170,8 @@ function checkGuardRemedies(
   const allowed = new Set([
     "op",
     "action",
+    "operation",
+    "interaction",
     "command",
     "requiresHuman",
     "executableNow",
@@ -1176,6 +1196,33 @@ function checkGuardRemedies(
     if (typeof remedy.action !== "string" || remedy.action.length === 0) {
       errors.push(`${kind}: remedies[${index}].action must be non-empty string`);
     }
+    if (
+      "interaction" in remedy &&
+      !["command", "human-input", "external-work"].includes(String(remedy.interaction))
+    ) {
+      errors.push(`${kind}: remedies[${index}].interaction must be command, human-input, or external-work`);
+    }
+    if ("operation" in remedy) {
+      if (
+        !isGuardRecoveryOperation(remedy.operation) ||
+        !guardOperationMatchesRemedy(
+          remedy.operation,
+          String(remedy.op),
+          String(o.stage),
+          typeof o.unit === "string" ? o.unit : undefined,
+        )
+      ) {
+        errors.push(`${kind}: remedies[${index}].operation must match the offered remedy and target`);
+      }
+      if (typeof remedy.command !== "string" || remedy.interaction !== "command") {
+        errors.push(`${kind}: remedies[${index}].operation requires a command interaction and command`);
+      }
+      if (remedy.requiresHuman !== true) {
+        errors.push(`${kind}: remedies[${index}].recovery reset requires human selection`);
+      }
+    } else if (remedy.interaction === "command") {
+      errors.push(`${kind}: remedies[${index}].command interaction requires an operation`);
+    }
     if ("command" in remedy) {
       if (typeof remedy.command !== "string" || remedy.command.trim().length === 0) {
         errors.push(`${kind}: remedies[${index}].command must be non-empty string`);
@@ -1185,12 +1232,21 @@ function checkGuardRemedies(
             `${kind}: remedies[${index}].command must not contain unresolved placeholders`,
           );
         }
-        if (!/^bun \.[A-Za-z0-9_.-]+\/tools\/aidlc-[A-Za-z0-9-]+\.ts(?:\s|$)/.test(remedy.command)) {
+        if (
+          !isGuardRecoveryOperation(remedy.operation) ||
+          !guardOperationMatchesCommand(remedy.operation, remedy.command)
+        ) {
           errors.push(
-            `${kind}: remedies[${index}].command must be a bun-qualified packaged AIDLC tool invocation`,
+            `${kind}: remedies[${index}].command must exactly render its structured recovery operation for a source or native install`,
           );
         }
       }
+    }
+    if (
+      (remedy.interaction === "human-input" && remedy.requiresHuman !== true) ||
+      (remedy.interaction === "external-work" && remedy.requiresHuman !== false)
+    ) {
+      errors.push(`${kind}: remedies[${index}].interaction must agree with requiresHuman`);
     }
     if (typeof remedy.requiresHuman !== "boolean") {
       errors.push(`${kind}: remedies[${index}].requiresHuman must be boolean`);
@@ -1406,6 +1462,39 @@ function checkOptionalStringArray(
 ): void {
   if (!(field in o)) return;
   checkStringArray(o, field, kind, errors);
+}
+
+function checkCeremony(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("ceremony" in o)) {
+    errors.push(`${kind}: missing required field: ceremony`);
+    return;
+  }
+  const value = o.ceremony;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: ceremony must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!(CEREMONY_KEYS as readonly string[]).includes(key)) {
+      errors.push(`${kind}: ceremony unknown key: ${key}`);
+    }
+  }
+  for (const key of CEREMONY_KEYS) {
+    if (!(key in value)) {
+      errors.push(`${kind}: missing required field: ceremony.${key}`);
+    } else if (
+      typeof value[key] !== "string" ||
+      !(CEREMONY_SETTINGS as readonly string[]).includes(value[key])
+    ) {
+      errors.push(
+        `${kind}: ceremony.${key} must be one of ${CEREMONY_SETTINGS.join(" | ")}, got ${describe(value[key])}`,
+      );
+    }
+  }
 }
 
 function checkOptionalProtocolModules(
@@ -1806,6 +1895,7 @@ if (import.meta.main) {
         "Could not read optional knowledge file example.md; fix its permissions.",
       ],
       sensors_applicable: ["required-sections", "upstream-coverage"],
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
       stage_file: ".claude/aidlc-common/stages/inception/domain-design.md",
       next_stage: "Units Generation",
     },
@@ -1823,6 +1913,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["linter", "type-check"],
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
       worker: "code-generation",
     },
@@ -1867,6 +1958,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/{unit-name}/functional-design/functional-spec.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["required-sections"],
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/functional-design.md",
       conductor_persona: "# The Conductor's Craft …",
     },

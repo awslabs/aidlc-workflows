@@ -513,7 +513,7 @@ function gateOpenedCountFor(sandbox: string, slug: string): number {
 const CONTINUATION_LABELS = ["alpha", "bravo", "charlie", "delta", "echo"];
 
 function completedContinuationLabels(sandbox: string): string[] {
-  const path = join(seededRecordDir(sandbox), ".aidlc-hooks-health", "hook-debug.log");
+  const path = join(seededRecordDir(sandbox), ".aidlc-engine/hooks-health", "hook-debug.log");
   if (!existsSync(path)) return [];
   const completed = new Set<string>();
   for (const line of readFileSync(path, "utf-8").split("\n")) {
