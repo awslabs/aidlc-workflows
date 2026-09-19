@@ -53,7 +53,6 @@ const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
-const KIRO_IDE_DIST = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
@@ -200,16 +199,14 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       expect(hostManifest.name, harness.name).toBe(`aidlc-${PLUGIN}`);
       expect(existsSync(join(built, "hooks", "compose.ts"))).toBe(true);
       const inventory = fileInventory(built);
-      if (harness.name === "kiro") {
-        expect(harness.capabilities.plugin.wiringFile).toBeNull();
-        expect(inventory.some((file) => file.endsWith(".kiro.hook"))).toBe(false);
-        expect(existsSync(join(built, "hooks", "hooks.json"))).toBe(false);
-        expect(existsSync(join(built, ".kiro", "hooks"))).toBe(false);
-      } else {
+      // Every shipped row emits wiring now: the Kiro row used to emit none,
+      // because it registered hooks inside its agent-v1 configs and a plugin had
+      // no agent to write into.
+      {
         const wiringFile = harness.capabilities.plugin.wiringFile;
         expect(wiringFile, `${harness.name}: wiring file`).not.toBeNull();
         const wiring = readFileSync(join(built, wiringFile!), "utf-8");
-        if (harness.name === "kiro-ide") {
+        if (harness.name === "kiro") {
           expect(inventory.some((file) => file.endsWith(".kiro.hook"))).toBe(false);
           const registration = JSON.parse(wiring) as {
             version?: string;
@@ -220,14 +217,18 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
             }>;
           };
           expect(registration.version).toBe("v1");
-          expect(registration.hooks).toHaveLength(1);
+          // Both lifecycle triggers: SessionStart is IDE-only and AgentSpawn is
+          // CLI-only, and one row serves both surfaces.
+          expect(registration.hooks).toHaveLength(2);
+          expect(registration.hooks?.map((entry) => entry.trigger).sort()).toEqual(
+            ["AgentSpawn", "SessionStart"],
+          );
           const hook = registration.hooks?.[0];
           expect(hook?.name).toBe(`aidlc-${PLUGIN}-compose`);
-          expect(hook?.trigger).toBe("SessionStart");
           expect(hook?.action?.type).toBe("command");
           const command = hook?.action?.command ?? "";
           expect(command).toBe(
-            "bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide",
+            "bun ./hooks/aidlc-plugin-compose.ts .kiro kiro",
           );
           expect(command).not.toContain("sh -c");
           expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
@@ -281,10 +282,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
   });
 
-  test("Kiro IDE executes its generated compose wiring after a folder-drop", () => {
-    const built = pluginBuilds.get("kiro-ide")!;
-    const kiroProject = join(tmp, "kiro-ide-folder-drop");
-    cpSync(join(REPO_ROOT, "dist", "kiro-ide"), kiroProject, { recursive: true });
+  test("Kiro executes its generated compose wiring after a folder-drop", () => {
+    const built = pluginBuilds.get("kiro")!;
+    const kiroProject = join(tmp, "kiro-folder-drop");
+    cpSync(join(REPO_ROOT, "dist", "kiro"), kiroProject, { recursive: true });
     cpSync(built, kiroProject, { recursive: true });
 
     const registration = JSON.parse(
@@ -1951,22 +1952,20 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   function composeSynthetic(
     name: string,
     files: Record<string, string>,
-    harness: ".claude" | ".kiro" | ".codex" | ".aidlc" | "kiro-ide" = ".claude",
+    harness: ".claude" | ".kiro" | ".codex" | ".aidlc" | "kiro" = ".claude",
     mutateInstall?: (proj: string, harnessDir: string) => void,
   ): { drops: string; proj: string } {
     const proj = mkdtempSync(join(tmp, `syn-${name}-`));
-    const harnessLeaf = harness === "kiro-ide" ? ".kiro" : harness;
+    const harnessLeaf = harness === "kiro" ? ".kiro" : harness;
     if (harnessLeaf === ".aidlc") {
       // OpenCode's dist is a whole-project shape (.aidlc + .opencode +
       // opencode.json), unlike the single-dir harness dists.
       cpSync(OPENCODE_DIST, proj, { recursive: true });
     } else {
       const baseDist =
-        harness === "kiro-ide"
-          ? KIRO_IDE_DIST
-          : harnessLeaf === ".kiro"
-            ? KIRO_DIST
-            : harnessLeaf === ".codex"
+        harnessLeaf === ".kiro"
+          ? KIRO_DIST
+          : harnessLeaf === ".codex"
               ? CODEX_DIST
               : CLAUDE_DIST;
       cpSync(baseDist, join(proj, harnessLeaf), { recursive: true });
@@ -1981,7 +1980,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         CLAUDE_PLUGIN_ROOT: root,
         CLAUDE_PROJECT_DIR: proj,
         AIDLC_HARNESS_DIR: harnessLeaf,
-        ...(harness === "kiro-ide" ? { AIDLC_HARNESS_NAME: "kiro-ide" } : {}),
+        ...(harness === "kiro" ? { AIDLC_HARNESS_NAME: "kiro" } : {}),
       },
     });
     expect(r.status).toBe(0); // compose is fail-open — never breaks the session
@@ -2064,10 +2063,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ), "utf-8")).not.toMatch(/^disallowedTools:/m);
     expect(drops).toContain('stage "syn-kiro-ensemble"');
     expect(drops).toContain('agent "syn-kiro-collaborator-agent"');
-    expect(drops).toContain("agent-v1 JSON");
+    expect(drops).toContain("a Kiro Markdown agent");
     expect(drops).toContain("toolsSettings.subagent.trustedAgents");
     expect(drops).toContain("change the stage's mode to inline");
-    // The lead is a CORE persona: its shipped agent-v1 JSON is its dispatch
+    // The lead is a CORE persona: its shipped Markdown agent is its dispatch
     // surface, so it must never be named as undispatchable.
     expect(drops).not.toContain('agent "aidlc-product-agent"');
 
@@ -2230,7 +2229,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(duplicate.drops).not.toContain("collides with an existing file");
   });
 
-  test("Kiro rejects an agent JSON that is missing conductor trust registration", () => {
+  test("Kiro rejects a delegate missing conductor trust registration", () => {
     const stage = [
       "---",
       "slug: syn-kiro-untrusted",
@@ -2257,13 +2256,16 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       { "stages/inception/syn-kiro-untrusted.md": stage },
       ".kiro",
       (_proj, harnessDir) => {
-        const conductorPath = join(harnessDir, "agents", "aidlc.json");
-        const conductor = JSON.parse(readFileSync(conductorPath, "utf-8"));
-        conductor.toolsSettings.subagent.trustedAgents =
-          conductor.toolsSettings.subagent.trustedAgents.filter(
-            (agent: string) => agent !== "aidlc-design-agent",
-          );
-        writeFileSync(conductorPath, `${JSON.stringify(conductor, null, 2)}\n`);
+        // Delegation trust lives in the conductor's Markdown frontmatter now;
+        // `permissions` has no subagent capability to hold it.
+        const conductorPath = join(harnessDir, "agents", "aidlc.md");
+        const conductor = readFileSync(conductorPath, "utf-8");
+        const stripped = conductor
+          .split(/\r?\n/)
+          .filter((line) => line.trim() !== '- "aidlc-design-agent"')
+          .join("\n");
+        expect(stripped, "the trust entry to strip must exist").not.toBe(conductor);
+        writeFileSync(conductorPath, stripped);
       },
     );
 
@@ -2279,79 +2281,30 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       proj,
       ".kiro",
       "agents",
-      "aidlc-design-agent.json",
+      "aidlc-design-agent.md",
     ))).toBe(true);
     expect(drops).toContain('agent "aidlc-design-agent"');
     expect(drops).toContain("toolsSettings.subagent.trustedAgents");
-    expect(drops).not.toContain("aidlc-design-agent.json (agent-v1 JSON)");
+    expect(drops).not.toContain("aidlc-design-agent.md (a Kiro Markdown agent)");
   });
 
-  test("Kiro IDE accepts only installed Markdown agents with complete dispatch grants", () => {
+  test("Kiro accepts an installed Markdown agent once the conductor trusts it", () => {
+    // This case used to vary the frontmatter GRANT shape - a complete `tools:`
+    // plus a well-formed `permissions.rules` was accepted, anything less was
+    // rejected. That is not what governs dispatch: those fields are optional on a
+    // Markdown agent, the 14 shipped personas carry neither, and a delegate
+    // authored with no permissions block was measured running its shell command
+    // with no prompt. What governs is (a) the file exists and (b) the conductor
+    // trusts the name, so those are the two axes here.
     const variants = [
-      {
-        label: "valid",
-        grant: [
-          'tools: ["read", "write", "shell"]',
-          "permissions:",
-          "  rules:",
-          "    - capability: shell",
-          "      effect: allow",
-          "      match:",
-          '        - "bun .kiro/tools/aidlc-*"',
-        ],
-        accepted: true,
-      },
-      {
-        label: "reordered-rule",
-        grant: [
-          'tools: ["read", "write", "shell"]',
-          "permissions:",
-          "  rules:",
-          "    - effect: allow",
-          "      match:",
-          '        - "bun .kiro/tools/aidlc-*"',
-          "      capability: shell",
-        ],
-        accepted: true,
-      },
-      {
-        label: "empty-tools",
-        grant: [
-          "tools: []",
-          "permissions:",
-          "  rules:",
-          "    - capability: shell",
-          "      effect: allow",
-          "      match:",
-          '        - "bun .kiro/tools/aidlc-*"',
-        ],
-        accepted: false,
-      },
-      {
-        label: "empty-permissions",
-        grant: ['tools: ["read"]', "permissions: {}"],
-        accepted: false,
-      },
-      {
-        label: "empty-rules",
-        grant: ['tools: ["read"]', "permissions:", "  rules: []"],
-        accepted: false,
-      },
-      {
-        label: "malformed-rule",
-        grant: [
-          'tools: ["read"]',
-          "permissions:",
-          "  rules:",
-          "    - capability: shell",
-          "      effect: allow",
-        ],
-        accepted: false,
-      },
+      { label: "trusted", installAgent: true, trust: true, accepted: true },
+      { label: "bare-frontmatter", installAgent: true, trust: true, accepted: true, bare: true },
+      { label: "untrusted", installAgent: true, trust: false, accepted: false },
+      { label: "absent", installAgent: false, trust: true, accepted: false },
     ] as const;
 
     for (const variant of variants) {
-      const plugin = `syn-kiro-ide-${variant.label}`;
+      const plugin = `syn-kiro-${variant.label}`;
       const agent = `${plugin}-agent`;
       const stage = [
         "---",
@@ -2376,22 +2329,34 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       const composed = composeSynthetic(
         plugin,
         { [`stages/inception/${plugin}-stage.md`]: stage },
-        "kiro-ide",
+        ".kiro",
         (_proj, harnessDir) => {
-          writeFileSync(
-            join(harnessDir, "agents", `${agent}.md`),
-            [
-              "---",
-              `name: ${agent}`,
-              `display_name: ${variant.label}`,
-              "examples: []",
-              ...variant.grant,
-              "---",
-              "",
-              `# ${variant.label}`,
-              "",
-            ].join("\n"),
-          );
+          if (variant.installAgent) {
+            // display_name is required by the graph compiler for any agent file;
+            // what varies here is the OPTIONAL capability frontmatter.
+            const frontmatter = "bare" in variant && variant.bare
+              ? [`name: ${agent}`, `display_name: ${variant.label}`, "examples: []"]
+              : [
+                `name: ${agent}`,
+                `display_name: ${variant.label}`,
+                "examples: []",
+                'tools: ["read", "write", "shell"]',
+              ];
+            writeFileSync(
+              join(harnessDir, "agents", `${agent}.md`),
+              ["---", ...frontmatter, "---", "", `# ${variant.label}`, ""].join("\n"),
+            );
+          }
+          if (variant.trust) {
+            const conductorPath = join(harnessDir, "agents", "aidlc.md");
+            const conductor = readFileSync(conductorPath, "utf-8");
+            const anchor = "    trustedAgents:\n";
+            expect(conductor, "conductor carries a trustedAgents block").toContain(anchor);
+            writeFileSync(
+              conductorPath,
+              conductor.replace(anchor, `${anchor}      - "${agent}"\n`),
+            );
+          }
         },
       );
       const stagePath = join(
@@ -2407,9 +2372,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         expect(composed.drops, variant.label).not.toContain(`agent "${agent}"`);
       } else {
         expect(composed.drops, variant.label).toContain(`agent "${agent}"`);
-        expect(composed.drops, variant.label).toContain("permissions.rules");
         expect(composed.drops, variant.label).toContain("mode to inline");
-        expect(composed.drops, variant.label).not.toContain("trustedAgents");
+        if (variant.installAgent) {
+          // Installed but untrusted: the remediation is the trust list, not a file.
+          expect(composed.drops, variant.label).toContain("trustedAgents");
+        } else {
+          expect(composed.drops, variant.label).toContain(`${agent}.md`);
+        }
       }
     }
   });
@@ -2836,7 +2805,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ))).toBe(true);
     expect(drops).toContain('stage "syn-kiro-subagent-stage"');
     expect(drops).toContain('mode "subagent"');
-    expect(drops).toContain("agent-v1 JSON");
+    expect(drops).toContain("a Kiro Markdown agent");
     expect(drops).toContain("toolsSettings.subagent.trustedAgents");
   });
 

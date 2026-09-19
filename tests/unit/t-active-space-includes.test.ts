@@ -140,47 +140,51 @@ describe("t-active-space-includes: Claude @-stub", () => {
   });
 });
 
-describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
+describe("t-active-space-includes: Kiro agents/* resources glob", () => {
   beforeEach(() => {
     process.env.AIDLC_HARNESS_DIR = ".kiro";
   });
+
+  // The shipped agents are Markdown; the .json arm stays covered because an
+  // older install's committed agent JSON survives an upgrade in place.
+  const SEEDED = [
+    "aidlc.md",
+    "aidlc-developer-agent.md",
+    "aidlc-architect-agent.md",
+    "aidlc-product-lead-agent.md",
+    "aidlc-architecture-reviewer-agent.md",
+  ];
 
   function setup(): string {
     const root = freshRoot();
     seedSpaces(root);
     const agentsDst = join(root, ".kiro", "agents");
     mkdirSync(agentsDst, { recursive: true });
-    // Copy ALL committed kiro agent JSONs (each carries a memory glob).
-    for (const name of ["aidlc.json", "aidlc-developer-agent.json", "aidlc-architect-agent.json", "aidlc-product-lead-agent.json", "aidlc-architecture-reviewer-agent.json"]) {
+    for (const name of SEEDED) {
       cpSync(distSurface("kiro", ".kiro", "agents", name), join(agentsDst, name));
     }
     return root;
   }
 
-  test("re-points the resources glob in every agent JSON; preserves hooks/prompt + other resources", () => {
+  test("re-points the resources glob in every agent; preserves the body + other resources", () => {
     const root = setup();
+    const before = readFileSync(join(root, ".kiro", "agents", "aidlc.md"), "utf-8");
     const written = portablePaths(repointHarnessIncludes(root, "teamB"));
-    // All 5 agent JSONs carry a memory glob → all 5 rewritten.
-    expect(written.length).toBe(5);
-    expect(written.every((p) => p.startsWith(".kiro/agents/") && p.endsWith(".json"))).toBe(true);
-    const conductor = JSON.parse(readFileSync(join(root, ".kiro", "agents", "aidlc.json"), "utf-8"));
-    expect(conductor.resources).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
-    expect(conductor.resources.some((r: string) => r.includes("/default/memory/"))).toBe(false);
+    // Every seeded agent carries a memory glob → every one rewritten.
+    expect(written.length).toBe(SEEDED.length);
+    expect(written.every((p) => p.startsWith(".kiro/agents/") && p.endsWith(".md"))).toBe(true);
+    const conductor = readFileSync(join(root, ".kiro", "agents", "aidlc.md"), "utf-8");
+    expect(conductor).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
+    expect(conductor).not.toContain("/default/memory/");
     // Other resource entries preserved.
-    expect(conductor.resources).toContain("file://AGENTS.md");
-    expect(conductor.resources.some((r: string) => r.startsWith("skill://"))).toBe(true);
-    // Engine wiring preserved (the load-bearing reason these files stay committed).
-    expect(conductor.hooks?.agentSpawn).toBeDefined();
-    expect(conductor.hooks?.postToolUse).toBeDefined();
-    expect(typeof conductor.prompt).toBe("string");
-    expect(conductor.prompt.length).toBeGreaterThan(50);
-    // No model pin to preserve — and the rewrite must not resurrect one
-    // (#601: Kiro agents inherit the session model).
-    expect("model" in conductor).toBe(false);
-    expect(conductor.tools).toBeDefined();
+    expect(conductor).toContain("file://AGENTS.md");
+    expect(conductor).toContain("skill://");
+    // The prompt body is the file itself, so the rewrite must leave everything
+    // outside the pointer byte-identical.
+    expect(conductor.replace("spaces/teamB/memory", "spaces/default/memory")).toBe(before);
   });
 
-  test("re-pointing to default (already shipped) is a NO-OP across all agent JSONs", () => {
+  test("re-pointing to default (already shipped) is a NO-OP across all agents", () => {
     const root = setup();
     const written = repointHarnessIncludes(root, "default");
     expect(written).toEqual([]);
@@ -210,7 +214,7 @@ describe("t-active-space-includes: Kiro IDE steering follows the active space", 
     const steeringPath = join(steeringDir, "aidlc-active-memory.md");
     cpSync(
       distSurface(
-        "kiro-ide",
+        "kiro",
         ".kiro",
         "steering",
         "aidlc-active-memory.md",
@@ -239,7 +243,7 @@ describe("t-active-space-includes: Kiro IDE steering follows the active space", 
     const steeringPath = join(steeringDir, "aidlc-active-memory.md");
     cpSync(
       distSurface(
-        "kiro-ide",
+        "kiro",
         ".kiro",
         "steering",
         "aidlc-active-memory.md",

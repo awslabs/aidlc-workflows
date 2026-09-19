@@ -48,7 +48,6 @@ const HARNESS_RUNTIMES = [
   { name: "copilot", dir: ".aidlc" },
   { name: "cursor", dir: ".cursor" },
   { name: "kiro", dir: ".kiro" },
-  { name: "kiro-ide", dir: ".kiro" },
   { name: "opencode", dir: ".aidlc" },
 ] as const;
 type Harness = (typeof HARNESS_RUNTIMES)[number];
@@ -152,7 +151,7 @@ beforeAll(() => {
   denialLog = join(scratch, "bun-denied.log");
   console.log(`Native remedy execution trace: ${trace}`);
 
-  // As in t-kiro-ide-native-recovery, compile the shipped dispatcher once.
+  // As in t-kiro-native-recovery, compile the shipped dispatcher once.
   // Packaging is the outer runner's responsibility; this file never regenerates
   // shared dist trees or uses a possibly stale binary from another test.
   const build = spawnSync(BUN, [

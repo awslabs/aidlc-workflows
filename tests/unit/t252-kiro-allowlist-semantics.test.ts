@@ -47,20 +47,20 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HARNESSES = ["kiro"] as const;
 
 const PERSONAS = [
-  "aidlc-architect-agent.json",
-  "aidlc-architecture-reviewer-agent.json",
-  "aidlc-aws-platform-agent.json",
-  "aidlc-compliance-agent.json",
-  "aidlc-composer-agent.json",
-  "aidlc-delivery-agent.json",
-  "aidlc-design-agent.json",
-  "aidlc-developer-agent.json",
-  "aidlc-devsecops-agent.json",
-  "aidlc-operations-agent.json",
-  "aidlc-pipeline-deploy-agent.json",
-  "aidlc-product-agent.json",
-  "aidlc-product-lead-agent.json",
-  "aidlc-quality-agent.json",
+  "aidlc-architect-agent.md",
+  "aidlc-architecture-reviewer-agent.md",
+  "aidlc-aws-platform-agent.md",
+  "aidlc-compliance-agent.md",
+  "aidlc-composer-agent.md",
+  "aidlc-delivery-agent.md",
+  "aidlc-design-agent.md",
+  "aidlc-developer-agent.md",
+  "aidlc-devsecops-agent.md",
+  "aidlc-operations-agent.md",
+  "aidlc-pipeline-deploy-agent.md",
+  "aidlc-product-agent.md",
+  "aidlc-product-lead-agent.md",
+  "aidlc-quality-agent.md",
 ];
 
 interface ExecuteBash {
@@ -68,9 +68,17 @@ interface ExecuteBash {
   deniedCommands?: string[];
 }
 
-function execBash(harness: string, agentFile: string): ExecuteBash {
+// Agent configs ship as Markdown; Kiro treats frontmatter and a JSON config as
+// equivalent, so the grant model lives in the frontmatter block.
+export function agentFrontmatter(harness: string, agentFile: string): Record<string, unknown> {
   const p = join(REPO_ROOT, "dist", harness, ".kiro", "agents", agentFile);
-  const doc = JSON.parse(readFileSync(p, "utf-8")) as {
+  const block = /^---\n([\s\S]*?)\n---\n/.exec(readFileSync(p, "utf-8"));
+  if (block === null) throw new Error(`${harness}/${agentFile}: no frontmatter`);
+  return Bun.YAML.parse(block[1]) as Record<string, unknown>;
+}
+
+function execBash(harness: string, agentFile: string): ExecuteBash {
+  const doc = agentFrontmatter(harness, agentFile) as {
     toolsSettings?: Record<string, ExecuteBash>;
   };
   const eb = doc.toolsSettings?.execute_bash;
@@ -294,7 +302,10 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
   });
 
   for (const harness of HARNESSES) {
-    const agents = ["aidlc.json", ...PERSONAS];
+    // The behavioural vectors below run against the personas, which are the
+    // configs that carry an `execute_bash` allowlist. The conductor states the
+    // same policy as capability globs and is asserted separately at the end.
+    const agents = PERSONAS;
 
     test(`${harness}: every shipped pattern is a VALID regex (no inert entries)`, () => {
       for (const agent of agents) {
@@ -347,21 +358,52 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
 
     test(`${harness}: no blanket shell trust via allowedTools`, () => {
       for (const agent of agents) {
-        const doc = JSON.parse(
-          readFileSync(
-            join(REPO_ROOT, "dist", harness, ".kiro", "agents", agent),
-            "utf-8",
-          ),
-        ) as { allowedTools?: string[] };
+        const doc = agentFrontmatter(harness, agent) as {
+          allowedTools?: string[];
+        };
         expect(doc.allowedTools ?? []).not.toContain("execute_bash");
       }
     });
 
-    test(`${harness}: personas carry the conductor's shell policy`, () => {
-      const conductor = execBash(harness, "aidlc.json");
+    test(`${harness}: every persona carries the same shell policy`, () => {
+      const first = execBash(harness, PERSONAS[0]);
       for (const agent of PERSONAS) {
-        expect(execBash(harness, agent), agent).toEqual(conductor);
+        expect(execBash(harness, agent), agent).toEqual(first);
       }
+    });
+
+    // The conductor states the same policy in the capability vocabulary
+    // (`permissions.rules`) rather than the tool-settings one, because that is
+    // the form its file shipped with before the two Kiro rows merged; both are
+    // honoured (agent configs are backward-compatible — Custom agents, "Previous
+    // versions"). Asserted as the DECLARED policy: re-implementing Kiro's glob
+    // matcher here would be a guess, and this suite exists because an
+    // unverifiable pattern is how a dead grant ships.
+    test(`${harness}: the conductor grants the same two commands and denies the same two`, () => {
+      const doc = agentFrontmatter(harness, "aidlc.md") as {
+        permissions?: {
+          rules?: Array<{
+            capability?: string;
+            effect?: string;
+            match?: string[];
+          }>;
+        };
+      };
+      const shell = (doc.permissions?.rules ?? []).filter(
+        (rule) => rule.capability === "shell",
+      );
+      const matches = (effect: string) =>
+        shell.filter((rule) => rule.effect === effect).flatMap((rule) => rule.match ?? []);
+      // The dispatcher entry is not redundant with the tool glob: shell matches
+      // are globs, so `aidlc-*` requires a literal `-` and never covers
+      // `aidlc.ts`, which the orchestrator skill drives its loop with. Scoped to
+      // `engine` so the trusted boundary is the one the native channel draws.
+      expect(matches("allow")).toEqual([
+        "bun .kiro/tools/aidlc-*",
+        "bun .kiro/tools/aidlc.ts engine *",
+        "date -u *",
+      ]);
+      expect(matches("deny")).toEqual(["rm -rf *", "git push *"]);
     });
   }
 });

@@ -5,15 +5,15 @@
 // harness reads it via its OWN native include, evaluated by the CLI *before*
 // AIDLC's engine runs:
 //   • Claude — an @-import stub at <harness>/rules/aidlc.md naming each method file.
-//   • Kiro CLI — a `resources` glob in each agents/*.json.
-//   • Kiro IDE — an always-included steering file with live file references.
+//   • Kiro — a `resources` glob in each agent config, plus an always-included
+//     steering file with live file references.
 //   • Codex — the AIDLC_RULES_DIR env var in config.toml.
 //   • opencode — the `instructions` glob in the project-root opencode.json.
 //   • Cursor — standing + phase read pointers in <harness>/rules/*.mdc.
 //
 // These surfaces stay COMMITTED (each carries load-bearing engine wiring beyond
-// the include — Kiro's agent JSON holds the conductor prompt + hook block,
-// Codex's config.toml holds model/provider/sandbox config — so they cannot be
+// the include — Kiro's agent config holds the conductor prompt and its capability
+// grants, Codex's config.toml holds model/provider/sandbox config — so they cannot be
 // gitignored+generated without a fresh-clone chicken-and-egg). They ship pointed
 // at the `default` space. `repointHarnessIncludes(projectDir, space)` does a
 // SURGICAL in-place rewrite of ONLY the `aidlc/spaces/<X>/memory` pointer
@@ -95,6 +95,19 @@ function repointKiroAgentResources(raw: string, space: string): string | null {
   json.resources = rewritten;
   // Two-space indent + trailing newline matches the authored agent JSON shape.
   return `${JSON.stringify(json, null, 2)}\n`;
+}
+
+/** Rewrite the memory glob in a Kiro agent's Markdown frontmatter. Anchored on
+ *  BOTH the `file://` scheme and the `/memory/**\/*.md` tail, because the persona
+ *  body also mentions `aidlc/spaces/<active-space>/memory/{org,team,project}.md`
+ *  — a placeholder the agent resolves at read time, which a looser pattern would
+ *  overwrite with a concrete space name. Returns null when nothing changed. */
+function repointKiroAgentFrontmatter(raw: string, space: string): string | null {
+  const next = raw.replace(
+    /file:\/\/aidlc\/spaces\/[^/]+\/memory\/\*\*\/\*\.md/g,
+    `file://${spaceMemoryRel(space)}/**/*.md`,
+  );
+  return next === raw ? null : next;
 }
 
 /** Rewrite live memory references in Kiro IDE's always-included steering file. */
@@ -233,15 +246,25 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
   }
 
   if (harness === ".kiro") {
-    // Kiro CLI compatibility surface: rewrite each agents/*.json memory glob.
+    // Agent binding surface: rewrite the memory glob in each agent's `resources`.
+    // The row ships Markdown configs; a .json is still handled because an older
+    // install's committed agent JSON survives an upgrade in place.
     const agentsDir = join(harnessRoot, "agents");
     if (existsSync(agentsDir)) {
       for (const name of readdirSync(agentsDir).sort()) {
-        if (!name.endsWith(".json")) continue;
+        const json = name.endsWith(".json");
+        if (!json && !name.endsWith(".md")) continue;
         const p = join(agentsDir, name);
         const raw = readSafe(p);
         if (raw === null) continue;
-        repointFile(p, join(harness, "agents", name), raw, sp, repointKiroAgentResources, written);
+        repointFile(
+          p,
+          join(harness, "agents", name),
+          raw,
+          sp,
+          json ? repointKiroAgentResources : repointKiroAgentFrontmatter,
+          written,
+        );
       }
     }
     // Kiro IDE binding surface: workspace steering is inherited by delegated

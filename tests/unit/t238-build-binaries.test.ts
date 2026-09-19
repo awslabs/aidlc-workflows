@@ -212,7 +212,6 @@ describe("t238 build-binaries release builder", () => {
       "codex",
       "cursor",
       "kiro",
-      "kiro-ide",
       "copilot",
       "opencode",
     ]) {
@@ -258,7 +257,6 @@ describe("t238 build-binaries release builder", () => {
       "runtime-codex",
       "runtime-cursor",
       "runtime-kiro",
-      "runtime-kiro-ide",
       "runtime-copilot",
       "runtime-opencode",
       "harness-probe-kiro",

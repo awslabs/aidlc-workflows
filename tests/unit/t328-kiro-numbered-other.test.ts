@@ -1,4 +1,4 @@
-// covers: doc:harness/kiro/skills/aidlc/question-rendering.md(numbered-other), doc:harness/kiro-ide/skills/aidlc/question-rendering.md(numbered-other)
+// covers: doc:harness/kiro/skills/aidlc/question-rendering.md(numbered-other)
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -12,11 +12,9 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const ANNEXES = [
   "harness/kiro/skills/aidlc/question-rendering.md",
-  "harness/kiro-ide/skills/aidlc/question-rendering.md",
 ] as const;
 const KIRO_SKILLS = [
   "harness/kiro/skills/aidlc/SKILL.md",
-  "harness/kiro-ide/skills/aidlc/SKILL.md",
 ] as const;
 const CORE_PROTOCOL = readFileSync(
   join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"),
@@ -58,12 +56,9 @@ function numberedList(labels: string[]): KiroIdeNumberedListSnapshot {
 }
 
 describe("t328 Kiro numbered Other rendering contract", () => {
-  test("Kiro CLI and IDE annexes stay aligned", () => {
-    const normalized = ANNEXES.map((rel) =>
-      readAnnex(rel).replaceAll(/Kiro (?:CLI|IDE)/g, "Kiro HARNESS")
-    );
-    expect(normalized[0]).toBe(normalized[1]);
-  });
+  // The CLI/IDE annex-alignment test that used to open this file is gone with the
+  // row merge: there is one annex now, so alignment is structural rather than
+  // something to assert. Every case below already runs over ANNEXES.
 
   test("the interaction-mode example visibly renders Other as option 4", () => {
     for (const rel of ANNEXES) {

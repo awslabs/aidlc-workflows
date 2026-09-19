@@ -42,6 +42,28 @@ function markerRecord(path: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+// The unified Kiro row replaces the retired `kiro-ide` distribution: both render
+// the same `.kiro` directory, so an id a previous release persisted resolves to its
+// successor whenever it is READ - a project stamp, a machine default, a settings
+// key. One direction only, and a map rather than an equivalence set, because
+// writing the retired id back must stay impossible.
+//
+// It lives here because this module owns distribution identity AND is one of the
+// modules the lib loads at runtime. A first cut put it in aidlc-init.ts, where no
+// other consumer saw it; moving it to aidlc-model-policy.ts fixed that but added a
+// runtime import to the hook path, which every spawned-hook test caught.
+export const RETIRED_DISTRIBUTION_SUCCESSOR: Readonly<Record<string, string>> = {
+  "kiro-ide": "kiro",
+};
+
+export function currentDistribution(distribution: string): string {
+  return RETIRED_DISTRIBUTION_SUCCESSOR[distribution] ?? distribution;
+}
+
+export function distributionUpgradesTo(existing: string, next: string): boolean {
+  return existing === next || RETIRED_DISTRIBUTION_SUCCESSOR[existing] === next;
+}
+
 function legacyDistribution(harnessDir: string): string | null {
   if (!/^\.[a-z0-9][a-z0-9._-]*$/i.test(harnessDir)) return null;
   return harnessDir.slice(1);

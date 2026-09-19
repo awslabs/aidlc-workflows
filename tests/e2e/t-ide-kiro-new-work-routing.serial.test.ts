@@ -21,7 +21,7 @@ import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cleanupTuiProject,
-  KIRO_IDE_SRC,
+  KIRO_SRC,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import {
@@ -310,8 +310,8 @@ function skipReason(): string | null {
   if (!existsSync(KIRO_IDE_BIN)) {
     return `Kiro IDE binary not found at ${KIRO_IDE_BIN}`;
   }
-  if (!existsSync(KIRO_IDE_SRC)) {
-    return `distributable missing: ${KIRO_IDE_SRC}`;
+  if (!existsSync(KIRO_SRC)) {
+    return `distributable missing: ${KIRO_SRC}`;
   }
   return null;
 }
@@ -322,7 +322,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
     `engine ask remains authoritative and Other completes its next response route${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const project = setupTuiProject({
-        harness: "kiro-ide",
+        harness: "kiro",
         withState: "state-mid-ideation.md",
       });
       seedSecondIntent(project);

@@ -399,7 +399,7 @@ jobs:
           }
           $env:COPILOT_HOME = Join-Path $env:RUNNER_TEMP 'aidlc-copilot-home'
           [IO.Directory]::CreateDirectory($env:COPILOT_HOME) | Out-Null
-          $harnesses = @('claude', 'codex', 'copilot', 'cursor', 'kiro', 'kiro-ide', 'opencode')
+          $harnesses = @('claude', 'codex', 'copilot', 'cursor', 'kiro', 'opencode')
           foreach ($harness in $harnesses) {
             $project = Join-Path $env:RUNNER_TEMP "aidlc-$harness-project-$([Guid]::NewGuid().ToString('N'))"
             [IO.Directory]::CreateDirectory($project) | Out-Null
@@ -529,7 +529,7 @@ jobs:
           env PATH="/usr/bin:/bin" "$command" version
           export COPILOT_HOME="$RUNNER_TEMP/aidlc-copilot-home"
           mkdir -p "$COPILOT_HOME"
-          for harness in claude codex copilot cursor kiro kiro-ide opencode; do
+          for harness in claude codex copilot cursor kiro opencode; do
             project="$(mktemp -d "$RUNNER_TEMP/aidlc-$harness-project.XXXXXX")"
             if [ "$harness" = copilot ]; then
               printf '{"trustedFolders":["%s"]}\n' "$project" > "$COPILOT_HOME/config.json"

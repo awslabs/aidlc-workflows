@@ -3,9 +3,10 @@
 How Kiro IDE delivers context to a command hook, captured live on 0.12-main
 (probe `.kiro.hook` files that dumped stdin, argv, and the full environment),
 1.0.165 (probe v2 hook JSON files; upstream #543/#555), and 1.0.242
-(UserPromptSubmit and PreToolUse probes on Windows). This is the evidence base
-for the `harness/kiro-ide/` adapter; the CLI harness (`harness/kiro/`) uses a
-different, kiro-cli-shaped stdin mechanism.
+(UserPromptSubmit and PreToolUse probes on Windows). This is the IDE-surface evidence base
+for the one Kiro adapter (`harness/kiro/hooks/aidlc-kiro-adapter.ts`), which
+serves both surfaces: the CLI surface delivers the same payloads through a
+kiro-cli-shaped stdin mechanism, and the adapter normalises the two.
 
 The redacted native Windows before/after captures are retained in
 [`research/kiro-windows-output-encoding/`](research/kiro-windows-output-encoding/).
@@ -43,6 +44,35 @@ field therefore advances only the legacy turn clock; the terminal utility is
 recognized later from `toolArgs.command` on the matching preToolUse event. Raw
 `/aidlc ...` text remains accepted for newer Kiro generations that expose it
 directly, but is not the 0.12 compatibility claim.
+
+## Which spelling of `hook_event_name` each generation sends
+
+The split is by **engine generation, not by surface** — that is the part worth writing
+down, because "IDE versus CLI" is the wrong axis to reason about it on.
+
+Counted 2026-09-17 across every capture available on this machine:
+
+| Source | Spelling | Evidence |
+|---|---|---|
+| Kiro CLI, agent-v1 engine (2.6.1, 2.18.1) | **camelCase** — `preToolUse`, `postToolUse` | `tests/fixtures/kiro-hook-payloads/payloads.json`, whose `_provenance` records both captures and says "payload field names are verbatim" |
+| Kiro IDE 1.x, every build from 1.0.89 to 1.1.14 | **PascalCase** | the per-version capture archives in the `kiro-ide-1.x-test` controlled-experiment tree: 1.0.89 (41), 1.0.116 (26), 1.0.138 (31), 1.0.165 (108), 1.0.203 (61), 1.0.212 (73), 1.0.309 (275), 1.0.337 (111), 1.0.395 (124), 1.1.14 (73) — camelCase 0 in all ten, including the first minor transition |
+| Current unified row, both surfaces | **PascalCase** | two concurrent gated runs, one CLI and one IDE on the same engine build: CLI `PreToolUse` 140 / `PostToolUse` 139 / `UserPromptSubmit` 7 / `SessionStart` 3; IDE 129 / 127 / 6 / 2; camelCase 0 in both |
+
+Kiro IDE 0.12 does not appear in this table at all: that generation carries no
+`hook_event_name` field, because its contract is the `USER_PROMPT` env var with
+camelCase *field* names (`toolName`, `toolArgs`) — see the channel table above. The
+camelCase `preToolUse` spelling of this field belongs to the CLI's agent-v1 engine, and
+the same fixture's `_registration_tool_names` notes that v3 "does not consume agent-v1
+hooks" at all.
+
+The published hook documentation also spells it camelCase, which matches the agent-v1
+generation rather than anything measured here.
+
+**The adapter does not depend on the answer.** `canonicalHookEvent` folds both spellings
+at parse, because the dispatch admission edge branches on this value and an exact-match
+comparison would rest a security decision on one field's capitalisation. Unknown names
+pass through unchanged, so a genuinely new trigger surfaces as a drop rather than being
+silently renamed into a known one.
 
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
 CLI). Legacy Plan Approval hashes those measured host-instance values into its
@@ -132,7 +162,14 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   structured 1.x `subagent_<agent>` tool name (#543) — it is platform-provided,
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
-  the only identity signal on the 0.12 `invoke_sub_agent` shape.
+  the only identity signal on the 0.12 `invoke_sub_agent` shape. Which arm actually
+  carries the identity is a per-build fact, and it moved: IDE 1.1.14 sends
+  `invoke_sub_agent` again — `subagent_<agent>` 0 across a capture of 73 hook
+  firings — but
+  with a populated `{name, prompt, explanation, preset, contextFiles}` argument
+  object, so on that build the argument arm is the live one while the suffix arm
+  keeps precedence in code. The precedence order is what the adapter guarantees;
+  neither arm may be assumed present.
 - **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
   shared target-aware guard. Kiro IDE 0.12 identifies the tool but supplies an
   empty argument object, so the adapter uses a mediated planned-source protocol:

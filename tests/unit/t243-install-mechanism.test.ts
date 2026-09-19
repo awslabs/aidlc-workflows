@@ -88,15 +88,13 @@ const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
 const COPILOT_RELEASE = join(REPO_ROOT, "dist-release", "copilot");
 const CURSOR_RELEASE = join(REPO_ROOT, "dist-release", "cursor");
-const KIRO_IDE_COPY = join(REPO_ROOT, "dist", "kiro-ide");
-const KIRO_IDE_RELEASE = join(REPO_ROOT, "dist-release", "kiro-ide");
+const KIRO_COPY = join(REPO_ROOT, "dist", "kiro");
+const KIRO_RELEASE = join(REPO_ROOT, "dist-release", "kiro");
 const OPENCODE_RELEASE = join(REPO_ROOT, "dist-release", "opencode");
 const COMMAND_NAME = process.platform === "win32" ? "aidlc.cmd" : "aidlc";
 const INSTALLED_EXECUTABLE = process.platform === "win32" ? "aidlc.exe" : "aidlc";
-const KIRO_RELEASES = [
-  join(REPO_ROOT, "dist-release", "kiro"),
-  join(REPO_ROOT, "dist-release", "kiro-ide"),
-] as const;
+// One Kiro row. The array shape is kept so the cases that index it read the same.
+const KIRO_RELEASES = [join(REPO_ROOT, "dist-release", "kiro")] as const;
 const NEXT_VERSION = (() => {
   const [major, minor, patch] = AIDLC_VERSION.split(".").map(Number);
   return `${major}.${minor}.${patch + 1}`;
@@ -1846,9 +1844,9 @@ describe("t243 project initialization", () => {
       "--project-dir",
       project,
       "--from",
-      KIRO_IDE_RELEASE,
+      KIRO_RELEASE,
       "--harness",
-      "kiro-ide",
+      "kiro",
     ], project);
     expect(installed.status, installed.stdout + installed.stderr).toBe(0);
     let settings = JSON.parse(readFileSync(join(project, ".vscode", "settings.json"), "utf-8"));
@@ -1863,7 +1861,7 @@ describe("t243 project initialization", () => {
       "--project-dir",
       project,
       "--from",
-      KIRO_IDE_COPY,
+      KIRO_COPY,
     ], project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     settings = JSON.parse(readFileSync(join(project, ".vscode", "settings.json"), "utf-8"));
@@ -3915,7 +3913,7 @@ describe("t243 projection channel", () => {
       );
       expect(copyText).not.toContain("{{INVOKE}}");
       expect(releaseText).not.toContain("{{INVOKE}}");
-      if (harness === "kiro-ide") {
+      if (harness === "kiro") {
         expect(existsSync(join(copy, ".vscode", "settings.json"))).toBe(false);
         expect(existsSync(join(release, ".vscode", "settings.json"))).toBe(true);
       }
@@ -3951,13 +3949,17 @@ describe("t243 projection channel", () => {
           "sha256:b3d4d0d178a01591629dbf79083b00e7a3ad42f59f79cbfc88d05b7615704a70",
           "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
           "sha256:cc3212fc7335018158882cbaa141ac6fd02cee53bbceb00bd185f416fa06ff8f",
+          "sha256:a505f2396863edc957b18779baa32e9c44a10d62c2472c3a309fec78c3cae3f4",
           "sha256:412776ee4595c453511a911e06c7729285bb5338b30584f8570908b273e27296",
           "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
-          "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
+          "sha256:acda2a823dd60bc8e59e3388fe83aa12a277d65c7aeddf72bfdf31eeca298130",
         ],
       },
       kiro: {
         "AGENTS.md": [
+          // The current render. The packager appends it, so this list moves every
+          // time the onboarding text changes - which is the point: an install
+          // carrying any earlier variant must still be recognized as ours.
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
           "sha256:992307cc3fac05d81958851b2ca51db3723fea604c8d2636814ef9b2e9f7a848",
           "sha256:b886d5b375f9ebc33ef206c4f6ad20630a13eb83d0f5838e9f71f483c040f362",
@@ -3968,13 +3970,10 @@ describe("t243 projection channel", () => {
           "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
           "sha256:67a57eddd94d613590d34ec2d0181398123d9e2d9f6382eb36c62233ce02b6f9",
           "sha256:3aea80a2afde8bb2a222b329bcfc2855b4207a53f7fbfbc3abbfb4aadbafc53b",
+          "sha256:8f3b3bbadb9047992b4e5c402e47f75388cbfad6e4d9c1d73397beb626a697e9",
+          "sha256:1989d45c43801ae58a6f0c9830d593a8ab17f5ada4cfa2cf03891b307a9d7634",
           "sha256:1abeb3cb19943bc1537c413dc45298c43a14ce7544444c88c13b53ea48a607a6",
           "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
-          "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
-        ],
-      },
-      "kiro-ide": {
-        "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
           "sha256:8159f54fcfe2a2ef807227cb12a3c83327e3851672ea47294812dde411f0de69",
           "sha256:8d59f353b5575abe6ee12e8abd5ac75f55461bd7307d677d64388c16690e5afa",
@@ -3982,12 +3981,12 @@ describe("t243 projection channel", () => {
           "sha256:b58a882d1b56bbb5cdb9a3c356b1428eb8d2593f4a9ca22118b98ca7cd0bae9c",
           "sha256:c5d2188b046cd75d8cb7214f32faa85cbc1539cddda4a0fae9bfe8fad90c237c",
           "sha256:dead4d5ea47849f489e05baeae418d5d26efc6cd14dd2201351a474376f8efde",
-          "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
           "sha256:990d80744904bfa3f9923b8a04bbb2e69b454154346915edca1e1a4ef7e31c07",
           "sha256:025c596b2f44b688a329d419b5cd39fd2ee2a6d6cae4e6491dc6cd0f663c04ea",
           "sha256:68be79dc053e88931557484ef37b7f63248cddcf02cb44db89c5bd2522980967",
           "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
+          "sha256:08950191e0303b76ea325c3940cc8a2018abd191535df62470bb736f8e76bc2f",
         ],
       },
     };
@@ -3995,7 +3994,6 @@ describe("t243 projection channel", () => {
       claude: ".claude",
       codex: ".codex",
       kiro: ".kiro",
-      "kiro-ide": ".kiro",
     };
     for (const [harness, paths] of Object.entries(expected)) {
       const descriptor = JSON.parse(
@@ -4024,6 +4022,281 @@ describe("t243 projection channel", () => {
       }
     }
   });
+
+  test("unified Kiro adopts the retired kiro-ide root signatures", () => {
+    // The unified row replaces the retired `kiro-ide` distribution, so a root file
+    // rendered by that row must still be recognized as framework-owned. Without these
+    // an unmarked `AGENTS.md` or `.gitignore` from such an install takes the ambiguity
+    // branch in aidlc-init.ts and the run exits on integrity instead of upgrading -
+    // measured against the retired row's own projection descriptor at 2.9.0.
+    const retired: Record<string, string[]> = {
+      ".gitignore": [
+          "sha256:648f12cb08d05e7bdf97ad4e69e36b7d2b76687d047811d58d196623fd9191bf",
+          "sha256:e82d7773f981dabccc1a0a8a31dad4feb26c2af4a65cc7d686bb2a0581ce0ecb",
+          "sha256:9dca2d16f38509dacc876574d67391f84476e9eea349c2f5250b0325895ce0b8",
+      ],
+      "AGENTS.md": [
+          "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
+          "sha256:8159f54fcfe2a2ef807227cb12a3c83327e3851672ea47294812dde411f0de69",
+          "sha256:8d59f353b5575abe6ee12e8abd5ac75f55461bd7307d677d64388c16690e5afa",
+          "sha256:aef608b826a4993d47e3de98679a81abe4823c7c73556def4a339c5cb92999e7",
+          "sha256:b58a882d1b56bbb5cdb9a3c356b1428eb8d2593f4a9ca22118b98ca7cd0bae9c",
+          "sha256:c5d2188b046cd75d8cb7214f32faa85cbc1539cddda4a0fae9bfe8fad90c237c",
+          "sha256:dead4d5ea47849f489e05baeae418d5d26efc6cd14dd2201351a474376f8efde",
+          "sha256:990d80744904bfa3f9923b8a04bbb2e69b454154346915edca1e1a4ef7e31c07",
+          "sha256:025c596b2f44b688a329d419b5cd39fd2ee2a6d6cae4e6491dc6cd0f663c04ea",
+          "sha256:68be79dc053e88931557484ef37b7f63248cddcf02cb44db89c5bd2522980967",
+          "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
+          "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
+      ],
+    };
+    const descriptor = JSON.parse(
+      readFileSync(join(KIRO_COPY, ".kiro", "tools", "data", "aidlc-projection.json"), "utf-8"),
+    ) as {
+      rootIntegrations: Array<{
+        path: string;
+        legacySignatures?: { wholeFileHashes?: string[] };
+      }>;
+    };
+    for (const [path, hashes] of Object.entries(retired)) {
+      const carried = descriptor.rootIntegrations.find((item) => item.path === path)
+        ?.legacySignatures?.wholeFileHashes ?? [];
+      for (const hash of hashes) {
+        expect(carried, `${path} ${hash}`).toContain(hash);
+      }
+    }
+  });
+
+  test("a project stamped with the retired kiro-ide distribution refreshes into kiro", () => {
+    const project = temp("aidlc-t240-kiro-ide-migrate-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASE,
+      "--harness",
+      "kiro",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    // What an existing Kiro IDE project carries: the same `.kiro` directory, stamped
+    // with the retired distribution id. Identity comes from the stamp, not the dir.
+    // The simulation has to stay self-consistent — a real install of that row
+    // recorded its own bytes — so the baseline's recorded hashes move with the
+    // files it describes, or the planner reports them as locally modified instead.
+    const dataDir = join(project, ".kiro", "tools", "data");
+    const retire = (name: string): string | null => {
+      const path = join(dataDir, name);
+      if (!existsSync(path)) return null;
+      const doc = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      if (doc.distribution !== "kiro") return null;
+      doc.distribution = "kiro-ide";
+      writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
+      return path;
+    };
+    const retired = ["aidlc-stamp.json", "harness.json"]
+      .map((name) => [name, retire(name)] as const)
+      .filter((entry): entry is readonly [string, string] => entry[1] !== null);
+    expect(retired.map(([name]) => name)).toEqual(["aidlc-stamp.json", "harness.json"]);
+    const baselinePath = join(dataDir, "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8")) as {
+      distribution: string;
+      files: Record<string, string>;
+    };
+    baseline.distribution = "kiro-ide";
+    for (const [name, path] of retired) {
+      baseline.files[`.kiro/tools/data/${name}`] = sha256Bytes(readFileSync(path));
+    }
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+
+    // BEFORE the migration runs, the diagnostics must survive the retired stamp.
+    // They did not: the runtime probe indexed the CLI table with the raw stamp and
+    // threw `undefined is not an object (evaluating 'spec.command')`, so the user
+    // holding the row that needs upgrading could not even ask what state it was in.
+    // A report is the contract here - reported problems are fine, a stack trace is not.
+    const diagnosed = run(DISPATCHER, ["doctor", "--project-dir", project], project);
+    expect(diagnosed.stdout + diagnosed.stderr).not.toContain("TypeError");
+    expect(diagnosed.stdout + diagnosed.stderr).toMatch(/problems?,/);
+
+    const migrated = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASE,
+      "--harness",
+      "kiro",
+    ], project);
+    expect(migrated.stdout + migrated.stderr).not.toContain("refusing kiro");
+    expect(migrated.status, migrated.stdout + migrated.stderr).toBe(0);
+    expect(
+      JSON.parse(readFileSync(join(dataDir, "aidlc-stamp.json"), "utf-8")).distribution,
+    ).toBe("kiro");
+  }, 120_000);
+
+  test("a project carrying the retired launcher MCP registry migrates, and a modified one conflicts", () => {
+    // The retired Kiro registry shipped `context7` plus four uvx AWS launchers.
+    // This row ships two keyless HTTP entries, so an existing project's registry
+    // has to move - and only when the project did not edit it. `preserveKiroMcpRegion`
+    // carries nothing here: it reads the `aws-mcp` arguments, and the staged file has
+    // no such entry, so the outcome below is the planner's ownership rule, not a
+    // region rewrite.
+    const RETIRED_REGISTRY = `${JSON.stringify({
+      mcpServers: {
+        context7: { type: "http", url: "https://mcp.context7.com/mcp", disabled: true },
+        "aws-mcp": {
+          command: "uvx",
+          args: [
+            "mcp-proxy-for-aws@latest",
+            "https://aws-mcp.us-east-1.api.aws/mcp",
+            "--metadata",
+            "AWS_REGION=us-east-1",
+          ],
+          disabled: true,
+        },
+        "aws-pricing": { command: "uvx", args: ["awslabs.aws-pricing-mcp-server@latest"], disabled: true },
+        "aws-iac": { command: "uvx", args: ["awslabs.aws-iac-mcp-server@latest"], disabled: true },
+        "aws-serverless": { command: "uvx", args: ["awslabs.aws-serverless-mcp-server@latest"], disabled: true },
+      },
+    }, null, 2)}\n`;
+
+    const plan = (edit?: (registry: string) => string): {
+      status: number;
+      action?: string;
+      detail?: string;
+    } => {
+      const project = temp("aidlc-t240-kiro-mcp-migrate-");
+      mkdirSync(join(project, ".git"));
+      const installed = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        KIRO_RELEASE,
+        "--harness",
+        "kiro",
+      ], project);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const registryPath = join(project, ".kiro", "settings", "mcp.json");
+      writeFileSync(registryPath, RETIRED_REGISTRY);
+      // The install shipped those bytes, so the baseline records them; without this
+      // the fixture would only prove that a hand-written file is unowned.
+      const baselinePath = join(project, ".kiro", "tools", "data", "aidlc-manifest.json");
+      const baseline = JSON.parse(readFileSync(baselinePath, "utf-8")) as {
+        files: Record<string, string>;
+      };
+      baseline.files[".kiro/settings/mcp.json"] = sha256Bytes(RETIRED_REGISTRY);
+      writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+      if (edit) writeFileSync(registryPath, edit(RETIRED_REGISTRY));
+      const dry = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        KIRO_RELEASE,
+        "--harness",
+        "kiro",
+        "--dry-run",
+        "--verbose",
+        "--json",
+      ], project);
+      const actions = (JSON.parse(dry.stdout).data.actions ?? []) as Array<{
+        path: string;
+        action: string;
+        detail?: string;
+      }>;
+      const registry = actions.find((item) => item.path.endsWith("settings/mcp.json"));
+      return { status: dry.status, action: registry?.action, detail: registry?.detail };
+    };
+
+    const owned = plan();
+    expect(owned.status).toBe(0);
+    expect(owned.action).toBe("update");
+
+    const edited = plan((registry) => {
+      const doc = JSON.parse(registry) as { mcpServers: Record<string, unknown> };
+      doc.mcpServers["team-docs"] = { type: "http", url: "https://docs.example.test/mcp" };
+      return `${JSON.stringify(doc, null, 2)}\n`;
+    });
+    expect(edited.status).toBe(4);
+    expect(edited.action).toBe("conflict");
+    expect(edited.detail).toContain("locally modified");
+  }, 120_000);
+
+  test("read-only config sections and a machine default accept the retired distribution", () => {
+    // Reviewers reproduced exit 2 here: a project still stamped with the retired row
+    // could not even be inspected, so the user could not see the state they were
+    // being asked to upgrade. `modelHarness` resolves the retired id at the gate now,
+    // which is why one change covers every section that reads a persisted identity.
+    const project = temp("aidlc-t240-retired-read-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASE,
+      "--harness",
+      "kiro",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    const dataDir = join(project, ".kiro", "tools", "data");
+    for (const name of ["aidlc-stamp.json", "harness.json"]) {
+      const path = join(dataDir, name);
+      const doc = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      doc.distribution = "kiro-ide";
+      writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
+    }
+    const baselinePath = join(dataDir, "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8")) as {
+      distribution: string;
+      files: Record<string, string>;
+    };
+    baseline.distribution = "kiro-ide";
+    for (const name of ["aidlc-stamp.json", "harness.json"]) {
+      baseline.files[`.kiro/tools/data/${name}`] = sha256Bytes(readFileSync(join(dataDir, name)));
+    }
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+
+    for (const section of ["providers", "models"]) {
+      const shown = run(INIT, [
+        "config",
+        section,
+        "--show",
+        "--project-dir",
+        project,
+      ], project);
+      expect(shown.status, `${section}: ${shown.stdout}${shown.stderr}`).toBe(0);
+      // Resolved, not echoed: the section reports the row it will write.
+      expect(shown.stdout, section).toContain("kiro");
+      expect(shown.stdout + shown.stderr, section).not.toContain("kiro-ide");
+    }
+
+    // A machine whose recorded default is the retired row still configures a fresh
+    // project without the user naming a harness.
+    const machine = temp("aidlc-t240-retired-default-");
+    mkdirSync(machine, { recursive: true });
+    writeFileSync(join(machine, "default-harness"), "kiro-ide\n");
+    const fresh = temp("aidlc-t240-retired-default-project-");
+    mkdirSync(join(fresh, ".git"), { recursive: true });
+    const configured = run(INIT, [
+      "config",
+      "--project-dir",
+      fresh,
+      "--from",
+      KIRO_RELEASE,
+      "--yes",
+    ], fresh, { AIDLC_INSTALL_ROOT: machine });
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(
+      JSON.parse(
+        readFileSync(join(fresh, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+      ).distribution,
+    ).toBe("kiro");
+  }, 180_000);
 
   test("release runtime-generated commands remain binary-invoked", () => {
     const project = temp("aidlc-t240-release-invoke-");
@@ -4099,7 +4372,7 @@ describe("t243 projection channel", () => {
         );
     }
     const ideSettings = JSON.parse(
-      readFileSync(join(KIRO_IDE_RELEASE, ".vscode", "settings.json"), "utf-8"),
+      readFileSync(join(KIRO_RELEASE, ".vscode", "settings.json"), "utf-8"),
     ) as { "kiroAgent.trustedCommands": string[] };
     expect(ideSettings["kiroAgent.trustedCommands"]).toEqual([trustedCommand("*")]);
     for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {

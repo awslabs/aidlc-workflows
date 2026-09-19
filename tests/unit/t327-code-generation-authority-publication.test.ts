@@ -59,7 +59,7 @@ function initGitBaseline(dir: string): void {
   }
 }
 
-function project(harness: "claude" | "kiro-ide" = "claude"): {
+function project(harness: "claude" | "kiro" = "claude"): {
   dir: string;
   tool: string;
   markerPath: string;
@@ -68,7 +68,7 @@ function project(harness: "claude" | "kiro-ide" = "claude"): {
     withState: "state-brownfield-feature.md",
   });
   projects.push(dir);
-  const harnessDir = harness === "kiro-ide" ? ".kiro" : ".claude";
+  const harnessDir = harness === "kiro" ? ".kiro" : ".claude";
   const destination = join(dir, harnessDir);
   rmSync(destination, { recursive: true, force: true });
   cpSync(
@@ -274,7 +274,7 @@ describe("t327 Code Generation authority publication", () => {
   }, 30000);
 
   test("legacy Kiro serializes live windows and rotates owner recovery without plaintext storage", () => {
-    const installed = project("kiro-ide");
+    const installed = project("kiro");
     const envA = {
       VSCODE_IPC_HOOK: `t327-host:${installed.dir}`,
       VSCODE_PID: String(process.pid),
@@ -388,7 +388,7 @@ describe("t327 Code Generation authority publication", () => {
   }, 30000);
 
   test("IPC-only legacy ownership blocks while live and permits human recovery after endpoint removal", () => {
-    const installed = project("kiro-ide");
+    const installed = project("kiro");
     const ipcA = join(installed.dir, "legacy-owner-a.ipc");
     const ipcB = join(installed.dir, "legacy-owner-b.ipc");
     writeFileSync(ipcA, "live\n");
@@ -420,7 +420,7 @@ describe("t327 Code Generation authority publication", () => {
   }, 30000);
 
   test("modern Kiro IDE receives no legacy capability from the same host variables", () => {
-    const installed = project("kiro-ide");
+    const installed = project("kiro");
     const directive = runToCodeGeneration(installed, {
       VSCODE_IPC_HOOK: `t327-modern:${installed.dir}`,
       VSCODE_PID: "315",

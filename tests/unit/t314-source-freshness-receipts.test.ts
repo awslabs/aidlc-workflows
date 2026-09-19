@@ -683,7 +683,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     seedGitRepo(dir);
     for (const [installedDir, name] of [
       [".claude", "claude"],
-      [".kiro", "kiro-ide"],
+      [".kiro", "kiro"],
     ] as const) {
       const dataDir = join(dir, installedDir, "tools", "data");
       mkdirSync(dataDir, { recursive: true });

@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-state-transition-guard",
+      "trigger": "PreToolUse",
+      "matcher": "^(execute_bash|execute_pwsh|shell)$",
+      "description": "Refuses a hand-run `aidlc-state.ts <verb>`: stage status is changed by the workflow tools so the state file, the audit log and the compiled stage graph stay in agreement. Matches the same terminal aliases as the terminal-command guard, which is a different responsibility - that one keeps terminal commands deterministic, this one protects workflow lifecycle state. Registered globally with no persona argument: agent-scope hooks were measured to fire for the active agent only, never a delegated one, so the persona-scoped form cannot work on either surface. The global form recovers the direct-mutation refusal for every agent.",
+      "action": {
+        "type": "command",
+        "command": "{{INVOKE}} engine adapter kiro state-transition-guard"
+      }
+    }
+  ]
+}

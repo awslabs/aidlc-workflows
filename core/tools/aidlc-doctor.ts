@@ -29,6 +29,7 @@ import { collectPluginStatus } from "./aidlc-plugin.ts";
 import { scanWindowsUninstallJournals } from "./aidlc-windows-uninstall.ts";
 import {
   aidlcInvocation,
+  currentDistribution,
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
 import {
@@ -158,7 +159,12 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
   const resolved = resolveAidlcSettings(projectDir);
   const issues: string[] = [];
   for (const harness of harnesses) {
-    if (!isModelHarness(harness.distribution)) {
+    // Reading a stamp, so it resolves through the successor map first: a project a
+    // previous release stamped carries a retired id, and reporting it as an
+    // "unsupported policy surface" told the user their own install was unsupported
+    // when it merely needs the upgrade this release performs.
+    const distribution = currentDistribution(harness.distribution);
+    if (!isModelHarness(distribution)) {
       issues.push(`unsupported harness policy surface: ${harness.distribution}`);
       continue;
     }
@@ -166,14 +172,14 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
       issues.push(
         ...modelPolicyDoctorIssues(
           harness.root,
-          harness.distribution,
-          modelPolicyForHarness(resolved.models, harness.distribution),
+          distribution,
+          modelPolicyForHarness(resolved.models, distribution),
         )
-          .map((issue) => `${harness.distribution}: ${issue}`),
+          .map((issue) => `${distribution}: ${issue}`),
       );
     } catch (error) {
       issues.push(
-        `${harness.distribution}: ${
+        `${distribution}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -206,8 +212,7 @@ function humanReport(
     codex: "Codex CLI",
     copilot: "GitHub Copilot",
     cursor: "Cursor",
-    kiro: "Kiro CLI",
-    "kiro-ide": "Kiro IDE",
+    kiro: "Kiro",
     opencode: "opencode",
   };
   const frameworkPattern =
