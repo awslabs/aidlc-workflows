@@ -798,6 +798,70 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(readFileSync(join(restoredPath, "notes.broken"), "utf-8")).toBe(dirtyBytes);
     });
 
+    test.skipIf(process.platform === "win32")("discard refuses a filtered non-UTF-8 filename before removing the live attempt", () => {
+      const proj = setupLifecycleProject();
+      const slug = "non-utf8-filtered";
+      const wt = worktreeDir(proj, slug);
+      const name = Buffer.concat([Buffer.from("notes-"), Buffer.from([0xff]), Buffer.from(".lossy")]);
+      gitInitMain(proj);
+      const created = runWorktree(proj, "create", "--slug", slug, "--base", "main");
+      expect(created.status, created.out).toBe(0);
+      expect(git(proj, "config", "filter.lossy.clean", "tr a-z A-Z").status).toBe(0);
+      writeFileSync(join(wt, ".gitattributes"), Buffer.concat([name, Buffer.from(" filter=lossy\n")]));
+      const path = Buffer.concat([Buffer.from(`${wt}/`), name]);
+      writeFileSync(path, "original lowercase notes\n");
+      expect(git(wt, "add", "-A").status).toBe(0);
+      expect(git(wt, "commit", "-q", "-m", "track a byte-exact filtered filename").status).toBe(0);
+      const head = git(wt, "rev-parse", "HEAD").stdout.trim();
+      const dirtyBytes = Buffer.from("dirty lowercase notes\n");
+      writeFileSync(path, dirtyBytes);
+
+      const aborted = runBolt(
+        proj, "abort", "--name", "Non-UTF-8 Filtered Bolt", "--slug", slug,
+        "--reason", "refuse to park transformed bytes", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(1);
+      expect(aborted.out).toContain("non-UTF-8 name");
+      expect(existsSync(wt)).toBe(true);
+      expect(git(proj, "rev-parse", "--verify", `refs/heads/bolt-${slug}`).stdout.trim()).toBe(head);
+      expect(readFileSync(path)).toEqual(dirtyBytes);
+      expect(eventBlock(proj, "WORKTREE_DISCARDED")).toBe("");
+      expect(eventBlock(proj, "BOLT_FAILED")).toBe("");
+    });
+
+    test("raw restore ignores replacement refs for parked blobs", () => {
+      const proj = setupLifecycleProject();
+      const slug = "replaced-blob";
+      const wt = worktreeDir(proj, slug);
+      writeFileSync(join(proj, "notes.txt"), "original notes\n");
+      gitInitMain(proj);
+      expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
+      const dirtyBytes = "parked lowercase notes\n";
+      writeFileSync(join(wt, "notes.txt"), dirtyBytes);
+      const aborted = runBolt(
+        proj, "abort", "--name", "Replaced Blob Bolt", "--slug", slug,
+        "--reason", "recover original objects", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
+      const original = git(proj, "rev-parse", `${parkedRef}/head:notes.txt`);
+      expect(original.status).toBe(0);
+      const replacement = spawnSync("git", ["hash-object", "-w", "--stdin"], {
+        cwd: proj, input: "replacement bytes must not be restored\n", encoding: "utf-8",
+      });
+      expect(replacement.status).toBe(0);
+      const originalSha = original.stdout.trim();
+      expect(git(proj, "replace", originalSha, replacement.stdout.trim()).status).toBe(0);
+      try {
+        const restored = runWorktree(proj, "restore", "--slug", slug);
+        expect(restored.status, restored.out).toBe(0);
+        const { worktree_path: restoredPath } = JSON.parse(restored.out) as { worktree_path: string };
+        expect(readFileSync(join(restoredPath, "notes.txt"), "utf-8")).toBe(dirtyBytes);
+      } finally {
+        expect(git(proj, "replace", "-d", originalSha).status).toBe(0);
+      }
+    });
+
     test.skipIf(process.platform === "win32")("restore preserves a dirty tracked non-UTF-8 filename byte-exactly", () => {
       const proj = setupLifecycleProject();
       const slug = "non-utf8-path";

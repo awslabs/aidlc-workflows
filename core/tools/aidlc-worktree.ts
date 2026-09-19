@@ -2812,7 +2812,8 @@ function parkAttempt(
   let stamp = baseStamp;
   for (let suffix = 2; occupied.has(stamp); suffix++) stamp = `${baseStamp}-${suffix}`;
   const ref = `refs/aidlc/parked/${slug}/${stamp}`;
-  const requireGit = (args: string[], cwd = repoCwd, env?: NodeJS.ProcessEnv): string => {
+  const objectEnv = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const requireGit = (args: string[], cwd = repoCwd, env: NodeJS.ProcessEnv = objectEnv): string => {
     const result = runGit(args, cwd, env);
     if (!result.ok) throw new Error(result.stderr.trim() || `git ${args[0]} exited ${result.code}`);
     return result.stdout.trim();
@@ -2824,6 +2825,7 @@ function parkAttempt(
     // An internal snapshot must not depend on the user's identity or mutate the
     // live index/branch. Seed tracked paths before add so ignored tracked files survive.
     const env = {
+      ...objectEnv,
       GIT_INDEX_FILE: idx,
       GIT_AUTHOR_NAME: "AI-DLC",
       GIT_AUTHOR_EMAIL: "aidlc@localhost",
@@ -2845,11 +2847,43 @@ function parkAttempt(
       });
       if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
       const includedRegularPaths = new Set<string>();
-      for (const record of listed.stdout.toString().split("\0")) {
-        if (!/^100(?:644|755) /.test(record)) continue;
-        const tab = record.indexOf("\t");
+      const nonUtf8Paths: Buffer[] = [];
+      for (let start = 0; start < listed.stdout.length;) {
+        const end = listed.stdout.indexOf(0, start);
+        if (end === -1) throw new Error("invalid parked index entry");
+        const record = listed.stdout.subarray(start, end + 1);
+        start = end + 1;
+        if (!/^100(?:644|755) /.test(record.subarray(0, 7).toString("ascii"))) continue;
+        const tab = record.indexOf(0x09);
         if (tab === -1) throw new Error("cannot parse a parked regular-file index entry");
-        includedRegularPaths.add(record.slice(tab + 1));
+        const pathBytes = record.subarray(tab + 1, -1);
+        const path = pathBytes.toString();
+        if (Buffer.from(path).equals(pathBytes)) includedRegularPaths.add(path);
+        else nonUtf8Paths.push(record.subarray(tab + 1));
+      }
+      if (nonUtf8Paths.length > 0) {
+        // String-based attribute/hash helpers cannot address these filenames.
+        // Ask Git with the original NUL-terminated bytes before trusting add's blobs.
+        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "filter", "text", "eol"], {
+          cwd: wtPath,
+          env: { ...process.env, ...env },
+          stdin: Buffer.concat(nonUtf8Paths),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        if (attrs.exitCode !== 0) throw new Error(`git check-attr failed: ${attrs.stderr.toString().trim() || `exit ${attrs.exitCode}`}`);
+        for (let start = 0; start < attrs.stdout.length;) {
+          const pathEnd = attrs.stdout.indexOf(0, start);
+          const attrEnd = pathEnd === -1 ? -1 : attrs.stdout.indexOf(0, pathEnd + 1);
+          const valueEnd = attrEnd === -1 ? -1 : attrs.stdout.indexOf(0, attrEnd + 1);
+          if (valueEnd === -1) throw new Error("invalid parked path attributes");
+          const value = attrs.stdout.subarray(attrEnd + 1, valueEnd).toString();
+          if (value !== "unspecified" && value !== "unset") {
+            const path = attrs.stdout.subarray(start, pathEnd);
+            throw new Error(`cannot park filtered file with a non-UTF-8 name: ${JSON.stringify(path.toString("latin1"))}; rename it or remove its filter`);
+          }
+          start = valueEnd + 1;
+        }
       }
       const rawEntries = filteredRawIndexEntries(wtPath, idx, includedRegularPaths);
       if (rawEntries === null) throw new Error("cannot compare raw bytes for filtered paths");
@@ -3168,16 +3202,18 @@ function handleRestore(args: string[]): void {
   }
   let materialized = 0;
   if (raw) {
+    const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
     try {
-      const indexed = runGit(["read-tree", head.oid], wtPath);
+      const indexed = runGit(["read-tree", head.oid], wtPath, env);
       if (!indexed.ok) throw new Error(`git read-tree failed: ${indexed.stderr.trim() || `exit ${indexed.code}`}`);
       const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
         cwd: wtPath,
+        env,
         stdout: "pipe",
         stderr: "pipe",
       });
       if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
-      const symlinkConfig = runGit(["config", "--bool", "core.symlinks"], wtPath);
+      const symlinkConfig = runGit(["config", "--bool", "core.symlinks"], wtPath, env);
       if (!symlinkConfig.ok && symlinkConfig.code !== 1) {
         throw new Error(`git config core.symlinks failed: ${symlinkConfig.stderr.trim() || `exit ${symlinkConfig.code}`}`);
       }
@@ -3209,6 +3245,7 @@ function handleRestore(args: string[]): void {
           // Only symlink targets are small enough to buffer in memory.
           const blob = Bun.spawnSync(["git", "cat-file", "blob", sha], {
             cwd: wtPath,
+            env,
             stdout: "pipe",
             stderr: "pipe",
           });
@@ -3223,6 +3260,7 @@ function handleRestore(args: string[]): void {
           try {
             blob = spawnSync("git", ["cat-file", "blob", sha], {
               cwd: wtPath,
+              env,
               stdio: ["ignore", fd, "pipe"],
             });
           } finally {

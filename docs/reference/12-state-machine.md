@@ -754,9 +754,10 @@ Audit-of-intent semantics apply to side-effects whose outcome cannot be checked 
 Discard snapshots tracked and untracked, non-ignored working-tree content with a
 temporary Git index and `commit-tree`. Regular files with configured clean filters
 retain raw bytes, bypassing clean filters. A regular file whose name is not valid
-UTF-8 and matches an effective clean/process filter cannot currently be parked:
-discard refuses before removing anything, leaving the live attempt intact rather
-than parking altered bytes; rename the file or drop the filter to proceed.
+UTF-8 and carries a `filter`, `text`, or `eol` attribute (neither unspecified nor
+unset) cannot be parked: discard refuses before removing anything, leaving the
+live attempt intact rather than parking altered bytes; rename the file or remove
+its attributes to proceed. Such names without these attributes park normally.
 All parked copies must exist before
 `WORKTREE_DISCARDED` can be emitted; if parking or audit emission fails, teardown
 does not start. The row's `Parked ref` names
