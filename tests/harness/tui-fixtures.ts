@@ -474,7 +474,25 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
       if (!existsSync(fixturePath)) {
         throw new Error(`setupTuiProject: state fixture not found: ${fixturePath}`);
       }
-      writeFileSync(join(record, "aidlc-state.md"), readFileSync(fixturePath, "utf8"));
+      const seededState = readFileSync(fixturePath, "utf8");
+      writeFileSync(join(record, "aidlc-state.md"), seededState);
+      // A real intent record always carries this sidecar: intent creation writes
+      // it once as the description register for the whole run. Seeding the state
+      // file directly skipped it, which made the record unlike anything a user
+      // has, and a LIVE conductor noticed. The shared conversation-language rule
+      // resolves the language partly from this file, so on a real harness the
+      // agent probes it in its first turn; against a record that lacks it the
+      // host answers with a hard tool-argument failure, and a live journey that
+      // asserts no tool call failed then fails for a reason that has nothing to
+      // do with what it tests. The engine only REQUIRES the sidecar when the
+      // state names it as the source, so writing it is harmless where the
+      // fixture still relies on the legacy Project field.
+      const projectField = seededState.match(/^- \*\*Project\*\*: (.+)$/m);
+      writeFileSync(
+        join(record, "project-description.json"),
+        `${JSON.stringify(projectField?.[1]?.trim() ?? "Fixture project")}\n`,
+        "utf-8",
+      );
     }
     if (opts.withAudit) {
       // A minimal audit shard the workflow appends to; the readers glob the

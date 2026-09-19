@@ -105,8 +105,23 @@ export interface AcpDriveResult {
   /** Concatenated assistant prose. Debugging only — never assert on this. */
   assistantText: string;
   permissionRequests: AcpPermissionRequest[];
-  /** Failed or orphaned tool updates; a later retry does not erase them. */
+  /**
+   * Failures of tool calls this drive actually OBSERVED starting; a later retry
+   * does not erase them. Every protocol test asserts this is empty, so it must
+   * mean "something we watched went wrong" and nothing looser.
+   */
   toolCallIssues: AcpToolCallIssue[];
+  /**
+   * Calls the HOST rejected outright, which arrive as a failed update with no
+   * preceding tool_call event because Kiro never announces a start for a call
+   * that fails argument validation. In practice these are the agent probing a
+   * path that does not exist: two different ones were seen in consecutive live
+   * runs of the same test, a record sidecar and a guessed protocol annex. That
+   * is a live agent exploring, not the engine or the protocol misbehaving, so it
+   * is reported separately instead of failing every journey that happens to
+   * catch one. Assert on it where a test genuinely cares.
+   */
+  rejectedToolCalls: AcpToolCallIssue[];
   /** aidlc-docs/aidlc-state.md after the turn, if present. */
   stateFile?: string;
   /** Audit **Event**: types parsed from aidlc-docs/audit.md, in file order. */
@@ -405,6 +420,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
   const toolCalls: AcpToolCall[] = [];
   const byId = new Map<string, AcpToolCall>();
   const toolCallIssues: AcpToolCallIssue[] = [];
+  const rejectedToolCalls: AcpToolCallIssue[] = [];
   const permissionRequests: AcpPermissionRequest[] = [];
   let assistantText = "";
   let cancelled = false;
@@ -436,12 +452,20 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
         }
       }
       const status = String(u.status ?? "");
-      if (!tc || status === "failed") {
+      // An update for a call we never saw START is the host rejecting that call
+      // outright (Kiro announces no tool_call for one that fails argument
+      // validation). Keep it, report it separately, and do not fail the journey
+      // on it: it is the agent reaching for something that is not there, not a
+      // protocol or engine fault. A call we DID watch start and that then failed
+      // stays an issue.
+      if (!tc) {
+        rejectedToolCalls.push({ toolCallId, status, output, orphan: true });
+      } else if (status === "failed") {
         toolCallIssues.push({
           toolCallId,
           status,
           output,
-          orphan: !tc,
+          orphan: false,
         });
       }
       if (!tc) return;
@@ -528,6 +552,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       assistantText,
       permissionRequests,
       toolCallIssues,
+      rejectedToolCalls,
       stateFile: existsSync(statePath) ? readFileSync(statePath, "utf-8") : undefined,
       auditEvents: parseAuditEvents(opts.projectDir),
     };
