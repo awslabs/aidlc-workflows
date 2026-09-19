@@ -1280,10 +1280,17 @@ function latestPlanApproval(body: string): {
   // [Approval Fingerprint] below it, and the resulting null fingerprint was
   // then reported as a fingerprint mismatch.
   let planApprovalDepth = 0;
+  // True once a deeper heading has opened a subsection of the section. Tags
+  // read from there FILL an empty slot but never replace a value the section
+  // already carried: a heading nested under the section could also be a
+  // malformed next question, and letting its answer overwrite a pending
+  // Plan Approval would turn an unanswered gate into an approval.
+  let inSubsection = false;
 
   const openPlanApproval = (depth: number): void => {
     inPlanApproval = true;
     planApprovalDepth = depth;
+    inSubsection = false;
     awaitingNumberedQuestionText = false;
     foundPlanApproval = true;
     latestAnswer = null;
@@ -1300,9 +1307,17 @@ function latestPlanApproval(body: string): {
         openPlanApproval(depth);
         continue;
       }
-      if (inPlanApproval && depth > planApprovalDepth) {
-        // A subsection of the open Plan Approval section: its body still
-        // belongs to that section.
+      if (
+        inPlanApproval &&
+        depth > planApprovalDepth &&
+        // A numbered heading is the next question, however deeply it was
+        // nested, so it ends the section rather than opening a subsection.
+        !QUESTION_PREFIX_RE.test(headingText) &&
+        !NUMBERED_QUESTION_HEADING_RE.test(headingText)
+      ) {
+        // A prose subsection of the open Plan Approval section: its body still
+        // belongs to that section, but only to fill tags the section lacks.
+        inSubsection = true;
         awaitingNumberedQuestionText = false;
         continue;
       }
@@ -1319,11 +1334,17 @@ function latestPlanApproval(body: string): {
     }
     if (!inPlanApproval) continue;
     const answer = line.match(ANSWER_TAG_RE);
-    if (answer) latestAnswer = answer[1].trim();
+    if (answer && !(inSubsection && latestAnswer !== null)) {
+      latestAnswer = answer[1].trim();
+    }
     const fingerprint = line.match(FINGERPRINT_TAG_RE);
-    if (fingerprint) latestFingerprint = fingerprint[1] ?? null;
+    if (fingerprint && !(inSubsection && latestFingerprint !== null)) {
+      latestFingerprint = fingerprint[1] ?? null;
+    }
     const plannedSource = line.match(PLANNED_SOURCE_TAG_RE);
-    if (plannedSource) latestPlannedSource = plannedSource[1] ?? null;
+    if (plannedSource && !(inSubsection && latestPlannedSource !== null)) {
+      latestPlannedSource = plannedSource[1] ?? null;
+    }
   }
   return {
     found: foundPlanApproval,
