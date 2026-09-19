@@ -117,7 +117,25 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   a follow-up nudge instead (the same posture as opencode). Its host
   `loop_limit` is 10 rather than Cursor's default 5, which covers the core's
   autonomous no-progress cap of 8. The forwarding loop in the conductor skill
-  is the real discipline.
+  is the real discipline. Cursor background agents are excluded from this
+  follow-up path: their stops remain silent, so an ancillary background review
+  cannot reset or consume the foreground conversation's steering continuation.
+  The adapter persists the boolean `is_background_agent` from `sessionStart`,
+  `beforeSubmitPrompt` (including hosts without `sessionStart`), and `sessionEnd`
+  as `background` in a protected record keyed by `conversation_id` under
+  `aidlc/.aidlc-cursor-subagents/`. Tool and stop payloads omit this flag and
+  consult the stored identity, which has no inactivity timeout. Unknown identity
+  (no lifecycle event seen) retains foreground behavior. A later lifecycle event
+  updates the flag; `sessionEnd` retains it for trailing tool/stop events.
+
+  Background shell commands follow an allowlist-literal-only rule: one direct
+  `bun` invocation of an installed read-only AIDLC entrypoint, or the compiled
+  `aidlc` dispatcher's read-only commands. Every token must be literal; variable
+  expansion, substitutions, shell wrappers, interpreter evaluation, helper
+  scripts, and Bun preloads are denied, even when they appear to select a
+  read-only verb. All other shell commands require the foreground conversation.
+  Native read/search tools remain available. Background agents cannot change
+  their identity record or dispatch child Tasks.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted. Pre-compaction validation also fires
   (`preCompact`).

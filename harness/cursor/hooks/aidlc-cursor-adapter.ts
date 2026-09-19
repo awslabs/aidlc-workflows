@@ -212,6 +212,48 @@ export async function run(
     return join(LEDGER_DIR, `main-${digest(conversation)}.marker`);
   }
 
+  function sessionIdentityFile(): string | null {
+    const conversation = cursor.conversation_id ?? sessionId;
+    return conversation
+      ? join(LEDGER_DIR, `session-${digest(conversation)}.marker`)
+      : null;
+  }
+
+  function rememberSessionIdentity(): boolean {
+    // Only lifecycle payloads carry this field. beforeSubmitPrompt provides
+    // the same evidence when a host does not emit sessionStart.
+    const conversation = cursor.conversation_id ?? sessionId;
+    if (!conversation || typeof cursor.is_background_agent !== "boolean") return false;
+    const path = sessionIdentityFile()!;
+    const temporary = `${path}.${process.pid}.tmp`;
+    try {
+      mkdirSync(LEDGER_DIR, { recursive: true });
+      writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent }), { mode: 0o600 });
+      renameSync(temporary, path);
+      registerMain();
+      return true;
+    } catch {
+      removeLedger(temporary);
+      return false;
+    }
+  }
+
+  function sessionIdentity(): "background" | "foreground" | "unknown" {
+    const path = sessionIdentityFile();
+    if (!path) return "unknown";
+    // Lifecycle events own this protected conversation identity. Tool/stop
+    // payloads omit the flag. Unknown identity retains foreground behavior.
+    try {
+      if (!lstatSync(path).isFile()) return "unknown";
+      const identity = JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean };
+      return typeof identity.background === "boolean"
+        ? identity.background ? "background" : "foreground"
+        : "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
   function witnessFile(parent: string, task: string): string {
     return join(
       AIDLC_RUNTIME_DIR,
@@ -731,6 +773,61 @@ export async function run(
       join(HOOKS_DIR, "review-freeze-command.ts")
     ) as Promise<ReviewFreezeCommandModule>;
     return reviewFreezeCommandModule;
+  }
+
+  interface StateTransitionCommandModule {
+    backgroundLifecycleCommand?: (
+      command: string,
+      installedScript?: (path: string) => boolean,
+    ) => string | null;
+  }
+
+  let stateTransitionCommandModule: Promise<StateTransitionCommandModule> | null =
+    null;
+  function loadStateTransitionCommandModule(): Promise<StateTransitionCommandModule> {
+    stateTransitionCommandModule ??= import(
+      join(HOOKS_DIR, "aidlc-state-transition-guard.ts")
+    ) as Promise<StateTransitionCommandModule>;
+    return stateTransitionCommandModule;
+  }
+
+  async function backgroundWorkflowCommand(): Promise<string | null> {
+    if (toolName !== "Bash") return null;
+    const command = cursor.tool_input?.command;
+    if (typeof command !== "string") return "uninspectable shell command";
+    try {
+      const module = await loadStateTransitionCommandModule();
+      if (typeof module.backgroundLifecycleCommand !== "function") {
+        return "workflow command classification unavailable";
+      }
+      return module.backgroundLifecycleCommand(command, (script) => {
+        const path = resolve(effectiveCwd(), script);
+        const tools = resolve(HOOKS_DIR, "..", "tools");
+        try {
+          // A helper cannot gain trust from a copied AIDLC filename. Require
+          // the actual installed entrypoint, without symlinks redirecting it.
+          return dirname(path) === tools &&
+            lstatSync(tools).isDirectory() &&
+            lstatSync(path).isFile() &&
+            dirname(realpathSync(path)) === realpathSync(tools);
+        } catch {
+          return false;
+        }
+      });
+    } catch {
+      return "workflow command classification unavailable";
+    }
+  }
+
+  async function backgroundTouchesProtectedState(): Promise<boolean> {
+    if (toolName !== "Bash") return touchesProtectedReviewerState();
+    // A read-only utility's --project-dir may name an ancestor of the ledger.
+    // Only write operands threaten identity; strict command classification
+    // has already rejected opaque execution before reaching this check.
+    const targets = await reviewFreezeTargets();
+    return targets === null || targets.some((path) =>
+      overlapsProtectedPath(path, protectedReviewerPaths(), effectiveCwd())
+    );
   }
 
   let reviewFreezeTargetsCache: string[] | null | undefined;
@@ -2778,9 +2875,10 @@ export async function run(
 
   switch (target) {
     case "session-start": {
+      if (!rememberSessionIdentity()) return 0;
       // sessionStart never fires for a Task subagent's conversation
       // (live-verified) — this conversation is a top-level one.
-      registerMain();
+      if (sessionIdentity() !== "foreground") return 0;
       const fwd = JSON.stringify({
         hook_event_name: "SessionStart",
         source: cursor.source ?? "startup",
@@ -2801,6 +2899,9 @@ export async function run(
     }
 
     case "session-end": {
+      // sessionEnd also carries the authoritative flag. Retain its final
+      // identity for any trailing tool/stop events from this conversation.
+      rememberSessionIdentity();
       // Cursor does not deliver Task postToolUse on its real CLI lifecycle.
       // Retire every still-live Task for this parent through the canonical
       // SubagentStop hook before ending the session, explicitly qualifying the
@@ -2848,12 +2949,20 @@ export async function run(
     }
 
     case "mint": {
+      if (!rememberSessionIdentity()) {
+        process.stdout.write(`${JSON.stringify({
+          continue: false,
+          user_message:
+            "AIDLC could not save Cursor session identity. Restore access to " +
+            "aidlc/.aidlc-cursor-subagents and resubmit your prompt.",
+        })}\n`);
+        return 0;
+      }
       // beforeSubmitPrompt fires only for top-level conversations
       // (live-verified) — register this one as a main either way.
-      registerMain();
       // A Cursor background agent submits prompts with no human present; its
       // turn must not mint HUMAN_TURN (the approval gates' presence evidence).
-      if (cursor.is_background_agent === true) return 0;
+      if (sessionIdentity() !== "foreground") return 0;
       // A real human acted this turn.
       runCore(
         "aidlc-record-human-turn.ts",
@@ -2907,6 +3016,31 @@ export async function run(
       // Cursor's {"permission":"deny","agent_message"} stdout JSON
       // (live-verified: the deny blocks the call and relays the reason).
       // Allow paths write {"permission":"allow"} — required under failClosed.
+      const backgroundCommand = sessionIdentity() === "background"
+        ? await backgroundWorkflowCommand()
+        : null;
+      if (backgroundCommand !== null) {
+        process.stdout.write(`${JSON.stringify({
+          permission: "deny",
+          agent_message:
+            `Cursor background agents do not own the active AI-DLC workflow continuation ` +
+            `and cannot run ${backgroundCommand}. Complete the requested background review ` +
+            "without changing workflow lifecycle or routing; leave that to the foreground conversation.",
+        })}\n`);
+        return 0;
+      }
+      if (
+        sessionIdentity() === "background" &&
+        (toolName === "Task" || await backgroundTouchesProtectedState())
+      ) {
+        process.stdout.write(`${JSON.stringify({
+          permission: "deny",
+          agent_message:
+            "Cursor background sessions cannot delegate tasks or access protected " +
+            "session identity. Complete the background review directly.",
+        })}\n`);
+        return 0;
+      }
       if (toolName === "Task") {
         const parentAgent = activeSubagent();
         if (parentAgent) {
@@ -3054,6 +3188,11 @@ export async function run(
     }
 
     case "stop": {
+      // Background agents are ancillary operations, not workflow conductors.
+      // Entering the core Stop loop here can run a fresh `next`, reset the
+      // shared single-use steering cursor, and invalidate the foreground
+      // conversation's already-issued successor.
+      if (sessionIdentity() === "background") return 0;
       // Cursor's stop hook CANNOT block (no decision channel). The core stop
       // hook's {"decision":"block","reason"} converts to a followup_message —
       // the forwarding-loop nudge is ADVISORY on this harness (the opencode
