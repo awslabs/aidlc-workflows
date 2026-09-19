@@ -314,6 +314,7 @@ describe("t281 upstream and target verification", () => {
   // (stage prose: "otherwise enumerate every FR"), and the story map rows carry
   // FR ids. The assignment parse has to follow the same fallback, or every FR
   // is reported as a phantom gap even though each row maps it to a unit.
+  // NFR rows are optional, but must join when present.
   test("units-generation joins FR rows when user-stories is skipped", () => {
     const proj = project();
     write(proj, "inception/requirements-analysis/requirements.md", [
@@ -322,6 +323,9 @@ describe("t281 upstream and target verification", () => {
       "## Functional",
       "- FR1 Login",
       "- FR2 Recovery",
+      "",
+      "## Non-functional",
+      "- NFR1 Latency",
     ].join("\n"));
     seedUnits(proj);
     write(proj, "inception/units-generation/unit-of-work-story-map.md", [
@@ -331,6 +335,7 @@ describe("t281 upstream and target verification", () => {
       "|---|---|---|",
       "| FR1 | U1 | u1-auth |",
       "| FR2 | U2 | u2-profile |",
+      "| NFR1 | U2 | u2-profile |",
     ].join("\n"));
     const file = trace(proj, "inception/units-generation/traceability.json", {
       stage: "units-generation",
@@ -343,8 +348,22 @@ describe("t281 upstream and target verification", () => {
     let out = run(proj, "units-generation", file);
     expect(out.result.pass).toBe(true);
     expect(out.result.gaps).toEqual([]);
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
 
-    // A row that maps FR2 to the wrong unit is still a broken join.
+    trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["FR1", "FR2", "NFR1"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "U1" },
+        { id: "FR2", status: "OK", target: "u2-profile" },
+        { id: "NFR1", status: "OK", target: "U2" },
+      ],
+    });
+    out = run(proj, "units-generation", file);
+    expect(out.result.invalid_targets).toEqual([]);
+    expect(out.result.pass).toBe(true);
+
+    // Rows that map FR2 and NFR1 to the wrong unit are still broken joins.
     write(proj, "inception/units-generation/unit-of-work-story-map.md", [
       "# Story Map",
       "",
@@ -352,11 +371,15 @@ describe("t281 upstream and target verification", () => {
       "|---|---|---|",
       "| FR1 | U1 | u1-auth |",
       "| FR2 | U1 | u1-auth |",
+      "| NFR1 | U1 | u1-auth |",
     ].join("\n"));
     out = run(proj, "units-generation", file);
     expect(out.result.pass).toBe(false);
     expect(out.result.invalid_targets).toContain(
       'FR2: target "u2-profile" is not mapped in unit-of-work-story-map.md',
+    );
+    expect(out.result.invalid_targets).toContain(
+      'NFR1: target "U2" is not mapped in unit-of-work-story-map.md',
     );
   });
 });
