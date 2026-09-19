@@ -245,12 +245,14 @@ customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
 without a default.
 
-Recommended defaults state the bundle on the option line. Customization walks
-Harness, Model provider, Model effort preset, Plugins, MCP servers, and settings
-layer. Every numbered prompt has a bracketed default, invalid input re-asks in
-place, and each answer is echoed. A check-your-answers table accepts Enter to
-apply or a step number to edit. No files are written before that final gate.
-After apply, gerund receipts name the project files and settings layer,
+Recommended defaults preserve the harness's current model provider.
+Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
+servers, and the model-preset settings layer. The provider step offers keeping
+the current provider first and Amazon Bedrock second. Every numbered prompt has
+a bracketed default, invalid input re-asks in place, and each answer is echoed.
+A check-your-answers table accepts Enter to apply or a step number to edit. No
+files are written before that final gate. After apply, gerund receipts name the
+project files and model-preset settings layer,
 genuinely blocking actions follow, then the wizard prints the exact harness
 launch and first workflow command.
 
@@ -439,23 +441,14 @@ Kiro IDE has no required separate CLI.
 
 ### Provider Diagnostics
 
-`aidlc config providers` records provider answers for this project install. The
-interactive section offers only the two answers that have distinct effects for
-the harness in front of you. `amazon-bedrock` records the region and profile the
-harness should use, and leads on every harness whose models AI-DLC can point at
-Bedrock. The second answer is `unchanged` on every harness the section asks,
-recording nothing and keeping what is already in place. Kiro CLI and Kiro IDE
-are not asked at all because model access comes with Kiro. The shipped fallback
-bytes remain valid when this section has never run.
-
-`other` is available as `--provider other --acknowledge` but is not offered
-interactively. Nothing reads a recorded `other`: its only effect is a
-`non-bedrock-provider-configuration` reminder that `--acknowledge` immediately
-clears, and declining that acknowledgement did exactly what `unchanged` does,
-so it duplicated the second answer by a longer route. Existing `other` records
-stay valid.
+`aidlc config providers` records provider answers for this project install.
+Keeping the provider already configured in the harness is the default answer.
+Amazon Bedrock is an explicit opt-in. Kiro CLI and Kiro IDE are not asked because
+model access comes with Kiro. `other` remains available for a manually configured
+provider and carries an acknowledgement reminder.
 
 ```bash
+aidlc config providers --provider current --yes
 aidlc config providers --provider amazon-bedrock \
   --region us-east-1 --profile default --yes
 aidlc config providers --show --json
@@ -473,8 +466,10 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 
 | Harness | Recorded answer application |
 |---------|-----------------------------|
-| Claude Code | Writes `AWS_REGION` and optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
-| Codex CLI | Writes profile and region in `[model_providers.amazon-bedrock.aws]` without changing model or effort keys |
+| Claude Code | Enables Bedrock and writes `AWS_REGION` plus optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
+| Codex CLI | Records the choice and instructs the user to keep provider, credentials, and model in `~/.codex/config.toml` |
+| Kiro CLI | No provider answer; model access comes with Kiro |
+| Kiro IDE | No provider answer; model access comes with Kiro |
 | opencode | Offers to write `provider.amazon-bedrock.options.region/profile` to `opencode.json`; `--opencode-default yes|no` records the answer |
 | GitHub Copilot | Records acknowledgement of the manual BYOK environment setup |
 | Cursor | Records acknowledgement of the manual provider and model-picker setup |
@@ -482,9 +477,14 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 Bedrock model access and IAM permission verification cannot be automated
 offline. The record therefore carries named pending actions. `--show` lists
 them, `--check` stays non-zero while they are pending, and
-`--mark-done <id>` records completion. A custom non-Bedrock provider is recorded with
-`--provider other --acknowledge`; it records the choice without silently
-editing provider bytes.
+`--mark-done <id>` records completion. Codex provider setup remains explicitly
+self-attested after completion because the effective user configuration and
+alternate credential channels cannot be resolved offline; `--check` returns
+success with that warning instead of describing the setup as verified.
+`--provider current` preserves the harness's configured provider and removes
+only exact legacy AI-DLC Bedrock defaults from Claude, Codex, or opencode
+project files. `--provider other` records a manually configured non-Bedrock
+provider and reports that setup as pending until `--acknowledge` is supplied.
 
 The question is worded for the harness in front of you, so each install offers
 the two paths that actually exist for it:
@@ -492,7 +492,7 @@ the two paths that actually exist for it:
 | Harness | `amazon-bedrock` records |
 |---------|--------------------------|
 | Claude Code | the AWS region and profile in `settings.json`, and the AWS MCP region in `.mcp.json` when present |
-| Codex CLI | the AWS region and profile in `config.toml` |
+| Codex CLI | the AWS region and profile in the project record, then guides user-level provider setup in `$CODEX_HOME/config.toml` |
 | OpenCode | the AWS region and profile, and offers to write them to `opencode.json` |
 | GitHub Copilot | that you set the Copilot BYOK provider variables yourself |
 | Cursor | that you configure the provider in Cursor yourself |
@@ -511,21 +511,21 @@ answer: whatever region that file carries, whether an earlier build's Bedrock
 answer put it there or you did, is kept across refreshes, and `--reset` leaves
 the file alone.
 
-Every other harness is Bedrock-oriented, so Bedrock leads and absent AWS
-credentials are never read as evidence that you are on your own subscription.
-Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
-which AI-DLC tracks as a pending action rather than performs.
+Every other harness asks whether to keep its current provider or opt in to
+Amazon Bedrock. Keeping the current provider is the default, including when AWS
+credentials are detected. Copilot and Cursor reach Bedrock through their own
+BYOK or provider settings, which AI-DLC tracks as a pending action rather than
+performs.
 
 On Kiro, `--check` says no answer is needed and exits zero even with a legacy
 record. On every other unrecorded section it names that state instead of
 reporting a verified answer, and still exits zero because the shipped fallback
 bytes remain valid.
 
-On a Bedrock-oriented harness `unchanged` is always the second answer, and it
-becomes the default once something is recorded, so re-entering the section never
-silently rewrites a region or profile you already set. It names what it keeps,
-records nothing, and still reaches the mark-done prompts, so a pending action
-can be cleared without re-answering.
+On these harnesses `keep current` is the first answer and the default.
+`amazon-bedrock` is the second answer. Re-entering the section with the recorded
+Bedrock answer keeps the region and profile unless you explicitly replace them;
+pending actions can still be completed with `--mark-done`.
 
 ### Trust Diagnostics
 

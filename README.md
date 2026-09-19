@@ -79,10 +79,11 @@ guide in the table below. The complete walkthrough is in
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
 
-Model-provider setup belongs to the harness. Claude Code and the shipped Codex
-configuration default to Amazon Bedrock; GitHub Copilot uses GitHub sign-in or
-BYOK; Cursor and opencode use their configured provider; Kiro CLI and Kiro IDE
-need none, because model access comes with Kiro. The methodology itself is
+Model-provider setup belongs to the harness. Shipped project configuration
+keeps the provider and model already selected by the user. `aidlc config
+providers` can apply Amazon Bedrock settings on supported project surfaces or
+record manual setup for other harnesses. Kiro CLI and Kiro IDE need no provider
+answer because model access comes with Kiro. The methodology itself is
 provider-independent.
 
 ## Recommended Model

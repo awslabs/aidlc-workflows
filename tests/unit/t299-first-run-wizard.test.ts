@@ -197,12 +197,14 @@ describe("t299 first-run setup wizard", () => {
       "credentials found  (instance role, detected region us-east-2)",
     );
     expect(result.stdout).toContain("1. Yes, use recommended defaults");
-    expect(result.stdout).toContain("MCP servers on, all plugins, Bedrock via your AWS credentials");
+    expect(result.stdout).toContain(
+      "MCP servers on, all plugins, current model provider preserved",
+    );
     expect(result.stdout).toContain("medium project agent effort for deciding");
     expect(result.stdout).not.toContain("effort dials do not apply");
     expect(result.stdout).toContain("Writing project files ... done");
     expect(result.stdout).toContain(
-      "Recording your choices ... done  (aidlc.settings.json in this project)",
+      "Recording model preset ... done  (aidlc.settings.json in this project)",
     );
     if (process.platform === "win32") {
       expect(result.stdout).toContain(
@@ -238,7 +240,7 @@ describe("t299 first-run setup wizard", () => {
 
   test("customize re-asks invalid preset and writes nothing when review declines", () => {
     const result = runWizard(
-      "2\n\n\n\n\nthorogh\n2\n\n\n\nn\n",
+      "2\n\n\nthorogh\n2\n\n\n\nn\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Customize setup - 6 steps");
@@ -258,7 +260,7 @@ describe("t299 first-run setup wizard", () => {
 
   test("unchanged completes setup without recording model policy in any settings layer", () => {
     const env = isolatedMachineEnv();
-    const result = runWizard("2\n\n\n\n\n4\n\n\n\n\n", { env });
+    const result = runWizard("2\n\n\n4\n\n\n\n\n", { env });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Keeping existing settings unchanged; no preset recorded.");
     expect(result.stdout).toContain("3. Preset       none (unchanged)");
@@ -286,7 +288,7 @@ describe("t299 first-run setup wizard", () => {
       },
     }, null, 4)}\n`;
     const env = isolatedMachineEnv();
-    const result = runWizard("2\n\n\n\n\n4\n\n\n2\n\n", {
+    const result = runWizard("2\n\n\n4\n\n\n2\n\n", {
       env,
       prepare: (project) => {
         writeFileSync(join(project, "aidlc.settings.json"), prior);
@@ -312,8 +314,6 @@ describe("t299 first-run setup wizard", () => {
     const result = runWizard(
       `${[
         "2",
-        "",
-        "",
         "",
         "",
         "",
@@ -354,7 +354,7 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(result.project, ".codex"))).toBe(true);
   }, 60_000);
 
-  test("OpenCode recommended Bedrock setup records an explicit default choice", () => {
+  test("OpenCode recommended setup preserves the current provider", () => {
     const result = runWizard("\n", {
       harnesses: {
         claude: { found: false },
@@ -369,8 +369,7 @@ describe("t299 first-run setup wizard", () => {
       ),
     );
     expect(harness.providers).toEqual(expect.objectContaining({
-      provider: "amazon-bedrock",
-      opencodeDefault: true,
+      provider: "current",
     }));
   }, 60_000);
 
@@ -449,8 +448,6 @@ describe("t299 first-run setup wizard", () => {
     }, null, 2)}\n`;
     const input = `${[
       "2",
-      "",
-      "",
       "",
       "",
       "",

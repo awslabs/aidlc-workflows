@@ -146,6 +146,7 @@ import {
   providerFiles,
   providerIssues,
   providerMenuCopy,
+  providerSurfaceIssues,
   projectChoiceFiles,
   projectChoiceIssues,
   projectMcpNote,
@@ -159,6 +160,7 @@ import {
   type ConfigDiagnosticRecords,
   type CompletionShell,
   type ConfigOutstandingAction,
+  type DiagnosticIssue,
   type ProjectChoicesRecord,
   type ProvidersRecord,
   type RuntimeRecord,
@@ -1228,7 +1230,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
     : section === "providers"
     ? [
         heading("Provider answers:", out),
-        "  --provider <amazon-bedrock|other>",
+        "  --provider <current|amazon-bedrock|other>",
         "  --region <aws-region>",
         "  --profile <aws-profile>",
         "  --opencode-default <yes|no>",
@@ -1473,6 +1475,12 @@ function showDiagnosticSection(
     }
     const pending = data.pendingActions as ReturnType<typeof pendingProviderIssues>;
     for (const issue of pending) output += `  Pending: ${issue.id} - ${issue.message}\n`;
+    const warnings = (data.issues as DiagnosticIssue[]).filter(
+      (issue) => issue.severity === "warn",
+    );
+    for (const issue of warnings) {
+      output += `  Warning: ${issue.id} - ${issue.message}\n`;
+    }
     output += "  Files carrying provider settings:\n";
     for (const entry of data.files as ReturnType<typeof providerFiles>) {
       output += `    ${entry.setting}: ${entry.file}\n`;
@@ -1497,7 +1505,7 @@ function checkDiagnosticSection(
   records: ConfigDiagnosticRecords,
   options: ReturnType<typeof globalOptions>,
 ): void {
-  let issues: Array<{ id: string; message: string }>;
+  let issues: DiagnosticIssue[];
   if (section === "runtime") {
     issues = runtimeIssues(
       probeRuntime(projectDir, selected.harnessDir, selected.harness),
@@ -1516,27 +1524,29 @@ function checkDiagnosticSection(
       selected.harness,
     ).issues;
   }
-  // "clean" on an unrecorded providers section contradicted the setup map,
-  // which calls the same state `[needs]`. Name the state instead of implying an
-  // answer was verified. The exit code is unchanged: the shipped fallback bytes
-  // stay valid, so an unrecorded section is not a failure.
+  const blockers = issues.filter((issue) => issue.severity !== "warn");
+  const warnings = issues.filter((issue) => issue.severity === "warn");
   const providersUnrecorded = section === "providers" && records.providers === null;
   const cleanMessage = section === "providers" && harnessOwnsModelAccess(selected.harness)
     ? `providers needs no answer for ${selected.harness}; its model access is harness-managed`
     : providersUnrecorded
     ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
       `Record one with '${configCommand("providers")}'`
+    : warnings.length > 0
+    ? `${section} configuration has ${warnings.length} warning(s) for ${selected.harness}: ${
+      warnings.map((issue) => `${issue.id} (${issue.message})`).join("; ")
+    }`
     : `${section} configuration is clean for ${selected.harness}`;
   emitResult(
-    issues.length === 0
+    blockers.length === 0
       ? success(cleanMessage, {
           section,
           harness: selected.harness,
-          issues: [],
+          issues: warnings,
         })
       : failure(
-          `${section} configuration has ${issues.length} unmet item(s): ${
-            issues.map((issue) => `${issue.id} (${issue.message})`).join("; ")
+          `${section} configuration has ${blockers.length} unmet item(s): ${
+            blockers.map((issue) => `${issue.id} (${issue.message})`).join("; ")
           }`,
           EXIT.failure,
           configCommand(`${section} --show`),
@@ -1586,16 +1596,24 @@ function providerRecordFromArgs(
   const next = cloneDiagnosticRecord(current) ?? { schemaVersion: 1 };
   const provider = valueAfter(argv, "--provider");
   if (provider === "builtin" || (provider === undefined && next.provider === "builtin")) {
-    throw new Error("--provider builtin is no longer recorded; a harness that provides its own model access needs no answer");
+    throw new Error("--provider builtin is legacy-only; choose current, amazon-bedrock, or other");
   }
   if (
     provider !== undefined &&
+    provider !== "current" &&
     provider !== "amazon-bedrock" &&
     provider !== "other"
   ) {
-    throw new Error("--provider must be amazon-bedrock or other");
+    throw new Error("--provider must be current, amazon-bedrock, or other");
   }
-  if (provider) next.provider = provider;
+  if (provider) {
+    next.provider = provider;
+    if (provider !== "amazon-bedrock") {
+      delete next.region;
+      delete next.profile;
+      delete next.opencodeDefault;
+    }
+  }
   const region = valueAfter(argv, "--region");
   const profile = valueAfter(argv, "--profile");
   if (region) next.region = region;
@@ -1610,9 +1628,20 @@ function providerRecordFromArgs(
     }
     next.opencodeDefault = opencodeDefault === "yes";
   }
+  if (
+    next.provider !== current?.provider ||
+    next.region !== current?.region ||
+    next.profile !== current?.profile ||
+    next.opencodeDefault !== current?.opencodeDefault
+  ) {
+    delete next.acknowledged;
+    delete next.pendingActions;
+  }
   if (argv.includes("--acknowledge")) next.acknowledged = true;
   if (!next.provider) {
-    throw new Error("provider configuration requires --provider <amazon-bedrock|other>");
+    throw new Error(
+      "provider configuration requires --provider <current|amazon-bedrock|other>",
+    );
   }
   if (next.provider === "amazon-bedrock" && !next.region) {
     throw new Error("Amazon Bedrock configuration requires --region <aws-region>");
@@ -1623,14 +1652,6 @@ function providerRecordFromArgs(
     next.opencodeDefault === undefined
   ) {
     throw new Error("OpenCode Bedrock configuration requires --opencode-default <yes|no>");
-  }
-  if (
-    next.provider === "other" &&
-    next.acknowledged !== true
-  ) {
-    throw new Error(
-      `${selected.harness} provider setup is instruct-only; pass --acknowledge after completing the manual provider step`,
-    );
   }
   let reconciled = reconcileProviderActions(
     normalizeProvidersRecord(next) as ProvidersRecord,
@@ -1699,42 +1720,19 @@ function diagnosticWizard(
         } region ${detected.region}.\n`
         : "  No AWS credentials were detected.\n",
     );
-    // `unchanged` records nothing and keeps what is in place. It leads once an
-    // answer is recorded, so re-entering never silently rewrites that answer.
-    // Two answers, because only two have distinct effects. `other` is not
-    // offered: nothing reads a recorded `other`, and declining its
-    // acknowledgement did exactly what `unchanged` does, so it duplicated the
-    // second answer by a longer route. It remains available as
-    // `--provider other --acknowledge` for anyone who wants its reminder.
-    const recorded = records.providers;
-    process.stdout.write(`    1. amazon-bedrock   ${copy.bedrock}\n`);
     process.stdout.write(
-      "    2. unchanged        records no provider answer and keeps existing settings;\n",
+      "    1. keep current     inherit the provider already configured in the harness (default)\n",
     );
-    process.stdout.write(
-      `                        ${
-        recorded
-          ? "the recorded answer stays as it is"
-          : "new projects use the shipped fallback"
-      }\n`,
-    );
-    const choice = promptChoice(
-      "  Provider",
-      2,
-      recorded ? 2 : 1,
-    );
-    // On a Bedrock-oriented harness the second answer records nothing but must
-    // still reach the mark-done loop below, or a pending action could never be
-    // cleared here.
-    const keepRecorded = choice === 2;
-    if (keepRecorded) {
-      process.stdout.write(
-        "  Keeping existing settings unchanged; no provider answer recorded.\n\n",
-      );
-    }
-    const args = ["--provider", "amazon-bedrock"];
+    process.stdout.write(`    2. amazon-bedrock   ${copy.bedrock}${
+      credentials.hasCredentials ? " (AWS credentials detected)" : ""
+    }\n`);
+    const choice = promptChoice("  Provider", 2, 1);
+    const providerAnswer = choice === 1
+      ? "current"
+      : "amazon-bedrock";
+    const args = ["--provider", providerAnswer];
     const skipMarkDone = new Set<string>();
-    if (choice === 1) {
+    if (choice === 2) {
       const region = promptTextDefault("  AWS region", detected.region);
       const profileAnswer = promptTextDefault(
         "  AWS profile",
@@ -1757,9 +1755,15 @@ function diagnosticWizard(
         );
         args.push("--opencode-default", offer ? "yes" : "no");
       }
-      if (selected.harness === "copilot" || selected.harness === "cursor") {
+      if (
+        selected.harness === "codex" ||
+        selected.harness === "copilot" ||
+        selected.harness === "cursor"
+      ) {
         process.stdout.write(
-          selected.harness === "copilot"
+          selected.harness === "codex"
+            ? "Configure the provider, credentials, and model in ~/.codex/config.toml before acknowledging this step.\n"
+            : selected.harness === "copilot"
             ? "Configure Copilot BYOK provider variables before acknowledging this step.\n"
             : "Configure the provider and select the model in Cursor before acknowledging this step.\n",
         );
@@ -1770,7 +1774,9 @@ function diagnosticWizard(
         if (acknowledged) {
           args.push("--acknowledge");
         } else {
-          const action = selected.harness === "copilot"
+          const action = selected.harness === "codex"
+            ? "codex-provider-configuration"
+            : selected.harness === "copilot"
             ? "copilot-byok-configuration"
             : "cursor-provider-configuration";
           skipMarkDone.add(action);
@@ -1779,13 +1785,12 @@ function diagnosticWizard(
           );
         }
       }
+    } else {
+      process.stdout.write(
+        "  Keeping the current harness provider; project Bedrock overrides will be removed.\n\n",
+      );
     }
-    // Keeping an absent answer leaves the section untouched, and there are no
-    // pending actions to offer, so stop before the loop below dereferences null.
-    if (keepRecorded && !recorded) return null;
-    let next = keepRecorded
-      ? recorded as ProvidersRecord
-      : providerRecordFromArgs(records.providers, args, selected);
+    let next = providerRecordFromArgs(records.providers, args, selected);
     for (const action of next.pendingActions ?? []) {
       if (action.status === "done") continue;
       if (skipMarkDone.has(action.id)) continue;
@@ -1839,12 +1844,14 @@ function diagnosticSummary(
     return {
       lines: [
         !record
-          ? "  Providers    reset to shipped fallback bytes"
+          ? "  Providers    reset to provider-neutral shipped bytes"
+          : record.provider === "current"
+          ? "  Providers    current harness provider; project overrides removed"
           : record.provider === "builtin"
-          ? "  Providers    builtin; the harness provides its own model access, nothing written"
+          ? "  Providers    legacy builtin answer; no provider settings written"
           : `  Providers    ${record.provider} region=${record.region ?? "manual"} profile=${
-              record.profile ?? "default-chain"
-            }`,
+            record.profile ?? "default-chain"
+          }`,
       ],
       notes: record
         ? pendingProviderIssues(record, harness).map((issue) => `${issue.id}: ${issue.message}`)
@@ -2357,7 +2364,16 @@ function prepareDiagnosticSection(
     next = diagnosticWizard(section, projectDir, selected, records, options);
   }
   const previous = currentDiagnosticRecord(records, section);
-  if (canonical(previous) === canonical(next)) {
+  const providerSurfaceDrift =
+    section === "providers" &&
+    next !== null &&
+    providerSurfaceIssues(
+      projectDir,
+      selected.harnessDir,
+      selected.harness,
+      next as ProvidersRecord,
+    ).some((issue) => issue.severity !== "warn");
+  if (canonical(previous) === canonical(next) && !providerSurfaceDrift) {
     emitResult(success(`${section} configuration unchanged`), options);
     return null;
   }
@@ -3616,6 +3632,245 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "rulesSubdir",
 ]);
 
+function preserveClaudeProviderFields(
+  projectDir: string,
+  stagedRoot: string,
+  harnessDir: string,
+  previousProvider: ProvidersRecord | null,
+  nextProvider: ProvidersRecord | null,
+): void {
+  const relative = join(harnessDir, "settings.json");
+  const currentPath = join(projectDir, relative);
+  const stagedPath = join(stagedRoot, relative);
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
+  const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
+  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(current)) {
+    if (
+      key !== "companyAnnouncements" &&
+      key !== "permissions" &&
+      key !== "statusLine" &&
+      key !== "env" &&
+      key !== "hooks"
+    ) {
+      staged[key] = value;
+    }
+  }
+  const currentEnv = current.env && typeof current.env === "object" &&
+      !Array.isArray(current.env)
+    ? { ...current.env as Record<string, unknown> }
+    : {};
+  if (
+    previousProvider?.provider === "amazon-bedrock" &&
+    currentEnv.CLAUDE_CODE_USE_BEDROCK === "1" &&
+    currentEnv.AWS_REGION === previousProvider.region &&
+    (!previousProvider.profile ||
+      currentEnv.AWS_PROFILE === previousProvider.profile)
+  ) {
+    delete currentEnv.CLAUDE_CODE_USE_BEDROCK;
+    delete currentEnv.AWS_REGION;
+    if (previousProvider.profile) delete currentEnv.AWS_PROFILE;
+  }
+  const stagedEnv = staged.env && typeof staged.env === "object" &&
+      !Array.isArray(staged.env)
+    ? { ...staged.env as Record<string, unknown> }
+    : {};
+  if (
+    nextProvider?.provider !== "amazon-bedrock" &&
+    previousProvider?.provider === "amazon-bedrock" &&
+    stagedEnv.CLAUDE_CODE_USE_BEDROCK === "1" &&
+    stagedEnv.AWS_REGION === previousProvider.region &&
+    (!previousProvider.profile ||
+      stagedEnv.AWS_PROFILE === previousProvider.profile)
+  ) {
+    delete stagedEnv.CLAUDE_CODE_USE_BEDROCK;
+    delete stagedEnv.AWS_REGION;
+    if (previousProvider.profile) delete stagedEnv.AWS_PROFILE;
+  }
+  // The project-flags record owns this value. Do not allow the current file to
+  // override a newly selected scope when user fields are carried into staging.
+  delete currentEnv.AWS_AIDLC_DEFAULT_SCOPE;
+  staged.env = { ...stagedEnv, ...currentEnv };
+  writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
+}
+
+const CODEX_FRAMEWORK_TABLES = new Set([
+  "agents",
+  "features",
+  "tools",
+  "tui",
+]);
+
+function codexSections(
+  content: string,
+): Array<{ name: string; text: string }> {
+  const lines = content.split(/\r?\n/);
+  const sections: Array<{ name: string; text: string }> = [];
+  let current: { name: string; lines: string[] } | null = null;
+  for (const line of lines) {
+    const table = /^\s*\[([^\]]+)\]\s*$/.exec(line)?.[1];
+    if (table !== undefined) {
+      if (current) {
+        sections.push({
+          name: current.name,
+          text: current.lines.join("\n").trimEnd(),
+        });
+      }
+      current = { name: table, lines: [line] };
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+  if (current) {
+    sections.push({
+      name: current.name,
+      text: current.lines.join("\n").trimEnd(),
+    });
+  }
+  return sections;
+}
+
+function mergeCodexUserConfiguration(
+  staged: string,
+  current: string,
+): string {
+  // Keep the project's exact bytes as the base and refresh only tables the
+  // framework owns. This is byte-idempotent when the generated tables have not
+  // changed, preserves top-level model/provider assignments and custom tables,
+  // and lets the normal ownership check catch edits to framework tables.
+  let merged = current;
+  const generatedFrameworkSections = codexSections(staged).filter((section) =>
+    CODEX_FRAMEWORK_TABLES.has(section.name)
+  );
+  for (const section of generatedFrameworkSections) {
+    const escaped = section.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(
+      `^\\[${escaped}\\]\\r?\\n[\\s\\S]*?(?=^\\[|(?![\\s\\S]))`,
+      "m",
+    );
+    const existing = pattern.exec(merged)?.[0];
+    if (existing !== undefined && existing.trimEnd() === section.text) {
+      continue;
+    }
+    if (existing !== undefined) {
+      merged = merged.replace(pattern, `${section.text}\n\n`);
+    } else {
+      merged = `${merged.trimEnd()}\n\n${section.text}\n`;
+    }
+  }
+  return merged.endsWith("\n") ? merged : `${merged}\n`;
+}
+
+function preserveCodexProviderFields(
+  projectDir: string,
+  stagedRoot: string,
+  harnessDir: string,
+): void {
+  const relative = join(harnessDir, "config.toml");
+  const currentPath = join(projectDir, relative);
+  const stagedPath = join(stagedRoot, relative);
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
+  const current = readFileSync(currentPath, "utf-8");
+  writeFileSync(
+    stagedPath,
+    mergeCodexUserConfiguration(
+      readFileSync(stagedPath, "utf-8"),
+      current,
+    ),
+  );
+}
+
+function preserveOpenCodeProviderFields(
+  projectDir: string,
+  stagedRoot: string,
+): void {
+  const currentPath = join(projectDir, "opencode.json");
+  const stagedPath = join(stagedRoot, "opencode.json");
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
+  const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
+  if (!current.provider || typeof current.provider !== "object" ||
+      Array.isArray(current.provider)) {
+    return;
+  }
+  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  const stagedProviders = staged.provider && typeof staged.provider === "object" &&
+      !Array.isArray(staged.provider)
+    ? staged.provider as Record<string, unknown>
+    : {};
+  staged.provider = {
+    ...stagedProviders,
+    ...current.provider as Record<string, unknown>,
+  };
+  writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
+}
+
+function preserveUserProviderFields(
+  projectDir: string,
+  stagedRoot: string,
+  harnessDir: string,
+  harness: ModelHarness,
+  previousProvider: ProvidersRecord | null,
+  nextProvider: ProvidersRecord | null,
+): void {
+  if (harness === "claude") {
+    preserveClaudeProviderFields(
+      projectDir,
+      stagedRoot,
+      harnessDir,
+      previousProvider,
+      nextProvider,
+    );
+  } else if (harness === "codex") {
+    preserveCodexProviderFields(projectDir, stagedRoot, harnessDir);
+  } else if (harness === "opencode") {
+    preserveOpenCodeProviderFields(projectDir, stagedRoot);
+  }
+}
+
+function claudeProviderOnlyDifference(
+  projectDir: string,
+  stagedRoot: string,
+  harnessDir: string,
+  previousProvider: ProvidersRecord | null,
+): boolean {
+  const relative = join(harnessDir, "settings.json");
+  const currentPath = join(projectDir, relative);
+  const stagedPath = join(stagedRoot, relative);
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
+  const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
+  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  const currentEnv = current.env && typeof current.env === "object" &&
+      !Array.isArray(current.env)
+    ? { ...current.env as Record<string, unknown> }
+    : {};
+  const stagedEnv = staged.env && typeof staged.env === "object" &&
+      !Array.isArray(staged.env)
+    ? { ...staged.env as Record<string, unknown> }
+    : {};
+  for (const key of [
+    "CLAUDE_CODE_USE_BEDROCK",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "AWS_REGION",
+  ]) {
+    delete currentEnv[key];
+    delete stagedEnv[key];
+  }
+  if (
+    previousProvider?.provider === "amazon-bedrock" &&
+    previousProvider.profile &&
+    currentEnv.AWS_PROFILE === previousProvider.profile
+  ) {
+    delete currentEnv.AWS_PROFILE;
+    delete stagedEnv.AWS_PROFILE;
+  }
+  current.env = currentEnv;
+  staged.env = stagedEnv;
+  return canonical(current) === canonical(staged);
+}
+
 function prepareRefreshSource(
   projectDir: string,
   sourceRoot: string,
@@ -3660,8 +3915,10 @@ function prepareRefreshSource(
 
   const stagedHarnessData = join(stagedHarness, "tools", "data", "harness.json");
   const staged = JSON.parse(readFileSync(stagedHarnessData, "utf-8")) as Record<string, unknown>;
+  let previousProvider: ProvidersRecord | null = null;
   if (regularFile(currentHarnessData)) {
     const current = JSON.parse(readFileSync(currentHarnessData, "utf-8")) as Record<string, unknown>;
+    previousProvider = normalizeProvidersRecord(current.providers);
     const policyKeys = ["models", "flags"].filter((key) => Object.hasOwn(current, key));
     if (policyKeys.length > 0) {
       throw new Error(
@@ -3686,16 +3943,25 @@ function prepareRefreshSource(
     if (diagnosticsOverride.plugins === null) delete staged.plugins;
     else staged.plugins = diagnosticsOverride.plugins;
   }
+  const distribution = staged.distribution;
+  if (typeof distribution !== "string") {
+    throw new Error(`${stagedHarnessData}: distribution must be a string`);
+  }
+  const providers = normalizeProvidersRecord(staged.providers);
+  if (providers) {
+    staged.providers = reconcileProviderActions(
+      providers,
+      modelHarness(distribution),
+    );
+  } else {
+    delete staged.providers;
+  }
   if (
     regularFile(currentHarnessData) ||
     diagnosticsOverride !== undefined
   ) {
     writeFileSync(stagedHarnessData, `${JSON.stringify(staged, null, 2)}\n`);
     regenerated.add(`${descriptor.harnessDir}/tools/data/harness.json`);
-  }
-  const distribution = staged.distribution;
-  if (typeof distribution !== "string") {
-    throw new Error(`${stagedHarnessData}: distribution must be a string`);
   }
   applyModelPolicyToProjection(
     root,
@@ -3719,6 +3985,7 @@ function prepareRefreshSource(
       trust: normalizeTrustRecord(staged.trust),
       project: normalizeProjectChoicesRecord(staged.project),
     },
+    previousProvider,
   );
   for (const directory of descriptor.managedDirectories) {
     const stagedDirectory = join(root, directory);
@@ -3737,6 +4004,60 @@ function prepareRefreshSource(
       beforeGeneratedWrites.get(integration.path) !== sha256File(path)
     ) {
       regenerated.add(integration.path);
+    }
+  }
+  // Provider preservation carries only user-owned fields into the staged
+  // projection. Run it after the regenerated scan so those fields cannot make
+  // the whole file runtime-generated and bypass the ordinary ownership check.
+  // Provider mutations were already classified above; when preservation is the
+  // only difference, the staged bytes equal the project and are preserved.
+  preserveUserProviderFields(
+    projectDir,
+    root,
+    descriptor.harnessDir,
+    modelHarness(distribution),
+    previousProvider,
+    normalizeProvidersRecord(staged.providers),
+  );
+  // User environment preservation intentionally excludes this managed value,
+  // but reapply it here to keep the ordering explicit.
+  applyProjectFlagsToProjection(
+    root,
+    descriptor.harnessDir,
+    modelHarness(distribution),
+    projectFlags,
+  );
+  // Preservation starts from project-owned fields, so apply the selected
+  // provider once more to prevent the previous provider from being carried
+  // back into the final staged projection.
+  applyConfigDiagnosticRecords(
+    root,
+    descriptor.harnessDir,
+    modelHarness(distribution),
+    {
+      runtime: normalizeRuntimeRecord(staged.runtime),
+      providers: normalizeProvidersRecord(staged.providers),
+      trust: normalizeTrustRecord(staged.trust),
+      project: normalizeProjectChoicesRecord(staged.project),
+    },
+    previousProvider,
+  );
+  if (modelHarness(distribution) === "claude") {
+    const settingsRel = `${descriptor.harnessDir}/settings.json`;
+    const currentSettings = join(projectDir, settingsRel);
+    const stagedSettings = join(root, settingsRel);
+    if (
+      regularFile(currentSettings) &&
+      regularFile(stagedSettings) &&
+      sha256File(currentSettings) !== sha256File(stagedSettings) &&
+      claudeProviderOnlyDifference(
+        projectDir,
+        root,
+        descriptor.harnessDir,
+        previousProvider,
+      )
+    ) {
+      regenerated.add(settingsRel);
     }
   }
   // Kiro CLI: the aws-mcp region is the project's own MCP setting, not a provider
@@ -4311,9 +4632,9 @@ type FirstRunDetection = {
 
 type FirstRunChoices = {
   candidate: InstalledSourceCandidate;
-  // Bedrock-oriented harnesses offer Bedrock or unchanged. Harness-managed
-  // access asks nothing and records no provider answer.
-  provider: "amazon-bedrock" | "harness-managed" | "unchanged";
+  // Kiro owns model access; all other harnesses default to preserving the
+  // provider already configured by the user.
+  provider: "current" | "amazon-bedrock" | "harness-managed";
   region: string;
   profile: string;
   preset: "balanced" | "thorough" | "minimal" | "unchanged";
@@ -4620,8 +4941,8 @@ function applyFirstRunChoices(
     "--yes",
     "--json",
   ], projectDir, snapshot);
-  // Neither unchanged nor harness-managed access has a provider answer to write.
-  if (choices.provider === "unchanged" || choices.provider === "harness-managed") return;
+  // Harness-managed access has no provider answer to write.
+  if (choices.provider === "harness-managed") return;
   const providerArgs = [
     "providers",
     "--project-dir",
@@ -4798,7 +5119,7 @@ function renderFirstRunEnding(
     `\n  Writing project files ... ${successText("done", process.stdout)}  (${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)\n`,
   );
   process.stdout.write(
-    `  Recording your choices ... ${successText("done", process.stdout)}  (${
+    `  Recording model preset ... ${successText("done", process.stdout)}  (${
       choices.target === "project"
         ? "aidlc.settings.json in this project"
         : choices.target === "local"
@@ -4811,9 +5132,6 @@ function renderFirstRunEnding(
     choices.candidate.descriptor.harnessDir,
     modelHarness(choices.candidate.stamp.distribution),
   );
-  // The wizard no longer offers "other", so there is no manual-provider step to
-  // chase here: Bedrock carries its own access check, harness-managed needs none,
-  // and "unchanged" leaves the shipped fallback in place.
   if (remaining.length > 0) {
     process.stdout.write(
       `\n  ${remaining.length === 1 ? "One thing needs you" : `${remaining.length} things need you`} - ${
@@ -4860,7 +5178,7 @@ function providerForHarness(
   distribution: string,
 ): FirstRunChoices["provider"] {
   if (harnessOwnsModelAccess(modelHarness(distribution))) return "harness-managed";
-  return current === "harness-managed" ? "amazon-bedrock" : current;
+  return current === "harness-managed" ? "current" : current;
 }
 
 function customizeFirstRun(
@@ -4871,7 +5189,7 @@ function customizeFirstRun(
   const aws = awsSummary(detection.aws);
   const choices: FirstRunChoices = {
     candidate: initial,
-    provider: providerForHarness("amazon-bedrock", initial.stamp.distribution),
+    provider: providerForHarness("current", initial.stamp.distribution),
     region: aws.region,
     profile: "",
     preset: "balanced",
@@ -4926,17 +5244,14 @@ function customizeFirstRun(
             } region ${aws.region}.\n`
           : "  No AWS credentials were detected.\n",
       );
-      process.stdout.write(`    1. amazon-bedrock   ${copy.bedrock}${
-        detection.aws.hasCredentials ? " (detected, default)" : " (default)"
+      process.stdout.write(
+        "    1. keep current     inherit the provider already configured in the harness (default)\n",
+      );
+      process.stdout.write(`    2. amazon-bedrock   ${copy.bedrock}${
+        detection.aws.hasCredentials ? " (AWS credentials detected)" : ""
       }\n`);
-      process.stdout.write(
-        "    2. unchanged        records no provider answer and keeps existing settings;\n",
-      );
-      process.stdout.write(
-        "                        new projects use the shipped fallback\n",
-      );
       const selected = promptChoice("  Provider", 2, 1);
-      choices.provider = selected === 1 ? "amazon-bedrock" : "unchanged";
+      choices.provider = selected === 1 ? "current" : "amazon-bedrock";
       if (choices.provider === "amazon-bedrock") {
         choices.region = promptTextDefault("  AWS region", choices.region);
         const profile = promptTextDefault(
@@ -4957,7 +5272,7 @@ function customizeFirstRun(
         );
       } else {
         process.stdout.write(
-          "  Keeping existing settings unchanged; no provider answer recorded.\n\n",
+          "  Keeping the current harness provider; project Bedrock overrides will be removed.\n\n",
         );
       }
       return;
@@ -5011,17 +5326,17 @@ function customizeFirstRun(
       process.stdout.write(`  MCP servers ${selected === 1 ? "on" : "off"}.\n\n`);
       return;
     }
-    process.stdout.write("  Step 6 of 6 - Where to record these choices\n");
+    process.stdout.write("  Step 6 of 6 - Where to record the model preset\n");
     process.stdout.write("    1. this project, committed     aidlc.settings.json - shared with your team  (default)\n");
     process.stdout.write("    2. this project, just for you  aidlc.settings.local.json - gitignored\n");
     process.stdout.write("    3. this machine                every project you set up here\n");
     const selected = promptChoice(
-      "  Record in",
+      "  Preset in",
       3,
       choices.target === "project" ? 1 : choices.target === "local" ? 2 : 3,
     );
     choices.target = selected === 1 ? "project" : selected === 2 ? "local" : "global";
-    process.stdout.write(`  Recording choices in ${firstRunSettingsTargetLabel(choices.target)}.\n\n`);
+    process.stdout.write(`  Recording the model preset in ${firstRunSettingsTargetLabel(choices.target)}.\n\n`);
   };
 
   process.stdout.write("\n  Customize setup - 6 steps, Enter accepts the [default].\n\n");
@@ -5034,12 +5349,12 @@ function customizeFirstRun(
         ? `amazon-bedrock, ${choices.region}, ${choices.profile || "default credential chain"}`
         : choices.provider === "harness-managed"
         ? `comes with ${choices.candidate.descriptor.productName}`
-        : "none (unchanged)"
+        : "keep current"
     }\n`);
     process.stdout.write(`    3. Preset       ${choices.preset === "unchanged" ? "none (unchanged)" : choices.preset}\n`);
     process.stdout.write(`    4. Plugins      ${choices.pluginLabel}\n`);
     process.stdout.write(`    5. MCP          ${choices.mcp === "defaults" ? "on" : "off"}\n`);
-    process.stdout.write(`    6. Record in    ${firstRunSettingsTargetLabel(choices.target)}\n`);
+    process.stdout.write(`    6. Preset in    ${firstRunSettingsTargetLabel(choices.target)}\n`);
     const value = firstRunPromptValue(configPrompt("  Apply? [Y/n]:")).toLowerCase();
     if (!value || value === "y" || value === "yes") return choices;
     if (value === "n" || value === "no") {
@@ -5123,10 +5438,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     }all plugins, ${
       harnessOwnsModelAccess(modelHarness(candidate.stamp.distribution))
         ? `no provider settings; model access comes with ${candidate.descriptor.productName}`
-        : detection.aws.hasCredentials
-        ? "Bedrock via your AWS credentials"
-        : "Bedrock, with model access left for you to verify"
-    }\n`,
+        : "current model provider preserved"
+    }
+`,
   );
   if (HARNESS_HONESTY[modelHarness(candidate.stamp.distribution)].groupEffort) {
     process.stdout.write("                                       Records balanced (default): medium project agent effort for deciding,\n");
@@ -5148,11 +5462,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   if (selected === 1) {
     choices = {
       candidate,
-      // Kiro needs no provider answer. Other harnesses record Bedrock and leave
-      // the access check pending when credentials were not detected.
       provider: harnessOwnsModelAccess(modelHarness(candidate.stamp.distribution))
         ? "harness-managed"
-        : "amazon-bedrock",
+        : "current",
       region: aws.region,
       profile: "",
       preset: "balanced",

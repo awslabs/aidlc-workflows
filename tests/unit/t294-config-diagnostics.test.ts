@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse as parseToml } from "smol-toml";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   applyConfigDiagnosticRecords,
@@ -360,6 +361,7 @@ describe("t294 provider diagnostics", () => {
     const settings = JSON.parse(
       readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
     ) as { env: Record<string, string> };
+    expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
     expect(settings.env.AWS_REGION).toBe("eu-west-1");
     expect(settings.env.AWS_PROFILE).toBe("dev");
     const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
@@ -376,14 +378,8 @@ describe("t294 provider diagnostics", () => {
       emptyRecords(record),
     );
     const codexAfter = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
-    expect(codexAfter).toContain('profile = "dev"');
-    expect(codexAfter).toContain('region = "eu-west-1"');
-    expect(codexAfter.match(/^model\s*=.*$/m)?.[0]).toBe(
-      codexBefore.match(/^model\s*=.*$/m)?.[0],
-    );
-    expect(codexAfter.match(/^model_reasoning_effort\s*=.*$/m)?.[0]).toBe(
-      codexBefore.match(/^model_reasoning_effort\s*=.*$/m)?.[0],
-    );
+    expect(codexAfter).toBe(codexBefore);
+    expect(codexAfter).not.toContain("[model_providers.amazon-bedrock");
 
     const opencode = temp("aidlc-t294-provider-opencode-");
     cpSync(join(DIST, "opencode"), opencode, { recursive: true });
@@ -463,6 +459,130 @@ describe("t294 provider diagnostics", () => {
     expect(readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8")).toBe(before2);
   });
 
+  test("current detects and removes stale project Bedrock overrides", () => {
+    const record: ProvidersRecord = {
+      schemaVersion: 1,
+      provider: "current",
+    };
+
+    const claude = temp("aidlc-t294-other-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    const claudePath = join(claude, ".claude", "settings.json");
+    const claudeSettings = JSON.parse(readFileSync(claudePath, "utf-8"));
+    claudeSettings.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    claudeSettings.env.AWS_REGION = "us-east-1";
+    claudeSettings.env.ANTHROPIC_DEFAULT_FABLE_MODEL =
+      "global.anthropic.claude-fable-5[1m]";
+    claudeSettings.env.ANTHROPIC_DEFAULT_OPUS_MODEL =
+      "global.anthropic.claude-opus-4-8[1m]";
+    claudeSettings.env.ANTHROPIC_DEFAULT_SONNET_MODEL =
+      "global.anthropic.claude-sonnet-4-6[1m]";
+    claudeSettings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL =
+      "global.anthropic.claude-haiku-4-5-20251001-v1:0";
+    writeFileSync(claudePath, `${JSON.stringify(claudeSettings, null, 2)}\n`);
+    expect(providerIssues(claude, ".claude", "claude", record)
+      .map((issue) => issue.id)).toContain("provider-claude-project-override");
+    applyConfigDiagnosticRecords(
+      claude,
+      ".claude",
+      "claude",
+      emptyRecords(record),
+    );
+    expect(providerIssues(claude, ".claude", "claude", record)).toEqual([]);
+
+    const userClaude = temp("aidlc-t294-user-claude-");
+    cpSync(join(DIST, "claude"), userClaude, { recursive: true });
+    const userClaudePath = join(userClaude, ".claude", "settings.json");
+    const userClaudeSettings = JSON.parse(readFileSync(userClaudePath, "utf-8"));
+    userClaudeSettings.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    userClaudeSettings.env.AWS_REGION = "eu-west-1";
+    userClaudeSettings.env.AWS_PROFILE = "team";
+    userClaudeSettings.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "team.opus";
+    writeFileSync(userClaudePath, `${JSON.stringify(userClaudeSettings, null, 2)}\n`);
+    applyConfigDiagnosticRecords(
+      userClaude,
+      ".claude",
+      "claude",
+      emptyRecords(record),
+    );
+    expect(JSON.parse(readFileSync(userClaudePath, "utf-8")).env)
+      .toEqual(expect.objectContaining({
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_REGION: "eu-west-1",
+        AWS_PROFILE: "team",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "team.opus",
+      }));
+
+    const codex = temp("aidlc-t294-other-codex-");
+    cpSync(join(DIST, "codex"), codex, { recursive: true });
+    const codexPath = join(codex, ".codex", "config.toml");
+    writeFileSync(
+      codexPath,
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n` +
+        readFileSync(codexPath, "utf-8"),
+    );
+    expect(providerIssues(codex, ".codex", "codex", record)
+      .map((issue) => issue.id)).toContain("provider-codex-project-override");
+    applyConfigDiagnosticRecords(
+      codex,
+      ".codex",
+      "codex",
+      emptyRecords(record),
+    );
+    expect(providerIssues(codex, ".codex", "codex", record)).toEqual([]);
+
+    const customCodex = temp("aidlc-t294-custom-codex-");
+    cpSync(join(DIST, "codex"), customCodex, { recursive: true });
+    const customCodexPath = join(customCodex, ".codex", "config.toml");
+    const customConfig =
+      `model = "gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 262144\nmodel_reasoning_effort = "low"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\nprofile = "dev"\nregion = "eu-west-1"\n\n` +
+      readFileSync(customCodexPath, "utf-8");
+    writeFileSync(customCodexPath, customConfig);
+    expect(providerIssues(customCodex, ".codex", "codex", record)).toEqual([]);
+    applyConfigDiagnosticRecords(
+      customCodex,
+      ".codex",
+      "codex",
+      emptyRecords(record),
+    );
+    expect(readFileSync(customCodexPath, "utf-8")).toBe(customConfig);
+
+    const opencode = temp("aidlc-t294-other-opencode-");
+    cpSync(join(DIST, "opencode"), opencode, { recursive: true });
+    const opencodePath = join(opencode, "opencode.json");
+    const opencodeSettings = JSON.parse(readFileSync(opencodePath, "utf-8"));
+    opencodeSettings.provider = {
+      "amazon-bedrock": {
+        options: { region: "us-east-1" },
+      },
+    };
+    writeFileSync(
+      opencodePath,
+      `${JSON.stringify(opencodeSettings, null, 2)}\n`,
+    );
+    applyConfigDiagnosticRecords(
+      opencode,
+      ".aidlc",
+      "opencode",
+      emptyRecords(record),
+      {
+        schemaVersion: 1,
+        provider: "amazon-bedrock",
+        region: "us-east-1",
+        opencodeDefault: true,
+      },
+    );
+    expect(providerIssues(opencode, ".aidlc", "opencode", record)).toEqual([]);
+  });
+
   test("pending actions drive check and doctor until marked done", () => {
     const project = temp("aidlc-t294-pending-");
     cpSync(join(DIST, "claude"), project, { recursive: true });
@@ -475,6 +595,16 @@ describe("t294 provider diagnostics", () => {
     const data = JSON.parse(readFileSync(dataPath, "utf-8"));
     data.providers = record;
     writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+    applyConfigDiagnosticRecords(
+      project,
+      ".claude",
+      "claude",
+      emptyRecords(record),
+    );
+    const accessKey = process.env.AWS_ACCESS_KEY_ID;
+    const secretKey = process.env.AWS_SECRET_ACCESS_KEY;
+    process.env.AWS_ACCESS_KEY_ID = "test-access";
+    process.env.AWS_SECRET_ACCESS_KEY = "test-secret";
     expect(providerDoctorCheck(project).pass).toBe(false);
     expect(
       providerIssues(
@@ -502,6 +632,10 @@ describe("t294 provider diagnostics", () => {
     data.providers = record;
     writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
     expect(providerDoctorCheck(project).pass).toBe(true);
+    if (accessKey === undefined) delete process.env.AWS_ACCESS_KEY_ID;
+    else process.env.AWS_ACCESS_KEY_ID = accessKey;
+    if (secretKey === undefined) delete process.env.AWS_SECRET_ACCESS_KEY;
+    else process.env.AWS_SECRET_ACCESS_KEY = secretKey;
   });
 });
 
@@ -923,7 +1057,9 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env);
     expect(reset.status, reset.stdout + reset.stderr).toBe(0);
     expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
-      .toContain('"AWS_REGION": "us-east-1"');
+      .not.toContain('"AWS_REGION"');
+    expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
+      .not.toContain('"CLAUDE_CODE_USE_BEDROCK"');
     expect(readConfigDiagnosticRecords(join(project, ".claude")).providers)
       .toBeNull();
 
@@ -943,6 +1079,660 @@ describe("t294 config diagnostics CLI", () => {
         provider: "other",
         acknowledged: true,
       }));
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
+    const switched = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--yes",
+    ], project, env);
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    const switchedRecord = readConfigDiagnosticRecords(
+      join(project, ".claude"),
+    ).providers;
+    expect(switchedRecord?.provider).toBe("amazon-bedrock");
+    expect(switchedRecord?.acknowledged).toBeUndefined();
+  }, 60_000);
+
+  test("legacy Codex Bedrock records acquire new required actions on load and refresh", () => {
+    const project = install("codex");
+    const dataPath = join(project, ".codex", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      pendingActions: [
+        { id: "bedrock-model-access", status: "done" },
+      ],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    expect(
+      readConfigDiagnosticRecords(join(project, ".codex")).providers
+        ?.pendingActions,
+    ).toContainEqual({
+      id: "codex-provider-configuration",
+      status: "pending",
+    });
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(check.status).toBe(1);
+    expect(check.stdout).toContain("codex-provider-configuration");
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, runtimeEnv());
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const persisted = JSON.parse(readFileSync(dataPath, "utf-8"));
+    expect(persisted.providers.pendingActions).toContainEqual({
+      id: "codex-provider-configuration",
+      status: "pending",
+    });
+  }, 60_000);
+
+  test("completed Codex Bedrock setup stays visibly self-attested", () => {
+    const project = install("codex");
+    const dataPath = join(project, ".codex", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      pendingActions: [
+        { id: "bedrock-model-access", status: "done" },
+        { id: "codex-provider-configuration", status: "done" },
+      ],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    const issues = providerIssues(
+      project,
+      ".codex",
+      "codex",
+      readConfigDiagnosticRecords(join(project, ".codex")).providers,
+      {
+        hasCredentials: true,
+        sources: [],
+        profiles: [],
+        regions: [],
+        files: [],
+      },
+    );
+    expect(issues).toContainEqual(expect.objectContaining({
+      id: "provider-codex-self-attested",
+      severity: "warn",
+    }));
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+      "--json",
+    ], project, runtimeEnv());
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("provider-codex-self-attested");
+  }, 60_000);
+
+  test("Claude local provider overrides are reported as warnings", () => {
+    const project = temp("aidlc-t294-claude-local-provider-");
+    cpSync(join(DIST, "claude"), project, { recursive: true });
+    writeFileSync(
+      join(project, ".claude", "settings.local.json"),
+      `${JSON.stringify({
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_REGION: "eu-west-1",
+        },
+      }, null, 2)}\n`,
+    );
+    const issues = providerIssues(project, ".claude", "claude", {
+      schemaVersion: 1,
+      provider: "current",
+    });
+    expect(issues).toContainEqual(expect.objectContaining({
+      id: "provider-claude-local-override",
+      severity: "warn",
+    }));
+  });
+
+  test("Claude local overrides that contradict Bedrock block check and doctor", () => {
+    const project = install("claude");
+    const env = runtimeEnv({
+      AWS_ACCESS_KEY_ID: "test-access",
+      AWS_SECRET_ACCESS_KEY: "test-secret",
+    });
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--mark-done",
+      "bedrock-model-access",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    writeFileSync(
+      join(project, ".claude", "settings.local.json"),
+      `${JSON.stringify({
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "0",
+          AWS_REGION: "eu-west-1",
+        },
+      }, null, 2)}\n`,
+    );
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status).toBe(1);
+    expect(check.stdout).toContain("provider-claude-local-override");
+    const previousAccess = process.env.AWS_ACCESS_KEY_ID;
+    const previousSecret = process.env.AWS_SECRET_ACCESS_KEY;
+    process.env.AWS_ACCESS_KEY_ID = "test-access";
+    process.env.AWS_SECRET_ACCESS_KEY = "test-secret";
+    expect(providerDoctorCheck(project)).toEqual(expect.objectContaining({
+      pass: false,
+      label: "Providers: 1 unmet item(s)",
+    }));
+    if (previousAccess === undefined) delete process.env.AWS_ACCESS_KEY_ID;
+    else process.env.AWS_ACCESS_KEY_ID = previousAccess;
+    if (previousSecret === undefined) delete process.env.AWS_SECRET_ACCESS_KEY;
+    else process.env.AWS_SECRET_ACCESS_KEY = previousSecret;
+  }, 60_000);
+
+  test("ordinary refresh preserves user-owned Codex provider fields", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const configPath = join(project, ".codex", "config.toml");
+    const current = readFileSync(configPath, "utf-8");
+    writeFileSync(
+      configPath,
+      `model = "team-model"\n` +
+        `model_provider = "team-provider"\n` +
+        `model_context_window = 262144\n` +
+        `model_reasoning_effort = "low"\n\n` +
+        `[model_providers.team-provider]\n` +
+        `name = "Team Provider"\n\n${current}`,
+    );
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).toContain('model = "team-model"');
+    expect(after).toContain('model_provider = "team-provider"');
+    expect(after).toContain('model_reasoning_effort = "low"');
+    expect(after).toContain("[model_providers.team-provider]");
+    expect(() => parseToml(after)).not.toThrow();
+  }, 60_000);
+
+  test("pristine Codex refresh remains valid and byte-idempotent", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const refresh = () => run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    const first = refresh();
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const firstText = readFileSync(configPath, "utf-8");
+    expect(() => parseToml(firstText)).not.toThrow();
+    const second = refresh();
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    const secondText = readFileSync(configPath, "utf-8");
+    expect(() => parseToml(secondText)).not.toThrow();
+    expect(secondText).toBe(firstText);
+  }, 60_000);
+
+  test("provider mutation and later refresh preserve unrelated Claude and Codex settings", () => {
+    const env = runtimeEnv();
+    const claude = install("claude");
+    const claudePath = join(claude, ".claude", "settings.json");
+    const claudeSettings = JSON.parse(readFileSync(claudePath, "utf-8"));
+    claudeSettings.model = "team-claude-model";
+    claudeSettings.env.MY_TEAM_SETTING = "preserved";
+    writeFileSync(claudePath, `${JSON.stringify(claudeSettings, null, 2)}\n`);
+    const claudeRecorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      claude,
+      "--provider",
+      "current",
+      "--yes",
+    ], claude, env);
+    expect(
+      claudeRecorded.status,
+      claudeRecorded.stdout + claudeRecorded.stderr,
+    ).toBe(0);
+    expect(JSON.parse(readFileSync(claudePath, "utf-8")))
+      .toEqual(expect.objectContaining({
+        model: "team-claude-model",
+        env: expect.objectContaining({ MY_TEAM_SETTING: "preserved" }),
+      }));
+    const claudeRefreshed = run([
+      "config",
+      "--project-dir",
+      claude,
+      "--yes",
+    ], claude, env);
+    expect(
+      claudeRefreshed.status,
+      claudeRefreshed.stdout + claudeRefreshed.stderr,
+    ).toBe(0);
+    expect(JSON.parse(readFileSync(claudePath, "utf-8")))
+      .toEqual(expect.objectContaining({
+        model: "team-claude-model",
+        env: expect.objectContaining({ MY_TEAM_SETTING: "preserved" }),
+      }));
+
+    const codex = install("codex");
+    const codexPath = join(codex, ".codex", "config.toml");
+    writeFileSync(
+      codexPath,
+      readFileSync(codexPath, "utf-8").replace(
+        'sandbox_mode = "workspace-write"',
+        'sandbox_mode = "read-only"',
+      ),
+    );
+    const codexRecorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      codex,
+      "--provider",
+      "current",
+      "--yes",
+    ], codex, env);
+    expect(
+      codexRecorded.status,
+      codexRecorded.stdout + codexRecorded.stderr,
+    ).toBe(0);
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('sandbox_mode = "read-only"');
+    const codexRefreshed = run([
+      "config",
+      "--project-dir",
+      codex,
+      "--yes",
+    ], codex, env);
+    expect(
+      codexRefreshed.status,
+      codexRefreshed.stdout + codexRefreshed.stderr,
+    ).toBe(0);
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('sandbox_mode = "read-only"');
+  }, 90_000);
+
+  test("preserved Claude env does not bypass ownership for permissions", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env).status).toBe(0);
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.env.MY_TEAM_SETTING = "preserved";
+    settings.permissions = {
+      ...(settings.permissions ?? {}),
+      allow: ["Bash(team-command:*)"],
+    };
+    const edited = `${JSON.stringify(settings, null, 2)}\n`;
+    writeFileSync(settingsPath, edited);
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+    expect(refreshed.stdout + refreshed.stderr).toContain("locally modified");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(edited);
+  }, 60_000);
+
+  test("copy-channel provider transitions remove the recorded Claude Bedrock values", () => {
+    for (const transition of [
+      ["--provider", "current"],
+      ["--provider", "other", "--acknowledge"],
+      ["--reset"],
+    ]) {
+      const project = install("claude");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "eu-west-1",
+        "--profile",
+        "team",
+        "--yes",
+      ], project, runtimeEnv());
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const copyEnv = {
+        AIDLC_RUNTIME_ROOT: "",
+        AWS_ACCESS_KEY_ID: "test-access",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+      };
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        ...transition,
+        "--yes",
+      ], project, copyEnv);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      const settings = JSON.parse(readFileSync(
+        join(project, ".claude", "settings.json"),
+        "utf-8",
+      ));
+      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+      expect(settings.env.AWS_REGION).toBeUndefined();
+      expect(settings.env.AWS_PROFILE).toBeUndefined();
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, copyEnv);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).not.toContain("provider-claude-project-override");
+    }
+  }, 120_000);
+
+  test("legacy Claude cleanup preserves a user-authored AWS profile", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "us-east-1",
+      AWS_PROFILE: "team-profile",
+      ANTHROPIC_DEFAULT_FABLE_MODEL:
+        "global.anthropic.claude-fable-5[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL:
+        "global.anthropic.claude-opus-4-8[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL:
+        "global.anthropic.claude-sonnet-4-6[1m]",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL:
+        "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const result = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8")).env;
+    expect(after.AWS_PROFILE).toBe("team-profile");
+    expect(after.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(after.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+  }, 60_000);
+
+  test("current preserves a manually configured OpenCode Bedrock provider", () => {
+    const project = install("opencode");
+    const env = runtimeEnv();
+    const path = join(project, "opencode.json");
+    const config = JSON.parse(readFileSync(path, "utf-8"));
+    config.provider = {
+      "amazon-bedrock": {
+        options: {
+          region: "eu-west-1",
+          profile: "team-profile",
+        },
+      },
+    };
+    writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+    const result = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf-8")).provider)
+      .toEqual(config.provider);
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
+  }, 60_000);
+
+  test("changing a Bedrock region or profile resets provider attestations", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configure = (...args: string[]) => run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      ...args,
+      "--yes",
+    ], project, env);
+    const complete = configure(
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--profile",
+      "dev",
+      "--acknowledge",
+      "--mark-done",
+      "bedrock-model-access",
+    );
+    expect(complete.status, complete.stdout + complete.stderr).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers)
+      .toEqual(expect.objectContaining({
+        acknowledged: true,
+        pendingActions: [
+          { id: "bedrock-model-access", status: "done" },
+          { id: "codex-provider-configuration", status: "done" },
+        ],
+      }));
+
+    const changedRegion = configure("--region", "eu-west-1");
+    expect(
+      changedRegion.status,
+      changedRegion.stdout + changedRegion.stderr,
+    ).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers)
+      .toEqual(expect.objectContaining({
+        region: "eu-west-1",
+        pendingActions: [
+          { id: "bedrock-model-access", status: "pending" },
+          { id: "codex-provider-configuration", status: "pending" },
+        ],
+      }));
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers
+      ?.acknowledged).toBeUndefined();
+
+    expect(configure(
+      "--acknowledge",
+      "--mark-done",
+      "bedrock-model-access",
+    ).status).toBe(0);
+    const changedProfile = configure("--profile", "team-profile");
+    expect(
+      changedProfile.status,
+      changedProfile.stdout + changedProfile.stderr,
+    ).toBe(0);
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers)
+      .toEqual(expect.objectContaining({
+        profile: "team-profile",
+        pendingActions: [
+          { id: "bedrock-model-access", status: "pending" },
+          { id: "codex-provider-configuration", status: "pending" },
+        ],
+      }));
+    expect(readConfigDiagnosticRecords(join(project, ".codex")).providers
+      ?.acknowledged).toBeUndefined();
+  }, 90_000);
+
+  test("reapplying an unchanged provider answer repairs stale project overrides", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    settings.env.AWS_REGION = "us-east-1";
+    settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL =
+      "global.anthropic.claude-fable-5[1m]";
+    settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL =
+      "global.anthropic.claude-opus-4-8[1m]";
+    settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL =
+      "global.anthropic.claude-sonnet-4-6[1m]";
+    settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL =
+      "global.anthropic.claude-haiku-4-5-20251001-v1:0";
+    settings.env.MY_TEAM_SETTING = "preserved";
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(1);
+
+    const repaired = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(repaired.status, repaired.stdout + repaired.stderr).toBe(0);
+    expect(repaired.stdout).not.toContain("configuration unchanged");
+    const repairedSettings = readFileSync(settingsPath, "utf-8");
+    expect(repairedSettings).not.toContain("CLAUDE_CODE_USE_BEDROCK");
+    expect(repairedSettings).not.toContain("ANTHROPIC_DEFAULT_OPUS_MODEL");
+    expect(repairedSettings).toContain('"MY_TEAM_SETTING": "preserved"');
+    expect(run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env).status).toBe(0);
+    expect(readFileSync(settingsPath, "utf-8"))
+      .toContain('"MY_TEAM_SETTING": "preserved"');
+    expect(run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env).status).toBe(0);
+  }, 60_000);
+
+  test("check warns when a non-Bedrock record has a project Bedrock flag", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "other",
+      "--acknowledge",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("provider-claude-project-override");
+    expect(check.stdout).toContain("warning");
   }, 60_000);
 
   test("provider flags refuse builtin and harness-owned access without writing", () => {
@@ -951,7 +1741,7 @@ describe("t294 config diagnostics CLI", () => {
       [
         "claude",
         ["--provider", "builtin"],
-        "--provider builtin is no longer recorded; a harness that provides its own model access needs no answer",
+        "--provider builtin is legacy-only; choose current, amazon-bedrock, or other",
       ],
       [
         "kiro",
@@ -1005,15 +1795,20 @@ describe("t294 config diagnostics CLI", () => {
 
     const json = run([...args, "--show", "--json"], project, env);
     expect(json.status, json.stdout + json.stderr).toBe(0);
-    expect(JSON.parse(json.stdout).data).toEqual(expect.objectContaining({
+    const jsonData = JSON.parse(json.stdout).data;
+    expect(jsonData).toEqual(expect.objectContaining({
       harnessManaged: true,
       pendingActions: [],
       issues: [],
-      files: [{
-        setting: "provider answers and pending actions",
-        file: join(".kiro", "tools", "data", "harness.json"),
-      }],
     }));
+    expect(jsonData.files).toEqual([
+      expect.objectContaining({
+        setting: "provider answers and pending actions",
+      }),
+    ]);
+    expect(jsonData.files[0].file.endsWith(
+      join(".kiro", "tools", "data", "harness.json"),
+    )).toBe(true);
     const check = run([...args, "--check"], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain(
@@ -1540,7 +2335,7 @@ describe("t294 config diagnostics CLI", () => {
     });
 
     const cursor = install("cursor");
-    const missingOtherAck = run([
+    const pendingOther = run([
       "config",
       "providers",
       "--project-dir",
@@ -1549,8 +2344,17 @@ describe("t294 config diagnostics CLI", () => {
       "other",
       "--yes",
     ], cursor, env);
-    expect(missingOtherAck.status).toBe(2);
-    expect(missingOtherAck.stdout).toContain("pass --acknowledge");
+    expect(pendingOther.status, pendingOther.stdout + pendingOther.stderr).toBe(0);
+    expect(readConfigDiagnosticRecords(join(cursor, ".cursor")).providers)
+      .toEqual(expect.objectContaining({
+        provider: "other",
+        pendingActions: expect.arrayContaining([
+          {
+            id: "non-bedrock-provider-configuration",
+            status: "pending",
+          },
+        ]),
+      }));
     const cursorApplied = run([
       "config",
       "providers",

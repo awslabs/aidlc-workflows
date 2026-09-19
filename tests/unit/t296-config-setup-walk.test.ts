@@ -181,7 +181,7 @@ describe("t296 first-run config setup walk", () => {
     expect(records.trust).toBeNull();
   }, 60_000);
 
-  test("a Bedrock-oriented harness gets the model-preset step's unchanged answer", () => {
+  test("a Bedrock-oriented harness defaults to keeping the current provider", () => {
     const path = project("aidlc-t296-walk-unchanged-");
     const env = hookPathEnv("aidlc", true, {
       AWS_ACCESS_KEY_ID: "test-access",
@@ -191,38 +191,31 @@ describe("t296 first-run config setup walk", () => {
     // model-preset step first, and its output would be scored by the
     // no-vendor-names assertions below that only the provider menu owns.
     expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
-    // 2 = unchanged, which records nothing and keeps what is in place.
     const result = run(
       ["config", "providers", "--project-dir", path, "--harness", "claude"],
       path,
       env,
-      "2\n",
+      "1\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    // Bedrock names what it writes for THIS harness. There is no `builtin` here:
-    // Claude Code does not serve its own models, and naming a vendor would be a
-    // guess, since it also runs on Vertex.
     expect(result.stdout).toContain(
-      "1. amazon-bedrock   records the AWS region and profile in settings.json",
+      "1. keep current     inherit the provider already configured in the harness (default)",
     );
     expect(result.stdout).toContain(
-      "2. unchanged        records no provider answer and keeps existing settings;",
+      "2. amazon-bedrock   write the AWS region and profile to settings.json",
     );
-    expect(result.stdout).toContain("new projects use the shipped fallback");
     expect(result.stdout).not.toContain("builtin");
-    // `other` is flag-only now: nothing read a recorded `other`, and declining
-    // its acknowledgement did exactly what `unchanged` does. Match the numbered
-    // answer and the old acknowledgement prompt, not any word containing "other".
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
+      .toEqual(expect.objectContaining({ provider: "current" }));
     expect(result.stdout).not.toMatch(/\d\. other\b/);
     expect(result.stdout).not.toContain("Using other provider setup");
     for (const vendor of ["Anthropic", "OpenAI", "Vertex", "subscription"]) {
       expect(result.stdout).not.toContain(vendor);
     }
     expect(result.stdout).toContain(
-      "Keeping existing settings unchanged; no provider answer recorded.",
+      "Keeping the current harness provider; project Bedrock overrides will be removed.",
     );
     expect(result.stdout).not.toContain("Manual provider setup complete?");
-    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toBeNull();
   }, 90_000);
 
   test("Kiro's providers section asks nothing and records nothing", () => {
@@ -460,7 +453,7 @@ describe("t296 first-run config setup walk", () => {
       scaffoldArgs(path),
       path,
       env,
-      "\nproject\n1\nbalanced\n\nus-west-2\ndev\ny\n",
+      "\nproject\n1\nbalanced\n2\nus-west-2\ndev\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Setup check - 2 of 8 sections need you.");
