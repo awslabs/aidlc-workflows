@@ -39,7 +39,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -488,22 +487,10 @@ if (target === "guard-tool-call") {
     /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\b([^\n]*)/,
   );
   const raw = m ? splitKiroCommandArgs(m[1].trim()) : [];
-  // Match aidlc-copilot-adapter.ts's foreign-project refusal before stripping selectors.
-  for (let i = 0; i < raw.length; i++) {
-    if (raw[i] === "--") break;
-    if (raw[i] !== "--project-dir" || i + 1 >= raw.length) continue;
-    const value = raw[++i];
-    try {
-      if (realpathSync(resolve(cwd, value)) === realpathSync(cwd)) continue;
-    } catch { /* Unresolved selectors cannot bypass the project boundary. */ }
-    process.stderr.write(
-      `This AI-DLC command targets a different project (${value}). Run it from that project's own Kiro session.\n`,
-    );
-    return 2;
-  }
-  // The engine strips launcher options anywhere before reading the subcommand.
-  // Otherwise next --project-dir <d> team-board looked bare-advancing, and the
-  // forwarding latch compared arguments the user never typed (#1259).
+  // The engine strips launcher options anywhere before reading the subcommand,
+  // so bare-advancing classification must see the same leading token. The
+  // first-next fidelity comparison below deliberately stays byte-exact: a
+  // launcher option the user did not type is an alteration.
   const nextArgs = stripOrchestratorLauncherOptions(raw);
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
@@ -557,10 +544,9 @@ if (target === "guard-tool-call") {
         forwarding.turn === counter &&
         Array.isArray(forwarding.args)
       ) {
-        const forwardingArgs = stripOrchestratorLauncherOptions(forwarding.args);
         const matches =
-          forwardingArgs.length === nextArgs.length &&
-          forwardingArgs.every((arg, index) => arg === nextArgs[index]);
+          forwarding.args.length === raw.length &&
+          forwarding.args.every((arg, index) => arg === raw[index]);
         if (!matches) {
           process.stderr.write(
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +

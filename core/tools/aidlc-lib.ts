@@ -795,7 +795,8 @@ export function isReadOnlyNextArgv(args: readonly string[]): boolean {
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
   if (verb === "park") return false;
-  if (args[0] === "--config" && args.length <= 2) return true;
+  // parseNextFlags returns on --config at any position (config print or usage refusal) before workflow inspection, without honoring the -- delimiter.
+  if (args.includes("--config")) return true;
   const workspace = parseWorkspaceCommand(args);
   if (workspace.kind !== "not-workspace") return workspace.kind !== "create-intent";
   for (let i = 0; i < args.length; i++) {
