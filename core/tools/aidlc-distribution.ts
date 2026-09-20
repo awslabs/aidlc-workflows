@@ -14,6 +14,7 @@ export type RootIntegration = {
   path: string;
   policy: "managed-block" | "json-map" | "json-array" | "whole-file";
   marker?: string;
+  shared?: "union";
   jsonKey?: string;
   optional?: boolean;
   legacySignatures?: {

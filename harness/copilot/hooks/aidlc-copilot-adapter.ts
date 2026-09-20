@@ -69,6 +69,7 @@ import {
   claimCopilotCommand,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
+  isReadOnlyNextArgv,
   recordCopilotHumanSequence,
   resolveWorkflowSelection,
   settleCopilotCommand,
@@ -493,6 +494,10 @@ export async function run(
     const commandKind = normalized[0];
     if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) return { status: "unrelated" };
     const subArgs = normalized.slice(1);
+    // Read-only next returns a terminal print before workflow inspection and
+    // touches no engine marker on other harnesses. Claiming it here advanced
+    // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
+    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) return { status: "unrelated" };
     if ((commandKind === "continue" && subArgs.length !== 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";

@@ -27,8 +27,8 @@
 // PARITY NOTES — every .sh assertion has an equal-or-stronger counterpart:
 //   .sh T1  create from sibling worktree exits non-zero          -> expect status !== 0
 //   .sh T2  error names "must run from the main repo checkout"    -> expect out contains it
-//   .sh T3  error explains "siblings of the main checkout, not nested"
-//                                                                 -> expect out contains it
+//   .sh T3  error explains the nesting rule                    -> expect out contains
+//             "inside another worktree's tracked tree"
 //
 // 3 .sh asserts -> 3 equal counterparts + STRONGER additions: the guard is
 // pre-audit, so we also assert NO WORKTREE_CREATED row for the slug landed in
@@ -43,6 +43,7 @@ import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
   seededAuditDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -63,6 +64,30 @@ function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
   return p;
+}
+
+const git = (cwd: string, ...args: string[]): string => {
+  const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr?.trim()}`);
+  return r.stdout ?? "";
+};
+
+function addOutsideWorktree(fixture: string): { outside: string; featureHead: string; mainHead: string } {
+  // Commit the workspace shell so it travels into the new worktree (the fixture
+  // seeds it after its own seed commit, which is why the nested case has no record).
+  git(fixture, "add", "--", "aidlc");
+  git(fixture, "commit", "-qm", "seed aidlc workspace shell");
+
+  const outside = `${fixture}-feature`;
+  outsideWorktrees.push(outside);
+  git(fixture, "worktree", "add", "-q", outside, "-b", "feature-x");
+  writeFileSync(join(outside, "feature.txt"), "approved work\n");
+  git(outside, "add", "--", "feature.txt");
+  git(outside, "commit", "-qm", "work the main checkout does not have");
+
+  const featureHead = git(outside, "rev-parse", "HEAD").trim();
+  const mainHead = git(fixture, "rev-parse", "HEAD").trim();
+  return { outside, featureHead, mainHead };
 }
 
 /** Add a real sibling worktree at <fixture>/<relativePath> on a new branch,
@@ -135,7 +160,7 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
 
     expect(r.status).not.toBe(0); // T1
     expect(r.out).toContain("must run from the main repo checkout"); // T2
-    expect(r.out).toContain("siblings of the main checkout, not nested"); // T3
+    expect(r.out).toContain("inside another worktree's tracked tree"); // T3
 
     // STRONGER: the guard fires BEFORE the audit emit, so nothing landed in
     // either checkout's audit, and no bolt-demo worktree dir was created.
@@ -154,26 +179,7 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
   // base is distinguishable from the main checkout's HEAD.
   test("4: create from a worktree OUTSIDE the main checkout is allowed and places the Bolt under the invoking worktree", () => {
     const fixture = freshFixture();
-    // Commit the workspace shell so it travels into the new worktree (the fixture
-    // seeds it after its own seed commit, which is why the nested case above has
-    // no record).
-    const git = (cwd: string, ...args: string[]): string => {
-      const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
-      if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr?.trim()}`);
-      return r.stdout ?? "";
-    };
-    git(fixture, "add", "--", "aidlc");
-    git(fixture, "commit", "-qm", "seed aidlc workspace shell");
-
-    const outside = `${fixture}-feature`;
-    outsideWorktrees.push(outside);
-    git(fixture, "worktree", "add", "-q", outside, "-b", "feature-x");
-    writeFileSync(join(outside, "feature.txt"), "approved work\n");
-    git(outside, "add", "--", "feature.txt");
-    git(outside, "commit", "-qm", "work the main checkout does not have");
-
-    const featureHead = git(outside, "rev-parse", "HEAD").trim();
-    const mainHead = git(fixture, "rev-parse", "HEAD").trim();
+    const { outside, featureHead, mainHead } = addOutsideWorktree(fixture);
     expect(featureHead).not.toBe(mainHead); // fixture precondition
 
     const r = create(outside, outside, ["--slug", "demo", "--base", "feature-x"]);
@@ -199,5 +205,34 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(r.out).toContain("must run from the main repo checkout");
     expect(existsSync(wtPath(nested, "demo"))).toBe(false);
     expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
+  }, 30000);
+
+  // #1252: #567 makes the shared-branch collision reachable from two outside/main
+  // checkouts. The second intent cannot create a Bolt with the same Unit slug.
+  // The refusal must name the owner so a human can tell which intent holds the Bolt.
+  test("6: create is refused when another worktree already holds bolt-<slug>, naming that worktree", () => {
+    const fixture = freshFixture();
+    // emitError only records ERROR_LOGGED when the record has a state file.
+    writeFileSync(seededStateFile(fixture), "- **Current Stage**: code-generation\n", "utf-8");
+    const { outside } = addOutsideWorktree(fixture);
+    const r1 = create(outside, outside, ["--slug", "demo", "--base", "feature-x"]);
+    expect(r1.status, r1.out).toBe(0);
+
+    const r2 = create(fixture, fixture, ["--slug", "demo", "--base", "main"]);
+    expect(r2.status).not.toBe(0);
+    expect(r2.out).toContain("Branch already exists: bolt-demo");
+    expect(r2.out).toContain(`checked out at ${wtPath(outside, "demo")}`);
+    expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
+
+    // Stderr may name the owner in another checkout, but the committed audit
+    // shard must stay portable and must not include that checkout's absolute path.
+    const auditDir = seededAuditDir(fixture);
+    const auditText = readdirSync(auditDir)
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => readFileSync(join(auditDir, name), "utf-8"))
+      .join("\n");
+    expect(auditText).toContain("**Event**: ERROR_LOGGED");
+    expect(auditText).toContain("Branch already exists: bolt-demo (checked out in another worktree of this repository)");
+    expect(auditText).not.toContain(outside);
   }, 30000);
 });

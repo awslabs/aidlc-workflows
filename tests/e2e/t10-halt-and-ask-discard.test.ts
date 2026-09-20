@@ -196,10 +196,10 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
   );
 
   test(
-    "2: discard emits WORKTREE_DISCARDED with Reason agent-discard + Bolt slug (co-located) [.sh a4+a5+a6]",
+    "2: discard emits WORKTREE_DISCARDED with Reason agent-discard + Bolt slug + root Repo (co-located) [.sh a4+a5+a6]",
     () => {
       // After test 1 ran, the WORKTREE_DISCARDED row is on disk. Assert all
-      // three fields land in the SAME audit block (stronger than the .sh's
+      // four fields land in the SAME audit block (stronger than the .sh's
       // three independent greps).
       const block = discardBlock(p, "y");
       expect(block).toBeDefined();
@@ -209,6 +209,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       expect(block).toMatch(/^\*\*Reason\*\*:\s*agent-discard\s*$/m);
       // a6: Bolt slug field (exactly `y`).
       expect(block).toMatch(/^\*\*Bolt slug\*\*:\s*y\s*$/m);
+      expect(block).toMatch(/^\*\*Repo\*\*:\s*-\s*$/m);
     },
     30000,
   );

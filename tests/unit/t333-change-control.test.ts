@@ -279,6 +279,17 @@ describe("t333 (2) the grammar", () => {
     expect(structuredField("Methodology: tdd\n  Ordering: tests first.", "Methodology")).toBe("tdd");
     expect(structuredField("  - **Ordering**: long\n    wrapped", "Ordering")).toBe("long wrapped");
     expect(structuredField("- **Mode**: strict\n  1. Require reapproval when inputs move.", "Mode")).toBe("strict");
+    // A sibling head is one of the structured fields, with or without a space after its colon; any other word: is prose.
+    expect(structuredField("Methodology: tdd\n  Ordering:tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("Methodology: tdd\n  Ordering:tests first.", "Ordering")).toBe("tests first.");
+    expect(structuredField("- **Methodology**: tdd\n  **Ordering**:tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("- **Ordering**: a,\n  then run https://x.y/z first", "Ordering")).toBe("a, then run https://x.y/z first");
+    expect(structuredField("- **Ordering**: a,\n  then file://share/tests", "Ordering")).toBe("a, then file://share/tests");
+    expect(structuredField("- **Ordering**: run the suite from\n  C:\\tests before implementation", "Ordering")).toBe("run the suite from C:\\tests before implementation");
+    expect(structuredField("- **Ordering**: a,\n  use C:\\tests before implementation", "Ordering")).toBe("a, use C:\\tests before implementation");
+    expect(structuredField("- **Ordering**: a,\n  issue:ABC-123 next, then implement", "Ordering")).toBe("a, issue:ABC-123 next, then implement");
+    expect(structuredField("- **Ordering**: a,\n  at 10:00 run the suite", "Ordering")).toBe("a, at 10:00 run the suite");
+    expect(structuredField("- **Ordering**: a,\n  Note: run them twice", "Ordering")).toBe("a, Note: run them twice");
   });
 
   test("the section body ignores commented headings and commented lines", () => {

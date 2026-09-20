@@ -23,8 +23,8 @@ import {
   boltSlugForUnit,
   currentSwarmSourceOpeningFingerprint,
   currentSwarmSourceMergeChain,
-  discoverSiblingRepos,
   emitError,
+  type EmitErrorMessage,
   errorMessage,
   filteredRawIndexEntries,
   findAllEvents,
@@ -35,10 +35,13 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   listIntentDirs,
   listSpaces,
+  maximalAttemptEvents,
+  parseParkedStampInstant,
   parseSourceListing,
   readAllAuditShards,
   readAuditShardEvents,
   readStateFile,
+  recoveryRepoCandidates,
   relativeRecordDir,
   repoDir,
   reviewedSourceRefPrefix,
@@ -49,6 +52,7 @@ import {
   serializeSourceListing,
   sourceListingEntriesEqual,
   sourceListingSha256,
+  swarmUnitCheckpointRejections,
   type WorkspaceSourceState,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
@@ -60,7 +64,9 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeFileAtomic,
+  REPO_NAME_REGEX,
 } from "./aidlc-lib.js";
+import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
 // hyphens. Mirrors stage-schema.ts:95+:101 — the codebase already duplicates
@@ -95,6 +101,29 @@ function parseFlags(args: string[]): Record<string, string> {
     i++;
   }
   return flags;
+}
+
+const RECOVERY_FLAGS: Record<string, readonly string[]> = {
+  restore: ["slug", "parked", "raw", "repo", "intent", "space", "project-dir"],
+  purge: ["slug", "parked", "older-than", "repo", "intent", "space", "project-dir"],
+  list: ["project-dir"],
+  info: ["slug", "intent", "space", "project-dir"],
+};
+
+function validateRecoveryFlags(args: string[], valid: readonly string[]): void {
+  const seen = new Set<string>();
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith("--")) continue;
+    const name = arg.slice(2);
+    if (!valid.includes(name)) error(`Unknown flag ${arg}. Valid flags: ${valid.map((flag) => `--${flag}`).join(", ")}`);
+    if (seen.has(name)) error(`Duplicate flag ${arg}.`);
+    seen.add(name);
+    if (name === "raw") continue;
+    const value = args[++i];
+    if (value === undefined) error(`${arg} expects a value, got end of arguments.`);
+    if (value.startsWith("--")) error(`${arg} expects a value, got another flag: "${value}". Did you forget the value?`);
+  }
 }
 
 // --- Audit emit shorthand ---
@@ -221,9 +250,9 @@ function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): s
 //
 // `aidlc-worktree` must not run from a checkout NESTED INSIDE the main repo
 // checkout's working tree — the `.aidlc/worktrees/<bolt>` (or legacy
-// `.claude/worktrees/<dev>`) shape the error names. Creating a Bolt worktree from
-// there would place one worktree inside another's tracked tree, which is exactly
-// what "Bolt worktrees are siblings of the main checkout, not nested" forbids.
+// `.claude/worktrees/<dev>`) shape the error names. A nested checkout is refused
+// because a Bolt worktree created from there would sit inside another worktree's
+// tracked tree.
 // The main checkout is the directory whose `.git` is `git rev-parse
 // --git-common-dir`'s parent. macOS symlinks `/var → /private/var`, so
 // canonicalise both sides via `realpathSync` before comparing.
@@ -269,7 +298,7 @@ function assertNotSiblingWorktree(repoCwd?: string): void {
 
   if (cwdTop !== mainCheckout && isNestedInside(mainCheckout, cwdTop)) {
     error(
-      `aidlc-worktree must run from the main repo checkout or a worktree outside it, not from a worktree nested inside it at ${cwdTop}. Bolt worktrees are siblings of the main checkout, not nested.`
+      `aidlc-worktree must run from the main repo checkout or a worktree outside it, not from a worktree nested inside it at ${cwdTop}. Bolt worktrees live under the invoking checkout's .aidlc/worktrees/, so creating one from a nested checkout would put a worktree inside another worktree's tracked tree.`
     );
   }
 }
@@ -334,14 +363,6 @@ function validateStrategy(strategy: string | undefined): string {
 // failure (multi-repo intent without --repo, or an out-of-set name) errors before
 // any audit emit. `flags.intent`/`flags.space` select the intent whose repo set is
 // consulted (same selector the audit emit threads).
-function resolveRepoCwd(
-  pd: string,
-  flags: Record<string, string>,
-  slug: string,
-): string {
-  return resolveRepoTarget(pd, flags, slug).cwd;
-}
-
 function resolveRepoTarget(
   pd: string,
   flags: Record<string, string>,
@@ -477,7 +498,20 @@ function handleCreate(args: string[]): void {
   const branchName = `bolt-${slug}`;
   const branchExists = runGit(["rev-parse", "--verify", `refs/heads/${branchName}`], repoCwd);
   if (branchExists.ok) {
-    errorWithSlug(slug, `Branch already exists: ${branchName}`);
+    const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
+    const owner = listed.ok
+      ? worktreeCheckedOutAt(listed.stdout, `refs/heads/${branchName}`)
+      : null;
+    const prefix = `Branch already exists: ${branchName}`;
+    const guidance = ". Bolt branches are shared by every worktree of this repository; finish or discard the Bolt that owns it, or rename the Unit.";
+    // The owner lives outside this project dir, so the audit row must not carry its absolute path.
+    errorWithSlug(
+      slug,
+      owner === null ? `${prefix}${guidance}` : {
+        message: `${prefix} (checked out at ${owner})${guidance}`,
+        auditMessage: `${prefix} (checked out in another worktree of this repository)${guidance}`,
+      },
+    );
   }
 
   // Audit-first: emit BEFORE git so a kill-9 between emit and git surfaces
@@ -728,6 +762,17 @@ interface RepositoryBoltEvidence {
   retained: boolean;
 }
 
+// Path of the registered worktree that has `branchRef` checked out, or null.
+function worktreeCheckedOutAt(porcelain: string, branchRef: string): string | null {
+  for (const block of porcelain.split(/\r?\n\r?\n/)) {
+    const lines = block.split(/\r?\n/);
+    if (lines.includes(`branch ${branchRef}`)) {
+      return lines.find((line) => line.startsWith("worktree "))?.slice(9) ?? null;
+    }
+  }
+  return null;
+}
+
 function repositoryRegistersBoltWorktree(
   pd: string,
   repoCwd: string,
@@ -781,20 +826,12 @@ function repositoryBoltEvidence(
 
 function worktreeRepoCandidates(
   pd: string,
-  creationRows: readonly WorktreeAuditRow[],
+  rows: readonly WorktreeAuditRow[],
+  slug: string,
 ): Map<string, string | null> {
   const selectors = new Map<string, string | null>();
-  selectors.set(repoSelectorKey(null), null);
-  for (const repo of discoverSiblingRepos(pd)) {
-    selectors.set(repoSelectorKey(repo), repo);
-  }
-  for (const row of creationRows) {
-    const field = auditBlockField(row.block, "Repo");
-    if (field === "-") {
-      selectors.set(repoSelectorKey(null), null);
-    } else if (field !== null && isValidRepoName(field)) {
-      selectors.set(repoSelectorKey(field), field);
-    }
+  for (const [repo, slugs] of recoveryRepoCandidates(pd, rows)) {
+    if (slugs === null || slugs.has(slug)) selectors.set(repoSelectorKey(repo), repo);
   }
   return selectors;
 }
@@ -818,7 +855,7 @@ function discardCreationAuthority(
       row.event === "WORKTREE_CREATED" &&
       auditBlockField(row.block, "Bolt slug") === slug,
   );
-  const selectors = worktreeRepoCandidates(pd, creationRows);
+  const selectors = worktreeRepoCandidates(pd, audit.rows, slug);
   if (recorded?.repoSelector !== undefined) {
     selectors.set(
       repoSelectorKey(recorded.repoSelector),
@@ -1544,6 +1581,13 @@ function convergedSourceRecord(
       "refusing to merge: the current swarm worktree has no correlated convergence authority; rerun finalize",
     );
   }
+  if (swarmUnitCheckpointRejections(rows, stage, floor, unitName, batch)
+    .some((rejection) => !rowAfter(latest, rejection))) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: this Unit convergence predates its checkpoint rejection; prepare and finalize a fresh retry",
+    );
+  }
 
   const bypass =
     auditBlockField(latest.block, "Source Freshness Bypass") ?? undefined;
@@ -1842,6 +1886,8 @@ interface SwarmWorktreeIdentity {
   batch: string;
   stage: string;
   floor: string;
+  baseCommit: string;
+  baseSourceListing: string;
 }
 
 function currentSwarmWorktreeIdentity(
@@ -1859,7 +1905,11 @@ function currentSwarmWorktreeIdentity(
     const batch = parsed.swarmBatch;
     const stage = parsed.swarmStage;
     const floor = parsed.swarmFloor;
+    const baseCommit = parsed.baseCommit;
+    const baseSourceListing = parsed.baseSourceListing;
     return (
+        parsed.version === 1 &&
+        parsed.boltSlug === slug &&
         typeof unit === "string" &&
         boltSlugForUnit(unit) === slug &&
         typeof batch === "string" &&
@@ -1867,9 +1917,13 @@ function currentSwarmWorktreeIdentity(
         typeof stage === "string" &&
         stage.length > 0 &&
         typeof floor === "string" &&
-        floor.length > 0
+        floor.length > 0 &&
+        typeof baseCommit === "string" &&
+        /^[0-9a-f]{40,64}$/.test(baseCommit) &&
+        typeof baseSourceListing === "string" &&
+        /^sha256:[0-9a-f]{64}$/.test(baseSourceListing)
       )
-      ? { unit, batch, stage, floor }
+      ? { unit, batch, stage, floor, baseCommit, baseSourceListing }
       : null;
   } catch {
     return null;
@@ -1933,20 +1987,51 @@ function mergedSwarmCleanupAuthority(
         stage !== identity.stage ||
         floor !== identity.floor)
     ) continue;
-    matchedSlugAuthority = true;
-    const convergence = audit.rows.find(
+    // A slug and stage floor survive a Unit checkpoint rejection. Cleanup of
+    // an old landing must never reset or remove the next child bearing them.
+    const creations = maximalAttemptEvents(audit.rows.filter((candidate) =>
+      candidate.event === "WORKTREE_CREATED" &&
+      candidate.authoritySpace === row.authoritySpace &&
+      candidate.authorityIntent === row.authorityIntent &&
+      auditBlockField(candidate.block, "Bolt slug") === slug &&
+      auditBlockField(candidate.block, "Repo") === repoField &&
+      (() => {
+        const path = auditBlockField(candidate.block, "Worktree path");
+        return path !== null &&
+          pathKey(resolveAuditWorktreePath(pd, path)) === pathKey(worktreePath(pd, slug));
+      })()));
+    if (creations.length > 1) continue;
+    const creation = creations[0];
+    if (creation && !rowAfter(row, creation)) continue;
+    if (identity !== undefined && (!creation ||
+      creation.authoritySpace !== row.authoritySpace ||
+      creation.authorityIntent !== row.authorityIntent ||
+      auditBlockField(creation.block, "Base commit") !== identity.baseCommit ||
+      auditBlockField(creation.block, "Base Source Listing") !== identity.baseSourceListing ||
+      auditBlockField(creation.block, "Swarm Unit") !== unit ||
+      auditBlockField(creation.block, "Swarm Batch") !== batch ||
+      auditBlockField(creation.block, "Swarm Stage") !== stage ||
+      auditBlockField(creation.block, "Swarm Run floor") !== floor)) continue;
+    const scopeRows = audit.rows.filter((candidate) =>
+      candidate.authoritySpace === row.authoritySpace &&
+      candidate.authorityIntent === row.authorityIntent);
+    if (swarmUnitCheckpointRejections(scopeRows, stage, floor, unit, batch)
+      .some((rejection) => !rowAfter(row, rejection))) continue;
+    const convergences = maximalAttemptEvents(scopeRows.filter(
       (candidate) =>
-        candidate.authoritySpace === row.authoritySpace &&
-        candidate.authorityIntent === row.authorityIntent &&
         candidate.event === "SWARM_UNIT_CONVERGED" &&
-        auditBlockField(candidate.block, "Batch number") === batch &&
         auditBlockField(candidate.block, "Unit name") === unit &&
-        auditBlockField(candidate.block, "Stage") === stage &&
-        auditBlockField(candidate.block, "Run floor") === floor &&
-        auditBlockField(candidate.block, "Source Commit") === sourceCommit &&
-        rowAfter(row, candidate),
-    );
-    if (!convergence) continue;
+        (!creation || rowAfter(candidate, creation)),
+    ));
+    const convergence = convergences.length === 1 ? convergences[0] : null;
+    if (!convergence ||
+      auditBlockField(convergence.block, "Batch number") !== batch ||
+      auditBlockField(convergence.block, "Stage") !== stage ||
+      auditBlockField(convergence.block, "Run floor") !== floor ||
+      auditBlockField(convergence.block, "Source Commit") !== sourceCommit ||
+      auditBlockField(convergence.block, "Source Freshness Bypass") !== null ||
+      !rowAfter(row, convergence)) continue;
+    matchedSlugAuthority = true;
     const repoCwd = repo === null ? pd : repoDir(pd, repo);
     if (
       !runGit(["cat-file", "-e", `${sourceCommit}^{commit}`], repoCwd).ok ||
@@ -2820,6 +2905,12 @@ function validateParkedStamp(stamp: string | undefined): void {
   }
 }
 
+interface ParkedAttempt {
+  ref: string;
+  commit: string;
+  mode: "snapshot" | "branch-tip" | "evidence-only";
+}
+
 function parkAttempt(
   repoCwd: string,
   slug: string,
@@ -2828,7 +2919,7 @@ function parkAttempt(
   registered: boolean,
   branchExists: boolean,
   retained: RetainedSourceRef[],
-): { ref: string; commit: string } {
+): ParkedAttempt {
   const baseStamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
   const occupied = new Set(parkedSourceRefs(repoCwd, slug).map(({ ref }) => parkedStamp(ref)));
   let stamp = baseStamp;
@@ -2840,7 +2931,7 @@ function parkAttempt(
     if (!result.ok) throw new Error(result.stderr.trim() || `git ${args[0]} exited ${result.code}`);
     return result.stdout.trim();
   };
-  let commit = "-";
+  let commit: string | null = null;
   if (dirExists) {
     if (!registered) throw new Error("worktree directory is not registered with the creating repository");
     const idx = join(tmpdir(), `aidlc-park-${process.pid}-${randomUUID()}`);
@@ -2903,8 +2994,9 @@ function parkAttempt(
           if (valueEnd === -1) throw new Error("invalid parked path attributes");
           const value = attrs.stdout.subarray(attrEnd + 1, valueEnd).toString();
           if (value !== "unspecified" && value !== "unset") {
+            const attribute = attrs.stdout.subarray(pathEnd + 1, attrEnd).toString();
             const path = attrs.stdout.subarray(start, pathEnd);
-            throw new Error(`cannot park filtered file with a non-UTF-8 name: ${JSON.stringify(path.toString("latin1"))}; rename it or remove its filter`);
+            throw new Error(`cannot park file with a non-UTF-8 name and a content-transforming attribute (${attribute}=${value}): ${JSON.stringify(path.toString("latin1"))}; rename the file or unset its ${attribute} attribute`);
           }
           start = valueEnd + 1;
         }
@@ -2932,9 +3024,6 @@ function parkAttempt(
           start = valueEnd + 1;
           if (value.equals(unspecified) || value.equals(unset)) continue;
           const path = pathBytes.toString();
-          if (!Buffer.from(path).equals(pathBytes)) {
-            throw new Error(`cannot park encoded file with a non-UTF-8 name: ${JSON.stringify(pathBytes.toString("latin1"))}; rename it or remove its working-tree-encoding attribute`);
-          }
           const indexed = requireGit(["ls-files", "-s", "-z", "--", path], wtPath, env);
           const mode = indexed.slice(0, indexed.indexOf(" "));
           if (!/^100(?:644|755)$/.test(mode)) {
@@ -2969,16 +3058,18 @@ function parkAttempt(
   } else if (branchExists) {
     commit = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
   }
-  if (commit !== "-") requireGit(["update-ref", `${ref}/head`, commit, ""]);
-  if (dirExists) requireGit(["update-ref", `${ref}/snapshot`, commit, ""]);
-  if (!dirExists && branchExists) requireGit(["update-ref", `${ref}/branch-tip`, commit, ""]);
+  const mode = dirExists ? "snapshot" : branchExists ? "branch-tip" : "evidence-only";
+  if (commit !== null) {
+    requireGit(["update-ref", `${ref}/head`, commit, ""]);
+    requireGit(["update-ref", `${ref}/${mode}`, commit, ""]);
+  }
   // Copy every source ref before audit/removal. Originals remain intact if any
   // copy fails; their compare-and-delete runs only after successful teardown.
   for (const source of retained) {
     const sourceCommit = source.ref.slice(source.ref.lastIndexOf("/") + 1);
     requireGit(["update-ref", `${ref}/reviewed-source/${sourceCommit}`, source.oid, ""]);
   }
-  return { ref, commit };
+  return { ref, commit: commit ?? "-", mode };
 }
 
 // --- Subcommand: discard ---
@@ -2993,6 +3084,9 @@ function handleDiscard(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
+  if (flags.repo !== undefined && !isValidRepoName(flags.repo)) {
+    errorWithSlug(slug, `Invalid --repo "${flags.repo}": a repo name must be a single path segment matching ${REPO_NAME_REGEX}.`);
+  }
   const intentWasExplicit =
     flags.intent !== undefined || flags.space !== undefined;
   const recorded = recordedWorktreeSelector(pd, slug);
@@ -3060,8 +3154,9 @@ function handleDiscard(args: string[]): void {
     );
   }
   // P7: anchor every git op to the target sibling repo (or projectDir for legacy).
-  const repoCwd =
-    creatingRepo === null ? pd : resolveRepoCwd(pd, flags, slug);
+  const { cwd: repoCwd, repo: parkedRepo } = creatingRepo === null
+    ? { cwd: pd, repo: null }
+    : resolveRepoTarget(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
 
   const branchName = `bolt-${slug}`;
@@ -3089,19 +3184,28 @@ function handleDiscard(args: string[]): void {
     return;
   }
 
-  let parked: { ref: string; commit: string };
+  const discardedApproval = dirExists &&
+    relativeRecordDir(pd, flags.intent, flags.space) === relativeRecordDir(pd)
+    ? (() => {
+        const identity = currentSwarmWorktreeIdentity(pd, slug);
+        return identity?.stage === "code-generation"
+          ? captureCodeGenerationDiscardApproval(pd, wtPath, identity.unit) : null;
+      })()
+    : null;
+  let parked: ParkedAttempt;
   try {
     parked = parkAttempt(repoCwd, slug, wtPath, dirExists, registered, branchExists, retained);
   } catch (e) {
     errorWithSlug(slug, `refusing to discard: parking the attempt failed: ${errorMessage(e)}`);
   }
-
   let auditTs: string;
   try {
     auditTs = emitAudit(pd, "WORKTREE_DISCARDED", {
       "Bolt slug": slug,
       "Worktree path": auditWorktreePath(pd, wtPath),
+      Repo: parkedRepo ?? "-",
       Reason: "agent-discard",
+      ...discardedApproval,
       "Parked ref": parked.ref,
       "Parked commit": parked.commit,
     }, flags.intent, flags.space);
@@ -3141,6 +3245,9 @@ function handleDiscard(args: string[]): void {
       audit_timestamp: auditTs,
       parked_ref: parked.ref,
       parked_commit: parked.commit,
+      parked_stamp: parkedStamp(parked.ref),
+      parked_mode: parked.mode,
+      parked_repo: parkedRepo,
     })
   );
 }
@@ -3152,34 +3259,50 @@ function parkedRepoCwd(
   flags: Record<string, string>,
   slug: string,
 ): string {
-  if (flags.repo !== undefined) return resolveRepoCwd(pd, flags, slug);
-  const creationRows = allWorktreeAuditRows(pd).rows.filter(
-    (row) =>
-      row.event === "WORKTREE_CREATED" &&
-      auditBlockField(row.block, "Bolt slug") === slug,
-  );
-  const candidates = worktreeRepoCandidates(pd, creationRows);
-  const parkedRepos: { cwd: string; repo: string | null }[] = [];
+  const candidates = worktreeRepoCandidates(pd, allWorktreeAuditRows(pd).rows, slug);
+  if (flags.repo !== undefined) {
+    const repo = flags.repo === "." ? null : flags.repo;
+    if (repo !== null && !candidates.has(repoSelectorKey(repo)) && isValidRepoName(repo) && lstatSync(repoDir(pd, repo), { throwIfNoEntry: false })?.isSymbolicLink()) {
+      errorWithSlug(slug, `"${repo}" is a symlink, not a workspace repository`);
+    }
+    if (repo !== null && (!isValidRepoName(repo) || !candidates.has(repoSelectorKey(repo)))) {
+      errorWithSlug(slug, `Invalid --repo "${flags.repo}": no matching recovery repository; use . for the project root or an existing sibling Git repository name.`);
+    }
+    const cwd = repo === null ? pd : repoDir(pd, repo);
+    const root = runGit(["rev-parse", "--show-toplevel"], cwd);
+    if (!existsSync(join(cwd, ".git")) || !root.ok || pathKey(root.stdout.trim()) !== pathKey(cwd)) {
+      errorWithSlug(slug, `Invalid --repo "${flags.repo}": no Git repository at ${cwd}.`);
+    }
+    return cwd;
+  }
+  const parkedRepos: { cwd: string; repo: string | null; exact: boolean }[] = [];
   for (const repo of candidates.values()) {
     const cwd = repo === null ? pd : repoDir(pd, repo);
+    if (!existsSync(join(cwd, ".git"))) continue;
     const listed = runGit(
       ["for-each-ref", "--format=%(refname)", `refs/aidlc/parked/${slug}/`],
       cwd,
     );
-    if (listed.ok && listed.stdout.trim()) parkedRepos.push({ cwd, repo });
+    if (listed.ok && listed.stdout.trim()) parkedRepos.push({ cwd, repo,
+      exact: flags.parked !== undefined && listed.stdout.split(/\r?\n/).some((ref) => parkedStamp(ref) === flags.parked),
+    });
+  }
+  if (flags.parked !== undefined) {
+    const exact = parkedRepos.filter((candidate) => candidate.exact);
+    if (exact.length === 1) return exact[0].cwd;
   }
   if (parkedRepos.length === 0) {
     errorWithSlug(slug, `no parked attempt for slug ${slug}`);
   }
   if (parkedRepos.length > 1) {
     const labels = parkedRepos
-      .map(({ repo }) => repoSelectorLabel(repo))
+      .map(({ repo }) => repo ?? ".")
       .sort()
       .map((value) => JSON.stringify(value))
       .join(", ");
     errorWithSlug(
       slug,
-      `parked attempts for slug ${slug} exist in several repositories (${labels}); pass --repo <name>`,
+      `parked attempts for slug ${slug} exist in several repositories (${labels}); pass --repo <name> or --repo . for the project root`,
     );
   }
   return parkedRepos[0].cwd;
@@ -3244,6 +3367,15 @@ function handleRestore(args: string[]): void {
   heads.sort((a, b) => parkedStamp(a.ref).localeCompare(parkedStamp(b.ref), "en", { numeric: true }));
   const head = heads.at(-1);
   if (!head) {
+    const evidence = refs.filter(({ ref }) =>
+      /\/reviewed-source\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(ref) &&
+      PARKED_STAMP_RE.test(parkedStamp(ref)) &&
+      (flags.parked === undefined || parkedStamp(ref) === flags.parked));
+    evidence.sort((a, b) => parkedStamp(a.ref).localeCompare(parkedStamp(b.ref), "en", { numeric: true }));
+    const latestEvidence = evidence.at(-1);
+    if (latestEvidence) {
+      errorWithSlug(slug, `no restorable files were parked for ${slug} ${parkedStamp(latestEvidence.ref)}; only review evidence was kept`);
+    }
     errorWithSlug(slug, `no parked attempt for slug ${slug}${flags.parked ? ` at ${flags.parked}` : ""}`);
   }
   const stamp = parkedStamp(head.ref);
@@ -3369,29 +3501,51 @@ function handlePurge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   validateParkedStamp(flags.parked);
+  let cutoff: number | undefined;
+  if (flags["older-than"] !== undefined) {
+    if (flags.parked !== undefined) error("--older-than and --parked are mutually exclusive.");
+    const days = Number(flags["older-than"]);
+    if (!flags["older-than"].trim() || !Number.isFinite(days) || days < 0) {
+      error("Invalid --older-than: expected a non-negative finite number of days.");
+    }
+    cutoff = Date.now() - days * 86_400_000;
+  }
   const pd = resolveProjectDir(projectDir);
   const repoCwd = parkedRepoCwd(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
-  const refs = parkedSourceRefs(repoCwd, slug).filter(({ ref }) =>
-    flags.parked === undefined || parkedStamp(ref) === flags.parked);
+  const skippedUnparseable = new Set<string>();
+  const refs = parkedSourceRefs(repoCwd, slug).filter(({ ref }) => {
+    const stamp = parkedStamp(ref);
+    if (flags.parked !== undefined && stamp !== flags.parked) return false;
+    if (cutoff === undefined) return true;
+    const timestamp = parseParkedStampInstant(stamp);
+    if (timestamp === null) {
+      skippedUnparseable.add(stamp);
+      return false;
+    }
+    return timestamp < cutoff;
+  });
   const stamps = [...new Set(refs.map(({ ref }) => parkedStamp(ref)))].sort((a, b) =>
     a.localeCompare(b, "en", { numeric: true }));
   const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
   if (!listed.ok) errorWithSlug(slug, `git worktree list failed: ${listed.stderr.trim()}`);
-  const registrations = listed.stdout.split(/\r?\n\r?\n/).map((block) => block.split(/\r?\n/));
   for (const stamp of stamps) {
     const wtPath = resolve(pd, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
     const branch = `refs/heads/restore/bolt-${slug}-${stamp}`;
     // Match registrations too: a restored checkout may have been moved.
-    const registration = registrations.find((lines) => lines.includes(`branch ${branch}`));
-    const registeredPath = registration?.find((line) => line.startsWith("worktree "))?.slice(9);
+    const registeredPath = worktreeCheckedOutAt(listed.stdout, branch);
     if (existsSync(wtPath) || registeredPath) {
       errorWithSlug(slug, `restore checkout still present at ${registeredPath ?? wtPath}; remove it first`);
     }
   }
   const cleanupError = deleteRetainedSourceRefs(repoCwd, refs);
   if (cleanupError) errorWithSlug(slug, `parked ref cleanup failed: ${cleanupError}`);
-  console.log(JSON.stringify({ purged: refs.length, slug, stamps }));
+  console.log(JSON.stringify({
+    purged: refs.length,
+    slug,
+    stamps,
+    skipped_unparseable: [...skippedUnparseable].sort(),
+  }));
 }
 
 // --- Subcommand: list ---
@@ -3644,6 +3798,8 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   try {
+    const validFlags = RECOVERY_FLAGS[subcommand];
+    if (validFlags) validateRecoveryFlags(rawArgs, validFlags);
     switch (subcommand) {
       case "create":
         handleCreate(filteredArgs.slice(1));
@@ -3683,11 +3839,14 @@ export function main(argv: string[]): void {
 // prepended to the message so doctor's regex `\[slug=([a-z0-9-]+)\]` can
 // correlate the error with the affected Bolt without re-engineering
 // emitError's field set.
-function errorWithSlug(slug: string, msg: string): never {
-  error(`[slug=${slug}] ${msg}`);
+function errorWithSlug(slug: string, msg: EmitErrorMessage): never {
+  error(typeof msg === "string" ? `[slug=${slug}] ${msg}` : {
+    message: `[slug=${slug}] ${msg.message}`,
+    auditMessage: `[slug=${slug}] ${msg.auditMessage}`,
+  });
 }
 
-function error(msg: string): never {
+function error(msg: EmitErrorMessage): never {
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-worktree ${process.argv.slice(2).join(" ")}`.trim();
   emitError(pd, "aidlc-worktree", command, msg);
