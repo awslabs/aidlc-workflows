@@ -237,4 +237,24 @@ describe("resolveBoltIdentity legacy provenance", () => {
     expect(error).toBeInstanceOf(BoltIdentityError);
     expect(error).toHaveProperty("code", "AMBIGUOUS_INTENT_ID8");
   });
+
+  test("a second registry record carrying the same full uuid also fails closed", () => {
+    // A hand-edited or badly merged registry: same uuid, different record.
+    const twinRecord = "twin-copy";
+    const twinIntents = join(project, "aidlc", "spaces", "platform", "intents");
+    mkdirSync(join(twinIntents, twinRecord), { recursive: true });
+    writeFileSync(join(twinIntents, twinRecord, "aidlc-state.md"), "# AI-DLC State\n");
+    writeFileSync(join(twinIntents, "intents.json"), `${JSON.stringify([
+      { uuid: UUID, slug: "twin", dirName: twinRecord, status: "in-flight" },
+    ], null, 2)}\n`);
+
+    let error: unknown;
+    try {
+      resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project));
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(BoltIdentityError);
+    expect(error).toHaveProperty("code", "AMBIGUOUS_INTENT_ID8");
+  });
 });

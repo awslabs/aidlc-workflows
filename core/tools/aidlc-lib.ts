@@ -10705,15 +10705,21 @@ export class BoltIdentityError extends Error {
   }
 }
 
-// True when another registered intent in ANY space of this workspace maps to
-// the same id8. Astronomically unlikely (2^-32 per pair) but the id8 is the
-// whole of a Bolt's intent authority, so a collision must refuse rather than
-// share directories, branches and recovery refs between two intents.
-export function intentId8IsAmbiguous(projectDir: string, uuid: string): boolean {
+// True when another registered intent RECORD in any space of this workspace
+// maps to the same id8 — a different uuid with the same suffix (2^-32 per
+// pair) or a duplicated uuid in a hand-edited or badly merged registry. The
+// id8 is the whole of a Bolt's intent authority, so either case must refuse
+// rather than share directories, branches and recovery refs between records.
+export function intentId8IsAmbiguous(
+  projectDir: string,
+  selection: WorkflowSelection,
+  uuid: string,
+): boolean {
   const id8 = idSuffix(uuid);
   for (const space of listSpaces(projectDir)) {
     for (const entry of listIntents(projectDir, space.name)) {
-      if (entry.uuid && entry.uuid !== uuid && idSuffix(entry.uuid) === id8) return true;
+      if (space.name === selection.space && entry.dirName === selection.intent) continue;
+      if (entry.uuid && idSuffix(entry.uuid) === id8) return true;
     }
   }
   return false;
@@ -10769,7 +10775,7 @@ export function resolveBoltIdentity(
   if (uuid === null) {
     throw new BoltIdentityError("NO_INTENT_UUID", record, slug);
   }
-  if (intentId8IsAmbiguous(projectDir, uuid)) {
+  if (intentId8IsAmbiguous(projectDir, selection, uuid)) {
     throw new BoltIdentityError("AMBIGUOUS_INTENT_ID8", record, slug);
   }
   const intentId8 = idSuffix(uuid);
