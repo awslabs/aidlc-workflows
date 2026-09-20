@@ -3165,7 +3165,7 @@ export async function collectDoctorReport(
           for (const file of Object.keys(manifest?.files ?? {})) {
             if (!file.startsWith(hooksPrefix)) continue;
             const basename = file.slice(hooksPrefix.length);
-            if (!/^aidlc-[^/]*\.ts$/.test(basename) || expectedHooks.includes(basename)) continue;
+            if (!/^aidlc-[a-z0-9-]+\.ts$/.test(basename) || expectedHooks.includes(basename)) continue;
             results.push({
               pass: false,
               label: `${basename} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
