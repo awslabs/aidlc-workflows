@@ -808,14 +808,15 @@ export function isReadOnlyNextArgv(args: readonly string[]): boolean {
 }
 
 // Match aidlc-orchestrate.main's launcher-option extraction before subcommand
-// routing; the literal delimiter preserves all following intent text.
+// routing; the literal delimiter preserves all following intent text. A trailing
+// option without a value stays, as in main().
 export function stripOrchestratorLauncherOptions(args: readonly string[]): string[] {
   const normalized: string[] = [];
   let literal = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--") literal = true;
-    if (!literal && (arg === "--project-dir" || arg === "--aidlc-attempt-id")) {
+    if (!literal && (arg === "--project-dir" || arg === "--aidlc-attempt-id") && i + 1 < args.length) {
       i++;
     } else {
       normalized.push(arg);

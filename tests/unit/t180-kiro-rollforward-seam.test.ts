@@ -750,5 +750,24 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+
+    const trailingOptionDir = scratchProject();
+    try {
+      const raw = '--scope feature "build auth" --project-dir';
+      seedForwarding(
+        trailingOptionDir,
+        4,
+        raw,
+        ["--scope", "feature", "build auth", "--project-dir"],
+      );
+      const r = runAdapter(trailingOptionDir, "guard-tool-call", {
+        tool_input: { command: `${BARE_NEXT} ${raw}` },
+        cwd: trailingOptionDir,
+      });
+      expect(r.code).toBe(0);
+      expect(existsSync(forwardingPath(trailingOptionDir))).toBe(false);
+    } finally {
+      rmSync(trailingOptionDir, { recursive: true, force: true });
+    }
   });
 });

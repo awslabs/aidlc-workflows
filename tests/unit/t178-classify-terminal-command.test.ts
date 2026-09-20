@@ -289,7 +289,9 @@ test("stripOrchestratorLauncherOptions preserves only command argv before the li
     .toEqual(["--status"]);
   expect(stripOrchestratorLauncherOptions(["--", "--project-dir", "/x"]))
     .toEqual(["--", "--project-dir", "/x"]);
-  expect(stripOrchestratorLauncherOptions(["--project-dir"])).toEqual([]);
+  expect(stripOrchestratorLauncherOptions(["--project-dir"])).toEqual(["--project-dir"]);
+  expect(stripOrchestratorLauncherOptions(["team-board", "--aidlc-attempt-id"]))
+    .toEqual(["team-board", "--aidlc-attempt-id"]);
 });
 
 describe("classifyTerminalCommand() - sole bare help tokens are terminal", () => {
