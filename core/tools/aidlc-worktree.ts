@@ -38,6 +38,7 @@ import {
   isValidRepoName,
   latestMainWorkflowStageRunFloorForProject,
   maximalAttemptEvents,
+  newBoltIdentity,
   parseParkedStampInstant,
   parseBoltName,
   parseSourceListing,
@@ -468,7 +469,7 @@ function handleCreate(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
-  const identity = resolveCommandBoltIdentity(pd, slug, selection);
+  let identity = resolveCommandBoltIdentity(pd, slug, selection);
   if (selection.intent !== null) flags.intent = selection.intent;
   flags.space = selection.space;
   const intentRecord = relativeRecordDirForSelection(selection);
@@ -479,6 +480,15 @@ function handleCreate(args: string[]): void {
   const creatingGitCommonDir = gitCommonDirRealpath(repoCwd);
   if (creatingGitCommonDir === null) {
     errorWithSlug(slug, "Cannot resolve the creating repository common dir.");
+  }
+  // A pre-upgrade audit-first create that died between its WORKTREE_CREATED
+  // row and `git worktree add` leaves an open legacy creation with no directory,
+  // branch, registration or retained ref. That phantom is doctor's to reconcile;
+  // it must not make the slug uncreatable, so with no durable git evidence the
+  // new Bolt takes the intent-scoped identity instead of "adopting" nothing.
+  if (identity.legacy && !existsSync(identity.dir) &&
+    !repositoryBoltEvidence(pd, repoTarget.repo, identity).durable) {
+    identity = newBoltIdentity(pd, identity.intentId8, slug);
   }
   assertNotSiblingWorktree(repoCwd);
 

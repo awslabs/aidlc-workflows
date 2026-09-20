@@ -336,4 +336,27 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
       expect(git(p, "rev-parse", "--verify", retainedRef), result.out).toBe(retainedHead);
     }
   }, 30000);
+
+  test("a phantom pre-upgrade creation (audit row, no git evidence) does not block the slug", () => {
+    const p = freshFixture();
+    // Pre-upgrade audit-first create that died between WORKTREE_CREATED and
+    // `git worktree add`: an open legacy row, but no directory, branch,
+    // registration or retained ref. Doctor owns the row; create must still work.
+    appendAuditEntry("WORKTREE_CREATED", {
+      "Bolt slug": "demo",
+      "Worktree path": ".aidlc/worktrees/bolt-demo",
+      "Branch name": "bolt-demo",
+      "Base branch": "main",
+      "Base commit": git(p, "rev-parse", "main"),
+      Repo: "-",
+      "Intent record": `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`,
+    }, p, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    expect(branchExists(p, "bolt-demo")).toBe(false);
+
+    const created = wt(p, ["create", "--slug", "demo", "--base", "main"]);
+    expect(created.status, created.out).toBe(0);
+    expect(existsSync(wtPath(p, "demo"))).toBe(true);
+    expect(branchExists(p, boltName(fixtureIntentId8(p), "demo"))).toBe(true);
+    expect(branchExists(p, "bolt-demo")).toBe(false);
+  }, 30000);
 });
