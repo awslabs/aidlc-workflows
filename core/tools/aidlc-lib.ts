@@ -19569,7 +19569,7 @@ const NON_REPO_WORKSPACE_DIRS = new Set([
   "node_modules",
 ]);
 
-/** Recovery requires a real immediate child repository, never a symlink or junction. */
+/** Unrecorded recovery candidates must be real immediate children, not symlinks or junctions. */
 export function isWorkspaceRepoDir(projectDir: string, name: string): boolean {
   if (basename(name) !== name || name === "." || name === "..") return false;
   const dir = join(projectDir, name);
@@ -19655,6 +19655,52 @@ export function intentRepos(
     return entry.repos ?? [];
   }
   return [];
+}
+
+/** Recovery trust comes from records; only unrecorded discovery requires real children.
+ * A null slug set admits every parked slug, while audit Repo rows admit their own slug.
+ */
+export function recoveryRepoCandidates(
+  projectDir: string,
+  rows: readonly AuditShardEvent[],
+): Map<string | null, Set<string> | null> {
+  const candidates = new Map<string | null, Set<string> | null>([[null, null]]);
+  for (const repo of discoverSiblingRepos(projectDir)) {
+    if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo)) candidates.set(repo, null);
+  }
+  const checkedRepos = new Map<string, boolean>();
+  const isRecordedRepo = (repo: string): boolean => {
+    const checked = checkedRepos.get(repo);
+    if (checked !== undefined) return checked;
+    const valid = isValidRepoName(repo) && isGitRepoDir(repoDir(projectDir, repo));
+    checkedRepos.set(repo, valid);
+    return valid;
+  };
+  const checkedIntents = new Set<string>();
+  for (const row of rows) {
+    // Derive the historical intent from the shard, never the active cursor.
+    const shard = relative(spacesRoot(projectDir), row.shard).replaceAll("\\", "/");
+    const record = /^([^/]+)\/intents\/([^/]+)\/audit\/[^/]+$/.exec(shard);
+    if (record !== null) {
+      const [, space, intent] = record;
+      const key = `${space}\0${intent}`;
+      if (!checkedIntents.has(key)) {
+        checkedIntents.add(key);
+        for (const repo of intentRepos(projectDir, intent, space)) {
+          if (isRecordedRepo(repo)) candidates.set(repo, null);
+        }
+      }
+    }
+    if (row.event !== "WORKTREE_CREATED" && row.event !== "WORKTREE_DISCARDED") continue;
+    const repo = auditBlockField(row.block, "Repo");
+    const slug = auditBlockField(row.block, "Bolt slug");
+    if (repo === null || slug === null || validateBoltSlug(slug) !== null ||
+      candidates.get(repo) === null || !isRecordedRepo(repo)) continue;
+    const slugs = candidates.get(repo) ?? new Set<string>();
+    slugs.add(slug);
+    candidates.set(repo, slugs);
+  }
+  return candidates;
 }
 
 export interface RepoResolution {

@@ -23,7 +23,6 @@ import {
   boltSlugForUnit,
   currentSwarmSourceOpeningFingerprint,
   currentSwarmSourceMergeChain,
-  discoverSiblingRepos,
   emitError,
   type EmitErrorMessage,
   errorMessage,
@@ -33,7 +32,6 @@ import {
   gitCommitSourceListing,
   intentsDir,
   isValidRepoName,
-  isWorkspaceRepoDir,
   latestMainWorkflowStageRunFloorForProject,
   listIntentDirs,
   listSpaces,
@@ -43,6 +41,7 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   readStateFile,
+  recoveryRepoCandidates,
   relativeRecordDir,
   repoDir,
   reviewedSourceRefPrefix,
@@ -827,20 +826,12 @@ function repositoryBoltEvidence(
 
 function worktreeRepoCandidates(
   pd: string,
-  creationRows: readonly WorktreeAuditRow[],
+  rows: readonly WorktreeAuditRow[],
+  slug: string,
 ): Map<string, string | null> {
   const selectors = new Map<string, string | null>();
-  selectors.set(repoSelectorKey(null), null);
-  for (const repo of discoverSiblingRepos(pd)) {
-    if (isWorkspaceRepoDir(pd, repo)) selectors.set(repoSelectorKey(repo), repo);
-  }
-  for (const row of creationRows) {
-    const field = auditBlockField(row.block, "Repo");
-    if (field === "-") {
-      selectors.set(repoSelectorKey(null), null);
-    } else if (field !== null && isValidRepoName(field) && isWorkspaceRepoDir(pd, field)) {
-      selectors.set(repoSelectorKey(field), field);
-    }
+  for (const [repo, slugs] of recoveryRepoCandidates(pd, rows)) {
+    if (slugs === null || slugs.has(slug)) selectors.set(repoSelectorKey(repo), repo);
   }
   return selectors;
 }
@@ -864,7 +855,7 @@ function discardCreationAuthority(
       row.event === "WORKTREE_CREATED" &&
       auditBlockField(row.block, "Bolt slug") === slug,
   );
-  const selectors = worktreeRepoCandidates(pd, creationRows);
+  const selectors = worktreeRepoCandidates(pd, audit.rows, slug);
   if (recorded?.repoSelector !== undefined) {
     selectors.set(
       repoSelectorKey(recorded.repoSelector),
@@ -3267,18 +3258,13 @@ function parkedRepoCwd(
   flags: Record<string, string>,
   slug: string,
 ): string {
-  const creationRows = allWorktreeAuditRows(pd).rows.filter(
-    (row) =>
-      row.event === "WORKTREE_CREATED" &&
-      auditBlockField(row.block, "Bolt slug") === slug,
-  );
-  const candidates = worktreeRepoCandidates(pd, creationRows);
+  const candidates = worktreeRepoCandidates(pd, allWorktreeAuditRows(pd).rows, slug);
   if (flags.repo !== undefined) {
     const repo = flags.repo === "." ? null : flags.repo;
-    if (repo !== null && isValidRepoName(repo) && lstatSync(repoDir(pd, repo), { throwIfNoEntry: false })?.isSymbolicLink()) {
+    if (repo !== null && !candidates.has(repoSelectorKey(repo)) && isValidRepoName(repo) && lstatSync(repoDir(pd, repo), { throwIfNoEntry: false })?.isSymbolicLink()) {
       errorWithSlug(slug, `"${repo}" is a symlink, not a workspace repository`);
     }
-    if (repo !== null && (!isValidRepoName(repo) || !candidates.has(repoSelectorKey(repo)) || !isWorkspaceRepoDir(pd, repo))) {
+    if (repo !== null && (!isValidRepoName(repo) || !candidates.has(repoSelectorKey(repo)))) {
       errorWithSlug(slug, `Invalid --repo "${flags.repo}": no matching recovery repository; use . for the project root or an existing sibling Git repository name.`);
     }
     const cwd = repo === null ? pd : repoDir(pd, repo);

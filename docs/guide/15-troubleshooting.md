@@ -366,11 +366,14 @@ moved; it never removes a live Bolt checkout. Use the same Bun tool prefix for
 copy installs. See the [purge reference](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs).
 
 Restore and purge reject unknown or duplicate flags before selecting or changing
-anything; use only the flags in the command reference. Repository selectors
-accept `.` or a real immediate child Git directory whose canonical path stays
-directly under the canonical workspace root, not arbitrary paths or symlink
-aliases. Doctor also ignores such aliases, including candidates named by audit
-records. These recovery selectors do not change live create/discard commands.
+anything; use only the flags in the command reference. Recovery selectors and
+doctor accept the project root (`.`) and trust valid Git repositories named in
+the slug's `WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields or recorded
+repo sets of historical intents identified by the audit shards, even when
+they are symlinked immediate children. Only unrecorded discovered siblings must
+be real immediate child directories whose canonical paths stay directly under
+the canonical workspace root; arbitrary paths and unrecorded symlink aliases
+are refused. These recovery selectors do not change live create/discard commands.
 
 ---
 

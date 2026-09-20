@@ -1638,10 +1638,13 @@ for the slug; with it, it selects that exact stamp. Stamps are UTC
 numerically for latest selection (`-10` follows `-2`). An exact stamp present in
 only one repository selects that repository before generic slug ambiguity.
 If selection remains ambiguous, `--repo <name>` selects an existing sibling Git
-repository and `--repo .` selects the project root. Siblings must be real
-immediate child directories, not symlinks, whose canonical paths remain directly
-under the canonical workspace root. Arbitrary paths and symlink aliases are
-refused. Restore and purge resolve this explicit selector independently of the
+repository and `--repo .` selects the project root. Recovery trusts valid Git
+repositories named in the slug's `WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit
+`Repo` fields or recorded repo sets of historical intents identified by the
+audit shards, even when they are symlinked immediate children. Only
+unrecorded discovered siblings must be real immediate child directories whose
+canonical paths remain directly under the canonical workspace root; arbitrary
+paths and unrecorded symlink aliases are refused. Restore and purge resolve this explicit selector independently of the
 current intent's repo list; this does not change the selectors for live worktree
 create/discard commands. Use `--intent` / `--space` when needed to resolve
 workspace context. Both recovery commands reject unknown flags and duplicate
@@ -1746,9 +1749,8 @@ ordinary and verbose output. Each entry includes slug, exact stamp, age in days,
 mode (`snapshot`, `branch-tip`, `legacy`, or `evidence-only`), canonical restored
 checkout existence, and rendered recovery commands. Every command includes
 `--parked <stamp>` and `--repo <name>` or `--repo .`. Evidence-only entries have
-`purge_command` but no `restore_command`. Doctor applies the same real-immediate-child
-repository boundary to both discovered and audit-derived sibling candidates;
-symlinks and out-of-root paths are ignored. A moved checkout may not show as
+`purge_command` but no `restore_command`. Doctor uses the same recovery repository
+candidate set described above. A moved checkout may not show as
 restored in doctor, but purge still checks its Git registration.
 Doctor uses the same strict stamp parser: impossible dates and times have
 `age_days: null` in JSON and show `unknown` in human-readable output.

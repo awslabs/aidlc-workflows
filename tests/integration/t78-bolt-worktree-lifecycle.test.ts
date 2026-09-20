@@ -1,4 +1,5 @@
 // covers: subcommand:aidlc-bolt:start, subcommand:aidlc-bolt:complete, subcommand:aidlc-bolt:abort, subcommand:aidlc-worktree:restore, subcommand:aidlc-worktree:purge
+// covers: function:recoveryRepoCandidates
 //
 // bun:test port of tests/integration/t78-bolt-worktree-lifecycle.sh (TAP plan 13),
 // mechanism = cli. End-to-end per-Bolt worktree lifecycle: every .sh assertion
@@ -174,6 +175,27 @@ function gitInitMain(proj: string): void {
   git(proj, "config", "user.name", "t");
   git(proj, "add", "-A");
   git(proj, "commit", "-q", "-m", "init", "--allow-empty");
+}
+
+/** Capture the linked sibling through real AUTO discovery, not a hand-authored repo row. */
+function setupRecordedSymlinkProject(): { proj: string; external: string } {
+  const proj = createTestProject();
+  const external = createTestProject();
+  tempDirs.push(proj, external);
+  writeFileSync(join(external, "saved.txt"), "linked repository base\n");
+  gitInitMain(external);
+  symlinkSync(external, join(proj, "api"), "junction");
+  // Omitting --repos is AUTO discovery; an explicit list would bypass the regression.
+  const created = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
+    "intent-create", "--scope", "feature", "--arguments", "Recover linked repository work",
+    "--project-dir", proj], { encoding: "utf-8", cwd: proj });
+  expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+  const intents = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents");
+  const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+  const roster = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8"));
+  expect(roster.find((entry: { dirName: string }) => entry.dirName === record).repos).toEqual(["api"]);
+  cpSync(join(FIXTURES_DIR, "state-construction.md"), join(intents, record, "aidlc-state.md"));
+  return { proj, external };
 }
 
 /** worktreePath contract: <proj>/.aidlc/worktrees/bolt-<slug>. */
@@ -807,6 +829,81 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       }
     }, 30_000);
 
+    test("AUTO-recorded symlink abort hints and doctor commands restore saved bytes and purge refs", () => {
+      const { proj, external } = setupRecordedSymlinkProject();
+      const slug = "recorded-link";
+      const wt = worktreeDir(proj, slug);
+      const created = runWorktree(proj, "create", "--slug", slug, "--base", "main");
+      expect(created.status, created.out).toBe(0);
+      const savedBytes = "dirty source in the linked repository\n";
+      const scratchBytes = Buffer.from([0, 255, 13, 10, 128]);
+      writeFileSync(join(wt, "saved.txt"), savedBytes);
+      writeFileSync(join(wt, "scratch.bin"), scratchBytes);
+      const aborted = runBolt(proj, "abort", "--name", "Recorded Link", "--slug", slug,
+        "--reason", "recover the recorded linked repository", "--discard");
+      expect(aborted.status, aborted.out).toBe(0);
+      const parked = JSON.parse(aborted.out);
+      expect(parked).toMatchObject({ parked_repo: "api", parked_mode: "snapshot" });
+      expect(existsSync(wt)).toBe(false);
+      expect(git(external, "show-ref", "--verify", "--quiet", `refs/heads/bolt-${slug}`).status).toBe(1);
+
+      const restored = runRestoreHint(proj, parked.restore_hint);
+      expect(restored.status, restored.out).toBe(0);
+      const recovery = JSON.parse(restored.out);
+      expect(readFileSync(join(recovery.worktree_path, "saved.txt"), "utf-8")).toBe(savedBytes);
+      expect(readFileSync(join(recovery.worktree_path, "scratch.bin"))).toEqual(scratchBytes);
+      const attempts = doctorAttempts(proj);
+      expect(attempts).toEqual([expect.objectContaining({
+        slug, repo: "api", stamp: parked.parked_stamp, mode: "snapshot", restored_exists: true,
+      })]);
+      expect(git(external, "worktree", "remove", "--force", recovery.worktree_path).status).toBe(0);
+      expect(git(external, "branch", "-D", recovery.branch).status).toBe(0);
+
+      const restoredByDoctor = runRestoreHint(proj, attempts[0].restore_command!);
+      expect(restoredByDoctor.status, restoredByDoctor.out).toBe(0);
+      const doctorRecovery = JSON.parse(restoredByDoctor.out);
+      expect(readFileSync(join(doctorRecovery.worktree_path, "saved.txt"), "utf-8")).toBe(savedBytes);
+      expect(readFileSync(join(doctorRecovery.worktree_path, "scratch.bin"))).toEqual(scratchBytes);
+      expect(git(external, "worktree", "remove", "--force", doctorRecovery.worktree_path).status).toBe(0);
+      const purgedByDoctor = runRestoreHint(proj, attempts[0].purge_command);
+      expect(purgedByDoctor.status, purgedByDoctor.out).toBe(0);
+      expect(git(external, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
+      expect(doctorAttempts(proj)).toEqual([]);
+      expect(readFileSync(join(external, "saved.txt"), "utf-8")).toBe("linked repository base\n");
+    }, 30_000);
+
+    test("partial cleanup in an AUTO-recorded symlink repo discards and recovers the branch without --repo", () => {
+      const { proj, external } = setupRecordedSymlinkProject();
+      const slug = "linked-branch-only";
+      const wt = worktreeDir(proj, slug);
+      const created = runWorktree(proj, "create", "--slug", slug, "--base", "main");
+      expect(created.status, created.out).toBe(0);
+      const savedBytes = "committed linked source survives partial cleanup\n";
+      writeFileSync(join(wt, "saved.txt"), savedBytes);
+      expect(git(wt, "add", "saved.txt").status).toBe(0);
+      expect(git(wt, "commit", "-q", "-m", "linked branch-only work").status).toBe(0);
+      const head = git(wt, "rev-parse", "HEAD").stdout.trim();
+      // Lose both the checkout metadata and Git registration: only the branch remains.
+      rmSync(wt, { recursive: true, force: true });
+      expect(git(external, "worktree", "prune").status).toBe(0);
+      const discarded = runWorktree(proj, "discard", "--slug", slug);
+      expect(discarded.status, discarded.out).toBe(0);
+      const parked = JSON.parse(discarded.out);
+      expect(parked).toMatchObject({ parked_repo: "api", parked_mode: "branch-tip" });
+      expect(git(external, "rev-parse", "--verify", `${parked.parked_ref}/head`).stdout.trim()).toBe(head);
+      expect(git(external, "rev-parse", "--verify", `${parked.parked_ref}/branch-tip`).stdout.trim()).toBe(head);
+      expect(git(external, "show-ref", "--verify", "--quiet", `refs/heads/bolt-${slug}`).status).toBe(1);
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const recovery = JSON.parse(restored.out);
+      expect(readFileSync(join(recovery.worktree_path, "saved.txt"), "utf-8")).toBe(savedBytes);
+      expect(git(recovery.worktree_path, "rev-parse", "HEAD").stdout.trim()).toBe(head);
+      expect(git(external, "worktree", "remove", "--force", recovery.worktree_path).status).toBe(0);
+      const purged = runWorktree(proj, "purge", "--slug", slug);
+      expect(purged.status, purged.out).toBe(0);
+      expect(git(external, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
+    }, 30_000);
+
     test("purge --older-than preserves February 31 refs and reports skipped_unparseable", () => {
       const proj = setupLifecycleProject();
       const slug = "impossible-date";
@@ -928,7 +1025,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(proj, "show-ref", "--verify", "--quiet", `${recovery.parked_ref}/head`).status).toBe(0);
     });
 
-    test("recovery ignores and refuses symlinked sibling repositories", () => {
+    test("recovery ignores and refuses unrecorded symlinked sibling repositories", () => {
       const proj = setupLifecycleProject();
       const external = setupLifecycleProject();
       gitInitMain(proj);
@@ -937,10 +1034,6 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       const slug = "external-park";
       const ref = `refs/aidlc/parked/${slug}/20260101T000000Z/head`;
       expect(git(external, "update-ref", ref, "HEAD").status).toBe(0);
-      writeFileSync(join(seededAuditDir(proj), "external.md"), [
-        "## Worktree Created", "**Timestamp**: 2024-01-01T00:00:00Z", "**Event**: WORKTREE_CREATED",
-        `**Bolt slug**: ${slug}`, "**Repo**: outside", "\n---\n",
-      ].join("\n"));
       expect(doctorAttempts(proj)).toEqual([]);
       for (const operation of ["restore", "purge"]) {
         const explicit = runWorktree(proj, operation, "--slug", slug, "--repo", "outside");
@@ -990,6 +1083,48 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         expect(git(cwd, "show-ref", "--verify", "--quiet", ref).status).toBe(1);
       }
     });
+
+    test("historical intent repo records recover linked parks without Repo audit rows or the current intent", () => {
+      const proj = setupLifecycleProject();
+      const external = createTestProject();
+      tempDirs.push(external);
+      const savedBytes = "historical linked source\n";
+      writeFileSync(join(external, "saved.txt"), savedBytes);
+      gitInitMain(external);
+      symlinkSync(external, join(proj, "historical"), "junction");
+      const slug = "intent-record-only";
+      const stamp = "20240101T000000Z";
+      const prefix = `refs/aidlc/parked/${slug}/${stamp}`;
+      for (const leaf of ["head", "snapshot"]) {
+        expect(git(external, "update-ref", `${prefix}/${leaf}`, "HEAD").status).toBe(0);
+      }
+      const currentRoster = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
+      const roster = JSON.parse(readFileSync(currentRoster, "utf-8"));
+      const historicalIntents = join(proj, "aidlc", "spaces", "history", "intents");
+      const historicalAudit = join(historicalIntents, DEFAULT_RECORD_DIR, "audit");
+      mkdirSync(historicalAudit, { recursive: true });
+      writeFileSync(join(historicalIntents, "intents.json"), JSON.stringify([
+        { ...roster[0], status: "archived", repos: ["historical"] },
+      ]));
+      // The shard locates the historical intent; only its registry records the repo.
+      writeFileSync(join(historicalAudit, "history.md"), [
+        "## Worktree Discarded", "**Timestamp**: 2024-01-01T00:00:00Z", "**Event**: WORKTREE_DISCARDED",
+        `**Bolt slug**: ${slug}`, `**Parked ref**: ${prefix}`, "\n---\n",
+      ].join("\n"));
+      roster[0].repos = ["current"];
+      writeFileSync(currentRoster, JSON.stringify(roster));
+      const attempts = doctorAttempts(proj);
+      expect(attempts).toEqual([expect.objectContaining({ slug, stamp, repo: "historical" })]);
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const recovery = JSON.parse(restored.out);
+      expect(readFileSync(join(recovery.worktree_path, "saved.txt"), "utf-8")).toBe(savedBytes);
+      expect(git(external, "worktree", "remove", "--force", recovery.worktree_path).status).toBe(0);
+      const purged = runRestoreHint(proj, attempts[0].purge_command);
+      expect(purged.status, purged.out).toBe(0);
+      expect(git(external, "for-each-ref", "--format=%(refname)", `${prefix}/`).stdout).toBe("");
+      expect(doctorAttempts(proj)).toEqual([]);
+    }, 30_000);
 
     test("recovery refuses missing or non-repository sibling selectors and live operations reject the root selector", () => {
       const proj = setupLifecycleProject();

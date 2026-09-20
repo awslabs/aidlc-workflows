@@ -112,7 +112,6 @@ import {
   defaultScopeResolution,
   DEFAULT_SPACE,
   detectLeakedLocks,
-  discoverSiblingRepos,
   documentInputRequestFilePath,
   DOCUMENT_INPUT_REQUEST_FILE,
   docsDir,
@@ -135,7 +134,6 @@ import {
   isoTimestamp,
   isPackageJson,
   isValidRepoName,
-  isWorkspaceRepoDir,
   codekbDir,
   intentsDir,
   codekbRepoName,
@@ -177,6 +175,7 @@ import {
   parseStateStageSuffixes,
   readAllAuditShards,
   readAuditShardEvents,
+  recoveryRepoCandidates,
   readActiveDirectiveMarker,
   readUnitClaimRegistryCache,
   readUnitScopeStamp,
@@ -2544,13 +2543,9 @@ export type DoctorReport = {
   parked_attempts: DoctorParkedAttempt[];
 };
 
-// Keep this read-only inventory aligned with worktreeRepoCandidates/parkedRepoCwd
-// without importing the worktree CLI (which initializes process-scoped state).
+// Share repository trust with restore/purge without importing the worktree CLI.
 function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
-  const candidates = new Map<string | null, Set<string> | null>([[null, null]]);
-  for (const repo of discoverSiblingRepos(projectDir)) {
-    if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo)) candidates.set(repo, null);
-  }
+  const rows: AuditShardEvent[] = [];
   for (const { name: space } of listSpaces(projectDir)) {
     const intents = new Set(listIntentDirs(projectDir, space));
     try {
@@ -2563,24 +2558,14 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
       // Missing records must not hide recoverable refs in discovered repositories.
     }
     for (const intent of [undefined, ...[...intents].sort()]) {
-      for (const row of readAuditShardEvents(projectDir, intent, space)) {
-        if (row.event !== "WORKTREE_CREATED") continue;
-        const repo = auditBlockField(row.block, "Repo");
-        const slug = auditBlockField(row.block, "Bolt slug");
-        if (repo === null || !isValidRepoName(repo) || slug === null || validateBoltSlug(slug) !== null) continue;
-        if (candidates.get(repo) === null) continue;
-        if (!isWorkspaceRepoDir(projectDir, repo)) continue;
-        const slugs = candidates.get(repo) ?? new Set<string>();
-        slugs.add(slug);
-        candidates.set(repo, slugs);
-      }
+      rows.push(...readAuditShardEvents(projectDir, intent, space));
     }
   }
 
   const attempts: DoctorParkedAttempt[] = [];
   const invoke = aidlcToolInvocation("worktree");
   const now = Date.now();
-  for (const [repo, slugs] of candidates) {
+  for (const [repo, slugs] of recoveryRepoCandidates(projectDir, rows)) {
     const cwd = repo === null ? projectDir : repoDir(projectDir, repo);
     if (!existsSync(join(cwd, ".git"))) continue;
     const listed = spawnSync("git", ["for-each-ref", "--format=%(refname)", "refs/aidlc/parked/"], {

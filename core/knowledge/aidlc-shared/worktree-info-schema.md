@@ -150,10 +150,13 @@ suffixes numerically (`-10` is newer than `-2`). With it, restore selects that
 exact stamp. An exact stamp present in only one repository selects that
 repository before checking for a slug shared across repositories. If selection
 is still ambiguous, `--repo <name>` selects an existing sibling Git repository
-and `--repo .` selects the project root. Unlike intent creation's sibling
-discovery, recovery additionally requires real immediate child directories, not
-symlinks, whose canonical paths remain directly under the canonical workspace
-root; arbitrary paths and symlink aliases are refused.
+and `--repo .` selects the project root. Recovery trusts valid Git repositories
+named in the slug's `WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields
+or recorded repo sets of historical intents identified by the audit shards,
+even when they are symlinked immediate children. Only unrecorded discovered
+siblings must be real immediate child directories whose canonical paths remain
+directly under the canonical workspace root; arbitrary paths and unrecorded
+symlink aliases are refused.
 These explicit restore/purge selectors work independently of the current
 intent's repo list; live create/discard selector behavior is unchanged. Use the
 intent/space selectors when needed to resolve workspace context. Restore and
@@ -280,8 +283,7 @@ the owning repository registers a Git worktree at its canonical
 `restore/bolt-<slug>-<stamp>` branch, and exact rendered recovery commands with
 `--parked <stamp>` and an explicit `--repo <name>`
 or `--repo .`. Evidence-only entries have a purge command but no restore command.
-Doctor applies the same real-immediate-child repository boundary to discovered
-and audit-derived sibling candidates, ignoring symlinks and out-of-root paths.
+Doctor uses the same recovery repository candidate set described above.
 The `legacy` inventory mode does not classify the commit identity; restore
 performs that distinction when invoked. A checkout moved elsewhere may not
 appear as restored in this inventory, but purge still checks Git worktree

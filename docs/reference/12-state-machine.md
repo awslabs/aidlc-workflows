@@ -824,9 +824,12 @@ or is registered with Git, including moved checkouts. Restore and purge accept
 `--repo <name>` for an existing sibling Git repository or `--repo .` for the
 project root, independently of the current intent's repo list. An exact restore
 stamp found in only one repository selects it before generic slug ambiguity.
-Unlike intent creation's sibling discovery, recovery additionally requires real
-immediate child directories, not symlinks, whose canonical paths stay directly
-under the canonical workspace root; arbitrary paths and symlink aliases are refused. Both commands reject unknown
+Recovery trusts valid Git repositories named in the slug's `WORKTREE_CREATED` or
+`WORKTREE_DISCARDED` audit `Repo` fields or recorded repo sets of historical intents
+identified by the audit shards, even when they are symlinked immediate
+children. Only unrecorded discovered siblings must be real immediate child
+directories whose canonical paths stay directly under the canonical workspace
+root; arbitrary paths and unrecorded symlink aliases are refused. Both commands reject unknown
 and duplicate flags before selection or mutation; `--raw` is a bare restore-only
 flag. This does not change live create/discard selectors. Neither command adds
 an audit event or repurposes the live Bolt path or branch.
@@ -865,9 +868,8 @@ informationally, with slug, exact stamp, age in days, mode (`snapshot`,
 rendered recovery commands using `--parked <stamp>` and
 an explicit `--repo <name>` or `--repo .`. Evidence-only entries retain
 `purge_command` but omit `restore_command`. These entries are neither warnings
-nor failures. Doctor applies the same real-immediate-child repository boundary
-to both discovered and audit-derived sibling candidates, ignoring symlinks and
-out-of-root paths. A checkout counts as restored only when the owning repository's
+nor failures. Doctor uses the same recovery repository candidate set described
+above. A checkout counts as restored only when the owning repository's
 Git worktree registration resolves to the canonical restore path and names the
 exact `restore/bolt-<slug>-<stamp>` branch. `legacy` in this inventory leaves
 commit-identity classification to restore. A moved checkout may not appear as

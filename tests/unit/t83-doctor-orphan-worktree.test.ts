@@ -1,4 +1,5 @@
 // covers: subcommand:aidlc-utility:doctor
+// covers: function:recoveryRepoCandidates
 //
 // CLI-contract port of tests/unit/t83-doctor-orphan-worktree.sh (TAP plan 16),
 // mechanism = cli. The .sh has no colon-form `# covers:` header; its prose
@@ -673,24 +674,37 @@ describe("t83 doctor parked attempts", () => {
     ]);
   }, 30000);
 
-  test("audit-only historical records discover excluded repos without treating ordinary children as repositories", () => {
-    const proj = freshProject();
+  test("audit-only historical records discover excluded and linked repos without treating ordinary children as repositories", () => {
+    const proj = setupIntegrationProject({ withState: STATE_FIXTURE, withAudit: true });
+    created.push(proj);
     const recordedRepo = join(proj, "node_modules");
+    const external = freshProject();
     initRepo(proj);
     initRepo(recordedRepo);
+    initRepo(external);
+    const savedBytes = "source recorded only by a historical discard\n";
+    writeFileSync(join(external, "saved.txt"), savedBytes);
+    git(external, "add", "saved.txt");
+    git(external, "-c", "user.name=Doctor fixture", "-c", "user.email=doctor@example.test",
+      "-c", "commit.gpgsign=false", "commit", "-m", "historical linked source");
+    symlinkSync(external, join(proj, "linked"), "junction");
     mkdirSync(join(proj, "ordinary"));
     const stamp = "20240101T000000Z";
     parkHead(recordedRepo, "historical", stamp, "snapshot");
+    parkHead(external, "linked-history", stamp, "snapshot");
+    // Audit membership is slug-scoped, not permission to discover every park in this link.
+    parkHead(external, "unrecorded-slug", stamp, "snapshot");
     parkHead(proj, "root-only", stamp, "branch-tip");
     const historicalAudit = join(proj, "aidlc", "spaces", "history", "intents", "old-record", "audit");
     mkdirSync(historicalAudit, { recursive: true });
     writeFileSync(join(historicalAudit, "history.md"), [
-      ["historical", "node_modules"],
-      ["root-only", "ordinary"],
-    ].map(([slug, repo]) => [
-      "## Worktree Created",
+      ["historical", "node_modules", "WORKTREE_CREATED"],
+      ["linked-history", "linked", "WORKTREE_DISCARDED"],
+      ["root-only", "ordinary", "WORKTREE_CREATED"],
+    ].map(([slug, repo, event]) => [
+      "## Historical Worktree",
       "**Timestamp**: 2024-01-01T00:00:00Z",
-      "**Event**: WORKTREE_CREATED",
+      `**Event**: ${event}`,
       `**Bolt slug**: ${slug}`,
       `**Repo**: ${repo}`,
       "\n---\n",
@@ -701,12 +715,25 @@ describe("t83 doctor parked attempts", () => {
         slug: "historical", repo: "node_modules", mode: "snapshot",
       }),
       expect.objectContaining({
+        slug: "linked-history", repo: "linked", mode: "snapshot",
+      }),
+      expect.objectContaining({
         slug: "root-only", repo: null, mode: "branch-tip",
       }),
     ]);
+    const linked = attempts.find((attempt: { repo: string | null }) => attempt.repo === "linked");
+    runRecoveryCommand(proj, linked.restore_command);
+    expect(readFileSync(join(linked.restored_path, "saved.txt"), "utf-8")).toBe(savedBytes);
+    git(external, "worktree", "remove", "--force", linked.restored_path);
+    runRecoveryCommand(proj, linked.purge_command);
+    expect(git(external, "for-each-ref", "--format=%(refname)", `refs/aidlc/parked/linked-history/${stamp}/`)).toBe("");
+    expect(git(external, "for-each-ref", "--format=%(refname)", "refs/aidlc/parked/")).toBe([
+      `refs/aidlc/parked/unrecorded-slug/${stamp}/head`,
+      `refs/aidlc/parked/unrecorded-slug/${stamp}/snapshot`,
+    ].join("\n"));
   }, 30000);
 
-  test("external Git repositories linked as immediate children stay out of inventory, even with audit authority", () => {
+  test("unrecorded external Git repositories linked as immediate children stay out of inventory", () => {
     const proj = freshProject();
     const external = freshProject();
     initRepo(proj);
@@ -714,17 +741,8 @@ describe("t83 doctor parked attempts", () => {
     const stamp = "20240101T000000Z";
     parkHead(external, "external", stamp, "snapshot");
     symlinkSync(external, join(proj, "api"), "dir");
-    // node_modules is excluded from discovery: its only candidate path is audit.
+    // Neither a discoverable name nor an excluded name has recorded authority.
     symlinkSync(external, join(proj, "node_modules"), "dir");
-    for (const repo of ["api", "node_modules"]) {
-      appendAudit(proj, [
-        "## Worktree Created",
-        "**Timestamp**: 2024-01-01T00:00:00Z",
-        "**Event**: WORKTREE_CREATED",
-        "**Bolt slug**: external",
-        `**Repo**: ${repo}`,
-      ].join("\n"));
-    }
 
     expect(JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts).toEqual([]);
     expect(runDoctor(proj, []).out).not.toContain("Parked attempts");
