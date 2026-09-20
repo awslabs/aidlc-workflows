@@ -349,6 +349,7 @@ describe("t114 orchestrator-verb routing", () => {
   test("`park` inside a longer description stays freeform, like `help`", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["park", "the", "car", "rental", "feature"]).out;
+    expect(out).toContain('"kind":"ask"');
     expect(out).not.toContain("aidlc.ts park`");
   });
 

@@ -170,6 +170,7 @@ import {
   isStopHookProbe,
   isTeamUnitOwnership,
   KNOWN_CODEKB_STAGES,
+  leadingOrchestratorVerb,
   listIntents,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   loadScopeMetadata,
@@ -190,7 +191,6 @@ import {
   PHASES,
   parseTeamBoardArgs,
   parseWorkspaceCommand,
-  ORCHESTRATOR_VERBS,
   READ_ONLY_FLAGS,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
@@ -1596,18 +1596,15 @@ function parseNextFlags(args: string[]): ParsedFlags {
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { readOnly: "--help" };
   }
-  // The orchestrator's own public verbs own the whole argv when they lead, so
-  // they are classified BEFORE the global `--config` shortcut and the loop: a
-  // `team-board --config x` is a stray token for the board grammar, not a
-  // configuration request. A SOLE `park` parks (sole-token like `help`, because
-  // park mutates: `park` inside a longer description stays freeform). A bare
-  // `unpark` is not a public verb; its spelling is --resume. Without these the
-  // tokens read as freeform work and the funnel offers a second intent.
-  if (args.length === 1 && args[0] === "park") return { orchestratorVerb: "park" };
+  // leadingOrchestratorVerb defines the shared routing rule. Classify BEFORE
+  // the global `--config` shortcut: `team-board --config x` is stray board argv,
+  // not a configuration request. Bare `unpark` is not public; use --resume.
+  const verb = leadingOrchestratorVerb(args);
+  if (verb === "park") return { orchestratorVerb: "park" };
   if (args.length === 1 && args[0] === "unpark") {
     return { parseError: "unpark is not a command: a parked workflow resumes with /aidlc --resume." };
   }
-  if (args[0] === "team-board" && ORCHESTRATOR_VERBS.has(args[0])) {
+  if (verb === "team-board") {
     // The verb is set even on a refused form so the engine-marker exclusion
     // treats it as a read-only board attempt, never workflow engagement.
     const parsed = parseTeamBoardArgs(args.slice(1));
@@ -9515,12 +9512,13 @@ function handleTeamBoard(
   let board: TeamConstructionBoard;
   if (selectedIntent || explicitSpace) {
     const intents = listIntents(pd, selectedSpace);
+    // UUIDs match case-insensitively like resolveIntentFlag in aidlc-knowledge.ts; record dirs and slugs stay exact.
     const matches = selectedIntent
       ? intents.filter(
       (intent) =>
         intent.dirName === selectedIntent ||
         intent.slug === selectedIntent ||
-        intent.uuid === selectedIntent,
+        intent.uuid.toLowerCase() === selectedIntent.toLowerCase(),
       )
       : intents.filter((intent) => intent.active);
     if (matches.length !== 1 || !matches[0].dirName || !matches[0].uuid) {

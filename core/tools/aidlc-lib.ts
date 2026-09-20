@@ -748,8 +748,8 @@ export const WORKSPACE_VERBS: ReadonlySet<string> = new Set([
   "intent",
 ]);
 // The orchestrator's own public verbs (`aidlc park`, `aidlc team-board`). A
-// leading one is routed by the engine as a print directive naming that command
-// (handleNext Branch 1c); it is NOT a terminal utility for a harness seam to run
+// sole `park` or leading `team-board` is routed as a print naming that command
+// (routeNext Branch 1c); it is NOT a terminal utility for a harness seam to run
 // off-band, because park mutates workflow state and team-board lives on the
 // orchestrator, not aidlc-utility. classifyTerminalCommand returns null for
 // them so they stay on the engine + conductor path, like `compose`.
@@ -757,6 +757,20 @@ export const ORCHESTRATOR_VERBS: ReadonlySet<string> = new Set([
   "park",
   "team-board",
 ]);
+
+export type OrchestratorVerb = "park" | "team-board";
+// The ONE rule for whether a `next` argv is an orchestrator-verb route: a SOLE
+// `park` (park mutates, so `park` inside a longer description stays freeform,
+// like the sole-token `help` rule) or a LEADING `team-board`, which owns its
+// whole argv (a refused trailing token is still a board attempt, never workflow
+// work). parseNextFlags, classifyTerminalCommand, the Kiro roll-forward guard
+// and the Stop hook's engagement classifier all consult this so they cannot
+// disagree about the same command.
+export function leadingOrchestratorVerb(args: readonly string[]): OrchestratorVerb | null {
+  if (args[0] === "team-board") return "team-board";
+  if (args.length === 1 && args[0] === "park") return "park";
+  return null;
+}
 
 export type WorkspaceNoun = "intent" | "space";
 
@@ -1341,9 +1355,9 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the
   // public grammar promises leading-token semantics.
-  // A leading orchestrator verb owns the command and stays on the engine path
-  // (see ORCHESTRATOR_VERBS); a read-only flag after it is that command's argv.
-  if (ORCHESTRATOR_VERBS.has(args[0])) return null;
+  // A SOLE park / LEADING team-board stays on the engine path; a later flag
+  // belongs to team-board's argv (see leadingOrchestratorVerb).
+  if (leadingOrchestratorVerb(args) !== null) return null;
   const workspaceCommand = parseWorkspaceCommand(args);
   if (workspaceCommand.kind !== "not-workspace") {
     // Intent creation mutates workflow state and must remain on the normal
@@ -1689,6 +1703,10 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
     return false;
   }
   if (args.shift() !== "next" || args.some((arg) => arg.includes("$"))) return false;
+  // team-board is a read-only board: routeNext Branch 1c answers with a terminal print
+  // before state inspection, without touching the engine marker, accepted or refused alike.
+  // park stays engagement because the park it names mutates.
+  if (leadingOrchestratorVerb(args) === "team-board") return true;
   // Legacy entry points do not extract the dispatcher's bare global flags.
   // Keep mixed positional/global forms conservative; trailing list flags remain valid.
   if (

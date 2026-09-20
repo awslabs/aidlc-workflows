@@ -1,5 +1,5 @@
 // covers: function:classifyTerminalCommand function:parsePluginCommand function:parseKnowledgeCommand function:RESERVED_RECORD_NAMES
-// covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS function:ORCHESTRATOR_VERBS
+// covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS function:ORCHESTRATOR_VERBS function:leadingOrchestratorVerb
 //
 // t178 — classifyTerminalCommand() in aidlc-lib.ts, plus the two exported sets
 // READ_ONLY_FLAGS and WORKSPACE_VERBS that it classifies off.
@@ -35,6 +35,7 @@ import { describe, expect, test } from "bun:test";
 import {
   classifyTerminalCommand,
   KNOWLEDGE_VERBS,
+  leadingOrchestratorVerb,
   parseKnowledgeCommand,
   ORCHESTRATOR_VERBS,
   READ_ONLY_FLAGS,
@@ -212,7 +213,21 @@ describe("classifyTerminalCommand() - orchestrator verbs stay on the engine path
     expect([...ORCHESTRATOR_VERBS].sort()).toEqual(["park", "team-board"]);
   });
 
-  test("a leading park or team-board is never a terminal utility, even with a read-only flag after it", () => {
+  test("leadingOrchestratorVerb routes a sole park or leading team-board only", () => {
+    expect(leadingOrchestratorVerb(["park"])).toBe("park");
+    expect(leadingOrchestratorVerb(["team-board"])).toBe("team-board");
+    expect(leadingOrchestratorVerb(["team-board", "--status"])).toBe("team-board");
+    expect(leadingOrchestratorVerb(["park", "the", "car"])).toBeNull();
+    expect(leadingOrchestratorVerb(["park", "--status"])).toBeNull();
+    expect(leadingOrchestratorVerb(["unpark"])).toBeNull();
+    expect(leadingOrchestratorVerb([])).toBeNull();
+    expect(classifyTerminalCommand(["park", "--status"])).toEqual({
+      subcommand: "status",
+      source: "read-only-flag",
+    });
+  });
+
+  test("a sole park or leading team-board stays on the engine path, even with a read-only flag after team-board", () => {
     // Park mutates and team-board lives on the orchestrator, so neither may run
     // off-band through a harness seam; the engine's Branch 1c names the command.
     expect(classifyTerminalCommand(["park"])).toBeNull();

@@ -911,6 +911,22 @@ describe("detector corpus", () => {
     )).toBe(true);
   });
 
+  test("team-board through next is terminal; park through next is engagement", () => {
+    for (const entry of [
+      "aidlc engine orchestrate",
+      "aidlc",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+    ]) {
+      expect(d1(`${entry} next team-board`)).toBe(false);
+      expect(d1(`${entry} next team-board --snapshot --space teamb --intent 260901-x`)).toBe(false);
+      expect(d1(`${entry} next team-board --status`)).toBe(false);
+      expect(d1(`${entry} next park`)).toBe(true);
+      expect(d1(`${entry} next team-board && ${entry} next`)).toBe(true);
+    }
+    expect(d1("bun .claude/tools/aidlc.ts team-board --snapshot")).toBe(false);
+  });
+
   test("observed workspace navigation through next is terminal", () => {
     expect(
       d1("bun .claude/tools/aidlc.ts engine orchestrate next space-create teamB"),
