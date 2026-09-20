@@ -77,6 +77,7 @@ import type {
   GraphStageLite,
 } from "../../dist/claude/.claude/tools/aidlc-doctor-bundle.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { aidlcToolInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -933,6 +934,25 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     // Positive control: WITH a workflow present, the warning DOES fire.
     const withWf = runDiagnosis(diagInput({ runtimeGraphExists: false, stateContent: "- **Status**: In-Progress\n" }));
     expect(withWf.some((f) => f.id === "runtime-graph-missing")).toBe(true);
+  });
+
+  test("23b: both runtime-graph remedies name the compiler that writes the file", () => {
+    // aidlc-graph.ts compiles stage-graph.json + scope-grid.json and never
+    // writes runtime-graph.json; aidlc-runtime.ts does. A remedy naming the
+    // former is a no-op for the finding that printed it.
+    const missing = runDiagnosis(
+      diagInput({ runtimeGraphExists: false, stateContent: "- **Status**: In-Progress\n" }),
+    ).find((f) => f.id === "runtime-graph-missing");
+    const stale = runDiagnosis(
+      diagInput({ runtimeGraphMtimeMs: 1, authoredInputsNewestMtimeMs: 2 }),
+    ).find((f) => f.id === "runtime-graph-stale");
+    for (const finding of [missing, stale]) {
+      expect(finding).toBeDefined();
+      expect(finding?.remedy, "remedy names the runtime compiler")
+        .toContain(`${aidlcToolInvocation("runtime")} compile`);
+      expect(finding?.remedy, "remedy must not send the user to the stage-graph compiler")
+        .not.toContain(aidlcToolInvocation("graph"));
+    }
   });
 
   test("24: repeated-stage timeline renders chronologically with no negative gap (Arden r3 #8)", () => {

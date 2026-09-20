@@ -714,7 +714,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       },
       remedy:
         `The compiled runtime graph is out of date. Re-run \`${
-          aidlcToolInvocation("graph")
+          aidlcToolInvocation("runtime")
         } compile\`; if this recurs, the ` +
         "rebuild-stage-graph hook may not be firing on this harness (check hook heartbeats).",
       safeToAutomate: true,
@@ -734,7 +734,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       summary: "runtime-graph.json is missing for the active workflow.",
       evidence: { runtimeGraphExists: false },
       remedy:
-        `No compiled runtime graph. Re-run \`${aidlcToolInvocation("graph")} compile\`. ` +
+        `No compiled runtime graph. Re-run \`${aidlcToolInvocation("runtime")} compile\`. ` +
         "If it never appears, the rebuild-stage-graph hook is not firing on this harness.",
       safeToAutomate: true,
     });
