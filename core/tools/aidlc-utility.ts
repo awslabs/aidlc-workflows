@@ -4554,6 +4554,11 @@ export async function collectDoctorReport(
     boltRecords.set(intentId8, record);
     return record;
   };
+  // Unrecognised directory/branch names are repository-controlled text that the
+  // conductor prints verbatim; show them JSON-escaped and bounded so a name
+  // carrying newlines, control characters or instruction-shaped prose cannot
+  // pose as doctor's own prose.
+  const untrustedName = (name: string): string => JSON.stringify(name.length > 80 ? `${name.slice(0, 80)}…` : name);
   const boltDoctorLabel = (name: string, intentId8: string | null): string =>
     intentId8 === null ? `${name} (legacy; selected intent only)` : name;
 
@@ -4597,7 +4602,7 @@ export async function collectDoctorReport(
         observed++;
         const parsed = parseBoltName(entry);
         if (!parsed) {
-          orphanActive.push(`${entry} (unrecognised)`);
+          orphanActive.push(`${untrustedName(entry)} (unrecognised)`);
           continue;
         }
         const { intentId8, slug } = parsed;
@@ -4703,7 +4708,7 @@ export async function collectDoctorReport(
         if (!name.startsWith("bolt-")) continue;
         const parsed = parseBoltName(name);
         if (!parsed) {
-          const label = `${name} (unrecognised)`;
+          const label = `${untrustedName(name)} (unrecognised)`;
           observed.push(label);
           stale.push(label);
           continue;
@@ -4764,7 +4769,7 @@ export async function collectDoctorReport(
         if (!entry.startsWith("bolt-")) continue;
         const parsed = parseBoltName(entry);
         if (!parsed) {
-          orphan.push(`${entry} (unrecognised)`);
+          orphan.push(`${untrustedName(entry)} (unrecognised)`);
           continue;
         }
         const { intentId8, slug } = parsed;

@@ -960,6 +960,18 @@ function discardCreationAuthority(
       evidence.get(repoSelectorKey(repo))?.durable === true
     );
   });
+  // A namespaced Bolt is always created audit-first by this tool, so the
+  // selected intent's own WORKTREE_CREATED must corroborate whatever git
+  // evidence exists. Without it the branch or ref belongs to someone else —
+  // a linked checkout whose registry diverged onto the same id8, or a hand
+  // made name — and discard must not park and delete it. Only pre-upgrade
+  // (legacy) Bolts may fall back to evidence-only ownership below.
+  if (!identity.legacy && wellShapedRows.length === 0 && audit.unreadableShards.length === 0) {
+    errorWithSlug(
+      slug,
+      `refusing to discard: no WORKTREE_CREATED row of intent ${relativeRecordDirForSelection(selection) ?? selection.space} names ${identity.name}; a branch or ref alone is not provenance for an intent-scoped Bolt`,
+    );
+  }
   const corroboratedRepos = new Map<string, string | null>();
   for (const row of corroborated) {
     const field = auditBlockField(row.block, "Repo") as string;

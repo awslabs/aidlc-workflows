@@ -525,6 +525,25 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     }
   }, 30000);
 
+  test("a namespaced branch with no creation row in the selected intent is not discard's to park", () => {
+    // Models a linked checkout whose committed registry diverged onto the same
+    // id8, or a hand-made name: the branch exists in the shared ref database but
+    // this intent never recorded creating it. Branch-only evidence is not
+    // provenance for an intent-scoped Bolt; only pre-upgrade Bolts may fall back
+    // to evidence-only ownership.
+    const p = freshFixture();
+    const branch = boltName(fixtureIntentId8(p), "demo");
+    git(p, "branch", branch, "main");
+    const branchHead = git(p, "rev-parse", "--verify", `refs/heads/${branch}`);
+
+    const result = wt(p, ["discard", "--slug", "demo"]);
+    expect(result.status, result.out).not.toBe(0);
+    expect(result.out).toContain(`no WORKTREE_CREATED row of intent`);
+    expect(result.out).toContain(`names ${branch}`);
+    expect(git(p, "rev-parse", "--verify", `refs/heads/${branch}`)).toBe(branchHead);
+    expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/parked/")).toBe("");
+  }, 30000);
+
   test("a phantom pre-upgrade creation (audit row, no git evidence) does not block the slug", () => {
     const p = freshFixture();
     // Pre-upgrade audit-first create that died between WORKTREE_CREATED and
