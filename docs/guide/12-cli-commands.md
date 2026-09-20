@@ -1633,7 +1633,7 @@ aidlc engine worktree restore --slug <slug> [--parked <stamp>] [--raw] [--repo <
 
 This recovers files saved by `worktree discard` or an authorized
 `bolt abort --discard`. Without `--parked`, it selects the latest saved `/head`
-for the slug; with it, it selects that exact stamp. Stamps are UTC
+for the selected intent's Bolt; with it, it selects that exact stamp. Stamps are UTC
 `YYYYMMDDTHHMMSSZ` with an optional numeric `-N` collision suffix, ordered
 numerically for latest selection (`-10` follows `-2`). An exact stamp present in
 only one repository selects that repository before generic slug ambiguity.
@@ -1658,12 +1658,13 @@ not accepted by purge.
 When the human asks to recover an attempt, the conductor uses the successful
 discard abort's saved `restore_operation`, not a command string. This typed
 `EngineInvocation` has route `worktree` and args
-`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? "."]` when the
+`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]` when the
 stamp is known. Invoke `aidlc engine worktree <args...>` (the installed
 `{{INVOKE}} engine worktree` route), passing each listed arg exactly as a
 separate argv argument; never join args into a shell command or rebuild a
 slug-only selection. The repository selector is always present: the sibling
-name or `.` for the root.
+name or `.` for the root. The final selectors pin the owning intent, even after
+the active intent changes; keep every returned argument.
 
 `restore_hint` is optional human display text rendered from that operation by
 `renderEngineInvocation`, with native/source selection, harness-directory
@@ -1701,9 +1702,9 @@ offer. If no namespace was saved, including without `--discard`, `parked_ref`
 is `null`; `parked_stamp`, `parked_mode`, `parked_repo`, `restore_operation`,
 `restore_hint`, `restore_hint_error`, `parked_excludes`, and `recovery_hint` are absent.
 
-Restore creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
-`restore/bolt-<slug>-<stamp>`. It never touches a live
-`.aidlc/worktrees/bolt-<slug>` checkout or `bolt-<slug>` branch, resumes the
+Restore creates `.aidlc/restored/bolt-<id8>_<slug>-<stamp>` on branch
+`restore/bolt-<id8>_<slug>-<stamp>`. It never touches a live
+`.aidlc/worktrees/bolt-<id8>_<slug>` checkout or `bolt-<id8>_<slug>` branch, resumes the
 aborted lifecycle, or reinstates review authority. If the restore path or branch
 already exists, it refuses rather than overwriting it. Selecting evidence-only
 recovery refs, with no `/head`, refuses even with `--raw`:
@@ -1711,6 +1712,10 @@ recovery refs, with no `/head`, refuses even with `--raw`:
 ```text
 no restorable files were parked for <slug> <stamp>; only review evidence was kept
 ```
+
+Legacy restores retain their recorded name and require the selected intent's
+exact `WORKTREE_DISCARDED` `Parked ref` provenance. See
+[Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity).
 
 | Selection | Behavior |
 |-----------|----------|
@@ -1745,12 +1750,12 @@ for the snapshot contract.
 ### `aidlc engine worktree purge` — remove recovery refs
 
 ```bash
-aidlc engine worktree purge --slug <slug> [--parked <stamp> | --older-than <days>] [--repo <name|.>]
+aidlc engine worktree purge --slug <slug> [--parked <stamp> | --older-than <days>] [--repo <name|.>] [--intent <intent>] [--space <space>]
 ```
 
 Purge compare-deletes local recovery refs, including snapshot/branch-tip markers
 and reviewed source refs. With no selector it removes all saved stamps for the
-slug; `--parked <stamp>` selects one exact stamp. `--older-than <days>` accepts
+selected intent's Bolt; `--parked <stamp>` selects one exact stamp. `--older-than <days>` accepts
 nonnegative finite days, including fractions, and selects only stamps strictly
 older than that threshold. Age is computed from the UTC `YYYYMMDDTHHMMSSZ`
 portion of the stamp, ignoring any `-N` collision suffix; commit dates do not
@@ -1775,7 +1780,7 @@ mode (`snapshot`, `branch-tip`, `legacy`, or `evidence-only`), canonical restore
 checkout existence, and typed recovery operations. In JSON, every entry has
 `purge_operation`; only restorable entries have `restore_operation`. Each is an
 `EngineInvocation` with route `worktree` and args beginning with `purge` or
-`restore`, followed by `["--slug", slug, "--parked", stamp, "--repo", repo ?? "."]`.
+`restore`, followed by `["--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]`.
 Conductors invoke that route with each arg exactly as argv, never by joining
 strings for a shell. Optional `restore_command` and `purge_command` are safe
 renderings for human display only. If rendering throws, the corresponding
@@ -1784,6 +1789,9 @@ explains why while the operation remains. Evidence-only entries have only the
 purge operation and its command-or-error fields. Doctor uses the same
 slug-scoped recovery repository candidate set described above. A moved checkout may not show as
 restored in doctor, but purge still checks its Git registration.
+Namespaced attempts resolve their owner through the intent registry UUID;
+legacy attempts require an exact discarded `Parked ref` in the owner's audit.
+Unknown or ambiguous owners and unattributed legacy parks are omitted.
 Doctor uses the same strict stamp parser: impossible dates and times have
 `age_days: null` in JSON and show `unknown` in human-readable output.
 These entries do not produce warnings or failures. Use the copy-install prefix

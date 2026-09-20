@@ -10745,7 +10745,8 @@ export function resolveBoltIdentity(
   selection: WorkflowSelection,
 ): BoltIdentity {
   const record = relativeRecordDirForSelection(selection);
-  if (selection.intent === null) {
+  const intent = selection.intent;
+  if (intent === null) {
     throw new BoltIdentityError("NO_INTENT", record, slug);
   }
   const intentId8 = intentId8ForSelection(projectDir, selection);
@@ -10755,45 +10756,41 @@ export function resolveBoltIdentity(
   if (existsSync(worktreePath(projectDir, intentId8, slug))) {
     return newBoltIdentity(projectDir, intentId8, slug);
   }
+  // A legacy Bolt is adopted only on immutable provenance binding it to the
+  // selected intent: its metadata's `intentRecord`, or — for metadata that
+  // predates that field, and for cleanup-only state where the directory is
+  // already gone — a single OPEN legacy WORKTREE_CREATED for this slug and path
+  // on the causal frontier of the selected intent's own audit shards. Shards are
+  // not time-ordered by filename, so an older creation in a lexically-later
+  // shard must not reopen a Bolt a newer terminal row closed; an unreadable
+  // shard or a cross-shard tie at the frontier fails closed. Nothing is ever
+  // inferred from how many intents a space or workspace holds: the legacy name
+  // is repository-global, so a wrong answer here would let one intent land or
+  // discard another intent's unmerged work.
   const legacyDir = legacyWorktreePath(projectDir, slug);
-  if (existsSync(legacyDir)) {
-    const intentRecord = readWorktreeMetaIntentRecord(legacyDir);
-    if (intentRecord === record) return legacyBoltIdentity(projectDir, intentId8, slug);
-    if (intentRecord === null) {
-      const intents = listIntents(projectDir, selection.space).filter((entry) => !isArchivedIntent(entry));
-      if (intents.length === 1 && intents[0].dirName === selection.intent) {
-        return legacyBoltIdentity(projectDir, intentId8, slug);
-      }
-    }
-  } else {
-    // Audit provenance can recover cleanup-only Bolts, never override a live
-    // directory's missing or conflicting ownership metadata. The selected
-    // intent's own rows must prove an OPEN legacy creation on the causal
-    // frontier: shards are not time-ordered by filename, so an older creation
-    // in a lexically-later shard must not reopen a Bolt a newer terminal row
-    // closed. An unreadable shard or a cross-shard tie at the frontier fails
-    // closed (no legacy identity) — the legacy branch name is global, so a
-    // wrong answer here would let this intent delete another intent's Bolt.
+  const openLegacyCreation = (): boolean => {
     const unreadableShards: string[] = [];
-    const lifecycle = readAuditShardEvents(projectDir, selection.intent, selection.space, unreadableShards)
+    const lifecycle = readAuditShardEvents(projectDir, intent, selection.space, unreadableShards)
       .filter((event) =>
         (event.event === "WORKTREE_CREATED" ||
           event.event === "WORKTREE_MERGED" ||
           event.event === "WORKTREE_DISCARDED") &&
         auditBlockField(event.block, "Bolt slug") === slug);
-    if (unreadableShards.length === 0 && lifecycle.length > 0) {
-      const frontier = maximalAttemptEvents(lifecycle);
-      const open = frontier.length === 1 ? frontier[0] : null;
-      if (open !== null &&
-        open.event === "WORKTREE_CREATED" &&
-        auditBlockField(open.block, "Branch name") === legacyBoltName(slug)) {
-        const path = auditBlockField(open.block, "Worktree path");
-        if (path !== null &&
-          canonicalPathKey(resolveAuditWorktreePath(projectDir, path)) === canonicalPathKey(legacyDir)) {
-          return legacyBoltIdentity(projectDir, intentId8, slug);
-        }
-      }
+    if (unreadableShards.length > 0 || lifecycle.length === 0) return false;
+    const frontier = maximalAttemptEvents(lifecycle);
+    if (frontier.length !== 1 || frontier[0].event !== "WORKTREE_CREATED") return false;
+    if (auditBlockField(frontier[0].block, "Branch name") !== legacyBoltName(slug)) return false;
+    const path = auditBlockField(frontier[0].block, "Worktree path");
+    return path !== null &&
+      canonicalPathKey(resolveAuditWorktreePath(projectDir, path)) === canonicalPathKey(legacyDir);
+  };
+  if (existsSync(legacyDir)) {
+    const intentRecord = readWorktreeMetaIntentRecord(legacyDir);
+    if (intentRecord === record || (intentRecord === null && openLegacyCreation())) {
+      return legacyBoltIdentity(projectDir, intentId8, slug);
     }
+  } else if (openLegacyCreation()) {
+    return legacyBoltIdentity(projectDir, intentId8, slug);
   }
   return newBoltIdentity(projectDir, intentId8, slug);
 }

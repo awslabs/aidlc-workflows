@@ -133,6 +133,40 @@ describe("resolveBoltIdentity legacy provenance", () => {
     expect(identity.name).toBe(boltName(idSuffix(UUID), SLUG));
   });
 
+  test("live metadata without intentRecord is adopted only on this intent's open creation", () => {
+    const metadataDir = join(legacyWorktreePath(project, SLUG), ".aidlc");
+    mkdirSync(metadataDir, { recursive: true });
+    writeFileSync(join(metadataDir, "worktree-meta.json"), JSON.stringify({ version: 1, boltSlug: SLUG }));
+
+    // No rows for this slug: the directory could belong to any intent in any
+    // space, so it is not ours — even though this space holds exactly one intent.
+    expect(resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project)).legacy).toBe(false);
+
+    seedShard("a-aaaa.md", lifecycleBlock("WORKTREE_CREATED", CREATED_AT));
+    expect(resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project)).legacy).toBe(true);
+  });
+
+  test("a second space's lone intent cannot adopt a live pre-intentRecord Bolt", () => {
+    const metadataDir = join(legacyWorktreePath(project, SLUG), ".aidlc");
+    mkdirSync(metadataDir, { recursive: true });
+    writeFileSync(join(metadataDir, "worktree-meta.json"), JSON.stringify({ version: 1, boltSlug: SLUG }));
+    // The Bolt's real owner (default space) has the open creation.
+    seedShard("a-aaaa.md", lifecycleBlock("WORKTREE_CREATED", CREATED_AT));
+
+    const otherUuid = "00000000000000000000000000000def";
+    const otherRecord = `demo-${idSuffix(otherUuid)}`;
+    const otherIntents = join(project, "aidlc", "spaces", "platform", "intents");
+    mkdirSync(join(otherIntents, otherRecord, "audit"), { recursive: true });
+    writeFileSync(join(otherIntents, otherRecord, "aidlc-state.md"), "# AI-DLC State\n");
+    writeFileSync(join(otherIntents, "intents.json"), `${JSON.stringify([
+      { uuid: otherUuid, slug: SLUG, dirName: otherRecord, status: "in-flight" },
+    ], null, 2)}\n`);
+
+    const foreign = resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project, { space: "platform", intent: otherRecord }));
+    expect(foreign.legacy).toBe(false);
+    expect(foreign.name).toBe(boltName(idSuffix(otherUuid), SLUG));
+  });
+
   test("a selected intent without a registry UUID fails closed", () => {
     seedRegistry(null);
     let error: unknown;

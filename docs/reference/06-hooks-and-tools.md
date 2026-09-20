@@ -586,7 +586,8 @@ that absent marker here would prevent the offered abort. The unchanged
 and reviewed source refs before removing the live checkout and branch. With
 a restorable descriptor, the abort result supplies `restore_operation` with route
 `worktree` and exact argv args, including `--parked <stamp>` and
-`--repo <name>` or `--repo .`. On a human restore request, the conductor invokes
+`--repo <name>` or `--repo .`, followed by `--intent <record-dir-name> --space <space>`
+to pin the owning intent. On a human restore request, the conductor invokes
 `{{INVOKE}} engine worktree <args...>` with each listed arg passed exactly as a
 separate argv argument, never joined into a shell command. This recovers files
 in a separate restored checkout, not by reviving the live Bolt. The optional
