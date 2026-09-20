@@ -885,6 +885,14 @@ process.stdout.write(JSON.stringify(value));
     expect(
       existsSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-correctness.md")),
     ).toBe(false);
+    const userExperience = readFileSync(
+      join(REPO_ROOT, ".github", "prompts", "ai-pr-review-user-experience.md"),
+      "utf8",
+    );
+    expect(userExperience).toContain("core/aidlc-common/protocols/stage-protocol.md");
+    expect(userExperience).toMatch(/speaks\s+as a teammate or colleague/);
+    expect(userExperience).toContain("model, bot, robot, framework, or impersonal workflow");
+    expect(userExperience).toContain("every message the user reads");
     const common = readFileSync(
       join(REPO_ROOT, ".github", "prompts", "ai-pr-review-common.md"),
       "utf8",
