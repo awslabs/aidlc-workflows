@@ -4554,7 +4554,7 @@ describe("t243 projection channel", () => {
           "sha256:412776ee4595c453511a911e06c7729285bb5338b30584f8570908b273e27296",
           "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
           "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
-          "sha256:b9b8d1c4b4218f5b9b9cb4378d9b75ee6234922f99f9ef365f33096d51d4c368",
+          "sha256:b68d1da4b4263b3126425467eb3008a0636449ee09d6e79396f1f6638f7fb3f2",
         ],
       },
       kiro: {
@@ -4572,6 +4572,7 @@ describe("t243 projection channel", () => {
           "sha256:1abeb3cb19943bc1537c413dc45298c43a14ce7544444c88c13b53ea48a607a6",
           "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
           "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
+          "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
         ],
       },
       "kiro-ide": {
@@ -4589,6 +4590,7 @@ describe("t243 projection channel", () => {
           "sha256:68be79dc053e88931557484ef37b7f63248cddcf02cb44db89c5bd2522980967",
           "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
+          "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
         ],
       },
     };

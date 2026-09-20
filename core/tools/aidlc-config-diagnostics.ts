@@ -2026,8 +2026,11 @@ export function providerSurfaceIssues(
           if (/^model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(text)) {
             entries.push("model_provider");
           }
-          const table = /^\[model_providers\.amazon-bedrock[^\]]*\]\s*$/m.exec(text);
-          if (table) entries.push(table[0].trim());
+          // Report a fixed identifier, never the project-authored header text:
+          // diagnostics are read by agents and must not relay file content.
+          if (/^\[model_providers\.amazon-bedrock[^\]]*\]\s*$/m.test(text)) {
+            entries.push("[model_providers.amazon-bedrock] table");
+          }
           if (entries.length > 0) {
             warning(
               "provider-codex-project-override",

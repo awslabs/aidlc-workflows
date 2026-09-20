@@ -97,6 +97,8 @@ const manifest: HarnessManifest = {
           "sha256:025c596b2f44b688a329d419b5cd39fd2ee2a6d6cae4e6491dc6cd0f663c04ea",
           "sha256:68be79dc053e88931557484ef37b7f63248cddcf02cb44db89c5bd2522980967",
           "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
+          // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
+          "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
         ],
       },
     },

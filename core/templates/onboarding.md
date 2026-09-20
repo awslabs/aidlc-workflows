@@ -44,7 +44,7 @@ AI-DLC is open-world. Plugins under `plugins/<name>/` contribute additional stag
 {{SLOT:structure_extra}}
 ## Conventions
 
-- All artifacts go under the active intent's record dir — `aidlc/spaces/<active-space>/intents/<slug>-<id8>/` (shorthand `<record>/`) — beneath the neutral `aidlc/` workspace roof; application code goes to the workspace root (or a sibling repo). Single-team users only ever see `spaces/default/`.
+- All artifacts go under the active intent's record dir — `aidlc/spaces/<active-space>/intents/<YYMMDD>-<label>/` (shorthand `<record>/`) — beneath the neutral `aidlc/` workspace roof; application code goes to the workspace root (or a sibling repo). Single-team users only ever see `spaces/default/`.
 - Each stage keeps an observation diary at `<record>/<phase>/<stage>/memory.md`, created by the engine from a template when it emits the run-stage directive and kept up to date automatically as the stage runs, never hand-edited
 - Use emojis as defined in skill/stage files — reproduce them exactly
 - Validate Mermaid diagram syntax before writing; include text fallback

@@ -58,6 +58,8 @@ const manifest: HarnessManifest = {
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
           "sha256:d86a61b7376772dcc7afdaefd63ce185f99d9c32d0e455668cf3b52f91a13d40",
+          // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
+          "sha256:db6e65ed85d6b47ca47d72b5a323ddc4dca76d021cce92591c1a28b26d9f237a",
         ],
       },
     },
