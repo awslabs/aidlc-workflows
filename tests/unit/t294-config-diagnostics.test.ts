@@ -1682,6 +1682,86 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 120_000);
 
+  test("keep-current preserves a customized legacy Codex Bedrock table and removes a record-written one", () => {
+    const legacyBlock =
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+      `# unavailable there; the market-research stage degrades gracefully). For\n` +
+      `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+      `# block.\n` +
+      `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\n` +
+      `# Set to your AWS profile/region with Bedrock model access.\n` +
+      `profile = "team"\nregion = "eu-west-1"\n\n`;
+    for (const env of [runtimeEnv(), runtimeEnv({ AIDLC_RUNTIME_ROOT: "" })]) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const customized = legacyBlock + readFileSync(configPath, "utf-8");
+      writeFileSync(configPath, customized);
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "current",
+        "--yes",
+      ], project, env);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      expect(readFileSync(configPath, "utf-8")).toBe(customized);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).toContain("1 warning(s)");
+      expect(check.stdout).toContain("provider-codex-project-override");
+    }
+
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const shipped = readFileSync(configPath, "utf-8");
+    writeFileSync(configPath, legacyBlock + shipped);
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "eu-west-1",
+      "--profile",
+      "team",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const changed = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    expect(readFileSync(configPath, "utf-8")).toBe(shipped);
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("clean for codex");
+  }, 120_000);
+
   test("reset removes the exact legacy Codex Bedrock block", () => {
     const project = install("codex");
     const env = runtimeEnv();
@@ -2410,6 +2490,54 @@ describe("t294 config diagnostics CLI", () => {
       region: "us-west-2",
       profile: "dev",
     });
+  }, 60_000);
+
+  test("Bedrock-only provider flags are rejected for current and other", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const current = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--region",
+      "us-east-1",
+      "--yes",
+    ], project, env);
+    expect(current.status, current.stdout + current.stderr).toBe(2);
+    expect(current.stdout).toContain("require --provider amazon-bedrock");
+    expect(readConfigDiagnosticRecords(join(project, ".claude")).providers).toBeNull();
+    const other = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "other",
+      "--profile",
+      "team",
+      "--acknowledge",
+      "--yes",
+    ], project, env);
+    expect(other.status, other.stdout + other.stderr).toBe(2);
+    expect(other.stdout).toContain("require --provider amazon-bedrock");
+    expect(readConfigDiagnosticRecords(join(project, ".claude")).providers).toBeNull();
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--profile",
+      "team",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
   }, 60_000);
 
   test("OpenCode-only provider flags are rejected for other harnesses", () => {

@@ -1162,13 +1162,28 @@ function clearClaudeProvider(
 const LEGACY_CODEX_BEDROCK_COMMENT =
   /^# D-9: Amazon Bedrock is the shipped default provider \(web_search is\r?\n# unavailable there; the market-research stage degrades gracefully\)\. For\r?\n# OpenAI-auth setups, comment out model_provider and the \[model_providers\]\r?\n# block\.\r?\n/m;
 
+function legacyCodexAwsTablePattern(profile: string, region: string): RegExp {
+  const escapedProfile = profile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedRegion = region.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `^\\[model_providers\\.amazon-bedrock\\.aws\\]\\r?\\n` +
+      `(?:# Set to your AWS profile/region with Bedrock model access\\.\\r?\\n)?` +
+      `profile = "${escapedProfile}"\\r?\\nregion = "${escapedRegion}"` +
+      `(?:\\r?\\n(?=\\r?\\n|\\[|$)(?:\\r?\\n)?|(?![\\s\\S]))`,
+    "m",
+  );
+}
+
+const LEGACY_CODEX_AWS_TABLE = legacyCodexAwsTablePattern("default", "us-east-1");
+
 function clearCodexProvider(
   projectionRoot: string,
   harnessDir: string,
+  previousProvider: ProvidersRecord | null,
 ): void {
   const path = join(projectionRoot, harnessDir, "config.toml");
   const original = readFileSync(path, "utf-8");
-  if (!hasLegacyCodexProviderConfig(original)) return;
+  if (!hasLegacyCodexProviderConfig(original, previousProvider)) return;
   let content = original;
   content = content.replace(LEGACY_CODEX_BEDROCK_COMMENT, "");
   content = content.replace(
@@ -1187,22 +1202,33 @@ function clearCodexProvider(
     /^model_reasoning_effort\s*=\s*"high"\s*(?:\r?\n|$)/m,
     "",
   );
-  // Stop at the legacy table's blank separator, preserving following comments.
-  content = content.replace(
-    /^\[model_providers\.amazon-bedrock\.aws\]\r?\n(?:(?!\[)\S.*(?:\r?\n|$))*(?:\r?\n)?/gm,
-    "",
-  );
+  // Remove only the exact shipped or previously written table and its separator.
+  if (LEGACY_CODEX_AWS_TABLE.test(original)) {
+    content = content.replace(LEGACY_CODEX_AWS_TABLE, "");
+  } else if (previousProvider?.provider === "amazon-bedrock" && previousProvider.region) {
+    content = content.replace(
+      legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region),
+      "",
+    );
+  }
   writeFileSync(path, content.replace(/\n{3,}/g, "\n\n"));
 }
 
-export function hasLegacyCodexProviderConfig(content: string): boolean {
+export function hasLegacyCodexProviderConfig(
+  content: string,
+  previousProvider: ProvidersRecord | null = null,
+): boolean {
   return (
     LEGACY_CODEX_BEDROCK_COMMENT.test(content) &&
     /^model\s*=\s*"openai\.gpt-5\.5"\s*$/m.test(content) &&
     /^model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(content) &&
     /^model_context_window\s*=\s*1000000\s*$/m.test(content) &&
     /^model_reasoning_effort\s*=\s*"high"\s*$/m.test(content) &&
-    /^\[model_providers\.amazon-bedrock\.aws\]\s*$/m.test(content)
+    (LEGACY_CODEX_AWS_TABLE.test(content) || (
+      previousProvider?.provider === "amazon-bedrock" &&
+      !!previousProvider.region &&
+      legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region).test(content)
+    ))
   );
 }
 
@@ -1370,7 +1396,7 @@ export function applyConfigDiagnosticRecords(
   const provider = records.providers;
   if (!provider?.provider) {
     if (harness === "claude") clearClaudeProvider(projectionRoot, harnessDir);
-    else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir);
+    else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir, previousProvider);
     else if (harness === "opencode") {
       clearOpenCodeProvider(projectionRoot, previousProvider);
     }
@@ -1378,7 +1404,7 @@ export function applyConfigDiagnosticRecords(
   }
   if (provider.provider === "current" || provider.provider === "other") {
     if (harness === "claude") clearClaudeProvider(projectionRoot, harnessDir);
-    else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir);
+    else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir, previousProvider);
     else if (harness === "opencode") {
       clearOpenCodeProvider(projectionRoot, previousProvider);
     }

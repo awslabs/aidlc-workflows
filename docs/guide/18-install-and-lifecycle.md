@@ -457,6 +457,8 @@ aidlc config providers --mark-done bedrock-model-access --yes
 aidlc config providers --reset --yes
 ```
 
+`--region`, `--profile`, and `--opencode-default` require `--provider amazon-bedrock`.
+
 Credential detection is offline only. It inspects AWS environment variables,
 `~/.aws/config`, `~/.aws/credentials`, role and container credential variables,
 and the AWS SSO cache. It never calls STS, Bedrock, a model endpoint, or any
@@ -488,9 +490,9 @@ aliases are preserved. A customized legacy Codex Bedrock block is also preserved
 `--check` reports a warning when it still names that provider instead of calling
 the configuration clean. `--provider other` records a manually configured
 non-Bedrock provider and reports that setup as pending until `--acknowledge` is
-supplied. `--reset` removes exact legacy AI-DLC Bedrock defaults from Claude and
-Codex project files and the opencode provider options written for the previous
-record; unproven values are preserved.
+supplied. `--reset` removes exact legacy AI-DLC Bedrock defaults or values written
+for the previous recorded answer from Claude, Codex, and opencode project files;
+unproven values are preserved.
 
 The question is worded for the harness in front of you, so each install offers
 the two paths that actually exist for it:

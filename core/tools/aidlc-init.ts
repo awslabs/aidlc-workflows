@@ -1239,6 +1239,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
         "  --acknowledge",
         "  --mark-done <pending-action-id>",
         "",
+        "--region, --profile, and --opencode-default require --provider amazon-bedrock.",
         "Credential detection is offline only. No provider or model endpoint is contacted.",
       ]
     : [
@@ -1615,6 +1616,12 @@ function providerRecordFromArgs(
       delete next.profile;
       delete next.opencodeDefault;
     }
+  }
+  if (
+    next.provider !== "amazon-bedrock" &&
+    ["--region", "--profile", "--opencode-default"].some((flag) => argv.includes(flag))
+  ) {
+    throw new Error("--region, --profile, and --opencode-default require --provider amazon-bedrock");
   }
   const region = valueAfter(argv, "--region");
   const profile = valueAfter(argv, "--profile");
