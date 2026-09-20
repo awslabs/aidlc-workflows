@@ -26,6 +26,7 @@ import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltName,
+  reviewedSourceRefPrefix,
   worktreePath,
   auditBlockField,
   currentStageSourceBaseline,
@@ -2709,53 +2710,7 @@ describe("t305 post-merge source authority failure", () => {
     expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
       .toHaveLength(1);
 
-    const authorityBlocks = readAllAuditShards(project)
-      .split(/\n---\n/)
-      .filter(
-        (block) =>
-          block.includes(`**Unit name**: ${unit}`) &&
-          (
-            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
-            block.includes("**Event**: SWARM_SOURCE_MERGED")
-          ),
-      );
-    // Bolt identity is intent-scoped, so copies of this Unit's authority rows
-    // planted under a DIFFERENT intent neither block nor authorize the selected
-    // intent's cleanup: the selector-free retry (active intent = the original)
-    // reconciles from its own rows alone.
-    const decoyAudit = join(
-      project,
-      "aidlc",
-      "spaces",
-      "default",
-      "intents",
-      "cleanup-decoy",
-      "audit",
-    );
-    mkdirSync(decoyAudit, { recursive: true });
-    writeFileSync(
-      join(decoyAudit, "decoy.md"),
-      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
-    );
-    const withDecoy = spawnSync(
-      process.execPath,
-      [
-        WORKTREE,
-        "merge",
-        "--slug",
-        unit,
-        "--target",
-        "main",
-        "--strategy",
-        "squash",
-        "--project-dir",
-        project,
-      ],
-      { cwd: project, encoding: "utf-8" },
-    );
-    expect(withDecoy.status, `${withDecoy.stdout ?? ""}${withDecoy.stderr ?? ""}`).toBe(0);
-    expect(withDecoy.stdout).toContain('"cleanup_reconciled":true');
-
+    // R4(b): the advanced-stage retry must reconcile the retained branch and source, not a prior no-op.
     appendAuditEntry(
       "STAGE_STARTED",
       { Stage: "code-generation", Agent: "aidlc-developer-agent" },
@@ -2767,6 +2722,19 @@ describe("t305 post-merge source authority failure", () => {
       ["-C", project, "rev-parse", "HEAD"],
       { encoding: "utf-8" },
     ).stdout.trim();
+    expect(
+      spawnSync("git", ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`], {
+        encoding: "utf-8",
+      }).status,
+    ).toBe(0);
+    const retainedPrefix = reviewedSourceRefPrefix(fixtureIntentId8(project), unit);
+    const sourceCommit = readAllAuditShards(project).split(/\n---\n/)
+      .filter((block) => block.includes("**Event**: SWARM_SOURCE_MERGED"))
+      .at(-1)?.match(/^\*\*Source Commit\*\*: (.+)$/m)?.[1];
+    expect(sourceCommit).toMatch(/^[0-9a-f]{40,64}$/);
+    expect(spawnSync("git", ["-C", project, "rev-parse", "--verify", `${retainedPrefix}${sourceCommit}`], {
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(sourceCommit!);
     const retried = spawnSync(
       process.execPath,
       [
@@ -2801,6 +2769,67 @@ describe("t305 post-merge source authority failure", () => {
         { encoding: "utf-8" },
       ).status,
     ).toBe(1);
+    expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
+      .toHaveLength(1);
+    expect(existsSync(wt)).toBe(false);
+    expect(spawnSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", retainedPrefix], {
+      encoding: "utf-8",
+    }).stdout).toBe("");
+
+    const authorityBlocks = readAllAuditShards(project)
+      .split(/\n---\n/)
+      .filter(
+        (block) =>
+          block.includes(`**Unit name**: ${unit}`) &&
+          (
+            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
+            block.includes("**Event**: SWARM_SOURCE_MERGED")
+          ),
+      );
+    // R4(b): only after stage-advance cleanup, plant another intent's decoy rows.
+    // They neither block nor authorize the original intent's idempotent retry.
+    const decoyAudit = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "cleanup-decoy",
+      "audit",
+    );
+    mkdirSync(decoyAudit, { recursive: true });
+    writeFileSync(
+      join(decoyAudit, "decoy.md"),
+      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
+    );
+    const withDecoy = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    expect(withDecoy.status, `${withDecoy.stdout ?? ""}${withDecoy.stderr ?? ""}`).toBe(0);
+    expect(withDecoy.stdout).toContain('"cleanup_reconciled":true');
+    expect(spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(headAfterLanding);
+    expect(existsSync(wt)).toBe(false);
+    expect(spawnSync("git", ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`], {
+      encoding: "utf-8",
+    }).status).toBe(1);
+    expect(spawnSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", retainedPrefix], {
+      encoding: "utf-8",
+    }).stdout).toBe("");
     expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
       .toHaveLength(1);
   }, 120000);

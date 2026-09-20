@@ -220,8 +220,11 @@ the human gate, run `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts merge --slug
 <that converged result row's bolt_slug> --target <the same base branch used by
 prepare> --strategy squash` for each result row whose status is `converged` and
 which is absent from `merge_failures`. The merge recovers the creating
-repository and intent from a unique durable source authority, consumes the
-immutable `Source Commit`, disables ambient Git hooks, and emits
+repository from a unique durable source authority; its intent remains the
+selected workflow intent. Pass `--intent`/`--space` only when they name the
+session's active workflow; swarm refuses a mismatch before mutation or audit
+emission. The merge consumes the immutable `Source Commit`, disables ambient
+Git hooks, and emits
 `SWARM_SOURCE_MERGED`; modern convergence does not advance
 the batch until that row exists. A normal non-zero result before
 `[merge-succeeded:<sha>]` preserves the worktree: resolve the conflict or target
@@ -249,9 +252,9 @@ args select the exact slug, stamp, and repository, then append
 `--intent <record-dir-name> --space <space>` so later execution cannot drift to
 another active intent. If only review evidence remained, there are no saved
 working files to restore, so neither `restore_operation` nor `restore_hint` is
-returned. Legacy restores retain their legacy name and require the selected
-intent's exact `WORKTREE_DISCARDED` `Parked ref` provenance. Restored artifacts
-and receipts are not
+returned. Namespaced and legacy restores both require the selected intent's
+exact `WORKTREE_DISCARDED` `Parked ref` and stamp provenance; legacy restores
+retain their legacy name. Restored artifacts and receipts are not
 current-attempt evidence; retry still requires a fresh `prepare` and review
 boundary as described below.
 

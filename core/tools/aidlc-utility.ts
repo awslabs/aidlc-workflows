@@ -242,10 +242,9 @@ import {
   workspaceSourceState,
   type WorkspaceSourceState,
   boltName,
-  legacyBoltIdentity,
   legacyBoltName,
   legacyParkedRefPrefix,
-  newBoltIdentity,
+  parkedRefPrefix,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -2537,16 +2536,17 @@ type DoctorParkedAttempt = {
   slug: string;
   stamp: string;
   age_days: number | null;
-  mode: "snapshot" | "branch-tip" | "legacy" | "evidence-only";
+  mode: "snapshot" | "branch-tip" | "legacy" | "evidence-only" | "unrecorded";
   repo: string | null;
   restored_path: string;
   restored_exists: boolean;
   restore_operation?: EngineInvocation;
-  purge_operation: EngineInvocation;
+  purge_operation?: EngineInvocation;
   restore_command?: string;
   restore_command_error?: string;
   purge_command?: string;
   purge_command_error?: string;
+  note?: string;
 };
 
 export type DoctorReport = {
@@ -2560,7 +2560,7 @@ export type DoctorReport = {
 // Share repository trust with restore/purge without importing the worktree CLI.
 function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
   const rows: AuditShardEvent[] = [];
-  type Owner = { id8: string; intent: string; space: string; rows: AuditShardEvent[] };
+  type Owner = { intent: string; space: string; rows: AuditShardEvent[]; parkedRefs: Set<string> };
   const owners = new Map<string, Owner | null>();
   const legacyOwners = new Map<string, Owner | null>();
   const ownerRepositories = new Map<Owner, Map<string | null, Set<string> | null>>();
@@ -2582,13 +2582,18 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
       const registered = registeredIntents.find((entry) => entry.dirName === intent);
       if (intent === undefined || !registered?.uuid) continue;
       const id8 = idSuffix(registered.uuid);
-      const owner: Owner = { id8, intent, space, rows: selectedRows };
+      const owner: Owner = { intent, space, rows: selectedRows, parkedRefs: new Set() };
       owners.set(id8, owners.has(id8) ? null : owner);
       for (const row of selectedRows) {
         if (row.event !== "WORKTREE_DISCARDED") continue;
         const slug = auditBlockField(row.block, "Bolt slug");
         const parkedRef = auditBlockField(row.block, "Parked ref");
-        if (slug === null || parkedRef === null || !parkedRef.startsWith(legacyParkedRefPrefix(slug))) continue;
+        if (slug === null || parkedRef === null) continue;
+        const legacy = parkedRef.startsWith(legacyParkedRefPrefix(slug));
+        if (!legacy && !parkedRef.startsWith(parkedRefPrefix(id8, slug))) continue;
+        // Recovery requires this owner's slug and exact ref, not merely its namespace.
+        owner.parkedRefs.add(parkedRef);
+        if (!legacy) continue;
         const existing = legacyOwners.get(parkedRef);
         legacyOwners.set(parkedRef, existing === undefined || existing === owner ? owner : null);
       }
@@ -2630,42 +2635,42 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
       const match = /^refs\/aidlc\/parked\/(?:([0-9a-f]{8})\/)?([^/]+)\/(\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?)\/(?:head|reviewed-source\/(?:[a-f0-9]{40}|[a-f0-9]{64}))$/.exec(ref);
       if (!match) continue;
       const [, id8, slug, stamp] = match;
-      const parsed = parseBoltName(id8 === undefined ? legacyBoltName(slug) : boltName(id8, slug));
+      const name = id8 === undefined ? legacyBoltName(slug) : boltName(id8, slug);
+      const parsed = parseBoltName(name);
       if (parsed === null || (slugs !== null && !slugs.has(slug))) continue;
+      const prefix = `${id8 === undefined ? legacyParkedRefPrefix(slug) : parkedRefPrefix(id8, slug)}${stamp}`;
       const owner = id8 === undefined
-        ? legacyOwners.get(`${legacyParkedRefPrefix(slug)}${stamp}`)
+        ? legacyOwners.get(prefix)
         : owners.get(id8);
-      if (!owner) continue;
-      let candidates = ownerRepositories.get(owner);
-      if (candidates === undefined) {
-        candidates = recoveryRepoCandidates(projectDir, owner.rows);
-        ownerRepositories.set(owner, candidates);
+      if (owner) {
+        let candidates = ownerRepositories.get(owner);
+        if (candidates === undefined) {
+          candidates = recoveryRepoCandidates(projectDir, owner.rows);
+          ownerRepositories.set(owner, candidates);
+        }
+        const allowedSlugs = candidates.get(repo);
+        if (allowedSlugs === undefined || (allowedSlugs !== null && !allowedSlugs.has(slug))) continue;
       }
-      const allowedSlugs = candidates.get(repo);
-      if (allowedSlugs === undefined || (allowedSlugs !== null && !allowedSlugs.has(slug))) continue;
-      const identity = id8 === undefined
-        ? legacyBoltIdentity(projectDir, owner.id8, slug)
-        : newBoltIdentity(projectDir, owner.id8, slug);
-      const prefix = `${identity.parkedRefPrefix}${stamp}`;
       if (inventoried.has(prefix)) continue;
       inventoried.add(prefix);
-      const mode = !refs.has(`${prefix}/head`) ? "evidence-only"
+      const recorded = owner?.parkedRefs.has(prefix) ?? false;
+      const mode = !recorded ? "unrecorded"
+        : !refs.has(`${prefix}/head`) ? "evidence-only"
         : refs.has(`${prefix}/snapshot`) ? "snapshot"
         : refs.has(`${prefix}/branch-tip`) ? "branch-tip" : "legacy";
       const milliseconds = parseParkedStampInstant(stamp);
       const ageDays = milliseconds === null
         ? null
         : Math.max(0, Math.floor((now - milliseconds) / 86_400_000));
-      const restoredPath = resolve(projectDir, ".aidlc", "restored", `${identity.name}-${stamp}`);
+      const restoredPath = resolve(projectDir, ".aidlc", "restored", `${name}-${stamp}`);
       let restoredExists = false;
       if (restoredBranches.size > 0) {
         try {
-          restoredExists = restoredBranches.get(realpathSync(restoredPath)) === `refs/heads/restore/${identity.name}-${stamp}`;
+          restoredExists = restoredBranches.get(realpathSync(restoredPath)) === `refs/heads/restore/${name}-${stamp}`;
         } catch {
           // The canonical restore checkout does not exist or cannot be resolved.
         }
       }
-      const args = ["--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", owner.intent, "--space", owner.space];
       const attempt: DoctorParkedAttempt = {
         slug,
         stamp,
@@ -2674,11 +2679,16 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
         repo,
         restored_path: restoredPath,
         restored_exists: restoredExists,
-        ...(mode === "evidence-only" ? {} : {
-          restore_operation: { route: "worktree", args: ["restore", ...args] },
-        }),
-        purge_operation: { route: "worktree", args: ["purge", ...args] },
       };
+      if (owner && recorded) {
+        const args = ["--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", owner.intent, "--space", owner.space];
+        if (mode !== "evidence-only") {
+          attempt.restore_operation = { route: "worktree", args: ["restore", ...args] };
+        }
+        attempt.purge_operation = { route: "worktree", args: ["purge", ...args] };
+      } else {
+        attempt.note = `no WORKTREE_DISCARDED row records this parked attempt; inspect ${prefix} manually`;
+      }
       if (attempt.restore_operation !== undefined) {
         try {
           attempt.restore_command = renderEngineInvocation(attempt.restore_operation);
@@ -2686,10 +2696,12 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
           attempt.restore_command_error = errorMessage(e);
         }
       }
-      try {
-        attempt.purge_command = renderEngineInvocation(attempt.purge_operation);
-      } catch (e) {
-        attempt.purge_command_error = errorMessage(e);
+      if (attempt.purge_operation !== undefined) {
+        try {
+          attempt.purge_command = renderEngineInvocation(attempt.purge_operation);
+        } catch (e) {
+          attempt.purge_command_error = errorMessage(e);
+        }
       }
       attempts.push(attempt);
     }

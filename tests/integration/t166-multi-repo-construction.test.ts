@@ -1093,8 +1093,8 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
     test("selector-free purge removes parked refs after the restore checkout is removed", () => {
       expect(purged.status, purged.out).toBe(0);
-      // Snapshot and branch-only parks each hold a head ref plus their discriminator ref.
-      expect(JSON.parse(purged.stdout)).toEqual({ purged: 2, slug: "discard-repo", stamps: [stamp], skipped_unparseable: [] });
+      // R4(d): a snapshot retains the original branch tip as well as its raw head and discriminator.
+      expect(JSON.parse(purged.stdout)).toEqual({ purged: 3, slug: "discard-repo", stamps: [stamp], skipped_unparseable: [] });
       expect(remainingRefs.status, remainingRefs.out).toBe(0);
       expect(remainingRefs.out).toBe("");
       for (const result of [missingRestore, missingPurge]) {
@@ -1303,6 +1303,12 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--intent",
       firstIntent,
     );
+    // R4(e): restore the real checkout after the cleanup-only selector check; foreign-dir refusal needs a live owner.
+    const firstWorktree = worktreePath(movedProj, fixtureIntentId8(movedProj, firstIntent), "moved-cursor");
+    expect(git(join(movedProj, "repo-a"), "worktree", "prune").status).toBe(0);
+    expect(git(join(movedProj, "repo-a"), "worktree", "add", firstWorktree,
+      boltName(fixtureIntentId8(movedProj, firstIntent), "moved-cursor")).status).toBe(0);
+    const firstHead = git(firstWorktree, "rev-parse", "HEAD").out.trim();
     const foreignIntent = runWorktree(
       movedProj,
       "discard",
@@ -1576,9 +1582,13 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(firstIntent).not.toBe(secondIntent);
       expect(movedWrong.status).not.toBe(0);
       expect(movedWrong.out).toContain("does not match creating repository");
-      expect(foreignIntent.status, foreignIntent.out).toBe(0);
-      expect(JSON.parse(foreignIntent.stdout)).toMatchObject({ emitted: null, reason: "already-discarded" });
-      // The second intent cannot discover the first intent's same-slug identity.
+      // R4(e): a foreign same-slug checkout must be refused, not reported as already discarded.
+      expect(foreignIntent.status, foreignIntent.out).not.toBe(0);
+      expect(foreignIntent.out).toContain(`no Bolt moved-cursor belongs to intent aidlc/spaces/default/intents/${secondIntent}`);
+      expect(foreignIntent.out).toContain(`this checkout holds ${boltName(fixtureIntentId8(movedProj, firstIntent), "moved-cursor")}`);
+      expect(foreignIntent.out).toContain("select that intent to discard it");
+      expect(existsSync(firstWorktree)).toBe(true);
+      expect(git(firstWorktree, "rev-parse", "HEAD").out.trim()).toBe(firstHead);
       expect(
         hasBoltBranch(movedProj, "repo-a", "moved-cursor", firstIntent),
       ).toBe(true);

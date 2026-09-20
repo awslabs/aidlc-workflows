@@ -28,21 +28,50 @@ parallel intents from colliding in one checkout or across worktrees of one clone
 Pre-upgrade legacy `bolt-<slug>` Bolts keep their directory, branch, and legacy
 `refs/aidlc/reviewed-source/<slug>/<commit>` and
 `refs/aidlc/parked/<slug>/<stamp>/…` namespaces through merge, discard, and purge
-to completion. No new Bolt is created in the old shape. Legacy resolution is
-provenance-gated by the committed audit, never by the worktree's writable
-metadata: the selected intent's own audit shards must hold a single open legacy
-`WORKTREE_CREATED` for that slug and path on the causal frontier — a later
-`WORKTREE_MERGED` or `WORKTREE_DISCARDED` (by timestamp and append order, not
-shard filename), a cross-shard timestamp tie, or an unreadable shard resolves to
-the namespaced identity and touches nothing legacy. A live legacy directory's
-`worktree-meta.json` `intentRecord` only corroborates: when present it must name
-the selected intent, and a value naming another intent strands the Bolt for both
-(conflicting evidence is a `doctor` matter, not something either intent may act
-on). Ownership is never inferred from how many intents a space or workspace
-holds. After discard, restore and purge admit a legacy parked namespace only when
-that intent's own `WORKTREE_DISCARDED` recorded its exact `Parked ref` and stamp;
-unknown legacy parks are ignored. Directory existence alone never proves
-ownership. `doctor` reports both shapes.
+to completion. No new Bolt is created in the old shape. Legacy resolution uses
+the selected intent's own `WORKTREE_CREATED`, `WORKTREE_MERGED`, and
+`WORKTREE_DISCARDED` rows for the slug. Their causal frontier must contain exactly
+one row, ordered by timestamp and same-shard append order, not shard filename;
+an unreadable shard or ambiguous frontier resolves to the namespaced identity.
+That row must name the legacy `Worktree path` and `Bolt slug`, and a
+`WORKTREE_CREATED` must also name the legacy `Branch name`.
+
+For a live legacy directory, readable `worktree-meta.json` must corroborate the
+audit. An `intentRecord` matching the selected intent permits any of those three
+frontier events: merge/discard rows are audit-of-intent, not proof that cleanup
+completed. Pre-P7 metadata without `intentRecord` requires an open creation
+(`WORKTREE_CREATED` on the frontier); a later merge/discard row may belong to a
+reused legacy name. Missing or unreadable metadata, or an `intentRecord` naming
+another intent, never authorizes the live legacy Bolt. With no legacy directory,
+any of the three matching frontier events permits cleanup-only resolution;
+`merge`, `discard`, and `purge` still verify Git state before deletion. Otherwise
+the namespaced identity applies. Neither directory existence nor the number of
+intents in a space or workspace proves ownership. `doctor` reports both shapes.
+
+Restore and purge admit namespaced and legacy parked attempts only when the
+selected intent's own `WORKTREE_DISCARDED` rows recorded their exact `Parked ref`
+and stamp. Unknown parks are ignored; requesting an unrecorded `--parked` stamp
+refuses:
+
+```text
+parked attempt <stamp> is not recorded by intent <record>
+```
+
+If a legacy directory is absent and no durable Git evidence remains, `create`
+uses the namespaced identity. If its branch or retained refs remain, it refuses:
+
+```text
+Legacy Bolt <slug> left branch <bolt-slug>[ and <n> retained refs] behind; run discard --slug <slug> under its intent to park and clean them before creating a new Bolt.
+```
+
+The existing `Worktree directory already exists: <dir>` refusal applies only
+when that directory exists. Discard with no evidence for the selected identity
+returns `already-discarded` only if this checkout has no same-slug Bolt directory
+under another identity; otherwise it exits non-zero:
+
+```text
+no Bolt <slug> belongs to intent <record>; this checkout holds <name> (intent <id8>|legacy) at <path> — select that intent to discard it
+```
 
 Creation without an intent registry UUID fails closed:
 
@@ -69,6 +98,31 @@ must be checked out at its own Bolt directory or nowhere. If another worktree
 owns it, cleanup refuses, names the owner path on stderr, and records
 `(checked out in another worktree of this repository)` in the audit. Do not
 delete the foreign checkout to bypass the refusal.
+
+A cleanup-only swarm merge also requires a `WORKTREE_CREATED` row matching the
+resolved Bolt path. With the legacy directory gone, discard checks a remaining
+branch against the tip saved by this intent's latest legacy `WORKTREE_DISCARDED`
+row (`Parked ref` plus `/branch-tip`, falling back to `/head`). A different tip refuses:
+
+```text
+legacy branch <name> tip does not match this intent's recorded discard; leaving it for inspection
+```
+
+If the frontier is `WORKTREE_CREATED`, discard has not started and proceeds
+through ordinary Git checks. Cleanup admits retained reviewed-source refs only
+when their suffix is a 40–64-character lowercase hex commit. Parked-source refs
+require a valid stamp and exactly one of these suffixes:
+`<stamp>/head`, `<stamp>/snapshot`, `<stamp>/branch-tip`, or
+`<stamp>/reviewed-source/<40–64-character lowercase hex commit>`.
+Other refs are skipped, never deleted.
+
+Swarm commands follow the session's active workflow. Pass `--intent`/`--space`
+only when they resolve to that workflow; a mismatch refuses before mutation or
+audit emission:
+
+```text
+swarm commands follow the session's active workflow (${ambient.space}/${ambient.intent}); switch to ${explicit.space}/${explicit.intent} instead of passing --intent/--space
+```
 
 ## Usage
 
@@ -183,10 +237,12 @@ bytes, bypassing those transformations.
 The new parked namespace is `refs/aidlc/parked/<id8>/<slug>/<stamp>`, where `stamp` is UTC
 `YYYYMMDDTHHMMSSZ`, with a numeric `-N` suffix for collisions. `/head` points to
 the snapshot commit with its raw working-tree blobs, with a `/snapshot` marker
-pointing to that same commit. If the checkout is already gone but its branch
-remains, `/head` instead preserves the branch tip, whose blobs are ordinary
-committed forms, with a `/branch-tip` marker pointing to the same commit.
-New parks with `/head` create exactly one of these two markers. `/reviewed-source/<commit>` preserves each
+pointing to that same commit. Snapshot parks also save the original branch OID
+at `/branch-tip`, so a cleanup-only retry can compare the remaining branch
+without mistaking saved uncommitted changes for its tip. If the checkout is
+already gone but its branch remains, `/head` instead preserves that tip, whose
+blobs are ordinary committed forms, with `/branch-tip` pointing to the same
+commit. `/reviewed-source/<commit>` preserves each
 reviewed source ref. The discard JSON keeps `parked_ref` (the namespace prefix,
 not its `/head` ref) and `parked_commit` (the snapshot commit or branch tip), and
 adds `parked_stamp` (the exact stamp), `parked_mode` (`snapshot`, `branch-tip`, or
@@ -423,17 +479,19 @@ Doctor shows a **Parked attempts** informational section in ordinary and verbose
 reports, omitted when no saved `/head` or actual `/reviewed-source/<commit>`
 entries exist. These entries are neither warnings nor failures. Each reports
 its slug, exact stamp, age in days, mode (`snapshot`, `branch-tip`, or `legacy`
-for saved heads; `evidence-only` when only reviewed source refs remain), whether
+for recorded saved heads; `evidence-only` for recorded review evidence without
+`/head`; `unrecorded` without unambiguous discard provenance), whether
 the owning repository registers a Git worktree at its canonical
 `.aidlc/restored/bolt-<id8>_<slug>-<stamp>` path on the exact
-`restore/bolt-<id8>_<slug>-<stamp>` branch, and typed recovery operations with exact
-`--parked <stamp>` and explicit `--repo <name>` or `--repo .` args, followed by
-`--intent <record-dir-name> --space <space>`. Every entry has
-`purge_operation`; only restorable entries have `restore_operation`. Their
-optional rendered commands are human display text. If safe rendering fails,
-the corresponding command is omitted and its error field explains why; the
-operation remains. Evidence-only entries expose only the purge operation and
-its command-or-error fields. Doctor uses the same slug-scoped recovery
+`restore/bolt-<id8>_<slug>-<stamp>` branch, and, for recorded attempts, typed
+recovery operations with exact `--parked <stamp>` and explicit `--repo <name>`
+or `--repo .` args, followed by `--intent <record-dir-name> --space <space>`.
+Recorded entries have `purge_operation`; only recorded restorable entries have
+`restore_operation`. Their optional rendered commands are human display text.
+If safe rendering fails, the corresponding command is omitted and its error
+field explains why; the operation remains. Evidence-only entries expose only
+the purge operation and its command-or-error fields. Unrecorded entries expose
+neither operation nor command/error fields. Doctor uses the same slug-scoped recovery
 repository candidate set described above.
 The `legacy` inventory mode does not classify the commit identity; restore
 performs that distinction when invoked. A checkout moved elsewhere may not
@@ -442,11 +500,15 @@ registrations and refuses to delete its refs.
 
 Doctor inventories both namespaced and legacy attempts. Namespaced attempts
 resolve their owning intent through the registry UUID suffix; legacy attempts
-require the owner's exact `WORKTREE_DISCARDED` `Parked ref` provenance and retain
-the legacy restored path and branch. Unknown or ambiguous owners and
-unattributed legacy parks are omitted, never authorized through the active
-intent. Each operation carries the owning record-directory name and space, so
-it remains bound to that intent after a workflow switch.
+require a single owner's exact `WORKTREE_DISCARDED` `Parked ref` provenance and
+retain the legacy restored path and branch. Recovery operations require the
+owner's own `WORKTREE_DISCARDED` rows to record the matching slug and exact
+`Parked ref`, for namespaced and legacy refs alike. Unrecorded attempts,
+including unknown or ambiguous owners and unattributed legacy parks, remain
+visible as `mode: "unrecorded"`, never authorized through the active intent.
+Their JSON `note` is `no WORKTREE_DISCARDED row records this parked attempt; inspect refs/aidlc/parked/<...> manually`.
+Each available operation carries the owning record-directory name and space,
+so it remains bound to that intent after a workflow switch.
 
 The public doctor's JSON exposes `data.parked_attempts`, an array of objects:
 
@@ -454,15 +516,16 @@ The public doctor's JSON exposes `data.parked_attempts`, an array of objects:
 |---|---|
 | `slug`, `stamp` | Exact Bolt identifier and saved namespace stamp |
 | `age_days` | Whole elapsed UTC days from the stamp, ignoring `-N`; future stamps show `0`, and invalid calendar timestamps show `null` (`unknown` in text) |
-| `mode` | `snapshot`, `branch-tip`, or `legacy` for saved heads; `evidence-only` for reviewed source refs without `/head` |
+| `mode` | `snapshot`, `branch-tip`, or `legacy` for recorded saved heads; `evidence-only` for recorded reviewed source refs without `/head`; `unrecorded` without unambiguous discard provenance |
 | `repo` | Sibling repository name, or `null` for the project root |
 | `restored_path`, `restored_exists` | Canonical restore path and whether the owning repository registers a checkout resolving to that path on the exact `restore/bolt-<id8>_<slug>-<stamp>` branch (legacy: `restore/bolt-<slug>-<stamp>`) |
-| `restore_operation` | `EngineInvocation` with route `worktree` and args `["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]`; absent for `evidence-only` |
-| `purge_operation` | `EngineInvocation` with route `worktree` and args `["purge", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]`; present for every listed mode |
-| `restore_command` | Optional safe rendering of `restore_operation` for human display, not execution input; absent for `evidence-only` or on rendering failure |
-| `restore_command_error` | Rendering failure reason when `restore_command` is omitted but `restore_operation` exists; absent for `evidence-only` |
-| `purge_command` | Optional safe rendering of `purge_operation` for human display, not execution input; absent on rendering failure |
-| `purge_command_error` | Rendering failure reason when `purge_command` is omitted; `purge_operation` remains present |
+| `restore_operation` | `EngineInvocation` with route `worktree` and args `["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]`; absent for `evidence-only` and `unrecorded` |
+| `purge_operation` | `EngineInvocation` with route `worktree` and args `["purge", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]`; absent for `unrecorded` |
+| `restore_command` | Optional safe rendering of `restore_operation` for human display, not execution input; absent without the operation or on rendering failure |
+| `restore_command_error` | Rendering failure reason when `restore_command` is omitted but `restore_operation` exists |
+| `purge_command` | Optional safe rendering of `purge_operation` for human display, not execution input; absent without the operation or on rendering failure |
+| `purge_command_error` | Rendering failure reason when `purge_command` is omitted but `purge_operation` exists |
+| `note` | Manual-inspection guidance for `unrecorded` attempts, including their exact parked ref prefix; absent for recorded attempts |
 
 Conductors invoke a selected operation's engine route with each listed arg as
 its own argv argument, never by joining strings for a shell. Rendering uses the

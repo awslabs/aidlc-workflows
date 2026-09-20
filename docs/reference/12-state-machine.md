@@ -648,10 +648,43 @@ for naming, missing-UUID refusal, and provenance-gated legacy completion.
 
 Pre-upgrade legacy `bolt-<slug>` Bolts retain their old paths, branches, and ref
 prefixes through merge, discard, and purge; new Bolts never use that shape.
-`doctor` reports both. Cleanup refuses to delete a Bolt branch or its
+`doctor` reports both. Legacy resolution requires exactly one causal-frontier
+row among the selected intent's `WORKTREE_CREATED`, `WORKTREE_MERGED`, and
+`WORKTREE_DISCARDED` rows for the slug. That row must name the legacy worktree
+path, plus the legacy branch for a creation. Ordering uses timestamps and
+same-shard append order, not shard filenames; an unreadable shard or ambiguous
+frontier does not authorize legacy resolution.
+
+A live legacy checkout also needs readable metadata: matching `intentRecord`
+permits any of those frontier events, because merge/discard rows record intent,
+not completed Git operations. Pre-P7 metadata without `intentRecord` requires an
+open creation on the frontier; missing, unreadable, or foreign-intent metadata
+never authorizes that checkout. With no legacy directory, any matching frontier
+event permits cleanup-only resolution, but destructive verbs still verify Git
+state. A cleanup-only swarm merge requires a creation row matching its resolved
+path. Discard checks a remaining legacy branch tip against this intent's latest
+discard's parked `/branch-tip` (falling back to `/head`), refusing a mismatch;
+if the frontier is a creation, discard has not started and ordinary Git checks
+apply.
+
+When neither a legacy directory nor durable Git evidence remains, creation uses
+the namespaced identity. Leftover branches or retained refs instead require
+discard under their intent before creation. With no evidence for the selected
+identity, discard refuses if another identity has a same-slug Bolt directory in
+this checkout; only an absent same-slug directory permits `already-discarded`.
+See [Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for the exact refusals. Cleanup refuses to delete a Bolt branch or its
 retained/parked refs if the branch is checked out outside its own Bolt directory.
 Stderr names the owner path; the audit records
 `(checked out in another worktree of this repository)`.
+Only correctly shaped retained reviewed-source and parked-source refs are
+eligible for cleanup; unrelated nested or malformed refs are never deleted.
+
+Namespaced and legacy restore/purge both require the selected intent's own
+`WORKTREE_DISCARDED` rows to record the exact `Parked ref` and stamp. An
+unrecorded requested stamp refuses with
+`parked attempt <stamp> is not recorded by intent <record>`; other unrecorded
+parks are ignored.
 
 ### Practices
 
@@ -698,7 +731,14 @@ Pre-registered for v0.5.0 in milestone 4; `MEMORY_EMPTY` emitter lands in milest
 
 ### Swarm
 
-The swarm taxonomy has seven events. Six emit from the stateless referee `aidlc-swarm.ts`: `prepare` captures the exact stage-attempt token, stamps it into worktree creation metadata, and forks the batch; `finalize` requires that token to remain current, re-verifies every claimed Unit, snapshots its exact declared record artifacts plus bound source manifest, merges those records and AIDLC metadata, and emits convergence/failure, baton, and batch rows. `SWARM_SOURCE_MERGED` emits later from `aidlc-worktree.ts merge`, after the immutable reviewed application source lands in main. It correlates durable worktree provenance with the exact current Bolt, batch, stage, and run floor, then links the main checkout from the stage baseline, the prior attempt's accepted rejection fingerprint, or the previous current-attempt aggregate. Selector-free merges recover the creating intent from durable creation authority; explicit mismatches name the required `--space`/`--intent` recovery, and authority-path comparison canonicalizes filesystem aliases. Pre-binding fieldless convergence retains historical branch-merge behavior; modern convergence does not advance routing until its source-merge authority exists. The `check` subcommand remains advisory and emits nothing. The conductor handles `invoke-swarm` as an orthogonal directive kind beside the stage `mode` enum; it does not activate the reserved `agent-team` mode.
+The swarm taxonomy has seven events. Six emit from the stateless referee `aidlc-swarm.ts`: `prepare` captures the exact stage-attempt token, stamps it into worktree creation metadata, and forks the batch; `finalize` requires that token to remain current, re-verifies every claimed Unit, snapshots its exact declared record artifacts plus bound source manifest, merges those records and AIDLC metadata, and emits convergence/failure, baton, and batch rows. `SWARM_SOURCE_MERGED` emits later from `aidlc-worktree.ts merge`, after the immutable reviewed application source lands in main. It correlates durable worktree provenance with the exact current Bolt, batch, stage, and run floor, then links the main checkout from the stage baseline, the prior attempt's accepted rejection fingerprint, or the previous current-attempt aggregate. Authority-path comparison canonicalizes filesystem aliases. Pre-binding fieldless convergence retains historical branch-merge behavior; modern convergence does not advance routing until its source-merge authority exists. The `check` subcommand remains advisory and emits nothing. The conductor handles `invoke-swarm` as an orthogonal directive kind beside the stage `mode` enum; it does not activate the reserved `agent-team` mode.
+
+Swarm commands use the session's active workflow. Explicit `--intent`/`--space`
+must name that workflow; a mismatch refuses before mutation or audit emission.
+Post-finalize source merge recovers the creating repository from durable
+authority, not the intent: it uses the selected workflow intent. See
+[Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for the selector refusal.
 
 | Event | Emitter | Trigger |
 |---|---|---|
@@ -788,7 +828,8 @@ does not start. The row's `Parked ref` names
 `Parked commit` and whose `/reviewed-source/<commit>` refs preserve the reviewed
 source evidence. When only the branch remains, `/head` preserves its ordinary
 committed blobs and a matching `/branch-tip` marker is created. Snapshot parks
-instead have a `/snapshot` marker pointing to the same commit as `/head`.
+have `/snapshot` pointing to the same commit as `/head` and also retain the
+original branch OID at `/branch-tip` for cleanup-only retry checks.
 Discard JSON retains `parked_ref` and `parked_commit` and adds `parked_stamp`
 (the exact stamp), `parked_mode` (`snapshot`, `branch-tip`, or `evidence-only`),
 and `parked_repo` (`null` for the project root, otherwise the sibling repository

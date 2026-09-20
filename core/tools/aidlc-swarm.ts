@@ -103,6 +103,7 @@ import {
   isRegularFile,
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
+  legacyBoltIdentity,
   maximalAttemptEvents,
   parseArgs,
   parseRefsList,
@@ -151,6 +152,7 @@ import {
   writeStateFile,
   type AuditShardEvent,
   type BoltIdentity,
+  type WorkflowSelection,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
@@ -1883,12 +1885,20 @@ function currentDiscardedSwarmSlot(
   const started = latestResumeRow(rows.filter((row) => row.event === "BOLT_STARTED" &&
     auditBlockField(row.block, "Bolt slug") === slug));
   const path = discard && auditBlockField(discard.block, "Worktree path");
-  return creation && discard && path &&
-    resumeCreationMatches(pd, creation, batch, unit, identity, attempt, repoName) &&
-    auditBlockField(discard.block, "Reason") === "agent-discard" &&
-    resumeMissingPathKey(resolveAuditWorktreePath(pd, path)) === resumeMissingPathKey(identity.dir) &&
-    attemptEventDefinitelyBefore(creation, discard) &&
-    (started === null || attemptEventDefinitelyBefore(started, discard))
+  if (!creation || !discard || !path ||
+    auditBlockField(discard.block, "Reason") !== "agent-discard" ||
+    !attemptEventDefinitelyBefore(creation, discard) ||
+    (started !== null && !attemptEventDefinitelyBefore(started, discard))) return null;
+  const discardedPath = resumeMissingPathKey(resolveAuditWorktreePath(pd, path));
+  let slot = identity;
+  if (discardedPath !== resumeMissingPathKey(slot.dir)) {
+    // Native discard may precede the namespace upgrade. Both lifecycle rows
+    // must still identify the same slot and this intent's exact swarm attempt.
+    slot = legacyBoltIdentity(pd, identity.intentId8, slug);
+    if (discardedPath !== resumeMissingPathKey(slot.dir)) return null;
+  }
+  return !existsSync(slot.dir) &&
+    resumeCreationMatches(pd, creation, batch, unit, slot, attempt, repoName)
     ? discard : null;
 }
 
@@ -2114,9 +2124,22 @@ function releasePreparationRegistration(pd: string, unit: string): void {
   });
 }
 
+function resolveSwarmSelection(projectDir: string, flags: Record<string, string>): WorkflowSelection {
+  const ambient = resolveWorkflowSelection(projectDir);
+  if (flags.intent === undefined && flags.space === undefined) return ambient;
+  const explicit = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
+  // State, approval, and audit helpers follow the session workflow, so an
+  // explicit selector cannot redirect only the Bolt side of a swarm operation.
+  if (explicit.space !== ambient.space || explicit.intent !== ambient.intent) {
+    fail(`swarm commands follow the session's active workflow (${ambient.space}/${ambient.intent}); switch to ${explicit.space}/${explicit.intent} instead of passing --intent/--space`);
+  }
+  return ambient;
+}
+
 function handlePrepare(rest: string[]): void {
   const { flags } = parseArgs(rest);
   const projectDir = resolveProjectDir(flags["project-dir"]);
+  const selected = resolveSwarmSelection(projectDir, flags);
 
   if (!flags.batch || !/^[1-9][0-9]*$/.test(flags.batch)) {
     fail("prepare requires --batch <positive integer>");
@@ -2215,7 +2238,6 @@ function handlePrepare(rest: string[]): void {
   }
   const resumes = new Map<string, SwarmResume>();
   const discardedPreparations = new Map<string, { discardedSha256: string; approvedBaseCommit?: string }>();
-  const selected = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const identities = new Map<string, BoltIdentity>();
   const identityErrors = new Map<string, string>();
   for (const unit of units) {
@@ -2518,13 +2540,13 @@ function handlePrepare(rest: string[]): void {
 function handleCheck(rest: string[]): void {
   const { positional, flags } = parseArgs(rest);
   const projectDir = resolveProjectDir(flags["project-dir"]);
+  const selection = resolveSwarmSelection(projectDir, flags);
 
   const unit = positional[0] ?? flags.unit;
   if (!unit) {
     fail("check requires a unit name (positional `check <unit>` or --unit <unit>)");
   }
   const boltSlug = swarmBoltSlug(unit);
-  const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   let identity: BoltIdentity;
   try {
     identity = resolveBoltIdentity(projectDir, boltSlug, selection);
@@ -2570,6 +2592,7 @@ function handleCheck(rest: string[]): void {
 function handleFinalize(rest: string[]): void {
   const { positional, flags } = parseArgs(rest);
   const projectDir = resolveProjectDir(flags["project-dir"]);
+  const selection = resolveSwarmSelection(projectDir, flags);
 
   const batch = flags.batch ?? positional[0];
   if (!batch || !/^[1-9][0-9]*$/.test(batch)) {
@@ -2581,7 +2604,6 @@ function handleFinalize(rest: string[]): void {
   // The universe of units in the batch; defaults to the claimed set when the
   // conductor passes only --claimed (then declined-unit accounting is a no-op).
   const allUnits = flags.units ? splitCsv(flags.units) : claimed.slice();
-  const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const workflowSelectors = selection.intent ? ["--intent", selection.intent, "--space", selection.space] : [];
   const dag = resolveBoltDag(projectDir, flags.intent, flags.space);
   if (dag.state !== "ok") fail("finalize requires a current resolved Unit DAG");

@@ -35,7 +35,7 @@ function seedRegistry(uuid: string | null = UUID): void {
 
 // Mirror t164's shard blocks, including the project-relative path written by
 // aidlc-worktree and the separator consumed by parseAuditShardEvents.
-function lifecycleBlock(event: "WORKTREE_CREATED" | "WORKTREE_DISCARDED", timestamp: string): string {
+function lifecycleBlock(event: "WORKTREE_CREATED" | "WORKTREE_MERGED" | "WORKTREE_DISCARDED", timestamp: string): string {
   return [
     "",
     `## ${event}`,
@@ -43,7 +43,7 @@ function lifecycleBlock(event: "WORKTREE_CREATED" | "WORKTREE_DISCARDED", timest
     `**Event**: ${event}`,
     `**Bolt slug**: ${SLUG}`,
     "**Worktree path**: .aidlc/worktrees/bolt-demo",
-    "**Branch name**: bolt-demo",
+    ...(event === "WORKTREE_CREATED" ? ["**Branch name**: bolt-demo"] : []),
     "",
     "---",
     "",
@@ -80,23 +80,23 @@ describe("resolveBoltIdentity legacy provenance", () => {
     expect(identity.dir).toBe(legacyWorktreePath(project, SLUG));
   });
 
-  test("a newer discard closes a creation in a lexically later shard", () => {
+  test("a newer discard permits cleanup-only retry despite creation in a lexically later shard", () => {
     seedShard("a-aaaa.md", lifecycleBlock("WORKTREE_DISCARDED", DISCARDED_AT));
     seedShard("b-bbbb.md", lifecycleBlock("WORKTREE_CREATED", CREATED_AT));
 
     const identity = resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project));
-    expect(identity.legacy).toBe(false);
-    expect(identity.name).toBe(boltName(idSuffix(UUID), SLUG));
+    expect(identity.legacy).toBe(true);
+    expect(identity.name).toBe("bolt-demo");
   });
 
-  test("a later same-shard discard closes a creation even at the same timestamp", () => {
+  test("a later same-shard discard permits cleanup-only retry even at the same timestamp", () => {
     seedShard("a-aaaa.md",
       lifecycleBlock("WORKTREE_CREATED", CREATED_AT),
       lifecycleBlock("WORKTREE_DISCARDED", CREATED_AT));
 
     const identity = resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project));
-    expect(identity.legacy).toBe(false);
-    expect(identity.name).toBe(boltName(idSuffix(UUID), SLUG));
+    expect(identity.legacy).toBe(true);
+    expect(identity.name).toBe("bolt-demo");
   });
 
   test("a cross-shard creation and discard timestamp tie fails closed", () => {
@@ -133,7 +133,7 @@ describe("resolveBoltIdentity legacy provenance", () => {
     expect(identity.name).toBe(boltName(idSuffix(UUID), SLUG));
   });
 
-  test("metadata naming this intent is corroboration, not authority: no open creation, no adoption", () => {
+  test("metadata naming this intent is corroboration, not authority: no lifecycle row, no adoption", () => {
     const metadataDir = join(legacyWorktreePath(project, SLUG), ".aidlc");
     mkdirSync(metadataDir, { recursive: true });
     writeFileSync(join(metadataDir, "worktree-meta.json"), JSON.stringify({
@@ -144,6 +144,21 @@ describe("resolveBoltIdentity legacy provenance", () => {
 
     seedShard("a-aaaa.md", lifecycleBlock("WORKTREE_CREATED", CREATED_AT));
     expect(resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project)).legacy).toBe(true);
+  });
+
+  test("live metadata naming this intent permits retry after a frontier merge intent", () => {
+    seedShard("a-aaaa.md",
+      lifecycleBlock("WORKTREE_CREATED", CREATED_AT),
+      lifecycleBlock("WORKTREE_MERGED", "2026-09-20T12:01:00Z"));
+    const metadataDir = join(legacyWorktreePath(project, SLUG), ".aidlc");
+    mkdirSync(metadataDir, { recursive: true });
+    writeFileSync(join(metadataDir, "worktree-meta.json"), JSON.stringify({
+      intentRecord: `aidlc/spaces/${SPACE}/intents/${RECORD}`,
+    }));
+
+    const identity = resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project));
+    expect(identity.legacy).toBe(true);
+    expect(identity.name).toBe("bolt-demo");
   });
 
   test("metadata rewritten to another intent strands the Bolt for both intents", () => {
@@ -182,6 +197,19 @@ describe("resolveBoltIdentity legacy provenance", () => {
 
     seedShard("a-aaaa.md", lifecycleBlock("WORKTREE_CREATED", CREATED_AT));
     expect(resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project)).legacy).toBe(true);
+  });
+
+  test("live metadata without intentRecord is not adopted after a frontier discard intent", () => {
+    seedShard("a-aaaa.md",
+      lifecycleBlock("WORKTREE_CREATED", CREATED_AT),
+      lifecycleBlock("WORKTREE_DISCARDED", DISCARDED_AT));
+    const metadataDir = join(legacyWorktreePath(project, SLUG), ".aidlc");
+    mkdirSync(metadataDir, { recursive: true });
+    writeFileSync(join(metadataDir, "worktree-meta.json"), JSON.stringify({ version: 1, boltSlug: SLUG }));
+
+    const identity = resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project));
+    expect(identity.legacy).toBe(false);
+    expect(identity.name).toBe(boltName(idSuffix(UUID), SLUG));
   });
 
   test("a second space's lone intent cannot adopt a live pre-intentRecord Bolt", () => {

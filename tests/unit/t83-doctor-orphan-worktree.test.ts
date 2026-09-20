@@ -83,7 +83,8 @@ import { hostname } from "node:os";
 import { appendFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { type EngineInvocation, renderEngineInvocation } from "../../core/tools/aidlc-guard-operation.ts";
-import { boltName, legacyParkedRefPrefix, legacyWorktreePath, parkedRefPrefix, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { boltName, createIntent, legacyParkedRefPrefix, legacyWorktreePath, parkedRefPrefix, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   fixtureIntentId8,
   AIDLC_SRC,
@@ -215,6 +216,25 @@ function parkHead(proj: string, slug: string, stamp: string, mode: "snapshot" | 
   const prefix = `${parkedRefPrefix(intentId8, slug)}${stamp}`;
   git(proj, "update-ref", `${prefix}/head`, "HEAD");
   git(proj, "update-ref", `${prefix}/${mode}`, "HEAD");
+}
+
+function recordParkedAttempt(
+  proj: string,
+  slug: string,
+  parkedRef: string,
+  repo: string | null = null,
+  intent = DEFAULT_RECORD_DIR,
+  space = DEFAULT_SPACE,
+): void {
+  const path = parkedRef.startsWith(legacyParkedRefPrefix(slug))
+    ? legacyWorktreePath(proj, slug)
+    : worktreePath(proj, fixtureIntentId8(proj, intent, space), slug);
+  appendAuditEntry("WORKTREE_DISCARDED", {
+    "Bolt slug": slug,
+    "Worktree path": relative(proj, path).replaceAll("\\", "/"),
+    "Parked ref": parkedRef,
+    Repo: repo ?? "-",
+  }, proj, intent, space);
 }
 
 function runRecoveryOperation(
@@ -601,12 +621,76 @@ describe("t83 doctor parked attempts", () => {
     expect(JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts).toEqual([]);
   }, 30000);
 
+  test("unrecorded parks require the exact ref in their owning intent's discard rows", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    const stamp = "20240101T000000Z";
+    const prefix = `${parkedRefPrefix(fixtureIntentId8(proj), "saved")}${stamp}`;
+    parkHead(proj, "saved", stamp, "snapshot");
+    const foreign = createIntent(proj, "other-intent", DEFAULT_SPACE);
+    recordParkedAttempt(proj, "saved", prefix, null, foreign.dirName);
+    recordParkedAttempt(proj, "saved", `${prefix}-2`);
+    recordParkedAttempt(proj, "other-slug", prefix);
+    appendAuditEntry("WORKTREE_CREATED", {
+      "Bolt slug": "saved", "Parked ref": prefix,
+    }, proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+
+    const [attempt] = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(attempt).toMatchObject({
+      slug: "saved", stamp, mode: "unrecorded", repo: null, restored_exists: false,
+      restored_path: join(proj, ".aidlc", "restored", `${boltName(fixtureIntentId8(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE), "saved")}-${stamp}`),
+      note: `no WORKTREE_DISCARDED row records this parked attempt; inspect ${prefix} manually`,
+    });
+    expect(attempt.age_days).toBeNumber();
+    for (const field of ["restore_operation", "purge_operation", "restore_command", "purge_command", "restore_command_error", "purge_command_error"]) {
+      expect(attempt).not.toHaveProperty(field);
+    }
+    const { out } = runDoctor(proj, []);
+    expect(out).toContain("mode unrecorded");
+    expect(out).not.toMatch(/^\s+(?:restore|purge):/m);
+
+    recordParkedAttempt(proj, "saved", prefix);
+    const [recorded] = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(recorded.mode).toBe("snapshot");
+    expect(recorded).not.toHaveProperty("note");
+    expect(recorded.restore_operation.args).toEqual([
+      "restore", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE,
+    ]);
+  }, 30000);
+
+  test("unknown and ambiguous owners leave parked namespaces visible without recovery operations", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    const stamp = "20240101T000000Z";
+    const unknown = `${parkedRefPrefix("ffffffff", "unknown")}${stamp}`;
+    const legacy = `${legacyParkedRefPrefix("legacy")}${stamp}`;
+    const ambiguous = `${legacyParkedRefPrefix("ambiguous")}${stamp}`;
+    const evidence = `${parkedRefPrefix(fixtureIntentId8(proj), "evidence")}${stamp}`;
+    for (const prefix of [unknown, legacy, ambiguous]) git(proj, "update-ref", `${prefix}/head`, "HEAD");
+    const head = git(proj, "rev-parse", "HEAD");
+    git(proj, "update-ref", `${evidence}/reviewed-source/${head}`, head);
+    recordParkedAttempt(proj, "ambiguous", ambiguous);
+    const foreign = createIntent(proj, "other-intent", DEFAULT_SPACE);
+    recordParkedAttempt(proj, "ambiguous", ambiguous, null, foreign.dirName);
+
+    const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(attempts.map((attempt: { slug: string }) => attempt.slug)).toEqual(["ambiguous", "evidence", "legacy", "unknown"]);
+    for (const attempt of attempts) {
+      expect(attempt.mode).toBe("unrecorded");
+      expect(attempt).not.toHaveProperty("restore_operation");
+      expect(attempt).not.toHaveProperty("purge_operation");
+      expect(attempt).not.toHaveProperty("restore_command");
+      expect(attempt).not.toHaveProperty("purge_command");
+    }
+  }, 30000);
+
   test("a parked snapshot lists recovery actions without changing health severity", () => {
     const proj = freshProject();
     initRepo(proj);
     const baseline = JSON.parse(runDoctor(proj, ["--json"]).out);
     const stamp = "20240101T000000Z-2";
     parkHead(proj, "saved", stamp, "snapshot");
+    recordParkedAttempt(proj, "saved", `${parkedRefPrefix(fixtureIntentId8(proj), "saved")}${stamp}`);
     const reviewed = git(proj, "rev-parse", "HEAD");
     git(proj, "update-ref", `${parkedRefPrefix(fixtureIntentId8(proj), "saved")}${stamp}/reviewed-source/${reviewed}`, reviewed);
     // Arbitrary leaves are neither restorable attempts nor reviewed evidence.
@@ -655,6 +739,7 @@ describe("t83 doctor parked attempts", () => {
     const stamp = "20240101T000000Z-2";
     const prefix = `${parkedRefPrefix(fixtureIntentId8(proj), "saved")}${stamp}/`;
     parkHead(proj, "saved", stamp, "snapshot");
+    recordParkedAttempt(proj, "saved", prefix.slice(0, -1));
     const savedRefs = git(proj, "for-each-ref", "--format=%(refname)", prefix);
     const env = { AIDLC_HARNESS_DIR: ".claude;echo injected" };
     const attempts = JSON.parse(runDoctor(proj, ["--json"], env).out).data.parked_attempts;
@@ -691,6 +776,7 @@ describe("t83 doctor parked attempts", () => {
     initRepo(proj);
     const stamp = "20260231T000000Z";
     parkHead(proj, "impossible-date", stamp, "snapshot");
+    recordParkedAttempt(proj, "impossible-date", `${parkedRefPrefix(fixtureIntentId8(proj), "impossible-date")}${stamp}`);
 
     const result = JSON.parse(runDoctor(proj, ["--json"]).out);
     expect(result.data.parked_attempts).toEqual([
@@ -712,10 +798,7 @@ describe("t83 doctor parked attempts", () => {
     git(proj, "update-ref", `${prefix}/head`, "HEAD");
     git(proj, "update-ref", `${prefix}/branch-tip`, "HEAD");
     git(sibling, "update-ref", `${prefix}/head`, "HEAD");
-    for (const repo of [".", "api"]) appendAudit(proj, [
-      "## Worktree Discarded", "**Timestamp**: 2024-01-01T00:00:00Z", "**Event**: WORKTREE_DISCARDED",
-      "**Bolt slug**: shared", `**Repo**: ${repo}`, `**Parked ref**: ${prefix}`,
-    ].join("\n"));
+    for (const repo of [null, "api"]) recordParkedAttempt(proj, "shared", prefix, repo);
     const restored = join(proj, ".aidlc", "restored", `bolt-shared-${stamp}`);
     const before = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
     for (const attempt of before) {
@@ -782,19 +865,17 @@ describe("t83 doctor parked attempts", () => {
     // Audit membership is slug-scoped, not permission to discover every park in this link.
     parkHead(external, "unrecorded-slug", stamp, "snapshot", historicalId8);
     parkHead(proj, "root-only", stamp, "branch-tip", historicalId8);
-    writeFileSync(join(historicalAudit, "history.md"), [
+    for (const [slug, repo, event] of [
       ["historical", "node_modules", "WORKTREE_CREATED"],
       ["linked-history", "linked", "WORKTREE_DISCARDED"],
       ["root-only", "ordinary", "WORKTREE_CREATED"],
-    ].map(([slug, repo, event]) => [
-      "## Historical Worktree",
-      "**Timestamp**: 2024-01-01T00:00:00Z",
-      `**Event**: ${event}`,
-      `**Bolt slug**: ${slug}`,
-      `**Repo**: ${repo}`,
-      ...(event === "WORKTREE_DISCARDED" ? [`**Parked ref**: ${parkedRefPrefix(historicalId8, slug)}${stamp}`] : []),
-      "\n---\n",
-    ].join("\n")).join("\n"));
+    ]) appendAuditEntry(event, {
+      "Bolt slug": slug,
+      Repo: repo,
+      ...(event === "WORKTREE_DISCARDED" ? { "Parked ref": `${parkedRefPrefix(historicalId8, slug)}${stamp}` } : {}),
+    }, proj, historicalRecord, "history");
+    recordParkedAttempt(proj, "historical", `${parkedRefPrefix(historicalId8, "historical")}${stamp}`, "node_modules", historicalRecord, "history");
+    recordParkedAttempt(proj, "root-only", `${parkedRefPrefix(historicalId8, "root-only")}${stamp}`, null, historicalRecord, "history");
     const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
     expect(attempts).toEqual([
       expect.objectContaining({
@@ -857,6 +938,7 @@ describe("t83 doctor parked attempts", () => {
       const second = git(repo, "rev-parse", "HEAD");
       git(repo, "update-ref", `${prefix}/reviewed-source/${second}`, second);
     }
+    for (const repo of [null, "api"]) recordParkedAttempt(proj, "reviewed", prefix, repo);
     // Unrecognized leaves are not tool-authored evidence-only namespaces.
     git(proj, "update-ref", `${parkedRefPrefix(fixtureIntentId8(proj), "unrecognized")}20240101T000000Z/reviewed-source/not-a-commit`, "HEAD");
 
@@ -898,6 +980,7 @@ describe("t83 doctor parked attempts", () => {
     const intentId8 = fixtureIntentId8(proj);
     const prefix = `${parkedRefPrefix(intentId8, "saved")}${stamp}/`;
     parkHead(selected, "saved", stamp, "snapshot", intentId8);
+    recordParkedAttempt(proj, "saved", prefix.slice(0, -1), repo === "." ? null : repo);
     const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
     expect(attempts).toHaveLength(1);
     const [attempt] = attempts;
@@ -918,6 +1001,7 @@ describe("t83 doctor parked attempts", () => {
     const competing = repo === "." ? join(proj, "later") : proj;
     if (repo === ".") initRepo(competing);
     parkHead(competing, "saved", stamp, "snapshot", intentId8);
+    recordParkedAttempt(proj, "saved", prefix.slice(0, -1), repo === "." ? "later" : null);
     const competingRefs = git(competing, "for-each-ref", "--format=%(refname)", prefix);
     writeFileSync(join(selected, "saved.txt"), "newer attempt must remain parked\n");
     git(selected, "add", "saved.txt");
@@ -926,6 +1010,7 @@ describe("t83 doctor parked attempts", () => {
     const newerStamp = "20240102T000000Z";
     const newerPrefix = `${parkedRefPrefix(intentId8, "saved")}${newerStamp}/`;
     parkHead(selected, "saved", newerStamp, "snapshot", intentId8);
+    recordParkedAttempt(proj, "saved", newerPrefix.slice(0, -1), repo === "." ? null : repo);
     const newerRefs = git(selected, "for-each-ref", "--format=%(refname)", newerPrefix);
     runRecoveryOperation(proj, attempt.restore_operation);
     expect(readFileSync(join(attempt.restored_path, "saved.txt"), "utf-8")).toBe(`saved in ${repo}\n`);

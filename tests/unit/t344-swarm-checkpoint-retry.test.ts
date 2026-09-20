@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:finalize,
+// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize,
 // subcommand:aidlc-bolt:start, subcommand:aidlc-worktree:merge,
 // subcommand:aidlc-bolt:abort, subcommand:aidlc-worktree:discard, audit:WORKTREE_DISCARDED,
 // subcommand:aidlc-bolt:swarm-checkpoint, function:validateCodeGenerationForkApproval,
@@ -11,9 +11,9 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltName, legacyBoltName, legacyWorktreePath, worktreePath,
-  activeIntentUuid, artifactFilename, auditBlockField, boltSlugForUnit,
+  activeIntentUuid, artifactFilename, auditBlockField, boltSlugForUnit, createIntent,
   findStageBySlug, latestMainWorkflowStageRunFloorForProject, readAuditShardEvents,
-  readPlanApprovalReceipt, recordDir,
+  readPlanApprovalReceipt, recordDir, resolveWorkflowSelection, setActiveIntentCursor,
   setField, stateDigest, workspaceSourceFingerprint, workspaceSourceListing,
   writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -422,6 +422,34 @@ function approveNativeCheckpoint(pd: string, units: string[]): void {
 }
 
 describe("t344 explicit swarm checkpoint re-entry", () => {
+  test.each([
+    [["prepare", "--batch", "1", "--units", "alpha", "--base", "main"]],
+    [["check", "alpha"]],
+    [["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]],
+  ] as string[][][])("%s refuses an intent selector outside the active workflow without changing either record", (args: string[]) => {
+    const pd = fixture();
+    const ambient = resolveWorkflowSelection(pd);
+    const other = createIntent(pd, "other", ambient.space, "feature", undefined, "t344-other-intent");
+    setActiveIntentCursor(pd, ambient.intent!, ambient.space);
+    const beforeAudit = readAuditShardEvents(pd, ambient.intent!, ambient.space);
+    const beforeState = readFileSync(seededStateFile(pd));
+    const otherStatePath = join(other.recordDir, "aidlc-state.md");
+    const otherState = readFileSync(otherStatePath);
+
+    const refused = swarm(pd, [...args, "--intent", other.dirName]);
+
+    expect(refused.code, `${refused.out}\n${refused.err}`).not.toBe(0);
+    expect(JSON.parse(refused.err)).toEqual({
+      error: `swarm commands follow the session's active workflow (${ambient.space}/${ambient.intent}); switch to ${other.space}/${other.dirName} instead of passing --intent/--space`,
+    });
+    expect(readAuditShardEvents(pd, ambient.intent!, ambient.space)).toEqual(beforeAudit);
+    expect(readAuditShardEvents(pd, other.dirName, other.space)).toEqual([]);
+    expect(readFileSync(seededStateFile(pd))).toEqual(beforeState);
+    expect(readFileSync(otherStatePath)).toEqual(otherState);
+    expect(existsSync(wt(pd))).toBe(false);
+    expect(existsSync(worktreePath(pd, fixtureIntentId8(pd, other.dirName, other.space), "alpha"))).toBe(false);
+  }, 60_000);
+
   test.each(["checkpoints", "legacy autonomy"])("dirty approved parent preflight leaves no orphan for %s and commit then retry works", (policy) => {
     const pd = fixture();
     if (policy === "legacy autonomy") {
@@ -475,8 +503,8 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(starts(pd)).toHaveLength(startedCount);
   }, 60_000);
 
-  test("native discard of a provenance-bound legacy Bolt recreates its approved baseline in the intent namespace", () => {
-    const pd = fixture();
+  test("native discard after a peer landing recreates a provenance-bound legacy Bolt's approved baseline in the intent namespace", () => {
+    const pd = fixture(["alpha", "beta"]);
     const interrupted = interruptAfterBoltStart(pd, false);
     expect(interrupted.code, `${interrupted.out}\n${interrupted.err}`).toBe(2);
     const id8 = fixtureIntentId8(pd);
@@ -505,20 +533,31 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const approved = evaluateCodeGenerationApproval(legacy, { unit: "alpha" });
     expect(approved.ok, approved.reason).toBe(true);
     const baseline = git(legacy, ["rev-parse", "HEAD"]);
+    const peer = prepare(pd, ["beta"]);
+    expect(peer.code, `${peer.out}\n${peer.err}`).toBe(0);
+    writeUnitSource(pd, "beta", 2);
+    checkReviewFinalizeAndLand(pd, { beta: 2 });
+    const landedHead = git(pd, ["rev-parse", "HEAD"]);
+    expect(landedHead).not.toBe(baseline);
     writeFileSync(join(legacy, "src", "alpha.ts"), "export const alpha = 99;\n");
     const removed = tool(pd, "tools/aidlc-worktree.ts", ["discard", "--slug", "alpha", "--project-dir", pd]);
     expect(removed.code, `${removed.out}\n${removed.err}`).toBe(0);
     expect(existsSync(legacy)).toBe(false);
-    expect(auditBlockField(discarded(pd, "alpha").at(-1)!.block, "Approval Source Commit")).toBe(baseline);
+    const approvedBase = auditBlockField(discarded(pd, "alpha").at(-1)!.block, "Approval Source Commit");
+    expect(approvedBase).toBe(baseline);
     const recreated = prepare(pd);
     expect(recreated.code, `${recreated.out}\n${recreated.err}`).toBe(0);
     expect(git(wt(pd), ["symbolic-ref", "--short", "HEAD"])).toBe(currentName);
     expect(git(wt(pd), ["rev-parse", "HEAD"])).toBe(baseline);
+    expect(JSON.parse(readFileSync(join(wt(pd), ".aidlc", "worktree-meta.json"), "utf-8")).baseCommit).toBe(baseline);
     expect(readFileSync(join(wt(pd), "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 1;\n");
+    expect(readFileSync(join(wt(pd), "src", "beta.ts"), "utf-8")).toBe("export const beta = 1;\n");
+    expect(git(pd, ["rev-parse", "HEAD"])).toBe(landedHead);
+    expect(readFileSync(join(pd, "src", "beta.ts"), "utf-8")).toBe("export const beta = 2;\n");
     expect(evaluateCodeGenerationApproval(wt(pd), { unit: "alpha" })).toMatchObject({
       ok: true, approvalFingerprint: approved.approvalFingerprint,
     });
-  }, 60_000);
+  }, 120_000);
 
   test("failed initial fork preserves source and releases registration so discard then retry works", () => {
     const executable = process.platform === "win32"

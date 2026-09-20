@@ -15,7 +15,7 @@
 
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
@@ -189,6 +189,7 @@ function retainedSourceRefs(repoCwd: string, identity: BoltIdentity): RetainedSo
     const ref = line.slice(0, tab);
     const oid = line.slice(tab + 1);
     if (!ref.startsWith(prefix) || !/^[0-9a-f]{40,64}$/.test(oid)) return null;
+    if (!/^[0-9a-f]{40,64}$/.test(ref.slice(prefix.length))) continue;
     refs.push({ ref, oid });
   }
   return refs;
@@ -521,7 +522,15 @@ function handleCreate(args: string[]): void {
   }
 
   const wtPath = identity.dir;
-  if (identity.legacy || existsSync(wtPath)) {
+  if (identity.legacy && !existsSync(wtPath)) {
+    const retained = retainedSourceRefs(repoCwd, identity);
+    if (retained === null) errorWithSlug(slug, "reviewed-source ref enumeration failed");
+    errorWithSlug(
+      slug,
+      `Legacy Bolt ${slug} left branch ${identity.branch}${retained.length > 0 ? ` and ${retained.length} retained refs` : ""} behind; run discard --slug ${slug} under its intent to park and clean them before creating a new Bolt.`,
+    );
+  }
+  if (existsSync(wtPath)) {
     errorWithSlug(
       slug,
       `Worktree directory already exists: ${wtPath}. If BOLT_COMPLETED was recorded ` +
@@ -856,6 +865,7 @@ interface DiscardCreationAuthority {
   intent?: string;
   repo?: string | null;
   space?: string;
+  legacyDiscardRef?: string | null;
 }
 
 function discardCreationAuthority(
@@ -1091,8 +1101,25 @@ function discardCreationAuthority(
       `refusing to discard: worktree metadata repository ${JSON.stringify(repoSelectorLabel(recorded.repoSelector))} does not match corroborated WORKTREE_CREATED repository ${JSON.stringify(repoSelectorLabel(auditRepo))}`,
     );
   }
+  let legacyDiscardRef: string | null | undefined;
+  if (identity.legacy && !existsSync(identity.dir)) {
+    const lifecycle = audit.rows.filter((row) =>
+      VALID_VERIFY_EVENTS.has(row.event) && auditBlockField(row.block, "Bolt slug") === slug);
+    const frontier = maximalAttemptEvents(lifecycle);
+    if (frontier.length === 1 && frontier[0].event !== "WORKTREE_CREATED") {
+      const discarded = maximalAttemptEvents(lifecycle.filter((row) => {
+        if (row.event !== "WORKTREE_DISCARDED") return false;
+        const path = auditBlockField(row.block, "Worktree path");
+        return path !== null && pathKey(resolveAuditWorktreePath(pd, path)) === pathKey(identity.dir);
+      }));
+      if (discarded.length > 0) {
+        legacyDiscardRef = discarded.length === 1 ? auditBlockField(discarded[0].block, "Parked ref") : null;
+      }
+    }
+  }
   return {
     evidenceExists: true,
+    legacyDiscardRef,
     ...(auditRepo === undefined
       ? {}
       : {
@@ -2018,10 +2045,10 @@ function mergedSwarmCleanupAuthority(
         return path !== null &&
           pathKey(resolveAuditWorktreePath(pd, path)) === pathKey(boltIdentity.dir);
       })()));
-    if (creations.length > 1) continue;
+    if (creations.length !== 1) continue;
     const creation = creations[0];
-    if (creation && !rowAfter(row, creation)) continue;
-    if (identity !== undefined && (!creation ||
+    if (!rowAfter(row, creation)) continue;
+    if (identity !== undefined && (
       creation.authoritySpace !== row.authoritySpace ||
       creation.authorityIntent !== row.authorityIntent ||
       auditBlockField(creation.block, "Base commit") !== identity.baseCommit ||
@@ -2039,7 +2066,7 @@ function mergedSwarmCleanupAuthority(
       (candidate) =>
         candidate.event === "SWARM_UNIT_CONVERGED" &&
         auditBlockField(candidate.block, "Unit name") === unit &&
-        (!creation || rowAfter(candidate, creation)),
+        rowAfter(candidate, creation),
     ));
     const convergence = convergences.length === 1 ? convergences[0] : null;
     if (!convergence ||
@@ -2898,12 +2925,16 @@ function parkedSourceRefs(repoCwd: string, identity: BoltIdentity): RetainedSour
   const prefix = identity.parkedRefPrefix;
   const listed = runGit(["for-each-ref", "--format=%(refname)%09%(objectname)", prefix], repoCwd);
   if (!listed.ok) throw new Error(listed.stderr.trim() || "parked ref enumeration failed");
-  return listed.stdout.split(/\r?\n/).filter(Boolean).map((line) => {
+  return listed.stdout.split(/\r?\n/).filter(Boolean).flatMap((line) => {
     const [ref, oid] = line.split("\t");
     if (!ref?.startsWith(prefix) || !/^[0-9a-f]{40,64}$/.test(oid ?? "")) {
       throw new Error("invalid parked ref enumeration");
     }
-    return { ref, oid };
+    const suffix = ref.slice(prefix.length);
+    const slash = suffix.indexOf("/");
+    if (slash === -1 || !PARKED_STAMP_RE.test(suffix.slice(0, slash)) ||
+      !/^(?:head|snapshot|branch-tip|reviewed-source\/[0-9a-f]{40,64})$/.test(suffix.slice(slash + 1))) return [];
+    return [{ ref, oid }];
   });
 }
 
@@ -2944,6 +2975,7 @@ function parkAttempt(
     return result.stdout.trim();
   };
   let commit: string | null = null;
+  let branchTip: string | null = null;
   if (dirExists) {
     if (!registered) throw new Error("worktree directory is not registered with the creating repository");
     const idx = join(tmpdir(), `aidlc-park-${process.pid}-${randomUUID()}`);
@@ -2959,6 +2991,7 @@ function parkAttempt(
     };
     try {
       const head = requireGit(["rev-parse", "--verify", `refs/heads/${identity.branch}^{commit}`]);
+      branchTip = head;
       requireGit(["read-tree", head], wtPath, env);
       requireGit(["add", "-A"], wtPath, env);
       // Clean filters may transform dirty bytes; the park must hold the exact
@@ -3074,6 +3107,8 @@ function parkAttempt(
   if (commit !== null) {
     requireGit(["update-ref", `${ref}/head`, commit, ""]);
     requireGit(["update-ref", `${ref}/${mode}`, commit, ""]);
+    // A retry after checkout removal must distinguish this branch from a reused legacy name.
+    if (branchTip !== null) requireGit(["update-ref", `${ref}/branch-tip`, branchTip, ""]);
   }
   // Copy every source ref before audit/removal. Originals remain intact if any
   // copy fails; their compare-and-delete runs only after successful teardown.
@@ -3082,6 +3117,19 @@ function parkAttempt(
     requireGit(["update-ref", `${ref}/reviewed-source/${sourceCommit}`, source.oid, ""]);
   }
   return { ref, commit: commit ?? "-", mode };
+}
+
+function assertNoForeignBoltDirectory(pd: string, identity: BoltIdentity, selection: WorkflowSelection): void {
+  const root = worktreesDir(pd);
+  if (!existsSync(root)) return;
+  for (const name of readdirSync(root).sort()) {
+    const parsed = parseBoltName(name);
+    if (parsed === null || parsed.slug !== identity.slug || name === identity.name) continue;
+    errorWithSlug(
+      identity.slug,
+      `no Bolt ${identity.slug} belongs to intent ${relativeRecordDirForSelection(selection)}; this checkout holds ${name} (${parsed.intentId8 === null ? "legacy" : `intent ${parsed.intentId8}`}) at ${join(root, name)} — select that intent to discard it`,
+    );
+  }
 }
 
 // --- Subcommand: discard ---
@@ -3113,6 +3161,7 @@ function handleDiscard(args: string[]): void {
   );
   const wtPath = identity.dir;
   if (!authority.evidenceExists) {
+    assertNoForeignBoltDirectory(pd, identity, selection);
     console.log(
       JSON.stringify({
         emitted: null,
@@ -3164,17 +3213,32 @@ function handleDiscard(args: string[]): void {
   const branchName = identity.branch;
   const dirExists = existsSync(wtPath);
   const registered = repositoryRegistersBoltWorktree(pd, repoCwd, identity);
-  const branchExists = runGit([
+  const branch = runGit([
     "rev-parse",
     "--verify",
     `refs/heads/${branchName}`,
-  ], repoCwd).ok;
+  ], repoCwd);
+  const branchExists = branch.ok;
+  if (identity.legacy && !dirExists && branchExists && authority.legacyDiscardRef !== undefined) {
+    const ref = authority.legacyDiscardRef;
+    let recordedTip: string | null = null;
+    if (ref?.startsWith(identity.parkedRefPrefix) &&
+      PARKED_STAMP_RE.test(ref.slice(identity.parkedRefPrefix.length))) {
+      const tip = runGit(["rev-parse", "--verify", `${ref}/branch-tip`], repoCwd);
+      const head = tip.ok ? tip : runGit(["rev-parse", "--verify", `${ref}/head`], repoCwd);
+      if (head.ok) recordedTip = head.stdout.trim();
+    }
+    if (recordedTip !== branch.stdout.trim()) {
+      errorWithSlug(slug, `legacy branch ${branchName} tip does not match this intent's recorded discard; leaving it for inspection`);
+    }
+  }
   const retained = retainedSourceRefs(repoCwd, identity);
   if (retained === null) {
     errorWithSlug(slug, "reviewed-source ref enumeration failed");
   }
 
   if (!dirExists && !branchExists && retained.length === 0) {
+    assertNoForeignBoltDirectory(pd, identity, selection);
     console.log(
       JSON.stringify({
         emitted: null,
@@ -3259,7 +3323,7 @@ function handleDiscard(args: string[]): void {
 // Local recovery uses a separate path and branch namespace, never a live Bolt.
 interface ParkedRecoveryScope {
   identity: BoltIdentity;
-  stamps: ReadonlySet<string> | null;
+  stamps: ReadonlySet<string>;
 }
 
 interface ParkedRecoveryRef extends RetainedSourceRef {
@@ -3272,30 +3336,29 @@ function parkedRecoveryScopes(
   identity: BoltIdentity,
   rows: readonly WorktreeAuditRow[],
 ): ParkedRecoveryScope[] {
-  const legacy = identity.legacy
-    ? identity
-    : legacyBoltIdentity(pd, identity.intentId8, identity.slug);
-  const stamps = new Set<string>();
-  // A discarded legacy checkout is gone, so only this intent's exact parked
-  // audit provenance can authorize recovery. Unattributed legacy refs stay untouched.
-  for (const row of rows) {
-    if (row.event !== "WORKTREE_DISCARDED" || auditBlockField(row.block, "Bolt slug") !== identity.slug) continue;
-    const ref = auditBlockField(row.block, "Parked ref");
-    if (ref === null || !ref.startsWith(legacy.parkedRefPrefix)) continue;
-    const stamp = ref.slice(legacy.parkedRefPrefix.length);
-    if (PARKED_STAMP_RE.test(stamp)) stamps.add(stamp);
-  }
-  return [
-    ...(identity.legacy ? [] : [{ identity, stamps: null }]),
-    { identity: legacy, stamps },
-  ];
+  const identities = identity.legacy
+    ? [identity]
+    : [identity, legacyBoltIdentity(pd, identity.intentId8, identity.slug)];
+  return identities.map((parkedIdentity) => {
+    const stamps = new Set<string>();
+    // Namespaced refs are shared by every checkout of this repository too;
+    // only this intent's recorded parks authorize their recovery or deletion.
+    for (const row of rows) {
+      if (row.event !== "WORKTREE_DISCARDED" || auditBlockField(row.block, "Bolt slug") !== identity.slug) continue;
+      const ref = auditBlockField(row.block, "Parked ref");
+      if (ref === null || !ref.startsWith(parkedIdentity.parkedRefPrefix)) continue;
+      const stamp = ref.slice(parkedIdentity.parkedRefPrefix.length);
+      if (PARKED_STAMP_RE.test(stamp)) stamps.add(stamp);
+    }
+    return { identity: parkedIdentity, stamps };
+  });
 }
 
 function parkedRecoveryRefs(repoCwd: string, scopes: readonly ParkedRecoveryScope[]): ParkedRecoveryRef[] {
   return scopes.flatMap(({ identity, stamps }) =>
     parkedSourceRefs(repoCwd, identity).flatMap((entry) => {
       const stamp = parkedStamp(entry.ref, identity);
-      return stamps !== null && !stamps.has(stamp)
+      return !stamps.has(stamp)
         ? []
         : [{ ...entry, identity, stamp }];
     }));
@@ -3309,6 +3372,9 @@ function parkedRepoCwd(
   rows: readonly WorktreeAuditRow[],
 ): string {
   const slug = identity.slug;
+  if (flags.parked !== undefined && !scopes.some(({ stamps }) => stamps.has(flags.parked))) {
+    errorWithSlug(slug, `parked attempt ${flags.parked} is not recorded by intent ${relativeRecordDir(pd, flags.intent, flags.space)}`);
+  }
   const candidates = worktreeRepoCandidates(pd, rows, slug);
   if (flags.repo !== undefined) {
     const repo = flags.repo === "." ? null : flags.repo;

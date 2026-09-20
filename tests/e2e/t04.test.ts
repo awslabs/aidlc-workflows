@@ -56,7 +56,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import {
@@ -165,6 +165,18 @@ function plantLegacyBolt(p: string): { dir: string; branch: string } {
     "Intent record": intentRecord,
   }, p, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
   return { dir, branch };
+}
+
+function plantConflictingLegacyBolt(p: string): { dir: string; branch: string; sourceCommit: string } {
+  const legacy = plantLegacyBolt(p);
+  writeFileSync(join(legacy.dir, "README.md"), "legacy Bolt source\n");
+  git(legacy.dir, "add", "README.md");
+  git(legacy.dir, "commit", "-qm", "legacy Bolt change");
+  const sourceCommit = git(legacy.dir, "rev-parse", "HEAD");
+  writeFileSync(join(p, "README.md"), "target source\n");
+  git(p, "add", "README.md");
+  git(p, "commit", "-qm", "conflicting target change");
+  return { ...legacy, sourceCommit };
 }
 
 describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-discard-list-verify.sh, plan 12)", () => {
@@ -279,12 +291,127 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     }
   }, 30000);
 
+  test("legacy merge conflict can be resolved and retried without stranding the branch", () => {
+    // R4(a): WORKTREE_MERGED is audit-of-intent, not proof that the legacy checkout closed.
+    const p = freshFixture();
+    const legacy = plantConflictingLegacyBolt(p);
+    const failed = wt(p, ["merge", "--slug", "demo", "--target", "main", "--strategy", "squash"]);
+    expect(failed.status, failed.out).not.toBe(0);
+    expect(JSON.parse(failed.stdout)).toMatchObject({ status: "conflict", conflict_files: ["README.md"] });
+    expect(existsSync(legacy.dir)).toBe(true);
+    expect(git(p, "rev-parse", legacy.branch)).toBe(legacy.sourceCommit);
+
+    // Resolve on the Bolt, so the retry performs a real source merge rather than a no-op commit.
+    git(p, "reset", "--hard", "HEAD");
+    const conflict = spawnSync("git", ["merge", "--no-commit", "main"], { cwd: legacy.dir, encoding: "utf-8" });
+    expect(conflict.status).not.toBe(0);
+    expect(git(legacy.dir, "diff", "--name-only", "--diff-filter=U")).toBe("README.md");
+    writeFileSync(join(legacy.dir, "README.md"), "resolved target and legacy Bolt source\n");
+    git(legacy.dir, "add", "README.md");
+    git(legacy.dir, "commit", "-qm", "resolve legacy Bolt conflict");
+
+    const retried = wt(p, ["merge", "--slug", "demo", "--target", "main", "--strategy", "squash"]);
+    expect(retried.status, retried.out).toBe(0);
+    expect(JSON.parse(retried.stdout).emitted).toBe("WORKTREE_MERGED");
+    expect(readFileSync(join(p, "README.md"), "utf-8")).toBe("resolved target and legacy Bolt source\n");
+    expect(existsSync(legacy.dir)).toBe(false);
+    expect(branchExists(p, legacy.branch)).toBe(false);
+    expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/reviewed-source/demo/")).toBe("");
+  }, 30000);
+
+  test("legacy swarm cleanup-only merge removes the landed branch and retained source refs", () => {
+    // R4(b): a landed swarm source remains cleanable after WORKTREE_MERGED and directory removal.
+    const p = freshFixture();
+    const legacy = plantLegacyBolt(p);
+    writeFileSync(join(legacy.dir, "landed.txt"), "legacy reviewed source\n");
+    git(legacy.dir, "add", "landed.txt");
+    git(legacy.dir, "commit", "-qm", "legacy reviewed source");
+    const sourceCommit = git(legacy.dir, "rev-parse", "HEAD");
+    const retainedRef = `refs/aidlc/reviewed-source/demo/${sourceCommit}`;
+    git(p, "update-ref", retainedRef, sourceCommit);
+    const authority = {
+      "Batch number": "1",
+      "Unit name": "demo",
+      Stage: "code-generation",
+      "Run floor": "2026-01-01T00:00:00Z",
+      "Source Commit": sourceCommit,
+    };
+    appendAuditEntry("SWARM_UNIT_CONVERGED", authority, p, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    appendAuditEntry("WORKTREE_MERGED", {
+      "Bolt slug": "demo",
+      "Worktree path": relative(p, legacy.dir).replaceAll("\\", "/"),
+      "Target branch": "main",
+      Strategy: "merge",
+    }, p, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    git(p, "merge", "--ff-only", legacy.branch);
+    appendAuditEntry("SWARM_SOURCE_MERGED", {
+      ...authority,
+      "Merge commit": sourceCommit,
+      Repo: "-",
+    }, p, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    git(p, "worktree", "remove", "--force", legacy.dir);
+    expect(branchExists(p, legacy.branch)).toBe(true);
+    expect(git(p, "rev-parse", retainedRef)).toBe(sourceCommit);
+
+    const create = wt(p, ["create", "--slug", "demo", "--base", "main"]);
+    expect(create.status, create.out).not.toBe(0);
+    expect(create.out).toContain("Legacy Bolt demo left branch bolt-demo and 1 retained refs behind");
+    expect(create.out).toContain("run discard --slug demo under its intent");
+    expect(existsSync(wtPath(p, "demo"))).toBe(false);
+    expect(git(p, "rev-parse", legacy.branch)).toBe(sourceCommit);
+    expect(git(p, "rev-parse", retainedRef)).toBe(sourceCommit);
+
+    const retried = wt(p, ["merge", "--slug", "demo", "--target", "main", "--strategy", "merge"]);
+    expect(retried.status, retried.out).toBe(0);
+    expect(JSON.parse(retried.stdout)).toMatchObject({
+      emitted: null, cleanup_reconciled: true, source_authority: sourceCommit,
+    });
+    expect(git(p, "rev-parse", "main")).toBe(sourceCommit);
+    expect(readFileSync(join(p, "landed.txt"), "utf-8")).toBe("legacy reviewed source\n");
+    expect(existsSync(legacy.dir)).toBe(false);
+    expect(branchExists(p, legacy.branch)).toBe(false);
+    expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/reviewed-source/demo/")).toBe("");
+  }, 30000);
+
+  test("discard after a failed legacy merge parks source and removes the checkout, branch and review refs", () => {
+    // R4(c): the failed merge's terminal audit row must not strand a live legacy Bolt.
+    const p = freshFixture();
+    const legacy = plantConflictingLegacyBolt(p);
+    const failed = wt(p, ["merge", "--slug", "demo", "--target", "main", "--strategy", "squash"]);
+    expect(failed.status, failed.out).not.toBe(0);
+    expect(JSON.parse(failed.stdout)).toMatchObject({ status: "conflict", conflict_files: ["README.md"] });
+    git(p, "reset", "--hard", "HEAD");
+    // Retained review evidence requires swarm merge authority, so add it only after the ordinary merge fails.
+    git(p, "update-ref", `refs/aidlc/reviewed-source/demo/${legacy.sourceCommit}`, legacy.sourceCommit);
+
+    const discarded = wt(p, ["discard", "--slug", "demo"]);
+    expect(discarded.status, discarded.out).toBe(0);
+    const parked = JSON.parse(discarded.stdout);
+    expect(parked.emitted).toBe("WORKTREE_DISCARDED");
+    expect(parked.parked_ref.startsWith("refs/aidlc/parked/demo/")).toBe(true);
+    expect(git(p, "show", `${parked.parked_ref}/head:README.md`)).toBe("legacy Bolt source");
+    expect(git(p, "rev-parse", `${parked.parked_ref}/reviewed-source/${legacy.sourceCommit}`)).toBe(legacy.sourceCommit);
+    expect(readFileSync(join(p, "README.md"), "utf-8")).toBe("target source\n");
+    expect(existsSync(legacy.dir)).toBe(false);
+    expect(branchExists(p, legacy.branch)).toBe(false);
+    expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/reviewed-source/demo/")).toBe("");
+  }, 30000);
+
   test("legacy provenance belongs only to intent A while intent B creates its own same-slug Bolt", () => {
     const p = freshFixture();
     const legacy = plantLegacyBolt(p);
     const legacyHead = git(p, "rev-parse", legacy.branch);
     const intentB = createIntent(p, "other-intent", DEFAULT_SPACE);
     const idB = fixtureIntentId8(p, intentB.dirName, DEFAULT_SPACE);
+    // R4(e): absence of B's identity is not an idempotent discard while A's same-slug checkout is live.
+    const foreignDiscard = wt(p, ["discard", "--slug", "demo", "--intent", intentB.dirName, "--space", DEFAULT_SPACE]);
+    expect(foreignDiscard.status, foreignDiscard.out).not.toBe(0);
+    expect(foreignDiscard.out).toContain(`no Bolt demo belongs to intent aidlc/spaces/${DEFAULT_SPACE}/intents/${intentB.dirName}`);
+    expect(foreignDiscard.out).toContain(`this checkout holds ${legacy.branch} (legacy)`);
+    expect(foreignDiscard.out).toContain("select that intent to discard it");
+    expect(existsSync(legacy.dir)).toBe(true);
+    expect(git(p, "rev-parse", legacy.branch)).toBe(legacyHead);
+    expect(readFileSync(join(legacy.dir, "README.md"), "utf-8")).toBe("seed\n");
     const created = wt(p, ["create", "--slug", "demo", "--base", "main", "--intent", intentB.dirName, "--space", DEFAULT_SPACE]);
     expect(created.status, created.out).toBe(0);
     expect(JSON.parse(created.stdout)).toMatchObject({
