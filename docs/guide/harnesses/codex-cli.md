@@ -24,6 +24,11 @@ source/development tree is **generated** into ignored local `dist/codex/` from
   Codex inherits provider, credentials, model, context window, and reasoning
   effort from `~/.codex/config.toml`. Agent roles inherit the selected model;
   balanced reviewers retain only their medium reasoning-effort cap.
+  Configure the model provider in that user-level file; Codex ignores
+  project-level `model_provider` and `model_providers`. Other settings, such as
+  `model`, in a trusted project's `.codex/config.toml` take precedence over user
+  configuration, so add project-level model keys only for intentional shared
+  overrides.
 
 ## Install
 

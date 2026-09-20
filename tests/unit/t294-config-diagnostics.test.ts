@@ -546,7 +546,12 @@ describe("t294 provider diagnostics", () => {
       `[model_providers.amazon-bedrock.aws]\nprofile = "dev"\nregion = "eu-west-1"\n\n` +
       readFileSync(customCodexPath, "utf-8");
     writeFileSync(customCodexPath, customConfig);
-    expect(providerIssues(customCodex, ".codex", "codex", record)).toEqual([]);
+    expect(providerIssues(customCodex, ".codex", "codex", record)).toEqual([
+      expect.objectContaining({
+        id: "provider-codex-project-override",
+        severity: "warn",
+      }),
+    ]);
     applyConfigDiagnosticRecords(
       customCodex,
       ".codex",
@@ -1439,6 +1444,239 @@ describe("t294 config diagnostics CLI", () => {
     expect(refreshed.stdout + refreshed.stderr).toContain("locally modified");
     expect(readFileSync(settingsPath, "utf-8")).toBe(edited);
   }, 60_000);
+
+  test("a recorded Bedrock answer keeps the ownership check for Claude permissions", () => {
+    const env = runtimeEnv();
+    for (const change of ["permissions", "env", "pristine"]) {
+      const project = install("claude");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      if (change !== "pristine") settings.env.MY_TEAM_SETTING = "preserved";
+      if (change === "permissions") {
+        settings.permissions = {
+          ...(settings.permissions ?? {}),
+          deny: ["Bash(team-command:*)"],
+        };
+      }
+      const edited = `${JSON.stringify(settings, null, 2)}\n`;
+      if (change !== "pristine") writeFileSync(settingsPath, edited);
+      const refreshed = run([
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(DIST_RELEASE, "claude"),
+        "--harness",
+        "claude",
+        "--yes",
+      ], project, env);
+      if (change === "permissions") {
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+        expect(refreshed.stdout + refreshed.stderr).toContain(".claude/settings.json");
+        expect(readFileSync(settingsPath, "utf-8")).toBe(edited);
+      } else {
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+        const after = JSON.parse(readFileSync(settingsPath, "utf-8")).env;
+        expect(after).toEqual(expect.objectContaining({
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_REGION: "us-east-1",
+        }));
+        if (change === "env") expect(after.MY_TEAM_SETTING).toBe("preserved");
+      }
+    }
+  }, 120_000);
+
+  test("opting out of a recorded Bedrock answer removes shipped Claude aliases and keeps customized ones", () => {
+    const env = runtimeEnv();
+    for (const opusModel of [
+      "my-custom-opus",
+      "global.anthropic.claude-opus-4-8[1m]",
+    ]) {
+      const project = install("claude");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      const scope = settings.env.AWS_AIDLC_DEFAULT_SCOPE;
+      Object.assign(settings.env, {
+        ANTHROPIC_DEFAULT_FABLE_MODEL:
+          "global.anthropic.claude-fable-5[1m]",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: opusModel,
+        ANTHROPIC_DEFAULT_SONNET_MODEL:
+          "global.anthropic.claude-sonnet-4-6[1m]",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL:
+          "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      });
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "current",
+        "--yes",
+      ], project, env);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      const after = JSON.parse(readFileSync(settingsPath, "utf-8")).env;
+      for (const key of [
+        "CLAUDE_CODE_USE_BEDROCK",
+        "AWS_REGION",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      ]) {
+        expect(after[key], key).toBeUndefined();
+      }
+      expect(after.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(
+        opusModel === "my-custom-opus" ? opusModel : undefined,
+      );
+      expect(after.AWS_AIDLC_DEFAULT_SCOPE).toBe(scope);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).toContain("clean for claude");
+    }
+  }, 120_000);
+
+  test("reset removes the OpenCode provider block AI-DLC wrote and keeps a user-authored one", () => {
+    const env = runtimeEnv();
+    for (const customized of [false, true]) {
+      const project = install("opencode");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+        "--opencode-default",
+        "yes",
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const path = join(project, "opencode.json");
+      const config = JSON.parse(readFileSync(path, "utf-8"));
+      expect(config.provider["amazon-bedrock"].options.region).toBe("us-east-1");
+      if (customized) {
+        config.provider["amazon-bedrock"].options.region = "eu-west-1";
+        writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+      }
+      const reset = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--reset",
+        "--yes",
+      ], project, env);
+      expect(reset.status, reset.stdout + reset.stderr).toBe(0);
+      const after = JSON.parse(readFileSync(path, "utf-8"));
+      if (customized) {
+        expect(after.provider).toEqual(config.provider);
+      } else {
+        expect(after.provider).toBeUndefined();
+      }
+    }
+  }, 120_000);
+
+  test("check warns and show stops calling a partially edited legacy Codex block provider-neutral", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const path = join(project, ".codex", "config.toml");
+    writeFileSync(
+      path,
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "medium"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n` +
+        readFileSync(path, "utf-8"),
+    );
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const changed = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    expect(readFileSync(path, "utf-8")).toContain('model_provider = "amazon-bedrock"');
+    expect(readFileSync(path, "utf-8")).toContain('model_reasoning_effort = "medium"');
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("1 warning(s)");
+    expect(check.stdout).toContain("provider-codex-project-override");
+    const show = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--show",
+    ], project, env);
+    expect(show.status, show.stdout + show.stderr).toBe(0);
+    expect(show.stdout).toContain("Codex project configuration");
+    expect(show.stdout).not.toContain("provider-neutral");
+    const record = normalizeProvidersRecord({
+      schemaVersion: 1,
+      provider: "current",
+    });
+    expect(providerIssues(project, ".codex", "codex", record)
+      .map(({ id, severity }) => ({ id, severity }))).toEqual([
+      { id: "provider-codex-project-override", severity: "warn" },
+    ]);
+  }, 120_000);
 
   test("copy-channel provider transitions remove the recorded Claude Bedrock values", () => {
     for (const transition of [

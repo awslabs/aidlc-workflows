@@ -482,9 +482,14 @@ self-attested after completion because the effective user configuration and
 alternate credential channels cannot be resolved offline; `--check` returns
 success with that warning instead of describing the setup as verified.
 `--provider current` preserves the harness's configured provider and removes
-only exact legacy AI-DLC Bedrock defaults from Claude, Codex, or opencode
-project files. `--provider other` records a manually configured non-Bedrock
-provider and reports that setup as pending until `--acknowledge` is supplied.
+only Bedrock values AI-DLC can attribute to its shipped defaults or the previous
+record from Claude, Codex, or opencode project files. Customized Claude model
+aliases are preserved. A customized legacy Codex Bedrock block is also preserved;
+`--check` reports a warning when it still names that provider instead of calling
+the configuration clean. `--provider other` records a manually configured
+non-Bedrock provider and reports that setup as pending until `--acknowledge` is
+supplied. For opencode, `--reset` also removes provider options matching the
+previous recorded Bedrock answer; options that no longer match are preserved.
 
 The question is worded for the harness in front of you, so each install offers
 the two paths that actually exist for it:

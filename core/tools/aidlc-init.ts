@@ -132,6 +132,7 @@ import {
   effectiveProjectFlagValues,
   flagFiles,
   flagIssues,
+  hasLegacyClaudeProviderConfig,
   managedBlockMarkers,
   normalizeProvidersRecord,
   normalizeProjectChoicesRecord,
@@ -154,6 +155,7 @@ import {
   readConfigDiagnosticRecords,
   reconcileProviderActions,
   runtimeIssues,
+  stripLegacyClaudeModelAliases,
   trustStatus,
   workspaceShellRefreshCommand,
   type ConfigDiagnosticOverrides,
@@ -3660,6 +3662,13 @@ function preserveClaudeProviderFields(
       !Array.isArray(current.env)
     ? { ...current.env as Record<string, unknown> }
     : {};
+  const currentLegacy = hasLegacyClaudeProviderConfig(currentEnv);
+  if (
+    previousProvider?.provider === "amazon-bedrock" ||
+    currentEnv.CLAUDE_CODE_USE_BEDROCK === "1"
+  ) {
+    stripLegacyClaudeModelAliases(currentEnv);
+  }
   if (
     previousProvider?.provider === "amazon-bedrock" &&
     currentEnv.CLAUDE_CODE_USE_BEDROCK === "1" &&
@@ -3670,22 +3679,36 @@ function preserveClaudeProviderFields(
     delete currentEnv.CLAUDE_CODE_USE_BEDROCK;
     delete currentEnv.AWS_REGION;
     if (previousProvider.profile) delete currentEnv.AWS_PROFILE;
+  } else if (currentLegacy) {
+    delete currentEnv.CLAUDE_CODE_USE_BEDROCK;
+    delete currentEnv.AWS_REGION;
   }
   const stagedEnv = staged.env && typeof staged.env === "object" &&
       !Array.isArray(staged.env)
     ? { ...staged.env as Record<string, unknown> }
     : {};
-  if (
-    nextProvider?.provider !== "amazon-bedrock" &&
-    previousProvider?.provider === "amazon-bedrock" &&
-    stagedEnv.CLAUDE_CODE_USE_BEDROCK === "1" &&
-    stagedEnv.AWS_REGION === previousProvider.region &&
-    (!previousProvider.profile ||
-      stagedEnv.AWS_PROFILE === previousProvider.profile)
-  ) {
-    delete stagedEnv.CLAUDE_CODE_USE_BEDROCK;
-    delete stagedEnv.AWS_REGION;
-    if (previousProvider.profile) delete stagedEnv.AWS_PROFILE;
+  if (nextProvider?.provider !== "amazon-bedrock") {
+    const stagedLegacy = hasLegacyClaudeProviderConfig(stagedEnv);
+    if (
+      previousProvider?.provider === "amazon-bedrock" ||
+      stagedEnv.CLAUDE_CODE_USE_BEDROCK === "1"
+    ) {
+      stripLegacyClaudeModelAliases(stagedEnv);
+    }
+    if (
+      previousProvider?.provider === "amazon-bedrock" &&
+      stagedEnv.CLAUDE_CODE_USE_BEDROCK === "1" &&
+      stagedEnv.AWS_REGION === previousProvider.region &&
+      (!previousProvider.profile ||
+        stagedEnv.AWS_PROFILE === previousProvider.profile)
+    ) {
+      delete stagedEnv.CLAUDE_CODE_USE_BEDROCK;
+      delete stagedEnv.AWS_REGION;
+      if (previousProvider.profile) delete stagedEnv.AWS_PROFILE;
+    } else if (stagedLegacy) {
+      delete stagedEnv.CLAUDE_CODE_USE_BEDROCK;
+      delete stagedEnv.AWS_REGION;
+    }
   }
   // The project-flags record owns this value. Do not allow the current file to
   // override a newly selected scope when user fields are carried into staging.
@@ -3854,6 +3877,7 @@ function claudeProviderOnlyDifference(
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
     "AWS_REGION",
+    "AWS_AIDLC_DEFAULT_SCOPE",
   ]) {
     delete currentEnv[key];
     delete stagedEnv[key];
@@ -4006,10 +4030,13 @@ function prepareRefreshSource(
       regenerated.add(integration.path);
     }
   }
+  if (modelHarness(distribution) === "claude") {
+    regenerated.delete(`${descriptor.harnessDir}/settings.json`);
+  }
   // Provider preservation carries only user-owned fields into the staged
   // projection. Run it after the regenerated scan so those fields cannot make
   // the whole file runtime-generated and bypass the ordinary ownership check.
-  // Provider mutations were already classified above; when preservation is the
+  // Other provider mutations were classified above; when preservation is the
   // only difference, the staged bytes equal the project and are preserved.
   preserveUserProviderFields(
     projectDir,
@@ -4042,6 +4069,8 @@ function prepareRefreshSource(
     },
     previousProvider,
   );
+  // This gate is the only path that marks Claude settings as runtime-generated:
+  // record-driven writes alone must not bypass the ordinary ownership check.
   if (modelHarness(distribution) === "claude") {
     const settingsRel = `${descriptor.harnessDir}/settings.json`;
     const currentSettings = join(projectDir, settingsRel);

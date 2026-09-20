@@ -1072,9 +1072,7 @@ function writeClaudeProvider(
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
   const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
-  if (hasLegacyClaudeProviderConfig(env)) {
-    for (const key of CLAUDE_BEDROCK_MODEL_KEYS) delete env[key];
-  }
+  stripLegacyClaudeModelAliases(env);
   env.CLAUDE_CODE_USE_BEDROCK = "1";
   env.AWS_REGION = record.region;
   if (record.profile) env.AWS_PROFILE = record.profile;
@@ -1117,7 +1115,18 @@ const LEGACY_CLAUDE_BEDROCK_ENV: Readonly<Record<string, string>> = {
     "global.anthropic.claude-haiku-4-5-20251001-v1:0",
 };
 
-function hasLegacyClaudeProviderConfig(
+export function stripLegacyClaudeModelAliases(env: Record<string, unknown>): string[] {
+  const removed: string[] = [];
+  for (const key of CLAUDE_BEDROCK_MODEL_KEYS) {
+    if (key !== "CLAUDE_CODE_USE_BEDROCK" && env[key] === LEGACY_CLAUDE_BEDROCK_ENV[key]) {
+      delete env[key];
+      removed.push(key);
+    }
+  }
+  return removed;
+}
+
+export function hasLegacyClaudeProviderConfig(
   env: Record<string, unknown>,
 ): boolean {
   return Object.entries(LEGACY_CLAUDE_BEDROCK_ENV).every(
@@ -1132,9 +1141,17 @@ function clearClaudeProvider(
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
   const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
-  if (!hasLegacyClaudeProviderConfig(env)) return;
-  for (const key of CLAUDE_BEDROCK_MODEL_KEYS) delete env[key];
-  delete env.AWS_REGION;
+  const legacy = hasLegacyClaudeProviderConfig(env);
+  let changed = false;
+  if (legacy || env.CLAUDE_CODE_USE_BEDROCK === "1") {
+    changed = stripLegacyClaudeModelAliases(env).length > 0;
+  }
+  if (legacy) {
+    delete env.CLAUDE_CODE_USE_BEDROCK;
+    delete env.AWS_REGION;
+    changed = true;
+  }
+  if (!changed) return;
   settings.env = env;
   writeJson(settingsPath, settings);
 }
@@ -1294,6 +1311,7 @@ function clearOpenCodeProvider(
   previousProvider: ProvidersRecord | null,
 ): void {
   const path = join(projectionRoot, "opencode.json");
+  if (!existsSync(path)) return;
   const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
   if (!isRecord(value.provider)) return;
   const providers = { ...value.provider };
@@ -1346,7 +1364,12 @@ export function applyConfigDiagnosticRecords(
   // the project's own file during staging, not from a record.
   if (harnessOwnsModelAccess(harness)) return;
   const provider = records.providers;
-  if (!provider?.provider) return;
+  if (!provider?.provider) {
+    if (harness === "opencode") {
+      clearOpenCodeProvider(projectionRoot, previousProvider);
+    }
+    return;
+  }
   if (provider.provider === "current" || provider.provider === "other") {
     if (harness === "claude") clearClaudeProvider(projectionRoot, harnessDir);
     else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir);
@@ -1381,17 +1404,17 @@ export function providerFiles(
   if (record?.provider === "current" || record?.provider === "other") {
     if (harness === "claude") {
       files.push({
-        setting: "provider-neutral Claude environment",
+        setting: "Claude project environment",
         file: join(harnessDir, "settings.json"),
       });
     } else if (harness === "codex") {
       files.push({
-        setting: "provider-neutral Codex project configuration",
+        setting: "Codex project configuration",
         file: join(harnessDir, "config.toml"),
       });
     } else if (harness === "opencode") {
       files.push({
-        setting: "provider-neutral opencode project configuration",
+        setting: "opencode project configuration",
         file: "opencode.json",
       });
     }
@@ -1865,6 +1888,20 @@ export function providerSurfaceIssues(
             path,
             "Codex project configuration still contains the legacy AI-DLC Bedrock defaults",
           );
+        } else {
+          const entries: string[] = [];
+          if (/^model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(text)) {
+            entries.push("model_provider");
+          }
+          const table = /^\[model_providers\.amazon-bedrock[^\]]*\]\s*$/m.exec(text);
+          if (table) entries.push(table[0].trim());
+          if (entries.length > 0) {
+            warning(
+              "provider-codex-project-override",
+              `Codex project configuration still names the amazon-bedrock provider despite the recorded ${record.provider} choice with: ${entries.join(", ")}`,
+              `AI-DLC removes only the exact shipped Bedrock block. Review ${path} and remove the entries, or leave them in place if the project override is intentional.`,
+            );
+          }
         }
       } else if (harness === "opencode" && record.provider === "other") {
         const path = join(projectDir, "opencode.json");
