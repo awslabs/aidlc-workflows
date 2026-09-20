@@ -405,8 +405,10 @@ exists or remains registered with Git, including moved checkouts. Its JSON is
 retains unparseable stamps; exact-stamp and all-stamp purges can remove them.
 For restore and purge, `--repo <name>` selects an existing sibling Git repository
 and `--repo .` selects the project root, independently of the current intent's
-repo list. Recovery admits valid Git repositories named in the same slug's
-`WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields even when those
+repo list. Both `WORKTREE_CREATED` and `WORKTREE_DISCARDED` emit `Repo`: the
+recorded sibling name, or `-` for the project root. A discard row preserves this
+provenance even when its creation row is unavailable. Recovery admits valid Git
+repositories named in the same slug's creation or discard audit `Repo` fields even when those
 sibling names are symlinks: the framework may recover exactly where it recorded
 the attempt's worktree or parking. That admission is slug-scoped; records for
 other slugs never widen this slug's repository set. Intent membership alone,

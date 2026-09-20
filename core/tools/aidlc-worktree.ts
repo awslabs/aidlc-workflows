@@ -3203,6 +3203,7 @@ function handleDiscard(args: string[]): void {
     auditTs = emitAudit(pd, "WORKTREE_DISCARDED", {
       "Bolt slug": slug,
       "Worktree path": auditWorktreePath(pd, wtPath),
+      Repo: parkedRepo ?? "-",
       Reason: "agent-discard",
       ...discardedApproval,
       "Parked ref": parked.ref,

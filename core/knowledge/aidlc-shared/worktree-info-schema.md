@@ -173,9 +173,11 @@ suffixes numerically (`-10` is newer than `-2`). With it, restore selects that
 exact stamp. An exact stamp present in only one repository selects that
 repository before checking for a slug shared across repositories. If selection
 is still ambiguous, `--repo <name>` selects an existing sibling Git repository
-and `--repo .` selects the project root. Recovery admits valid Git repositories
-named in the same slug's `WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo`
-fields even when those sibling names are symlinks: the framework may recover
+and `--repo .` selects the project root. Both `WORKTREE_CREATED` and
+`WORKTREE_DISCARDED` emit `Repo`: the recorded sibling name, or `-` for the project
+root. A discard row preserves this provenance even when its creation row is
+unavailable. Recovery admits valid Git repositories named in the same slug's
+creation or discard audit `Repo` fields even when those sibling names are symlinks: the framework may recover
 exactly where it recorded the attempt's worktree or parking. That admission is
 slug-scoped; a record for another slug never widens this slug's repository set.
 Membership in a current or historical intent's repo list alone cannot admit a

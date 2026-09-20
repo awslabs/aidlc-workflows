@@ -633,7 +633,7 @@ Pre-registered for v0.4.0; the three `WORKTREE_*` rows ship with `aidlc-worktree
 |---|---|---|
 | `WORKTREE_CREATED` | `tools/aidlc-worktree.ts` | Audit-first per-Bolt creation records the immutable Base commit, `Base Source Listing`, and portable creating-repo selector (`Repo`, `-` for root); private worktree metadata also binds the canonical Git common-dir. Swarm prepare additionally stamps intent/Unit/batch/stage/floor provenance (subcommand: `create`) |
 | `WORKTREE_MERGED` | `tools/aidlc-worktree.ts` | Bolt's worktree merged back to main on gate approval (subcommand: `merge`) |
-| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission; `Parked ref` records that namespace prefix and `Parked commit` the snapshot commit or branch tip (`-` when only reviewed refs remain). The live checkout and branch are then removed (subcommand: `discard`) |
+| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission; `Repo` records the same portable repository selector as creation (`-` for root), `Parked ref` records that namespace prefix and `Parked commit` the snapshot commit or branch tip (`-` when only reviewed refs remain). The live checkout and branch are then removed (subcommand: `discard`) |
 | `STATE_FORKED` | `tools/aidlc-state.ts` | State file forked to worktree on Bolt start (subcommand: `fork`) |
 | `STATE_MERGED` | `tools/aidlc-state.ts` | Worktree's state merged back to main on gate approval; alphabetical-slug tiebreak as defence-in-depth (subcommand: `merge`) |
 | `AUDIT_FORKED` | `tools/aidlc-audit.ts` (`audit-fork`) | Audit log forked to worktree on Bolt start; audit-of-intent — emit precedes the byte-copy |
@@ -824,8 +824,10 @@ or is registered with Git, including moved checkouts. Restore and purge accept
 `--repo <name>` for an existing sibling Git repository or `--repo .` for the
 project root, independently of the current intent's repo list. An exact restore
 stamp found in only one repository selects it before generic slug ambiguity.
-Recovery admits valid Git repositories named in the same slug's
-`WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields even when those
+Both `WORKTREE_CREATED` and `WORKTREE_DISCARDED` emit `Repo`: the recorded sibling
+name, or `-` for the project root. A discard row preserves this provenance even
+when its creation row is unavailable. Recovery admits valid Git repositories
+named in the same slug's creation or discard audit `Repo` fields even when those
 sibling names are symlinks: the framework may recover exactly where it recorded
 the attempt's worktree or parking. That admission is slug-scoped; records for
 other slugs never widen this slug's repository set. Membership in a current or

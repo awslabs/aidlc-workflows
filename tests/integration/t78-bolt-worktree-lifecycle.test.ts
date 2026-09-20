@@ -949,6 +949,66 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(git(external, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
     }, 30_000);
 
+    for (const matchingSlug of [true, false]) test(`discard-record-only linked recovery ${matchingSlug ? "admits the emitted slug" : "refuses a different recorded slug"}`, () => {
+      const { proj, external } = setupRecordedSymlinkProject();
+      const slug = "discard-record-only";
+      const created = runWorktree(proj, "create", "--slug", slug, "--base", "main");
+      expect(created.status, created.out).toBe(0);
+      const savedBytes = Buffer.from([0, 255, 13, 10, 128]);
+      writeFileSync(join(worktreeDir(proj, slug), "saved.txt"), savedBytes);
+      const discarded = runWorktree(proj, "discard", "--slug", slug);
+      expect(discarded.status, discarded.out).toBe(0);
+      const parked = JSON.parse(discarded.out);
+      expect(existsSync(worktreeDir(proj, slug))).toBe(false);
+
+      // Keep the real discard row, but remove creation provenance as can happen
+      // in partial cleanup or mixed-version audit history. Never synthesize Repo.
+      const intents = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents");
+      const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+      const auditDir = join(intents, record, "audit");
+      for (const name of readdirSync(auditDir).filter((name) => name.endsWith(".md"))) {
+        const path = join(auditDir, name);
+        const blocks = readFileSync(path, "utf-8").split("\n---\n")
+          .filter((block) => !block.includes("**Event**: WORKTREE_CREATED"))
+          .map((block) => !matchingSlug && block.includes("**Event**: WORKTREE_DISCARDED")
+            ? block.replace(`**Bolt slug**: ${slug}`, "**Bolt slug**: another-slug") : block);
+        writeFileSync(path, blocks.join("\n---\n"));
+      }
+
+      const attempts = doctorAttempts(proj);
+      if (!matchingSlug) {
+        expect(attempts).toEqual([]);
+        const before = git(external, "for-each-ref", "--format=%(refname)%09%(objectname)", `${parked.parked_ref}/`).stdout;
+        for (const operation of ["restore", "purge"]) {
+          const automatic = runWorktree(proj, operation, "--slug", slug);
+          expect(automatic.status, automatic.out).toBe(1);
+          expect(automatic.out).toContain(`no parked attempt for slug ${slug}`);
+          const explicit = runWorktree(proj, operation, "--slug", slug, "--repo", "api");
+          expect(explicit.status, explicit.out).toBe(1);
+          expect(JSON.parse(explicit.out).error).toContain('"api" is a symlink, not a workspace repository');
+        }
+        expect(git(external, "for-each-ref", "--format=%(refname)%09%(objectname)", `${parked.parked_ref}/`).stdout).toBe(before);
+        expect(git(external, "rev-parse", "--verify", `${parked.parked_ref}/head`).stdout.trim()).toBe(parked.parked_commit);
+        expect(existsSync(join(proj, ".aidlc", "restored"))).toBe(false);
+        return;
+      }
+
+      expect(attempts).toEqual([expect.objectContaining({
+        slug, repo: "api", stamp: parked.parked_stamp, mode: "snapshot",
+      })]);
+      const restored = runWorktree(proj, "restore", "--slug", slug);
+      expect(restored.status, restored.out).toBe(0);
+      const recovery = JSON.parse(restored.out);
+      expect(readFileSync(join(recovery.worktree_path, "saved.txt"))).toEqual(savedBytes);
+      expect(git(recovery.worktree_path, "rev-parse", "HEAD").stdout.trim()).toBe(parked.parked_commit);
+      expect(git(external, "worktree", "remove", "--force", recovery.worktree_path).status).toBe(0);
+      const purged = runRecoveryOperation(proj, attempts[0].purge_operation);
+      expect(purged.status, purged.out).toBe(0);
+      expect(git(external, "for-each-ref", "--format=%(refname)", `${parked.parked_ref}/`).stdout).toBe("");
+      expect(doctorAttempts(proj)).toEqual([]);
+      expect(readFileSync(join(external, "saved.txt"), "utf-8")).toBe("linked repository base\n");
+    }, 30_000);
+
     test("purge --older-than preserves February 31 refs and reports skipped_unparseable", () => {
       const proj = setupLifecycleProject();
       const slug = "impossible-date";
