@@ -3137,6 +3137,22 @@ export async function collectDoctorReport(
         });
       }
     }
+    // Reverse check: the file is the project's, so a registration the user
+    // removed or rewrote is kept by refresh; doctor is where that shows up.
+    const hooksDir = join(projectDir, harness, "hooks");
+    if (settingsReadable && expectedHooks.length > 0 && existsSync(hooksDir)) {
+      for (const hook of readdirSync(hooksDir, { withFileTypes: true })) {
+        if (
+          !hook.isFile() || !hook.name.startsWith("aidlc-") ||
+          !hook.name.endsWith(".ts") || expectedHooks.includes(hook.name)
+        ) continue;
+        results.push({
+          pass: false,
+          label: `${hook.name} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
+          fix: `re-add the hook entry, or delete the hooks key and rerun \`${aidlcInvocation()} config\` to restore the shipped wiring`,
+        });
+      }
+    }
 
     // Hooks GLOBALLY disabled (issue #802). Every check above verifies the hook
     // files are present and wired, but Claude Code honours `disableAllHooks:

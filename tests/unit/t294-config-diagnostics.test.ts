@@ -977,6 +977,82 @@ describe("t294 trust diagnostics", () => {
       check.label.includes("Harness CLI: codex")
     )).toBe(true);
   });
+
+  test("doctor flags unwired shipped Claude hooks through refresh until the hooks key is restored", () => {
+    const env = runtimeEnv();
+    for (const [source, hook] of [[DIST, "session-end"], [DIST_RELEASE, "session-start"]]) {
+      const project = temp("aidlc-t294-doctor-unwired-");
+      mkdirSync(join(project, ".git"));
+      cpSync(join(source, "claude"), project, { recursive: true });
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      const shippedHooks = structuredClone(settings.hooks);
+      const doctor = (): {
+        status: number | null;
+        checks: Array<{ pass: boolean; label: string }>;
+        failed: number;
+      } => {
+        const result = spawnSync(BUN, [
+          join(project, ".claude", "tools", "aidlc.ts"),
+          "--doctor",
+          "--json",
+          "--offline",
+        ], {
+          cwd: project,
+          env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+          encoding: "utf-8",
+          timeout: 60_000,
+        });
+        if (result.error) throw result.error;
+        return { ...JSON.parse(result.stdout).data, status: result.status };
+      };
+      const pristine = doctor();
+      expect(pristine.checks.some((check) => check.label.includes("shipped but not wired")))
+        .toBe(false);
+
+      if (hook === "session-end") {
+        settings.hooks.SessionEnd[0].hooks = settings.hooks.SessionEnd[0].hooks.filter(
+          (entry: { command: string }) => !entry.command.includes("session-end"),
+        );
+      } else {
+        delete settings.hooks.SessionStart;
+      }
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const label = `aidlc-${hook}.ts shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`;
+      const unwired = doctor();
+      expect(unwired.checks).toContainEqual(expect.objectContaining({ pass: false, label }));
+      expect(unwired.failed).toBeGreaterThan(pristine.failed);
+      expect(unwired.status).toBe(1);
+
+      const args = [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(source, "claude"),
+        "--harness",
+        "claude",
+        "--yes",
+      ];
+      const refreshed = run(args, project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      expect(after.hooks).toEqual(settings.hooks);
+      const stillUnwired = doctor();
+      expect(stillUnwired.checks).toContainEqual(expect.objectContaining({ pass: false, label }));
+      expect(stillUnwired.failed).toBeGreaterThan(0);
+      expect(stillUnwired.status).toBe(1);
+
+      delete after.hooks;
+      writeFileSync(settingsPath, `${JSON.stringify(after, null, 2)}\n`);
+      const restored = run(args, project, env);
+      expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(settingsPath, "utf-8")).hooks).toEqual(shippedHooks);
+      const repaired = doctor();
+      expect(repaired.checks.some((check) => check.label.includes("shipped but not wired")))
+        .toBe(false);
+    }
+  }, 120_000);
 });
 
 describe("t294 post-apply outstanding actions", () => {
@@ -3049,9 +3125,8 @@ describe("t294 config diagnostics CLI", () => {
       "--yes",
     ], project, env);
     expect(declined.status, declined.stdout + declined.stderr).toBe(0);
-    expect(readFileSync(join(project, "opencode.json"), "utf-8")).not.toContain(
-      '"provider"',
-    );
+    expect(JSON.parse(readFileSync(join(project, "opencode.json"), "utf-8")).provider)
+      .toBeUndefined();
     expect(readConfigDiagnosticRecords(join(project, ".aidlc")).providers)
       .toEqual(expect.objectContaining({ opencodeDefault: false }));
 
@@ -3075,7 +3150,60 @@ describe("t294 config diagnostics CLI", () => {
       region: "us-west-2",
       profile: "dev",
     });
+
+    const revoked = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-west-2",
+      "--profile",
+      "dev",
+      "--opencode-default",
+      "no",
+      "--yes",
+    ], project, env);
+    expect(revoked.status, revoked.stdout + revoked.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(project, "opencode.json"), "utf-8")).provider)
+      .toBeUndefined();
+    expect(readConfigDiagnosticRecords(join(project, ".aidlc")).providers)
+      .toEqual(expect.objectContaining({ opencodeDefault: false }));
   }, 60_000);
+
+  test("OpenCode yes-to-no removes recorded options but preserves user-authored provider fields", () => {
+    const env = runtimeEnv();
+    const models = { "anthropic.claude-sonnet-4-6": { name: "Sonnet" } };
+    for (const customRegion of [false, true]) {
+      const project = install("opencode");
+      const args = [
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+      ];
+      const configured = run([...args, "--opencode-default", "yes", "--yes"], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const path = join(project, "opencode.json");
+      const config = JSON.parse(readFileSync(path, "utf-8"));
+      config.provider["amazon-bedrock"].models = models;
+      config.provider["amazon-bedrock"].options.maxRetries = 3;
+      if (customRegion) config.provider["amazon-bedrock"].options.region = "eu-west-1";
+      writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+
+      const declined = run([...args, "--opencode-default", "no", "--yes"], project, env);
+      expect(declined.status, declined.stdout + declined.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf-8")).provider["amazon-bedrock"]).toEqual(
+        customRegion ? config.provider["amazon-bedrock"] : { models, options: { maxRetries: 3 } },
+      );
+    }
+  }, 120_000);
 
   test("Bedrock-only provider flags are rejected for current and other", () => {
     const project = install("claude");

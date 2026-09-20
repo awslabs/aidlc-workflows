@@ -1504,6 +1504,13 @@ export function applyConfigDiagnosticRecords(
     }
     return;
   }
+  if (
+    harness === "opencode" && provider.provider === "amazon-bedrock" &&
+    provider.opencodeDefault === false
+  ) {
+    clearOpenCodeProvider(projectionRoot, previousProvider);
+    return;
+  }
   if (!provider.region) return;
   if (harness === "claude") {
     writeClaudeProvider(projectionRoot, harnessDir, provider);
