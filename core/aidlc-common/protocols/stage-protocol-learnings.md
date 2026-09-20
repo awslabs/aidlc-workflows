@@ -54,6 +54,18 @@ When this module is listed, trigger after Step N-1 (completion message rendered)
    ```bash
    {{INVOKE}} engine learnings persist --slug <stage-slug> --selections-json <path>
    ```
+   Each entry in `selections[]` identifies its candidate by `candidate_id`, and
+   `id` — the spelling `surface` emits and step 3 correlates on — is accepted as
+   an alias for it. A learning entry carries `type: "learning"` (the default when
+   `type` is absent), `scope` (`project` by default, or `team`), the routed
+   `heading`, and the practice `text`. A sensor entry carries `type: "sensor"`,
+   `origin_stage`, and `manifest_fields` with `id`, `kind`, `command`,
+   `default_severity`, `description` and `matches` as strings, plus optional
+   `timeout_seconds` (number) and `category`. Either entry may carry `source`,
+   `orchestrator` or `user_addition`, which lands on the audit row. A malformed
+   entry fails the whole call before the audit lock is taken, so nothing is
+   half-written.
+
    The tool rejects a `--slug` that differs from the selections file's `stage_slug`, then verifies inside one `withAuditLock` transaction that the pinned space and non-null intent record still exist. It deduplicates against both the fresh audit snapshot and hashes emitted earlier in the same batch, using a `<!-- cid:<intent-slug>:<stage-slug>:<content-hash> -->` marker whose content hash is the full SHA-256 digest of the learning text. A crashed run therefore recovers without double-appending, while distinct learning text cannot share a truncated persisted identity:
    - **Learning** → appends a practice line under the orchestrator-routed heading in `<scope>.md` (scope ∈ {project, team}): `- <text> (learned YYYY-MM-DD) <!-- cid:... -->`. Ensure-exists the heading first, so a routed heading the file doesn't yet carry is created rather than throwing. Emits `RULE_LEARNED` (with `Source: orchestrator | user_addition`, `Heading: <routed>`).
    - **Sensor** → scaffolds a project-tier `<project>/{{HARNESS_DIR}}/sensors/aidlc-<id>.md` manifest (with the user-supplied `matches:` glob) AND appends the new id to the originating stage's `sensors:` frontmatter list — both writes inside the same lock. Emits `SENSOR_PROPOSED`. The sensor binds and fires from the next workflow's compile.

@@ -581,4 +581,32 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(c.default_scope).toBe("project");
   }, TIMEOUT);
 
+  test("Glue: a selection keyed by surface's own `id` persists", () => {
+    // surface prints `id`, and stage-protocol 13 step 3 correlates a kept label
+    // back to that `id`. Feeding it straight back must not be rejected for
+    // naming the field the producer used.
+    const pd = mkproj();
+    seedMemoryMixed(pd);
+    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
+    const sel = join(pd, "sel-id-alias.json");
+    writeJson(sel, {
+      stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
+      selections: [
+        {
+          id: candidate.id,
+          type: "learning",
+          scope: "project",
+          heading: "Corrections",
+          text: candidate.summary,
+          source: "orchestrator",
+        },
+      ],
+    });
+    const r = persist(pd, sel);
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(candidate.summary);
+  }, TIMEOUT);
+
 });
