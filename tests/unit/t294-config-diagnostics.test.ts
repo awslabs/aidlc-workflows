@@ -2049,6 +2049,48 @@ describe("t294 config diagnostics CLI", () => {
     expect(check.stdout).toContain("clean for codex");
   }, 120_000);
 
+  test("keep-current preserves a legacy Codex table that carries a user key after a blank line", () => {
+    const legacyBlock =
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+      `# unavailable there; the market-research stage degrades gracefully). For\n` +
+      `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+      `# block.\n` +
+      `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\n` +
+      `profile = "default"\nregion = "us-east-1"\n\ncustom = "keep"\n\n`;
+    for (const env of [runtimeEnv(), runtimeEnv({ AIDLC_RUNTIME_ROOT: "" })]) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const customized = legacyBlock + readFileSync(configPath, "utf-8");
+      writeFileSync(configPath, customized);
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "current",
+        "--yes",
+      ], project, env);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      const after = readFileSync(configPath, "utf-8");
+      expect(after).toContain('custom = "keep"');
+      expect(after).toContain("[model_providers.amazon-bedrock.aws]");
+      expect(after).toContain('model_provider = "amazon-bedrock"');
+      expect(after).toBe(customized);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).toContain("provider-codex-project-override");
+    }
+  }, 120_000);
+
   test("reset removes the exact legacy Codex Bedrock block", () => {
     const project = install("codex");
     const env = runtimeEnv();

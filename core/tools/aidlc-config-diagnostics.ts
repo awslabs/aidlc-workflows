@@ -1250,7 +1250,7 @@ function legacyCodexAwsTablePattern(profile: string, region: string): RegExp {
     `^\\[model_providers\\.amazon-bedrock\\.aws\\]\\r?\\n` +
       `(?:# Set to your AWS profile/region with Bedrock model access\\.\\r?\\n)?` +
       `profile = "${escapedProfile}"\\r?\\nregion = "${escapedRegion}"` +
-      `(?:\\r?\\n(?=\\r?\\n|\\[|$)(?:\\r?\\n)?|(?![\\s\\S]))`,
+      `(?:\\r?\\n(?:\\r?\\n)?|(?![\\s\\S]))`,
     "m",
   );
 }
@@ -1299,18 +1299,25 @@ export function hasLegacyCodexProviderConfig(
   content: string,
   previousProvider: ProvidersRecord | null = null,
 ): boolean {
-  return (
-    LEGACY_CODEX_BEDROCK_COMMENT.test(content) &&
-    /^model\s*=\s*"openai\.gpt-5\.5"\s*$/m.test(content) &&
-    /^model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(content) &&
-    /^model_context_window\s*=\s*1000000\s*$/m.test(content) &&
-    /^model_reasoning_effort\s*=\s*"high"\s*$/m.test(content) &&
-    (LEGACY_CODEX_AWS_TABLE.test(content) || (
-      previousProvider?.provider === "amazon-bedrock" &&
-      !!previousProvider.region &&
-      legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region).test(content)
-    ))
+  if (
+    !LEGACY_CODEX_BEDROCK_COMMENT.test(content) ||
+    !/^model\s*=\s*"openai\.gpt-5\.5"\s*$/m.test(content) ||
+    !/^model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(content) ||
+    !/^model_context_window\s*=\s*1000000\s*$/m.test(content) ||
+    !/^model_reasoning_effort\s*=\s*"high"\s*$/m.test(content)
+  ) return false;
+  const table = LEGACY_CODEX_AWS_TABLE.exec(content) ?? (
+    previousProvider?.provider === "amazon-bedrock" && previousProvider.region
+      ? legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region).exec(content)
+      : null
   );
+  if (!table) return false;
+  // A TOML table continues across blank lines and comments until the next header.
+  for (const line of content.slice(table.index + table[0].length).split(/\r?\n/)) {
+    if (line.startsWith("[")) return true;
+    if (!/^\s*(?:#.*)?$/.test(line)) return false;
+  }
+  return true;
 }
 
 // The `aws-mcp` region in `.kiro/settings/mcp.json` is plain MCP configuration.
