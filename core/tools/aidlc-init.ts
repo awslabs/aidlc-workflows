@@ -198,7 +198,16 @@ type Baseline = {
   harnessDir: string;
   mcpMode: "defaults" | "none";
   files: Record<string, string>;
+  entries?: Record<string, Record<string, string>>;
   rootContributions: Record<string, RootContribution>;
+};
+
+type PreparedRefreshSource = {
+  root: string;
+  cleanup?: string;
+  regenerated: Set<string>;
+  entries?: Baseline["entries"];
+  notes: string[];
 };
 
 type PlannedAction = {
@@ -1665,7 +1674,7 @@ function providerRecordFromArgs(
   let reconciled = reconcileProviderActions(
     normalizeProvidersRecord(next) as ProvidersRecord,
     selected.harness,
-    "mutation",
+    argv.includes("--acknowledge"),
   );
   const done = new Set(valuesAfter(argv, "--mark-done"));
   if (done.size > 0) {
@@ -3642,30 +3651,49 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "rulesSubdir",
 ]);
 
+const CLAUDE_SHIPPED_KEYS = [
+  "companyAnnouncements",
+  "permissions",
+  "statusLine",
+  "hooks",
+];
+
 function preserveClaudeProviderFields(
   projectDir: string,
   stagedRoot: string,
   harnessDir: string,
   previousProvider: ProvidersRecord | null,
   nextProvider: ProvidersRecord | null,
+  prior: Baseline | null,
+  notes: string[],
 ): void {
-  const relative = join(harnessDir, "settings.json");
+  const relative = `${harnessDir}/settings.json`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
   if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
   const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
   const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  const pristine = sha256File(currentPath) === prior?.files[relative];
   for (const [key, value] of Object.entries(current)) {
-    // Shipped keys plus the hook kill-switch stay framework-owned.
-    if (
-      key !== "companyAnnouncements" &&
-      key !== "permissions" &&
-      key !== "statusLine" &&
-      key !== "env" &&
-      key !== "hooks" &&
-      key !== "disableAllHooks"
-    ) {
+    if (key === "env") continue;
+    // This file is the project's. Refresh only shipped entries that the user
+    // has not changed; all other top-level keys remain theirs.
+    if (!CLAUDE_SHIPPED_KEYS.includes(key) || !Object.hasOwn(staged, key)) {
       staged[key] = value;
+      continue;
+    }
+    const priorHash = prior?.entries?.[relative]?.[key];
+    const currentValue = canonical(value);
+    if (priorHash ? sha256Bytes(currentValue) === priorHash : pristine) continue;
+    const releaseValue = canonical(staged[key]);
+    staged[key] = value;
+    if (
+      releaseValue !== currentValue &&
+      (!priorHash || sha256Bytes(releaseValue) !== priorHash)
+    ) {
+      notes.push(
+        `kept your ${key} in ${relative}; this release ships a different ${key}. Delete the key and rerun 'aidlc config' to take the shipped one.`,
+      );
     }
   }
   const currentEnv = current.env && typeof current.env === "object" &&
@@ -3766,11 +3794,14 @@ function codexSections(
 function mergeCodexUserConfiguration(
   staged: string,
   current: string,
+  priorEntries: Record<string, string> | undefined,
+  pristine: boolean,
+  relative: string,
+  notes: string[],
 ): string {
-  // Keep the project's exact bytes as the base and refresh only tables the
-  // framework owns. This is byte-idempotent when the generated tables have not
-  // changed, preserves top-level model/provider assignments and custom tables,
-  // and lets the normal ownership check catch edits to framework tables.
+  // Keep the project's bytes as the base and refresh only shipped tables the
+  // user has not changed. Unchanged tables are byte-idempotent; model/provider
+  // assignments and custom tables remain the project's settings.
   let merged = current;
   const generatedFrameworkSections = codexSections(staged).filter((section) =>
     CODEX_FRAMEWORK_TABLES.has(section.name)
@@ -3778,15 +3809,26 @@ function mergeCodexUserConfiguration(
   for (const section of generatedFrameworkSections) {
     const escaped = section.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const pattern = new RegExp(
-      `^\\[${escaped}\\]\\r?\\n[\\s\\S]*?(?=^\\[|(?![\\s\\S]))`,
+      `^[\\t ]*\\[${escaped}\\][\\t ]*(?:\\r?\\n|$)[\\s\\S]*?(?=^[\\t ]*\\[|(?![\\s\\S]))`,
       "m",
     );
     const existing = pattern.exec(merged)?.[0];
-    if (existing !== undefined && existing.trimEnd() === section.text) {
+    const currentText = existing?.replaceAll("\r\n", "\n").trimEnd();
+    if (currentText === section.text) continue;
+    const priorHash = priorEntries?.[section.name];
+    if (
+      currentText !== undefined &&
+      (priorHash ? sha256Bytes(currentText) !== priorHash : !pristine)
+    ) {
+      if (!priorHash || sha256Bytes(section.text) !== priorHash) {
+        notes.push(
+          `kept your [${section.name}] table in ${relative}; this release ships a different one. Delete the table and rerun 'aidlc config' to take the shipped one.`,
+        );
+      }
       continue;
     }
     if (existing !== undefined) {
-      merged = merged.replace(pattern, `${section.text}\n\n`);
+      merged = merged.replace(pattern, () => `${section.text}\n\n`);
     } else {
       merged = `${merged.trimEnd()}\n\n${section.text}\n`;
     }
@@ -3798,8 +3840,10 @@ function preserveCodexProviderFields(
   projectDir: string,
   stagedRoot: string,
   harnessDir: string,
+  prior: Baseline | null,
+  notes: string[],
 ): void {
-  const relative = join(harnessDir, "config.toml");
+  const relative = `${harnessDir}/config.toml`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
   if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
@@ -3809,6 +3853,10 @@ function preserveCodexProviderFields(
     mergeCodexUserConfiguration(
       readFileSync(stagedPath, "utf-8"),
       current,
+      prior?.entries?.[relative],
+      sha256Bytes(current) === prior?.files[relative],
+      relative,
+      notes,
     ),
   );
 }
@@ -3844,6 +3892,8 @@ function preserveUserProviderFields(
   harness: ModelHarness,
   previousProvider: ProvidersRecord | null,
   nextProvider: ProvidersRecord | null,
+  prior: Baseline | null,
+  notes: string[],
 ): void {
   if (harness === "claude") {
     preserveClaudeProviderFields(
@@ -3852,57 +3902,14 @@ function preserveUserProviderFields(
       harnessDir,
       previousProvider,
       nextProvider,
+      prior,
+      notes,
     );
   } else if (harness === "codex") {
-    preserveCodexProviderFields(projectDir, stagedRoot, harnessDir);
+    preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior, notes);
   } else if (harness === "opencode") {
     preserveOpenCodeProviderFields(projectDir, stagedRoot);
   }
-}
-
-function claudeProviderOnlyDifference(
-  projectDir: string,
-  stagedRoot: string,
-  harnessDir: string,
-  previousProvider: ProvidersRecord | null,
-): boolean {
-  const relative = join(harnessDir, "settings.json");
-  const currentPath = join(projectDir, relative);
-  const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
-  const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
-  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
-  const currentEnv = current.env && typeof current.env === "object" &&
-      !Array.isArray(current.env)
-    ? { ...current.env as Record<string, unknown> }
-    : {};
-  const stagedEnv = staged.env && typeof staged.env === "object" &&
-      !Array.isArray(staged.env)
-    ? { ...staged.env as Record<string, unknown> }
-    : {};
-  for (const key of [
-    "CLAUDE_CODE_USE_BEDROCK",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "AWS_REGION",
-    "AWS_AIDLC_DEFAULT_SCOPE",
-  ]) {
-    delete currentEnv[key];
-    delete stagedEnv[key];
-  }
-  if (
-    previousProvider?.provider === "amazon-bedrock" &&
-    previousProvider.profile &&
-    currentEnv.AWS_PROFILE === previousProvider.profile
-  ) {
-    delete currentEnv.AWS_PROFILE;
-    delete stagedEnv.AWS_PROFILE;
-  }
-  current.env = currentEnv;
-  staged.env = stagedEnv;
-  return canonical(current) === canonical(staged);
 }
 
 function prepareRefreshSource(
@@ -3912,18 +3919,45 @@ function prepareRefreshSource(
   prior: Baseline | null,
   modelPolicy: ModelPolicyRecord | null,
   projectFlags: ProjectFlagsRecord | null,
+  recordOnly: boolean,
+  projectProjection: boolean,
   diagnosticsOverride?: ConfigDiagnosticOverrides,
-): { root: string; cleanup?: string; regenerated: Set<string> } {
+): PreparedRefreshSource {
+  // A copied project is not a release: never baseline the user's edits as
+  // shipped entries during an in-place record mutation.
+  const entries: Baseline["entries"] = projectProjection ? prior?.entries : {};
+  const notes: string[] = [];
+  if (!projectProjection && entries && descriptor.distribution === "claude") {
+    const rel = `${descriptor.harnessDir}/settings.json`;
+    const settings = JSON.parse(readFileSync(join(sourceRoot, rel), "utf-8")) as Record<string, unknown>;
+    entries[rel] = Object.fromEntries(
+      CLAUDE_SHIPPED_KEYS.filter((key) => Object.hasOwn(settings, key))
+        .map((key) => [key, sha256Bytes(canonical(settings[key]))]),
+    );
+  } else if (!projectProjection && entries && descriptor.distribution === "codex") {
+    const rel = `${descriptor.harnessDir}/config.toml`;
+    entries[rel] = Object.fromEntries(
+      codexSections(readFileSync(join(sourceRoot, rel), "utf-8"))
+        .filter((section) => CODEX_FRAMEWORK_TABLES.has(section.name))
+        .map((section) => [section.name, sha256Bytes(section.text)]),
+    );
+  }
   const currentHarness = join(projectDir, descriptor.harnessDir);
   const currentHarnessData = join(currentHarness, "tools", "data", "harness.json");
+  const currentConfiguration = descriptor.distribution === "claude"
+    ? join(currentHarness, "settings.json")
+    : descriptor.distribution === "codex"
+    ? join(currentHarness, "config.toml")
+    : null;
   if (
     !prior &&
     !regularFile(currentHarnessData) &&
+    !(currentConfiguration && pathPresent(currentConfiguration)) &&
     modelPolicy === null &&
     projectFlags === null &&
     diagnosticsOverride === undefined
   ) {
-    return { root: sourceRoot, regenerated: new Set() };
+    return { root: sourceRoot, regenerated: new Set(), entries, notes };
   }
   const cleanup = mkdtempSync(join(tmpdir(), "aidlc-init-refresh-"));
   try {
@@ -3986,7 +4020,7 @@ function prepareRefreshSource(
     staged.providers = reconcileProviderActions(
       providers,
       modelHarness(distribution),
-      "stored",
+      false,
     );
   } else {
     delete staged.providers;
@@ -4041,14 +4075,8 @@ function prepareRefreshSource(
       regenerated.add(integration.path);
     }
   }
-  if (modelHarness(distribution) === "claude") {
-    regenerated.delete(`${descriptor.harnessDir}/settings.json`);
-  }
-  // Provider preservation carries only user-owned fields into the staged
-  // projection. Run it after the regenerated scan so those fields cannot make
-  // the whole file runtime-generated and bypass the ordinary ownership check.
-  // Other provider mutations were classified above; when preservation is the
-  // only difference, the staged bytes equal the project and are preserved.
+  // The configuration files are the project's; preservation refreshes only
+  // shipped entries the user has not changed and carries their other settings.
   preserveUserProviderFields(
     projectDir,
     root,
@@ -4056,6 +4084,8 @@ function prepareRefreshSource(
     modelHarness(distribution),
     previousProvider,
     normalizeProvidersRecord(staged.providers),
+    prior,
+    notes,
   );
   // User environment preservation intentionally excludes this managed value,
   // but reapply it here to keep the ordering explicit.
@@ -4080,25 +4110,12 @@ function prepareRefreshSource(
     },
     previousProvider,
   );
-  // This gate is the only path that marks Claude settings as runtime-generated:
-  // record-driven writes alone must not bypass the ordinary ownership check.
+  // Every staged entry is either the user's value or an unchanged AI-DLC entry
+  // refreshed from the release, so these files never have ownership conflicts.
   if (modelHarness(distribution) === "claude") {
-    const settingsRel = `${descriptor.harnessDir}/settings.json`;
-    const currentSettings = join(projectDir, settingsRel);
-    const stagedSettings = join(root, settingsRel);
-    if (
-      regularFile(currentSettings) &&
-      regularFile(stagedSettings) &&
-      sha256File(currentSettings) !== sha256File(stagedSettings) &&
-      claudeProviderOnlyDifference(
-        projectDir,
-        root,
-        descriptor.harnessDir,
-        previousProvider,
-      )
-    ) {
-      regenerated.add(settingsRel);
-    }
+    regenerated.add(`${descriptor.harnessDir}/settings.json`);
+  } else if (modelHarness(distribution) === "codex") {
+    regenerated.add(`${descriptor.harnessDir}/config.toml`);
   }
   // Kiro CLI: the aws-mcp region is the project's own MCP setting, not a provider
   // answer, so the staged file takes it from the project rather than the release.
@@ -4277,7 +4294,20 @@ function prepareRefreshSource(
     }
     resetProjectionCaches();
   }
-  return { root, cleanup, regenerated };
+  if (recordOnly) {
+    for (const directory of descriptor.managedDirectories) {
+      const stagedDirectory = join(root, directory);
+      if (!existsSync(stagedDirectory) || !lstatSync(stagedDirectory).isDirectory()) continue;
+      for (const nested of walkFiles(stagedDirectory)) {
+        const rel = join(directory, nested).replaceAll("\\", "/");
+        const currentPath = join(projectDir, rel);
+        if (!regularFile(currentPath) || sha256File(currentPath) !== sha256File(join(root, rel))) {
+          regenerated.add(rel);
+        }
+      }
+    }
+  }
+  return { root, cleanup, regenerated, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -5717,6 +5747,7 @@ function planRootIntegrations(
   prior: Baseline | null,
   mcpMode: "defaults" | "none",
   force: boolean,
+  recordOnly: boolean,
   operations: TransactionOperation[],
   actions: PlannedAction[],
   contributions: Record<string, RootContribution>,
@@ -5951,6 +5982,7 @@ function planRootIntegrations(
     const adoptedLegacy = integration.legacySignatures?.wholeFileHashes?.includes(currentHash) ?? false;
     contributions[integration.path] = { policy: "whole-file", hash: shippedHash };
     if (
+      !recordOnly &&
       targetExists &&
       currentHash !== priorHash &&
       currentHash !== shippedHash &&
@@ -6713,7 +6745,7 @@ export async function main(
     }
   }
   let selected: ConfigSource | null = null;
-  let prepared: { root: string; cleanup?: string; regenerated: Set<string> } | null = null;
+  let prepared: PreparedRefreshSource | null = null;
   try {
     const existing = existingProject(projectDir, requestedHarness);
     const pinPath = join(projectDir, ".aidlc-version");
@@ -6726,26 +6758,15 @@ export async function main(
       diagnosticsContext ||
       choicesContext?.section === "flags",
     );
-    if (
-      recordOnly &&
-      existing.distribution &&
-      !from &&
-      !process.env.AIDLC_RUNTIME_ROOT &&
-      !isCompiledExecutable()
-    ) {
+    if (recordOnly && existing.distribution && !from) {
       selected = copiedProjectSource(projectDir, requestedHarness);
     } else {
-      try {
-        selected = selectSource(
-          requestedHarness,
-          from,
-          existing.distribution,
-          requiredVersion,
-        );
-      } catch (error) {
-        if (!recordOnly || !existing.distribution || from) throw error;
-        selected = copiedProjectSource(projectDir, requestedHarness);
-      }
+      selected = selectSource(
+        requestedHarness,
+        from,
+        existing.distribution,
+        requiredVersion,
+      );
     }
     const { stamp, descriptor } = selected;
     if (existing.distribution && existing.distribution !== stamp.distribution) {
@@ -6778,6 +6799,8 @@ export async function main(
       prior,
       projectedPolicy,
       projectedSettings.flags,
+      recordOnly,
+      Boolean(selected.projectProjection),
       diagnosticsContext?.overrides ?? choicesContext?.overrides,
     );
     const preparedRoot = prepared.root;
@@ -6835,6 +6858,19 @@ export async function main(
       files,
       prepared.regenerated,
     );
+    if (selected.projectProjection) {
+      // Until a release provides entry hashes, keep the old pristine-file
+      // evidence rather than treating user edits as new shipped defaults.
+      const rel = stamp.distribution === "claude"
+        ? `${descriptor.harnessDir}/settings.json`
+        : stamp.distribution === "codex"
+        ? `${descriptor.harnessDir}/config.toml`
+        : null;
+      if (rel && !prior?.entries?.[rel]) {
+        if (prior?.files[rel]) files[rel] = prior.files[rel];
+        else delete files[rel];
+      }
+    }
     if (!selected.projectProjection) {
       planRootIntegrations(
         projectDir,
@@ -6843,6 +6879,7 @@ export async function main(
         prior,
         mcpMode,
         argv.includes("--force"),
+        recordOnly,
         operations,
         actions,
         rootContributions,
@@ -6870,6 +6907,7 @@ export async function main(
           prior,
           mcpMode,
           argv.includes("--force"),
+          recordOnly,
           operations,
           actions,
           rootContributions,
@@ -6921,6 +6959,7 @@ export async function main(
       harnessDir: stamp.harnessDir,
       mcpMode,
       files,
+      entries: prepared.entries,
       rootContributions,
     };
     const baselineRel = join(descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
@@ -6976,6 +7015,9 @@ export async function main(
         for (const line of choicesContext.summaryLines) process.stdout.write(`${line}\n`);
         for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
       }
+      if (options.mode === "human") {
+        for (const note of prepared.notes) process.stdout.write(`  Note: ${note}\n`);
+      }
       const configuredSection = diagnosticsContext?.section ??
         choicesContext?.section ??
         (modelsContext ? "models" : null);
@@ -6989,6 +7031,7 @@ export async function main(
           counts,
           actions,
           planToken,
+          notes: prepared.notes,
           ...(modelsContext
             ? {
                 models: {
@@ -7069,6 +7112,9 @@ export async function main(
       for (const line of choicesContext.summaryLines) process.stdout.write(`${line}\n`);
       for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
     }
+    if (options.mode === "human") {
+      for (const note of prepared.notes) process.stdout.write(`  Note: ${note}\n`);
+    }
     const outstandingActions = internal.setupWalkChild
       ? []
       : postApplyOutstandingActions(
@@ -7106,6 +7152,7 @@ export async function main(
         counts,
         actions,
         planToken,
+        notes: prepared.notes,
         outstandingActions,
         ...(modelsContext
           ? {

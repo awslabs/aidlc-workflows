@@ -952,10 +952,16 @@ describe("t243 project initialization", () => {
     expect(JSON.parse(readFileSync(scopeData, "utf-8"))["custom-composed"]).toEqual(scopeGrid.bugfix);
     const baseline = JSON.parse(
       readFileSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
-    ) as { files: Record<string, string> };
+    ) as { files: Record<string, string>; entries: Record<string, Record<string, string>> };
     expect(baseline.files[".claude/tools/data/harness.json"]).toBeUndefined();
     expect(baseline.files[".claude/tools/data/stage-graph.json"]).toBeUndefined();
     expect(baseline.files[".claude/tools/data/scope-grid.json"]).toBeUndefined();
+    expect(baseline.entries[".claude/settings.json"]).toEqual({
+      companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
 
     const gitignore = join(project, ".gitignore");
     writeFileSync(

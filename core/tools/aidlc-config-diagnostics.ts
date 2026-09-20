@@ -494,7 +494,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
     providers: providers
       ? harnessOwnsModelAccess(distribution)
         ? providers
-        : reconcileProviderActions(providers, distribution, "stored")
+        : reconcileProviderActions(providers, distribution, false)
       : null,
     trust: normalizeTrustRecord(value.trust),
     project: normalizeProjectChoicesRecord(value.project),
@@ -1100,7 +1100,7 @@ export function requiredProviderActions(
 export function reconcileProviderActions(
   record: ProvidersRecord,
   harness: ModelHarness,
-  source: "mutation" | "stored",
+  acknowledging: boolean,
 ): ProvidersRecord {
   const current = new Map(
     (record.pendingActions ?? []).map((action) => [action.id, action.status]),
@@ -1112,11 +1112,11 @@ export function reconcileProviderActions(
       id === "copilot-byok-configuration" ||
       id === "cursor-provider-configuration" ||
       id === "non-bedrock-provider-configuration";
-    // A stored record's generic acknowledgement cannot complete an action
-    // introduced after that record was written.
+    // Only an explicit acknowledgement of this mutation can complete a newly
+    // required action; a stored generic acknowledgement is not sufficient.
     return {
       id,
-      status: source === "mutation" && record.acknowledged && acknowledgeGated
+      status: acknowledging && record.acknowledged && acknowledgeGated
         ? "done"
         : current.get(id) ?? "pending",
     } as ProviderPendingAction;

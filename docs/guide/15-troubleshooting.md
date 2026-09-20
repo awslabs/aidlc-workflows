@@ -46,8 +46,8 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `aidlc doctor` asks for Bun on a project you did not install through the copy channel | Copy-channel projections run hooks through Bun; native installs run them through the `aidlc` command. The remediation names which channel the project is on. To stop needing Bun, reinstall through the native release installer and rerun `aidlc config --harness <name>`. |
 | `refusing to refresh while ... workflow(s) are active` | Complete every named workflow, including parked workflows, then rerun `aidlc config`. `--force`, `--yes`, and a plan token cannot bypass this guard. `update` or `use` may proceed because they do not modify projects. |
 | `config plan changed after approval` | Rerun `aidlc config --dry-run --json`, review `data.actions`, and apply the new `data.planToken` with exactly the same source and behavior options. |
-| `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. |
-| `unowned whole file` from `aidlc config` | Move or merge the existing file manually before config. Whole-file integrations such as OpenCode's `opencode.json` cannot be claimed with `--force`. |
+| `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. Claude `settings.json` keys and Codex `config.toml` tables keep your edits instead of raising ownership conflicts. |
+| `unowned whole file` from an ordinary `aidlc config` release refresh | Move or merge the existing file manually before refresh. OpenCode's `opencode.json` cannot be claimed with `--force` during release refresh; provider, scope, and model answers instead edit the current file in place and do not conflict with unrelated edits. |
 | `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Move or delete the old unmarked AI-DLC block in the named root file, preserve any project-owned text elsewhere, then rerun `aidlc config`. This release intentionally refuses to guess ownership. |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc config`. |
 | `project runtime <version> is incompatible with selected engine <version>` | Run `aidlc use <version>` to install and select the compatible version, or refresh the project intentionally with `aidlc config`. |
@@ -136,8 +136,9 @@ On Claude Code, per-stage token usage and cost tracking is on by default: the fo
 
 Hooks are registered project-wide in the harness's native configuration. On
 Claude, verify that `.claude/settings.json` contains the expected `hooks`
-events and `statusLine`. For a native project, complete active workflows and
-run `aidlc config` to reconcile framework-owned wiring. For a manual copy,
+events and `statusLine`. For a native project, complete active workflows,
+delete the affected key if you want to discard your wiring edits, and run
+`aidlc config` to restore the shipped entry. For a manual copy,
 replace the complete harness root from the same versioned
 `runtime/<harness>/` archive while preserving project root integrations; do
 not patch one hook command in isolation. The manual archive is Bun-shaped and

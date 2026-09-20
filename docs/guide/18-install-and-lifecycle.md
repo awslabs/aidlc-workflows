@@ -295,7 +295,7 @@ interactive wizard.
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
 | `--force` | Replace locally modified framework-owned files and managed blocks where that policy permits |
 | `--yes` | Confirm an otherwise unrecognized target directory or a section mutation; it does not imply MCP consent or choose a section answer |
-| `--json` | Emit one result object with counts, actions, and `data.planToken` |
+| `--json` | Emit one result object with counts, actions, `data.notes`, and `data.planToken` |
 | `--quiet` | Emit one summary or remediation line |
 | `--no-color` | Disable color output |
 
@@ -720,6 +720,21 @@ Locally modified framework-owned files conflict against the prior baseline.
 edits to hand-authored orchestrator prose. It does not claim unrelated
 project content.
 
+`.claude/settings.json`, `.codex/config.toml`, and `opencode.json` are the
+project's files. Provider, scope, and model answers apply their own keys in
+place; unrelated edits never cause ownership conflicts for those answers.
+An explicit `--from` still selects that source instead of the project's copy.
+
+For Claude and Codex, a release refresh updates only shipped entries you have
+not changed: Claude's `companyAnnouncements`, `permissions`, `statusLine`, and
+`hooks` keys, and Codex's `[agents]`, `[features]`, `[tools]`, and `[tui]` tables.
+Your changed entry is kept, even with `--force`; when the release also changes
+it, config prints a `Note`. Delete the key or table and rerun `aidlc config`
+to take the shipped version. Other settings are carried forward, including
+Claude's `disableAllHooks`; provider and scope records still control their own
+environment values. Older baselines without entry hashes conservatively keep
+differing values in edited files and print the same note.
+
 ### Root Integrations and Ownership
 
 | Surface | Harnesses | Policy |
@@ -728,7 +743,7 @@ project content.
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, OpenCode | Own one marked onboarding block; preserve project instructions |
 | `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
-| `opencode.json` | OpenCode | Whole-file ownership; an unknown existing file is a conflict |
+| `opencode.json` | OpenCode | Record-only answers edit the current file in place; ordinary release refresh still requires an unchanged file baseline or exact shipped signature |
 
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Modified
@@ -736,8 +751,8 @@ lookalikes remain ambiguous and are refused.
 
 `--force` can replace a modified, baseline-owned managed block or managed
 harness file. It cannot adopt ambiguous unmarked content, overwrite a
-user-owned JSON value, or replace an unowned or locally modified whole-file
-integration such as `opencode.json`. Malformed JSON, malformed or duplicate
+user-owned JSON value, or replace an unowned or locally modified `opencode.json`
+during an ordinary release refresh. Malformed JSON, malformed or duplicate
 markers, non-regular-file targets, and retired owned content whose integrity
 cannot be proved are hard conflicts.
 

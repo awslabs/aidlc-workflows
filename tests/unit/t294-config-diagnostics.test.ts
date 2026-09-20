@@ -586,7 +586,7 @@ describe("t294 provider diagnostics", () => {
       pendingActions: [
         { id: "bedrock-model-access", status: "done" },
       ],
-    }, "claude", "mutation");
+    }, "claude", true);
 
     const claude = temp("aidlc-t294-provider-claude-");
     cpSync(join(DIST, "claude"), claude, { recursive: true });
@@ -833,7 +833,7 @@ describe("t294 provider diagnostics", () => {
       schemaVersion: 1,
       provider: "amazon-bedrock",
       region: "us-east-1",
-    }, "claude", "mutation");
+    }, "claude", true);
     const dataPath = join(project, ".claude", "tools", "data", "harness.json");
     const data = JSON.parse(readFileSync(dataPath, "utf-8"));
     data.providers = record;
@@ -1361,12 +1361,12 @@ describe("t294 config diagnostics CLI", () => {
         { id: "bedrock-model-access", status: "done" },
       ],
     };
-    expect(reconcileProviderActions(legacyRecord, "codex", "stored").pendingActions)
+    expect(reconcileProviderActions(legacyRecord, "codex", false).pendingActions)
       .toContainEqual({
         id: "codex-provider-configuration",
         status: "pending",
       });
-    expect(reconcileProviderActions(legacyRecord, "codex", "mutation").pendingActions)
+    expect(reconcileProviderActions(legacyRecord, "codex", true).pendingActions)
       .toContainEqual({
         id: "codex-provider-configuration",
         status: "done",
@@ -1412,6 +1412,31 @@ describe("t294 config diagnostics CLI", () => {
     ], project, runtimeEnv());
     expect(refreshedCheck.status).toBe(1);
     expect(refreshedCheck.stdout).toContain("codex-provider-configuration");
+
+    const reapplied = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--yes",
+    ], project, runtimeEnv());
+    expect(reapplied.status, reapplied.stdout + reapplied.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(dataPath, "utf-8")).providers.pendingActions)
+      .toContainEqual({
+        id: "codex-provider-configuration",
+        status: "pending",
+      });
+    const reappliedCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(reappliedCheck.status).toBe(1);
+    expect(reappliedCheck.stdout).toContain("codex-provider-configuration");
 
     const acknowledged = run([
       "config",
@@ -1691,7 +1716,7 @@ describe("t294 config diagnostics CLI", () => {
       .toContain('sandbox_mode = "read-only"');
   }, 90_000);
 
-  test("preserved Claude env does not bypass ownership for permissions", () => {
+  test("refresh keeps user Claude permissions and never conflicts", () => {
     const project = install("claude");
     const env = runtimeEnv();
     expect(run([
@@ -1708,7 +1733,7 @@ describe("t294 config diagnostics CLI", () => {
     settings.env.MY_TEAM_SETTING = "preserved";
     settings.permissions = {
       ...(settings.permissions ?? {}),
-      allow: ["Bash(team-command:*)"],
+      deny: ["Bash(team-command:*)"],
     };
     const edited = `${JSON.stringify(settings, null, 2)}\n`;
     writeFileSync(settingsPath, edited);
@@ -1716,14 +1741,21 @@ describe("t294 config diagnostics CLI", () => {
       "config",
       "--project-dir",
       project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
       "--yes",
     ], project, env);
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
-    expect(refreshed.stdout + refreshed.stderr).toContain("locally modified");
-    expect(readFileSync(settingsPath, "utf-8")).toBe(edited);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(after.permissions).toEqual(settings.permissions);
+    expect(after.env).toEqual(settings.env);
+    expect(after.hooks).toEqual(settings.hooks);
+    expect(refreshed.stdout).not.toContain("Note: kept your permissions");
   }, 60_000);
 
-  test("a recorded Bedrock answer keeps the ownership check for Claude permissions", () => {
+  test("refresh with a Bedrock record keeps user Claude settings and never conflicts", () => {
     const env = runtimeEnv();
     for (const change of ["permissions", "env", "pristine"]) {
       const project = install("claude");
@@ -1760,18 +1792,32 @@ describe("t294 config diagnostics CLI", () => {
         "claude",
         "--yes",
       ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      expect(after.permissions).toEqual(settings.permissions);
+      expect(after.hooks).toEqual(settings.hooks);
+      expect(after.env).toEqual(expect.objectContaining({
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_REGION: "us-east-1",
+      }));
+      if (change !== "pristine") expect(after.env.MY_TEAM_SETTING).toBe("preserved");
+      expect(refreshed.stdout).not.toContain("Note: kept your permissions");
       if (change === "permissions") {
-        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
-        expect(refreshed.stdout + refreshed.stderr).toContain(".claude/settings.json");
-        expect(readFileSync(settingsPath, "utf-8")).toBe(edited);
-      } else {
-        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-        const after = JSON.parse(readFileSync(settingsPath, "utf-8")).env;
-        expect(after).toEqual(expect.objectContaining({
-          CLAUDE_CODE_USE_BEDROCK: "1",
-          AWS_REGION: "us-east-1",
-        }));
-        if (change === "env") expect(after.MY_TEAM_SETTING).toBe("preserved");
+        const current = run([
+          "config",
+          "providers",
+          "--project-dir",
+          project,
+          "--provider",
+          "current",
+          "--yes",
+        ], project, env);
+        expect(current.status, current.stdout + current.stderr).toBe(0);
+        const optedOut = JSON.parse(readFileSync(settingsPath, "utf-8"));
+        expect(optedOut.permissions).toEqual(settings.permissions);
+        expect(optedOut.env.MY_TEAM_SETTING).toBe("preserved");
+        expect(optedOut.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+        expect(optedOut.hooks).toEqual(settings.hooks);
       }
     }
 
@@ -1803,10 +1849,220 @@ describe("t294 config diagnostics CLI", () => {
         "claude",
         "--yes",
       ], project, env);
-      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
-      expect(refreshed.stdout + refreshed.stderr).toContain(".claude/settings.json");
-      expect(readFileSync(settingsPath, "utf-8")).toBe(edited);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      expect(after.disableAllHooks).toBe(true);
+      expect(after.hooks).toEqual(settings.hooks);
+      expect(after.env).toEqual(settings.env);
+      expect(refreshed.stdout).not.toContain("Note: kept your");
     }
+  }, 120_000);
+
+  test("refresh updates only the shipped Claude entries the user has not changed", () => {
+    const env = runtimeEnv();
+    const source = temp("aidlc-t294-claude-entries-source-");
+    cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
+    const sourceSettingsPath = join(source, ".claude", "settings.json");
+    const release = JSON.parse(readFileSync(sourceSettingsPath, "utf-8"));
+    release.permissions.allow.push("Bash(team-tool:*)");
+    const extraStopHook = {
+      matcher: "",
+      hooks: [{ type: "command", command: "aidlc engine hook validate-state" }],
+    };
+    release.hooks.Stop.push(extraStopHook);
+    writeFileSync(sourceSettingsPath, `${JSON.stringify(release, null, 2)}\n`);
+
+    const pristine = install("claude");
+    const pristineRefresh = run([
+      "config",
+      "--project-dir",
+      pristine,
+      "--from",
+      source,
+      "--harness",
+      "claude",
+      "--yes",
+    ], pristine, env);
+    expect(pristineRefresh.status, pristineRefresh.stdout + pristineRefresh.stderr).toBe(0);
+    const pristineSettings = JSON.parse(
+      readFileSync(join(pristine, ".claude", "settings.json"), "utf-8"),
+    );
+    expect(pristineSettings.permissions).toEqual(release.permissions);
+    expect(pristineSettings.hooks.Stop).toEqual(release.hooks.Stop);
+
+    const project = install("claude");
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.permissions.deny = ["Bash(team-command:*)"];
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const args = [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      source,
+      "--harness",
+      "claude",
+      "--yes",
+    ];
+    const note = "kept your permissions in .claude/settings.json";
+    const dryRun = run([...args, "--dry-run"], project, env);
+    expect(dryRun.status, dryRun.stdout + dryRun.stderr).toBe(0);
+    expect(dryRun.stdout).toContain(`Note: ${note}`);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual(settings);
+    const dryJson = run([...args, "--dry-run", "--json"], project, env);
+    expect(dryJson.status, dryJson.stdout + dryJson.stderr).toBe(0);
+    expect(JSON.parse(dryJson.stdout).data.notes)
+      .toContainEqual(expect.stringContaining(note));
+
+    const refreshed = run(args, project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain(`Note: ${note}`);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(after.permissions).toEqual(settings.permissions);
+    expect(after.permissions.allow).not.toContain("Bash(team-tool:*)");
+    expect(after.hooks.Stop).toEqual(release.hooks.Stop);
+    const baseline = JSON.parse(readFileSync(
+      join(project, ".claude", "tools", "data", "aidlc-manifest.json"),
+      "utf-8",
+    ));
+    expect(baseline.entries[".claude/settings.json"]).toEqual({
+      companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+  }, 120_000);
+
+  test("refresh keeps a user-edited Codex framework table and reports it", () => {
+    const env = runtimeEnv();
+    const project = install("codex");
+    const configPath = join(project, ".codex", "config.toml");
+    const userStatus = ["git-branch", "context-used"];
+    const edited = readFileSync(configPath, "utf-8").replace(
+      /^status_line\s*=.*$/m,
+      `status_line = ${JSON.stringify(userStatus)}`,
+    );
+    writeFileSync(configPath, edited);
+    const ordinary = run([
+      "config",
+      "--project-dir",
+      project,
+      "--yes",
+    ], project, env);
+    expect(ordinary.status, ordinary.stdout + ordinary.stderr).toBe(0);
+    expect(parseToml(readFileSync(configPath, "utf-8")).tui)
+      .toEqual({ status_line: userStatus });
+    expect(ordinary.stdout).not.toContain("Note: kept your [tui]");
+
+    const source = temp("aidlc-t294-codex-entries-source-");
+    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    const sourceConfigPath = join(source, ".codex", "config.toml");
+    const releaseStatus = ["model-with-reasoning", "context-used"];
+    writeFileSync(sourceConfigPath, readFileSync(sourceConfigPath, "utf-8").replace(
+      /^status_line\s*=.*$/m,
+      `status_line = ${JSON.stringify(releaseStatus)}`,
+    ));
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      source,
+      "--harness",
+      "codex",
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain("Note: kept your [tui] table in .codex/config.toml");
+    expect(parseToml(readFileSync(configPath, "utf-8")).tui)
+      .toEqual({ status_line: userStatus });
+
+    const pristine = install("codex");
+    const pristineRefresh = run([
+      "config",
+      "--project-dir",
+      pristine,
+      "--from",
+      source,
+      "--harness",
+      "codex",
+      "--yes",
+    ], pristine, env);
+    expect(pristineRefresh.status, pristineRefresh.stdout + pristineRefresh.stderr).toBe(0);
+    expect(parseToml(readFileSync(join(pristine, ".codex", "config.toml"), "utf-8")).tui)
+      .toEqual({ status_line: releaseStatus });
+    const baseline = JSON.parse(readFileSync(
+      join(project, ".codex", "tools", "data", "aidlc-manifest.json"),
+      "utf-8",
+    ));
+    expect(baseline.entries[".codex/config.toml"]).toEqual({
+      agents: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      features: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      tui: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+  }, 120_000);
+
+  test("provider answers apply in place and never conflict with unrelated edits", () => {
+    const env = runtimeEnv();
+    const opencode = install("opencode");
+    const opencodePath = join(opencode, "opencode.json");
+    const opencodeSettings = JSON.parse(readFileSync(opencodePath, "utf-8"));
+    opencodeSettings.mcp = {
+      ...opencodeSettings.mcp,
+      "team-service": { type: "local", command: ["team-tool"] },
+    };
+    writeFileSync(opencodePath, `${JSON.stringify(opencodeSettings, null, 2)}\n`);
+    const opencodeAnswer = run([
+      "config",
+      "providers",
+      "--project-dir",
+      opencode,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "eu-west-1",
+      "--opencode-default",
+      "yes",
+      "--yes",
+    ], opencode, env);
+    expect(opencodeAnswer.status, opencodeAnswer.stdout + opencodeAnswer.stderr).toBe(0);
+    const opencodeAfter = JSON.parse(readFileSync(opencodePath, "utf-8"));
+    expect(opencodeAfter.mcp).toEqual(opencodeSettings.mcp);
+    expect(opencodeAfter.provider["amazon-bedrock"].options.region).toBe("eu-west-1");
+
+    const codex = install("codex");
+    const codexPath = join(codex, ".codex", "config.toml");
+    const userStatus = ["git-branch"];
+    const edited = readFileSync(codexPath, "utf-8").replace(
+      /^status_line\s*=.*$/m,
+      `status_line = ${JSON.stringify(userStatus)}`,
+    );
+    const legacyBlock =
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+      `# unavailable there; the market-research stage degrades gracefully). For\n` +
+      `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+      `# block.\n` +
+      `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+      `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+      `[model_providers.amazon-bedrock.aws]\n` +
+      `# Set to your AWS profile/region with Bedrock model access.\n` +
+      `profile = "default"\nregion = "us-east-1"\n\n`;
+    writeFileSync(codexPath, legacyBlock + edited);
+    const codexAnswer = run([
+      "config",
+      "providers",
+      "--project-dir",
+      codex,
+      "--provider",
+      "current",
+      "--yes",
+    ], codex, env);
+    expect(codexAnswer.status, codexAnswer.stdout + codexAnswer.stderr).toBe(0);
+    const codexAfter = readFileSync(codexPath, "utf-8");
+    expect(codexAfter).toBe(edited);
+    expect(parseToml(codexAfter).tui).toEqual({ status_line: userStatus });
   }, 120_000);
 
   test("opting out of a recorded Bedrock answer removes shipped Claude aliases and keeps customized ones", () => {
