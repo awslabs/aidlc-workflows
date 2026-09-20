@@ -1351,7 +1351,13 @@ function clearOpenCodeProvider(
   )) {
     return;
   }
-  delete providers["amazon-bedrock"];
+  const provider = providers["amazon-bedrock"] as Record<string, unknown>;
+  const options = isRecord(provider.options) ? provider.options : {};
+  delete options.region;
+  if (previousProvider?.profile) delete options.profile;
+  if (Object.keys(options).length > 0) provider.options = options;
+  else delete provider.options;
+  if (Object.keys(provider).length === 0) delete providers["amazon-bedrock"];
   if (Object.keys(providers).length > 0) value.provider = providers;
   else delete value.provider;
   writeJson(path, value);

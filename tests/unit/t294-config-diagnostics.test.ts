@@ -1682,6 +1682,55 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 120_000);
 
+  test("reset and keep-current remove only the OpenCode provider options AI-DLC wrote", () => {
+    const env = runtimeEnv();
+    const models = { "anthropic.claude-sonnet-4-6": { name: "Sonnet" } };
+    for (const flags of [["--reset"], ["--provider", "current"]]) {
+      const project = install("opencode");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "amazon-bedrock",
+        "--region",
+        "us-east-1",
+        "--opencode-default",
+        "yes",
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const path = join(project, "opencode.json");
+      const config = JSON.parse(readFileSync(path, "utf-8"));
+      config.provider["amazon-bedrock"].options.maxRetries = 3;
+      config.provider["amazon-bedrock"].models = models;
+      writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+
+      const refreshed = run([
+        "config",
+        "--project-dir",
+        project,
+        "--yes",
+      ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf-8")).provider["amazon-bedrock"])
+        .toEqual({ models, options: { region: "us-east-1", maxRetries: 3 } });
+
+      const cleared = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        ...flags,
+        "--yes",
+      ], project, env);
+      expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf-8")).provider["amazon-bedrock"])
+        .toEqual({ models, options: { maxRetries: 3 } });
+    }
+  }, 120_000);
+
   test("keep-current preserves a customized legacy Codex Bedrock table and removes a record-written one", () => {
     const legacyBlock =
       `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
