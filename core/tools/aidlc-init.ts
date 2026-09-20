@@ -5668,6 +5668,7 @@ function planManagedFiles(
   actions: PlannedAction[],
   nextHashes: Record<string, string>,
   regenerated: ReadonlySet<string>,
+  retainBaseline: boolean,
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -5681,11 +5682,13 @@ function planManagedFiles(
       const targetExists = pathPresent(target);
       const targetRegular = targetExists && lstatSync(target).isFile();
       const hash = sha256File(source);
+      const currentHash = targetRegular ? sha256File(target) : undefined;
+      const priorHash = prior?.files[rel];
       const adoptedManagedFile = prior === null &&
-        targetRegular &&
+        currentHash !== undefined &&
         (
           descriptor.legacyManagedFileHashes?.[rel]?.includes(
-            sha256File(target),
+            currentHash,
           ) ?? false
         );
       const seedOnly = rel === "aidlc/active-space" ||
@@ -5706,17 +5709,21 @@ function planManagedFiles(
         }
         continue;
       }
+      if (
+        ![
+          `${descriptor.harnessDir}/tools/data/harness.json`,
+          `${descriptor.harnessDir}/tools/data/stage-graph.json`,
+          `${descriptor.harnessDir}/tools/data/scope-grid.json`,
+        ].includes(rel)
+      ) {
+        // In-place answers can advance ownership only from an unmodified base.
+        const nextHash = retainBaseline
+          ? regenerated.has(rel) && targetRegular && currentHash === priorHash ? hash : priorHash
+          : hash;
+        if (nextHash !== undefined) nextHashes[rel] = nextHash;
+      }
       if (runtimeGenerated(rel, descriptor.harnessDir, regenerated)) {
-        if (
-          ![
-            `${descriptor.harnessDir}/tools/data/harness.json`,
-            `${descriptor.harnessDir}/tools/data/stage-graph.json`,
-            `${descriptor.harnessDir}/tools/data/scope-grid.json`,
-          ].includes(rel)
-        ) {
-          nextHashes[rel] = hash;
-        }
-        if (targetRegular && sha256File(target) === hash) {
+        if (targetRegular && currentHash === hash) {
           actions.push({ path: rel, action: "preserve", detail: "runtime-generated" });
           continue;
         }
@@ -5739,17 +5746,15 @@ function planManagedFiles(
         });
         continue;
       }
-      nextHashes[rel] = hash;
-      if (targetRegular && sha256File(target) === hash) {
+      if (targetRegular && currentHash === hash) {
         actions.push({ path: rel, action: "preserve" });
         continue;
       }
-      const priorHash = prior?.files[rel];
       if (
         targetExists &&
         (
           !targetRegular ||
-          (!adoptedManagedFile && (!priorHash || sha256File(target) !== priorHash))
+          (!adoptedManagedFile && (!priorHash || currentHash !== priorHash))
         ) &&
         !force
       ) {
@@ -5792,6 +5797,7 @@ function planRootIntegrations(
   mcpMode: "defaults" | "none",
   force: boolean,
   recordOnly: boolean,
+  retainBaseline: boolean,
   operations: TransactionOperation[],
   actions: PlannedAction[],
   contributions: Record<string, RootContribution>,
@@ -6092,7 +6098,11 @@ function planRootIntegrations(
       : undefined;
     const currentHash = sha256Bytes(current);
     const adoptedLegacy = integration.legacySignatures?.wholeFileHashes?.includes(currentHash) ?? false;
-    contributions[integration.path] = { policy: "whole-file", hash: shippedHash };
+    if (!retainBaseline || currentHash === priorHash) {
+      contributions[integration.path] = { policy: "whole-file", hash: shippedHash };
+    } else if (priorContribution) {
+      contributions[integration.path] = priorContribution;
+    }
     if (
       !recordOnly &&
       targetExists &&
@@ -6990,6 +7000,7 @@ export async function main(
     const actions: PlannedAction[] = [];
     const files: Record<string, string> = {};
     const rootContributions: Record<string, RootContribution> = {};
+    const retainBaseline = recordOnly && Boolean(selected.projectProjection);
     planManagedFiles(
       projectDir,
       prepared.root,
@@ -7000,20 +7011,8 @@ export async function main(
       actions,
       files,
       prepared.regenerated,
+      retainBaseline,
     );
-    if (selected.projectProjection) {
-      // Until a release provides entry hashes, keep the old pristine-file
-      // evidence rather than treating user edits as new shipped defaults.
-      const rel = stamp.distribution === "claude"
-        ? `${descriptor.harnessDir}/settings.json`
-        : stamp.distribution === "codex"
-        ? `${descriptor.harnessDir}/config.toml`
-        : null;
-      if (rel && !prior?.entries?.[rel]) {
-        if (prior?.files[rel]) files[rel] = prior.files[rel];
-        else delete files[rel];
-      }
-    }
     if (!selected.projectProjection) {
       planRootIntegrations(
         projectDir,
@@ -7023,6 +7022,7 @@ export async function main(
         mcpMode,
         argv.includes("--force"),
         recordOnly,
+        retainBaseline,
         operations,
         actions,
         rootContributions,
@@ -7051,6 +7051,7 @@ export async function main(
           mcpMode,
           argv.includes("--force"),
           recordOnly,
+          retainBaseline,
           operations,
           actions,
           rootContributions,

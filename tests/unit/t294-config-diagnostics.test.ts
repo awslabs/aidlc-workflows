@@ -1052,6 +1052,24 @@ describe("t294 trust diagnostics", () => {
       expect(repaired.checks.some((check) => check.label.includes("shipped but not wired")))
         .toBe(false);
     }
+    if (process.platform !== "win32") {
+      const project = install("claude");
+      writeFileSync(join(project, ".claude", "hooks", "aidlc-x\u001b[31mfake.ts"), "// local hook\n");
+      const human = spawnSync(BUN, [
+        join(project, ".claude", "tools", "aidlc.ts"),
+        "--doctor",
+        "--offline",
+      ], {
+        cwd: project,
+        env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude", NO_COLOR: "1" },
+        encoding: "utf-8",
+        timeout: 60_000,
+      });
+      if (human.error) throw human.error;
+      expect(human.status, human.stdout + human.stderr).toBe(1);
+      expect(human.stdout).not.toContain("\u001b");
+      expect(human.stdout).toContain("aidlc-x?[31mfake.ts shipped but not wired");
+    }
   }, 120_000);
 });
 
@@ -2078,6 +2096,75 @@ describe("t294 config diagnostics CLI", () => {
       tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tui: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     });
+  }, 120_000);
+
+  test("record-only answers never adopt local drift into the ownership baseline", () => {
+    const env = runtimeEnv();
+    for (const [harness, harnessDir] of [["claude", ".claude"], ["opencode", ".aidlc"]]) {
+      for (const modified of [true, false]) {
+        const project = install(harness);
+        const manifestPath = join(project, harnessDir, "tools", "data", "aidlc-manifest.json");
+        const before = JSON.parse(readFileSync(manifestPath, "utf-8"));
+        const rel = harness === "claude" ? ".claude/hooks/aidlc-session-end.ts" : "opencode.json";
+        const path = join(project, rel);
+        const userHook = ".claude/hooks/aidlc-team.ts";
+        if (modified) {
+          if (harness === "claude") {
+            writeFileSync(path, `${readFileSync(path, "utf-8")}\n// local hook edit\n`);
+            writeFileSync(join(project, userHook), "// user-owned hook\n");
+          } else {
+            const settings = JSON.parse(readFileSync(path, "utf-8"));
+            settings.mcp = {
+              ...settings.mcp,
+              "team-service": { type: "local", command: ["team-tool"] },
+            };
+            writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`);
+          }
+        }
+        const current = readFileSync(path, "utf-8");
+        const answer = run([
+          "config",
+          "providers",
+          "--provider",
+          harness === "claude" ? "current" : "amazon-bedrock",
+          ...(harness === "opencode" ? ["--region", "eu-west-1", "--opencode-default", "yes"] : []),
+          "--yes",
+        ], project, env);
+        expect(answer.status, answer.stdout + answer.stderr).toBe(0);
+        const after = JSON.parse(readFileSync(manifestPath, "utf-8"));
+        expect(after.entries).toEqual(before.entries);
+        if (harness === "claude") {
+          expect(readFileSync(path, "utf-8")).toBe(current);
+          expect(after.files[rel]).toBe(before.files[rel]);
+          expect(after.files[userHook]).toBeUndefined();
+          expect(after.rootContributions).toEqual(before.rootContributions);
+        } else {
+          const settings = JSON.parse(readFileSync(path, "utf-8"));
+          expect(settings.mcp).toEqual(JSON.parse(current).mcp);
+          expect(settings.provider["amazon-bedrock"].options.region).toBe("eu-west-1");
+          if (modified) {
+            expect(after.rootContributions[rel]).toEqual(before.rootContributions[rel]);
+          } else {
+            expect(after.rootContributions[rel]).not.toEqual(before.rootContributions[rel]);
+          }
+        }
+        const refresh = run([
+          "config",
+          "--from",
+          join(DIST_RELEASE, harness),
+          "--harness",
+          harness,
+          "--yes",
+        ], project, env);
+        expect(refresh.status, refresh.stdout + refresh.stderr).toBe(modified ? 4 : 0);
+        if (modified) {
+          expect(refresh.stdout).toContain(rel);
+          expect(refresh.stdout).toContain(
+            harness === "claude" ? "locally modified or unowned" : "unowned whole file",
+          );
+        }
+      }
+    }
   }, 120_000);
 
   test("provider answers apply in place and never conflict with unrelated edits", () => {
