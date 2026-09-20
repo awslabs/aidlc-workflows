@@ -2549,7 +2549,7 @@ export type DoctorReport = {
 function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
   const candidates = new Map<string | null, Set<string> | null>([[null, null]]);
   for (const repo of discoverSiblingRepos(projectDir)) {
-    if (isValidRepoName(repo)) candidates.set(repo, null);
+    if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo)) candidates.set(repo, null);
   }
   for (const { name: space } of listSpaces(projectDir)) {
     const intents = new Set(listIntentDirs(projectDir, space));
@@ -2589,6 +2589,25 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
     });
     if (listed.status !== 0) continue;
     const refs = new Set(listed.stdout.split(/\r?\n/).filter(Boolean));
+    if (refs.size === 0) continue;
+    const worktrees = spawnSync("git", ["worktree", "list", "--porcelain", "-z"], {
+      cwd,
+      encoding: "utf-8",
+    });
+    const restoredBranches = new Map<string, string>();
+    if (worktrees.status === 0) {
+      for (const block of worktrees.stdout.split("\0\0")) {
+        const fields = block.split("\0");
+        const branch = fields.find((field) => field.startsWith("branch "))?.slice(7);
+        const path = fields.find((field) => field.startsWith("worktree "))?.slice(9);
+        if (!path || !branch?.startsWith("refs/heads/restore/bolt-")) continue;
+        try {
+          restoredBranches.set(realpathSync(path), branch);
+        } catch {
+          // A stale registration without a checkout is not a restored attempt.
+        }
+      }
+    }
     const inventoried = new Set<string>();
     for (const ref of refs) {
       const match = /^refs\/aidlc\/parked\/([^/]+)\/(\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?)\/(?:head|reviewed-source\/(?:[a-f0-9]{40}|[a-f0-9]{64}))$/.exec(ref);
@@ -2606,6 +2625,14 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
         ? null
         : Math.max(0, Math.floor((now - milliseconds) / 86_400_000));
       const restoredPath = resolve(projectDir, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
+      let restoredExists = false;
+      if (restoredBranches.size > 0) {
+        try {
+          restoredExists = restoredBranches.get(realpathSync(restoredPath)) === `refs/heads/restore/bolt-${slug}-${stamp}`;
+        } catch {
+          // The canonical restore checkout does not exist or cannot be resolved.
+        }
+      }
       const args = `--slug ${slug} --parked ${stamp} --repo ${repo ?? "."}`;
       attempts.push({
         slug,
@@ -2614,7 +2641,7 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
         mode,
         repo,
         restored_path: restoredPath,
-        restored_exists: existsSync(restoredPath),
+        restored_exists: restoredExists,
         ...(mode === "evidence-only" ? {} : { restore_command: `${invoke} restore ${args}` }),
         purge_command: `${invoke} purge ${args}`,
       });

@@ -832,7 +832,7 @@ function worktreeRepoCandidates(
   const selectors = new Map<string, string | null>();
   selectors.set(repoSelectorKey(null), null);
   for (const repo of discoverSiblingRepos(pd)) {
-    selectors.set(repoSelectorKey(repo), repo);
+    if (isWorkspaceRepoDir(pd, repo)) selectors.set(repoSelectorKey(repo), repo);
   }
   for (const row of creationRows) {
     const field = auditBlockField(row.block, "Repo");

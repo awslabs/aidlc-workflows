@@ -637,24 +637,25 @@ describe("t83 doctor parked attempts", () => {
     expect(out).toContain(`impossible-date / ${stamp} (repo ., age unknown days, mode snapshot)`);
   }, 30000);
 
-  test("same-slug root and sibling attempts retain modes and restored presence", () => {
-    const proj = freshProject();
+  test("same-slug same-stamp attempts report only the owning repository as restored", () => {
+    const proj = setupIntegrationProject({ withState: STATE_FIXTURE, withAudit: true });
+    created.push(proj);
     const sibling = join(proj, "api");
     initRepo(proj);
     initRepo(sibling);
-    const rootStamp = "20240101T000000Z";
-    const siblingStamp = "20240102T000000Z";
-    parkHead(proj, "shared", rootStamp, "branch-tip");
-    parkHead(sibling, "shared", siblingStamp, "legacy");
-    const restored = join(proj, ".aidlc", "restored", `bolt-shared-${siblingStamp}`);
-    mkdirSync(restored, { recursive: true });
+    const stamp = "20240101T000000Z";
+    parkHead(proj, "shared", stamp, "branch-tip");
+    parkHead(sibling, "shared", stamp, "legacy");
+    const restored = join(proj, ".aidlc", "restored", `bolt-shared-${stamp}`);
+    const before = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    runRecoveryCommand(proj, before.find((attempt: { repo: string | null }) => attempt.repo === "api").restore_command);
     const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
     expect(attempts).toEqual([
       expect.objectContaining({
-        slug: "shared", stamp: rootStamp, mode: "branch-tip", repo: null, restored_exists: false,
+        slug: "shared", stamp, mode: "branch-tip", repo: null, restored_exists: false,
       }),
       expect.objectContaining({
-        slug: "shared", stamp: siblingStamp, mode: "legacy", repo: "api", restored_exists: true,
+        slug: "shared", stamp, mode: "legacy", repo: "api", restored_exists: true,
         restored_path: restored,
       }),
     ]);
@@ -662,6 +663,14 @@ describe("t83 doctor parked attempts", () => {
     expect(out).toContain("mode branch-tip");
     expect(out).toContain("mode legacy");
     expect(out).toContain(`restored checkout: present - ${restored}`);
+
+    // A registered checkout at the right path is not this restoration after
+    // switching away from its exact restore branch.
+    git(restored, "checkout", "--detach");
+    expect(JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts).toEqual([
+      expect.objectContaining({ repo: null, restored_exists: false }),
+      expect.objectContaining({ repo: "api", restored_exists: false }),
+    ]);
   }, 30000);
 
   test("audit-only historical records discover excluded repos without treating ordinary children as repositories", () => {

@@ -19569,7 +19569,7 @@ const NON_REPO_WORKSPACE_DIRS = new Set([
   "node_modules",
 ]);
 
-/** A workspace repository is a real immediate child, never a symlink or junction. */
+/** Recovery requires a real immediate child repository, never a symlink or junction. */
 export function isWorkspaceRepoDir(projectDir: string, name: string): boolean {
   if (basename(name) !== name || name === "." || name === "..") return false;
   const dir = join(projectDir, name);
@@ -19583,8 +19583,8 @@ export function isWorkspaceRepoDir(projectDir: string, name: string): boolean {
 }
 
 // Auto-discover the code repos that are immediate children of the workspace root:
-// any real child dir holding a `.git`, excluding symlinks, workspace internal dirs and
-// the harness engine dir. Sorted + deduped. Returns [] when the workspace root is
+// any child directory holding a `.git`, following directory symlinks but excluding
+// workspace internal dirs and the harness engine dir. Sorted + deduped. Returns [] when the workspace root is
 // unreadable or holds no sibling repos (the legacy single-repo / fresh-greenfield
 // case — the caller records no repos row and the lone repo is inferred later).
 export function discoverSiblingRepos(projectDir: string): string[] {
@@ -19598,7 +19598,12 @@ export function discoverSiblingRepos(projectDir: string): string[] {
   for (const name of entries) {
     if (NON_REPO_WORKSPACE_DIRS.has(name)) continue;
     if (isHarnessDirName(name)) continue; // .claude / .kiro / .codex
-    if (isWorkspaceRepoDir(projectDir, name)) found.push(name);
+    const dir = join(projectDir, name);
+    try {
+      if (statSync(dir).isDirectory() && isGitRepoDir(dir)) found.push(name);
+    } catch {
+      // Ignore unreadable entries and dangling directory symlinks.
+    }
   }
   return [...new Set(found)].sort();
 }
