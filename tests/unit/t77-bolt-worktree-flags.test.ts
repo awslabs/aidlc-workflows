@@ -1,4 +1,5 @@
 // covers: subcommand:aidlc-bolt:start, subcommand:aidlc-bolt:complete, subcommand:aidlc-bolt:abort, subcommand:aidlc-bolt:fail
+// covers: function:renderEngineInvocation
 //
 // t77 — aidlc-bolt.ts v0.4.0 milestone 11 worktree-flag lifecycle. Migrated from
 // tests/unit/t77-bolt-worktree-flags.sh (TAP plan 28; no `# covers:` header —
@@ -515,6 +516,43 @@ describe("t77 — abort", () => {
       parked_ref: null,
     });
   });
+
+  test("abort keeps executable recovery argv when the harness directory contains shell metacharacters", () => {
+    const proj = track(setupV7Project());
+    const slug = "unsafe-harness";
+    const saved = "parked source survives an invalid display harness\n";
+    writeFileSync(join(proj, "saved.txt"), saved);
+    for (const args of [
+      ["init", "-q"],
+      ["add", "saved.txt"],
+      ["-c", "user.name=Recovery fixture", "-c", "user.email=recovery@example.test",
+        "-c", "commit.gpgsign=false", "commit", "-qm", "saved source"],
+      ["branch", `bolt-${slug}`],
+    ]) {
+      const result = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    const env = { ...process.env, AIDLC_HARNESS_DIR: ".claude;echo injected" };
+    const aborted = spawnSync(BUN, [TOOL, "abort", "--name", "Unsafe Harness", "--slug", slug,
+      "--reason", "retry safely", "--discard", "--project-dir", proj], {
+      cwd: proj, encoding: "utf-8", env,
+    });
+    expect(aborted.status, aborted.stderr).toBe(0);
+    const parked = JSON.parse(aborted.stdout);
+    expect(parked).not.toHaveProperty("restore_hint");
+    expect(parked.restore_hint_error).toContain("Invalid recovery harness directory");
+    expect(parked.restore_operation).toEqual({
+      route: "worktree",
+      args: ["restore", "--slug", slug, "--parked", parked.parked_stamp, "--repo", "."],
+    });
+    const restored = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"),
+      "engine", parked.restore_operation.route, ...parked.restore_operation.args,
+      "--project-dir", proj], { cwd: proj, encoding: "utf-8", env });
+    expect(restored.status, restored.stderr).toBe(0);
+    const recovery = JSON.parse(restored.stdout);
+    expect(recovery.parked_ref).toBe(parked.parked_ref);
+    expect(readFileSync(join(recovery.worktree_path, "saved.txt"), "utf-8")).toBe(saved);
+  }, 30000);
 
   test("default abort (no --discard) preserves the worktree directory [.sh T28]", () => {
     const proj = track(setupV7Project("exp-pres"));

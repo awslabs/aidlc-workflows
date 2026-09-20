@@ -45,7 +45,7 @@ When dispatched for trunk-based:
 
 - **Dirty tree on merge.** Local uncommitted changes on `main`; tool errors with the git message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; an explicit discard on abort sets the work aside before removing the live checkout and branch.
 - **Conflict on squash.** Squash conflicts with concurrent `main` motion (e.g. another Bolt landed first). Tool exits non-zero with `{status: "conflict", conflict_files, detail}`. Orchestrator quotes `detail` to the user.
-- **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should set the old attempt aside with `worktree discard` first only when authorized, or pick a different slug. Recover its files with the abort result's `restore_hint` verbatim, or doctor's exact-stamp, explicit-repository restore command, in the separate restored namespace.
+- **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should set the old attempt aside with `worktree discard` first only when authorized, or pick a different slug. Recover its files with the abort result's or doctor's `restore_operation`, invoking its engine route with the listed args exactly as argv, in the separate restored namespace. Rendered hints and commands are human display text only.
 
 ---
 
@@ -305,32 +305,42 @@ the supplied `--reason` text in the additive `abort_reason` field, `failed_bolt`
 `slug`, `discarded`, and `parked_ref`. When nothing was parked, including without
 `--discard`, `parked_ref` is `null`. Only a non-null `parked_ref` adds the returned
 `parked_stamp`, `parked_mode`, and `parked_repo`.
-For restorable attempts, the exact `restore_hint` is the rendered
-`aidlcToolInvocation("worktree")` prefix plus
-` restore --slug <slug> --parked <stamp> --repo <name|.>`. The repository selector
-is always present: the sibling name or `.` when `parked_repo` is `null`.
+For restorable attempts, `restore_operation` has route `worktree` and args
+`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? "."]`.
+The repository selector is always present: the sibling name or `.` when
+`parked_repo` is `null`. `restore_hint` is optional human display text rendered
+from that operation by `renderEngineInvocation`, using the installed native or
+source prefix, harness validation, and shell-safe argument quoting. If rendering
+throws, the hint is omitted and `restore_hint_error` carries the reason; the
+typed operation remains available. A missing hint is not evidence-only status.
 Snapshot mode reports
 `parked_excludes: ["ignored files", "eol/text=auto normalization"]`; branch-tip
 mode reports `["uncommitted files (no working tree existed)"]` instead.
-Evidence-only mode keeps the four descriptor fields but omits `restore_hint`
-and `parked_excludes` because no restorable files were saved.
+Evidence-only mode keeps the four descriptor fields but omits
+`restore_operation`, `restore_hint`, `restore_hint_error`, and `parked_excludes`
+because no restorable files were saved.
 
 If a saved namespace is known but its discard descriptor is missing, the
 fallback has a non-null `parked_ref`, `parked_stamp: null`, `parked_mode: null`,
-and `parked_repo: null`, with a `restore_hint` ending in
-` restore --slug <slug> --repo .` (no exact stamp) and the snapshot-style
-exclusions. This unknown mode does not justify claiming a snapshot was saved.
-If no namespace was saved, `parked_ref` is `null`, with no `parked_stamp`,
-`parked_mode`, `parked_repo`, `restore_hint`, or `parked_excludes`. The audit row
+and `parked_repo: null`, with `restore_operation` route `worktree` and args
+`["restore", "--slug", slug, "--repo", "."]` (no exact stamp) and the
+snapshot-style exclusions. Its optional hint follows the same safe rendering
+and error contract. This fallback can select a later attempt and does not
+justify claiming a snapshot was saved. If no namespace was saved, `parked_ref`
+is `null`, with no `parked_stamp`, `parked_mode`, `parked_repo`,
+`restore_operation`, `restore_hint`, `restore_hint_error`, or `parked_excludes`. The audit row
 still uses `Reason: aborted`; the success JSON preserves the caller's text in
 `abort_reason`.
 Do not change the abort command or its human-consent requirement. Tell the human
 the attempt was **set aside**. For branch-tip mode, say: "I kept its committed
 work; there were no uncommitted files to save." For evidence-only mode, say:
 "Nothing of its working files remained to save; only its review evidence was
-kept." Omit the final restoration offer whenever `restore_hint` is absent. On a
-later restore request, the conductor must execute the saved hint verbatim and
-announce its returned `worktree_path` plainly.
+kept." Omit the final restoration offer only when `restore_operation` is absent.
+On a later human restore request, invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each saved arg exactly as a
+separate argv argument. Never join args into a shell command, execute the
+display-only hint, or rebuild a slug-only selection. A rendering error does not
+withdraw the restoration offer. Announce the returned `worktree_path` plainly.
 
 ### Restore or purge set-aside work
 
@@ -395,26 +405,34 @@ exists or remains registered with Git, including moved checkouts. Its JSON is
 retains unparseable stamps; exact-stamp and all-stamp purges can remove them.
 For restore and purge, `--repo <name>` selects an existing sibling Git repository
 and `--repo .` selects the project root, independently of the current intent's
-repo list. Recovery trusts valid Git repositories named in the slug's
-`WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields or recorded repo
-sets of historical intents identified by the audit shards, even when they are
-symlinked immediate children. Only unrecorded discovered siblings must be real
-immediate child directories whose canonical paths remain directly under the
-canonical workspace root; arbitrary paths and unrecorded symlink aliases are
-refused. These selectors do not change
+repo list. Recovery admits valid Git repositories named in the same slug's
+`WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields even when those
+sibling names are symlinks: the framework may recover exactly where it recorded
+the attempt's worktree or parking. That admission is slug-scoped; records for
+other slugs never widen this slug's repository set. Intent membership alone,
+current or historical, cannot admit a symlink. Intent-list candidates and
+unrecorded discovered siblings must be real immediate child directories whose
+canonical paths remain directly under the canonical workspace root
+(`isWorkspaceRepoDir`). Arbitrary paths and symlink aliases without the
+same-slug audit provenance are refused. These selectors do not change
 live create/discard behavior. Restore and purge reject unknown and duplicate
 flags before selection or mutation; `--raw` is a bare restore-only flag.
 
 Doctor lists saved `/head` entries and evidence-only namespaces containing actual
 reviewed source refs informationally, not as warnings or failures: slug, stamp,
 age in days, mode (`snapshot`, `branch-tip`, `legacy`, or `evidence-only`),
-existence of the canonical restored checkout, and rendered recovery commands
-for the exact stamp with an explicit repository selector. Evidence-only entries
-retain `purge_command` but omit `restore_command`. Doctor applies the same
-real-immediate-child boundary only to unrecorded discovered siblings; valid Git
-repositories recorded by an intent or audit `Repo` rows remain eligible even
-when reached through a symlink. A moved checkout may not show as restored there,
-but purge still checks its Git registration. Doctor and
+existence of the canonical restored checkout, and typed recovery operations
+for the exact stamp with an explicit repository selector. Every entry has
+`purge_operation`; only restorable entries have `restore_operation`. Each has
+route `worktree` and exact argv args, never a shell program. Optional
+`restore_command` and `purge_command` are safe renderings for human display;
+if rendering throws, the corresponding command is omitted and
+`restore_command_error` or `purge_command_error` carries the reason while the
+operation remains. Evidence-only entries have only the purge operation and its
+command-or-error fields. Doctor applies the same slug-scoped audit provenance
+and real-immediate-child boundary described above; an intent's repo list alone
+does not admit a symlink, nor does a record for another slug. A moved checkout
+may not show as restored there, but purge still checks its Git registration. Doctor and
 purge share the strict stamp parser: impossible dates or times have
 `age_days: null` in doctor's JSON and `unknown` in human-readable output. Restore and
 purge add no audit events. See `aidlc-shared/worktree-info-schema.md` for the JSON

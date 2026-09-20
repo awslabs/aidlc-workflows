@@ -19657,8 +19657,10 @@ export function intentRepos(
   return [];
 }
 
-/** Recovery trust comes from records; only unrecorded discovery requires real children.
- * A null slug set admits every parked slug, while audit Repo rows admit their own slug.
+/** Recovery operates exactly where the framework recorded parking this slug;
+ * records never widen to other slugs; unrecorded discovery requires a real child.
+ * Intent membership alone does not authorize recovery through a repository symlink.
+ * A null slug set admits every parked slug in a real workspace repository.
  */
 export function recoveryRepoCandidates(
   projectDir: string,
@@ -19687,7 +19689,7 @@ export function recoveryRepoCandidates(
       if (!checkedIntents.has(key)) {
         checkedIntents.add(key);
         for (const repo of intentRepos(projectDir, intent, space)) {
-          if (isRecordedRepo(repo)) candidates.set(repo, null);
+          if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo)) candidates.set(repo, null);
         }
       }
     }

@@ -333,10 +333,11 @@ a stale-review recovery command explicitly includes `--discard`, abort instead
 parks the Bolt's tracked and non-ignored untracked files (or its remaining branch
 tip when the checkout is gone) plus reviewed source refs, then removes the live
 checkout and branch. Obtain the human's selection before executing the unchanged
-returned command. When present, the returned `restore_hint` recovers the parked
-work in an isolated restored checkout; restoring files does not resume the
-aborted Bolt or revive its review authority. If only review evidence remained,
-there are no saved working files to restore and no `restore_hint` is returned.
+returned command. When present, the returned `restore_operation` recovers the
+parked work in an isolated restored checkout; restoring files does not resume
+the aborted Bolt or revive its review authority. If only review evidence
+remained, there are no saved working files to restore, so neither
+`restore_operation` nor `restore_hint` is returned.
 
 **After a successful discard.** Only after the `--discard` abort succeeds and
 confirms the attempt was parked, and before starting the replacement attempt,
@@ -355,11 +356,16 @@ Select `[saved-files text]` from the returned `parked_mode`:
 
 **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because [reason], and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
 
-When `restore_hint` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore command for an evidence-only attempt.
+When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
 
-If the human later asks for that attempt back, the conductor must execute the
-saved abort result's `restore_hint` verbatim, preserving its exact attempt and
-repository selectors rather than rebuilding a slug-only command.
+If the human later asks for that attempt back, use the saved abort result's
+`restore_operation`: invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+as a separate argv argument. Never join those arguments into a shell command or
+rebuild a slug-only selection. `restore_hint` is human display text only, never
+an execution input. If safe rendering fails (for example, an invalid harness
+directory), the hint is omitted and `restore_hint_error` explains why; the
+operation remains available and the restoration offer still applies.
 After restoration succeeds, announce the returned restored path plainly:
 **SAY:** "I restored the previous attempt at [returned restored path]."
 This does not resume the old attempt or make its review current.

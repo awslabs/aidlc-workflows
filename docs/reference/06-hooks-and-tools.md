@@ -584,12 +584,20 @@ review refusal prints its ask without publishing a selection marker; requiring
 that absent marker here would prevent the offered abort. The unchanged
 `--discard` command now parks the working-tree snapshot or remaining branch tip
 and reviewed source refs before removing the live checkout and branch. When
-files were saved, recover them using the abort result's exact `restore_hint`,
-which includes `--parked <stamp>` and `--repo <name>` or `--repo .`, in a separate
-restored checkout, not by reviving the live Bolt. If only reviewed source refs
-remained, the `evidence-only` descriptor has `parked_commit: null` in discard;
-abort retains the ref, stamp, mode, and repository but omits `restore_hint` and
-`parked_excludes`. Restore refuses that selection; doctor offers purge only.
+files were saved, the abort result supplies `restore_operation` with route
+`worktree` and exact argv args, including `--parked <stamp>` when known and
+`--repo <name>` or `--repo .`. On a human restore request, the conductor invokes
+`{{INVOKE}} engine worktree <args...>` with each listed arg passed exactly as a
+separate argv argument, never joined into a shell command. This recovers files
+in a separate restored checkout, not by reviving the live Bolt. The optional
+`restore_hint` is human display text only, safely rendered by
+`renderEngineInvocation` using the same native/source selection, harness
+validation, and shell quoting as guard remedies. A rendering failure omits the
+hint and supplies `restore_hint_error`, but keeps the operation and restoration
+offer. If only reviewed source refs remained, the `evidence-only` descriptor
+has `parked_commit: null` in discard; abort retains the ref, stamp, mode, and
+repository but omits `restore_operation`, `restore_hint`, `restore_hint_error`,
+and `parked_excludes`. Restore refuses that selection; doctor offers purge only.
 A mechanical selection receipt remains a candidate for later hardening, not a
 check added by this recovery behavior.
 The native restart continuation has a recorded ask and separately verifies its

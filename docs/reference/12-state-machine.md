@@ -824,12 +824,16 @@ or is registered with Git, including moved checkouts. Restore and purge accept
 `--repo <name>` for an existing sibling Git repository or `--repo .` for the
 project root, independently of the current intent's repo list. An exact restore
 stamp found in only one repository selects it before generic slug ambiguity.
-Recovery trusts valid Git repositories named in the slug's `WORKTREE_CREATED` or
-`WORKTREE_DISCARDED` audit `Repo` fields or recorded repo sets of historical intents
-identified by the audit shards, even when they are symlinked immediate
-children. Only unrecorded discovered siblings must be real immediate child
+Recovery admits valid Git repositories named in the same slug's
+`WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields even when those
+sibling names are symlinks: the framework may recover exactly where it recorded
+the attempt's worktree or parking. That admission is slug-scoped; records for
+other slugs never widen this slug's repository set. Membership in a current or
+historical intent's repo list alone cannot admit a symlink. Intent-list
+candidates and unrecorded discovered siblings must be real immediate child
 directories whose canonical paths stay directly under the canonical workspace
-root; arbitrary paths and unrecorded symlink aliases are refused. Both commands reject unknown
+root (`isWorkspaceRepoDir`); arbitrary paths and symlink aliases without the
+same-slug audit provenance are refused. Both commands reject unknown
 and duplicate flags before selection or mutation; `--raw` is a bare restore-only
 flag. This does not change live create/discard selectors. Neither command adds
 an audit event or repurposes the live Bolt path or branch.
@@ -839,38 +843,54 @@ Successful `bolt abort` JSON retains `reason: "aborted"` and echoes the supplied
 `Reason: aborted`. The result always includes `parked_ref`, which is `null` when
 nothing was parked, including without `--discard`. Only a non-null `parked_ref`
 adds the saved descriptor's `parked_stamp`, `parked_mode`, and `parked_repo`.
-For a restorable attempt, the exact `restore_hint` is the installed channel's
-native or source worktree invocation plus
-` restore --slug <slug> --parked <stamp> --repo <name|.>`. The selector is always
-present: `--repo <name>` for a sibling or `--repo .` when `parked_repo` is `null`.
+For a restorable attempt, `restore_operation` is an `EngineInvocation` with route
+`worktree` and args `["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? "."]`.
+The repository selector is always present: the sibling name or `.` when
+`parked_repo` is `null`. `restore_hint` is optional human display text rendered
+from that operation by `renderEngineInvocation`, with the installed channel's
+native/source prefix, harness validation, and shell-safe argument quoting.
+If rendering throws, abort omits the hint and returns the reason in
+`restore_hint_error`; the typed operation remains. A missing hint is not an
+evidence-only classification.
 Snapshot mode reports
 `parked_excludes: ["ignored files", "eol/text=auto normalization"]`; branch-tip
 mode reports `["uncommitted files (no working tree existed)"]` instead.
-Evidence-only mode keeps all four descriptor fields but omits `restore_hint`
-and `parked_excludes` because no working files could be saved.
+Evidence-only mode keeps all four descriptor fields but omits
+`restore_operation`, `restore_hint`, `restore_hint_error`, and `parked_excludes`
+because no working files could be saved.
 
 If a saved namespace is known but its discard descriptor is missing, the
 fallback retains `parked_ref`, sets `parked_stamp`, `parked_mode`, and
-`parked_repo` to `null`, and returns a hint ending in
-` restore --slug <slug> --repo .` without an exact stamp, with snapshot-style
-exclusions. Unknown mode does not establish that a snapshot was saved, so the
-conductor must not make that claim. If no namespace was saved, `parked_ref` is
-`null`; `parked_stamp`, `parked_mode`, `parked_repo`, `restore_hint`, and
-`parked_excludes` are absent.
-Offer restoration only when `restore_hint` is present; when the human asks for
-the attempt back, execute that saved hint verbatim instead of reconstructing a
-latest-attempt command.
+`parked_repo` to `null`, and returns `restore_operation` with route `worktree`
+and args `["restore", "--slug", slug, "--repo", "."]`, without an exact stamp,
+with snapshot-style exclusions. Its optional hint follows the same safe
+rendering/error contract. The fallback can select a later attempt; unknown
+mode does not establish that a snapshot was saved, so the conductor must not
+make that claim. If no namespace was saved, `parked_ref` is `null`;
+`parked_stamp`, `parked_mode`, `parked_repo`, `restore_operation`, `restore_hint`,
+`restore_hint_error`, and `parked_excludes` are absent.
+Offer restoration only when `restore_operation` is present. When the human
+asks for the attempt back, invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed arg exactly as a
+separate argv argument. Never join args into a shell command, execute the
+display-only hint, or reconstruct a latest-attempt selection. A rendering error
+does not withdraw the restoration offer.
 This changes no abort arguments, command admission, or human-consent
 requirement. Restoring files later never revives the aborted lifecycle or its
 review authority.
 
 Doctor lists saved `/head` entries and actual reviewed source refs
 informationally, with slug, exact stamp, age in days, mode (`snapshot`,
-`branch-tip`, `legacy`, or `evidence-only`), restored checkout ownership, and exact
-rendered recovery commands using `--parked <stamp>` and
-an explicit `--repo <name>` or `--repo .`. Evidence-only entries retain
-`purge_command` but omit `restore_command`. These entries are neither warnings
-nor failures. Doctor uses the same recovery repository candidate set described
+`branch-tip`, `legacy`, or `evidence-only`), restored checkout ownership, and typed
+recovery operations with exact `--parked <stamp>` and explicit `--repo <name>`
+or `--repo .` args. Every entry has `purge_operation`; only restorable entries
+have `restore_operation`. Both use route `worktree` and exact argv args, never
+a shell program. Optional `restore_command` and `purge_command` are safe human
+display text. If rendering throws, the corresponding command is omitted and
+`restore_command_error` or `purge_command_error` carries the reason while the
+operation remains. Evidence-only entries have only the purge operation and its
+command-or-error fields. These entries are neither warnings nor failures.
+Doctor uses the same slug-scoped recovery repository candidate set described
 above. A checkout counts as restored only when the owning repository's
 Git worktree registration resolves to the canonical restore path and names the
 exact `restore/bolt-<slug>-<stamp>` branch. `legacy` in this inventory leaves
@@ -971,10 +991,15 @@ does not authenticate consent. Direct refusal asks do not publish the selection
 marker used by the separately checked native restart continuation. A mistaken
 abort with the unchanged `--discard` argv now parks available files and review
 evidence rather than irretrievably deleting them. When files were saved, the
-returned `restore_hint` selects the exact stamp and repository for recovery in
-a separate checkout, not the aborted lifecycle or its review authority.
-Evidence-only attempts retain their descriptor but have no restoration hint;
-doctor offers purge only. A mechanical selection receipt remains a candidate for later
+returned `restore_operation` selects the saved stamp when known and repository
+for recovery in a separate checkout, not the aborted lifecycle or its review
+authority. On a human restore request, invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>` with each listed arg exactly as argv,
+never joined into a shell command. `restore_hint` is optional human display text
+only; rendering failure omits it and supplies `restore_hint_error` without
+removing the operation or restoration offer. Evidence-only attempts retain
+their descriptor but omit the restore operation, hint, hint error, and
+exclusions; doctor offers purge only. A mechanical selection receipt remains a candidate for later
 hardening; recoverable discard does not change command admission.
 
 Directive validation requires an exact rendering of the operation, including

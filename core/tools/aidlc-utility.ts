@@ -261,6 +261,7 @@ import {
   resolveSkillsPath,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
+import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   activeVersion,
   binRoot,
@@ -2531,8 +2532,12 @@ type DoctorParkedAttempt = {
   repo: string | null;
   restored_path: string;
   restored_exists: boolean;
+  restore_operation?: EngineInvocation;
+  purge_operation: EngineInvocation;
   restore_command?: string;
-  purge_command: string;
+  restore_command_error?: string;
+  purge_command?: string;
+  purge_command_error?: string;
 };
 
 export type DoctorReport = {
@@ -2563,7 +2568,6 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
   }
 
   const attempts: DoctorParkedAttempt[] = [];
-  const invoke = aidlcToolInvocation("worktree");
   const now = Date.now();
   for (const [repo, slugs] of recoveryRepoCandidates(projectDir, rows)) {
     const cwd = repo === null ? projectDir : repoDir(projectDir, repo);
@@ -2618,8 +2622,8 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
           // The canonical restore checkout does not exist or cannot be resolved.
         }
       }
-      const args = `--slug ${slug} --parked ${stamp} --repo ${repo ?? "."}`;
-      attempts.push({
+      const args = ["--slug", slug, "--parked", stamp, "--repo", repo ?? "."];
+      const attempt: DoctorParkedAttempt = {
         slug,
         stamp,
         age_days: ageDays,
@@ -2627,9 +2631,24 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
         repo,
         restored_path: restoredPath,
         restored_exists: restoredExists,
-        ...(mode === "evidence-only" ? {} : { restore_command: `${invoke} restore ${args}` }),
-        purge_command: `${invoke} purge ${args}`,
-      });
+        ...(mode === "evidence-only" ? {} : {
+          restore_operation: { route: "worktree", args: ["restore", ...args] },
+        }),
+        purge_operation: { route: "worktree", args: ["purge", ...args] },
+      };
+      if (attempt.restore_operation !== undefined) {
+        try {
+          attempt.restore_command = renderEngineInvocation(attempt.restore_operation);
+        } catch (e) {
+          attempt.restore_command_error = errorMessage(e);
+        }
+      }
+      try {
+        attempt.purge_command = renderEngineInvocation(attempt.purge_operation);
+      } catch (e) {
+        attempt.purge_command_error = errorMessage(e);
+      }
+      attempts.push(attempt);
     }
   }
   return attempts.sort((a, b) => a.slug.localeCompare(b.slug) ||

@@ -71,7 +71,8 @@ import {
   writeStateFile,
   VERIFICATION_COMMAND_RECOVERY,
 } from "./aidlc-lib.js";
-import { aidlcToolInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   askConstructionCheckpoint,
   approveConstructionCheckpoint,
@@ -893,6 +894,25 @@ function handleAbort(args: string[]): void {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
+  let restoreOperation: EngineInvocation | undefined;
+  let restoreHint: string | undefined;
+  let restoreHintError: string | undefined;
+  if (parkedRef !== null && parkedMode !== "evidence-only") {
+    restoreOperation = {
+      route: "worktree",
+      args: [
+        "restore", "--slug", flags.slug,
+        ...(parkedStamp === null ? [] : ["--parked", parkedStamp]),
+        "--repo", parkedRepo ?? ".",
+      ],
+    };
+    try {
+      restoreHint = renderEngineInvocation(restoreOperation);
+    } catch (e) {
+      restoreHintError = errorMessage(e);
+    }
+  }
+
   console.log(
     JSON.stringify({
       emitted: "BOLT_FAILED",
@@ -908,7 +928,9 @@ function handleAbort(args: string[]): void {
         parked_repo: parkedRepo,
       } : {}),
       ...(parkedRef === null || parkedMode === "evidence-only" ? {} : {
-        restore_hint: `${aidlcToolInvocation("worktree")} restore --slug ${flags.slug}${parkedStamp === null ? "" : ` --parked ${parkedStamp}`} --repo ${parkedRepo ?? "."}`,
+        restore_operation: restoreOperation,
+        restore_hint: restoreHint,
+        restore_hint_error: restoreHintError,
         parked_excludes: parkedMode === "branch-tip"
           ? ["uncommitted files (no working tree existed)"]
           : ["ignored files", "eol/text=auto normalization"],
