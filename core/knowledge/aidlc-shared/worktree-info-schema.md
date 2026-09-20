@@ -54,6 +54,14 @@ intent before using those commands; do not infer its UUID from a directory name.
 `list` remains an inventory independent of the active intent; `verify` and
 `info` remain audit lookups that need no registry identity.
 
+The `<id8>` is the whole of a Bolt's intent authority, so two registered intents
+whose uuids share their last eight hex characters (a 2^-32 event per pair) refuse
+every identity-resolving command rather than share names and recovery refs:
+
+```text
+Intent record <relative record dir> shares its eight-character uuid suffix with another registered intent, so its Bolt names would collide; re-create one of the two intents before Construction.
+```
+
 Before cleanup deletes a Bolt branch or its retained/parked refs, that branch
 must be checked out at its own Bolt directory or nowhere. If another worktree
 owns it, cleanup refuses, names the owner path on stderr, and records

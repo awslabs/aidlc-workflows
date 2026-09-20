@@ -178,4 +178,25 @@ describe("resolveBoltIdentity legacy provenance", () => {
     expect(error).toBeInstanceOf(BoltIdentityError);
     expect(error).toHaveProperty("code", "NO_INTENT_UUID");
   });
+
+  test("two registered intents sharing an eight-character uuid suffix fail closed", () => {
+    // Same trailing eight hex chars as UUID, different uuid, different space.
+    const twinUuid = `ffffffffffffffffffffffff${idSuffix(UUID)}`;
+    const twinRecord = `twin-${idSuffix(twinUuid)}`;
+    const twinIntents = join(project, "aidlc", "spaces", "platform", "intents");
+    mkdirSync(join(twinIntents, twinRecord), { recursive: true });
+    writeFileSync(join(twinIntents, twinRecord, "aidlc-state.md"), "# AI-DLC State\n");
+    writeFileSync(join(twinIntents, "intents.json"), `${JSON.stringify([
+      { uuid: twinUuid, slug: "twin", dirName: twinRecord, status: "in-flight" },
+    ], null, 2)}\n`);
+
+    let error: unknown;
+    try {
+      resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project));
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(BoltIdentityError);
+    expect(error).toHaveProperty("code", "AMBIGUOUS_INTENT_ID8");
+  });
 });
