@@ -980,16 +980,29 @@ describe("t294 trust diagnostics", () => {
 
   test("doctor flags unwired shipped Claude hooks through refresh until the hooks key is restored", () => {
     const env = runtimeEnv();
+    const driftLabel = "hooks in .claude/settings.json differ from the shipped wiring (you changed them)";
     for (const [source, hook] of [[DIST, "session-end"], [DIST_RELEASE, "session-start"]]) {
       const project = temp("aidlc-t294-doctor-unwired-");
       mkdirSync(join(project, ".git"));
       cpSync(join(source, "claude"), project, { recursive: true });
+      const args = [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(source, "claude"),
+        "--harness",
+        "claude",
+        "--yes",
+      ];
+      const installed = run(args, project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
       const settingsPath = join(project, ".claude", "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
       const shippedHooks = structuredClone(settings.hooks);
       const doctor = (): {
         status: number | null;
-        checks: Array<{ pass: boolean; label: string }>;
+        checks: Array<{ pass: boolean; label: string; severity?: string }>;
         failed: number;
       } => {
         const result = spawnSync(BUN, [
@@ -1009,6 +1022,28 @@ describe("t294 trust diagnostics", () => {
       const pristine = doctor();
       expect(pristine.checks.some((check) => check.label.includes("shipped but not wired")))
         .toBe(false);
+      expect(pristine.checks.some((check) => check.label === driftLabel)).toBe(false);
+
+      const guardIndex = settings.hooks.PreToolUse.findIndex(
+        (registration: { hooks: Array<{ command: string }> }) =>
+          registration.hooks.some((entry) => entry.command.includes("plan-approval-guard")),
+      );
+      expect(guardIndex).toBeGreaterThanOrEqual(0);
+      const [guard] = settings.hooks.PreToolUse.splice(guardIndex, 1);
+      settings.hooks.PostToolUse.push(guard);
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const moved = doctor();
+      expect(moved.checks).toContainEqual(expect.objectContaining({
+        pass: true,
+        severity: "warn",
+        label: driftLabel,
+      }));
+      expect(moved.checks.some((check) => check.label.includes("shipped but not wired")))
+        .toBe(false);
+      expect(moved.failed).toBe(pristine.failed);
+      expect(moved.status).toBe(pristine.status);
+
+      settings.hooks = structuredClone(shippedHooks);
 
       if (hook === "session-end") {
         settings.hooks.SessionEnd[0].hooks = settings.hooks.SessionEnd[0].hooks.filter(
@@ -1024,16 +1059,6 @@ describe("t294 trust diagnostics", () => {
       expect(unwired.failed).toBeGreaterThan(pristine.failed);
       expect(unwired.status).toBe(1);
 
-      const args = [
-        "config",
-        "--project-dir",
-        project,
-        "--from",
-        join(source, "claude"),
-        "--harness",
-        "claude",
-        "--yes",
-      ];
       const refreshed = run(args, project, env);
       expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
       const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
@@ -1051,6 +1076,7 @@ describe("t294 trust diagnostics", () => {
       const repaired = doctor();
       expect(repaired.checks.some((check) => check.label.includes("shipped but not wired")))
         .toBe(false);
+      expect(repaired.checks.some((check) => check.label === driftLabel)).toBe(false);
     }
     if (process.platform !== "win32") {
       const project = install("claude");

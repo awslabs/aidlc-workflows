@@ -464,7 +464,7 @@ aidlc config providers --mark-done bedrock-model-access --yes
 aidlc config providers --reset --yes
 ```
 
-`--region`, `--profile`, and `--opencode-default` require `--provider amazon-bedrock`.
+`--region`, `--profile`, and `--opencode-default` apply only when the recorded or selected provider is `amazon-bedrock`.
 
 Credential detection is offline only. It inspects AWS environment variables,
 `~/.aws/config`, `~/.aws/credentials`, role and container credential variables,

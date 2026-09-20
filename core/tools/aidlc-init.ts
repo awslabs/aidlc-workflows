@@ -1249,7 +1249,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
         "  --acknowledge",
         "  --mark-done <pending-action-id>",
         "",
-        "--region, --profile, and --opencode-default require --provider amazon-bedrock.",
+        "--region, --profile, and --opencode-default apply only when the recorded or selected provider is amazon-bedrock.",
         "Credential detection is offline only. No provider or model endpoint is contacted.",
       ]
     : [

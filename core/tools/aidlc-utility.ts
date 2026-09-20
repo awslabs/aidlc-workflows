@@ -39,6 +39,7 @@ import {
   type LegacyDoctorResult,
   redactSecretPatterns,
 } from "./aidlc-doctor-bundle.ts";
+import { sha256Bytes } from "./aidlc-distribution.ts";
 import {
   artifactsRegistryFor,
   consumedArtifactProducerCollisions,
@@ -2681,6 +2682,15 @@ function collapseLegacyPolicyChecks(checks: readonly DoctorCheck[]): DoctorCheck
   );
 }
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function projectedFileRepair(
   distribution: string,
   relativePath: string,
@@ -3074,6 +3084,7 @@ export async function collectDoctorReport(
     const settingsForHooks = join(projectDir, harness, "settings.json");
     let expectedHooks: string[] = [];
     let settingsReadable = true;
+    let settingsHooks: unknown;
     try {
       const raw = readFileSync(settingsForHooks, "utf-8");
       // jq-free: collect every distinct aidlc-*.ts basename referenced anywhere
@@ -3081,6 +3092,7 @@ export async function collectDoctorReport(
       // "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-write-audit-log.ts" and the
       // statusLine command). Basename, not path, so the probe is dir-relative.
       const parsed = JSON.parse(raw) as unknown;
+      settingsHooks = isPlainObject(parsed) ? parsed.hooks : undefined;
       const commands: string[] = [];
       const collectCommands = (value: unknown): void => {
         if (Array.isArray(value)) return void value.forEach(collectCommands);
@@ -3151,6 +3163,28 @@ export async function collectDoctorReport(
           label: `${hook.name} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
           fix: `re-add the hook entry, or delete the hooks key and rerun \`${aidlcInvocation()} config\` to restore the shipped wiring`,
         });
+      }
+    }
+    if (settingsReadable) {
+      try {
+        const manifest = JSON.parse(readFileSync(
+          join(projectDir, harness, "tools", "data", "aidlc-manifest.json"),
+          "utf-8",
+        )) as { entries?: Record<string, Record<string, string>> };
+        const shippedHooksHash = manifest?.entries?.[".claude/settings.json"]?.hooks;
+        if (
+          typeof shippedHooksHash === "string" &&
+          (settingsHooks === undefined || sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash)
+        ) {
+          results.push({
+            pass: true,
+            severity: "warn",
+            label: "hooks in .claude/settings.json differ from the shipped wiring (you changed them)",
+            fix: `if unintended, delete the hooks key and rerun \`${aidlcInvocation()} config\` to restore the shipped registrations`,
+          });
+        }
+      } catch {
+        // Legacy and unmanifested projects have no shipped baseline to compare.
       }
     }
 
