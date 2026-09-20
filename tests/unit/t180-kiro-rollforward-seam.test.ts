@@ -55,7 +55,7 @@ function runAdapter(
   target: string,
   payload: unknown,
   env: NodeJS.ProcessEnv = {},
-): { stdout: string; code: number } {
+): { stdout: string; stderr: string; code: number } {
   const r = spawnSync("bun", [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target], {
     cwd: projectDir,
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
@@ -63,7 +63,7 @@ function runAdapter(
     env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, ...env },
     timeout: 30_000,
   });
-  return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
 }
 
 function fakeCompiledExecutable(projectDir: string): string {
@@ -768,6 +768,54 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
       expect(existsSync(forwardingPath(trailingOptionDir))).toBe(false);
     } finally {
       rmSync(trailingOptionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("13: a foreign --project-dir is refused before any latch logic", () => {
+    const dir = scratchProject();
+    try {
+      seedClock(dir, 3, 3);
+      const foreign = runAdapter(dir, "guard-tool-call", {
+        tool_input: { command: `${BARE_NEXT} --project-dir /tmp --stage intent-capture` },
+        cwd: dir,
+      });
+      expect(foreign.code).toBe(2);
+      expect(foreign.stderr).toContain("different project");
+      const missing = runAdapter(dir, "guard-tool-call", {
+        tool_input: { command: `${BARE_NEXT} --project-dir ${dir}/missing --stage intent-capture` },
+        cwd: dir,
+      });
+      expect(missing.code).toBe(2);
+      const same = runAdapter(dir, "guard-tool-call", {
+        tool_input: { command: `${BARE_NEXT} --project-dir ${dir} --stage intent-capture` },
+        cwd: dir,
+      });
+      expect(same.code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("14: a user-typed same-project selector matches the forwarding latch after normalization", () => {
+    for (const includeProjectDir of [false, true]) {
+      const dir = scratchProject();
+      try {
+        const raw = `--project-dir ${dir} --scope feature "build auth"`;
+        seedForwarding(
+          dir,
+          4,
+          raw,
+          ["--project-dir", dir, "--scope", "feature", "build auth"],
+        );
+        const command = includeProjectDir
+          ? `${BARE_NEXT} ${raw}`
+          : `${BARE_NEXT} --scope feature "build auth"`;
+        const r = runAdapter(dir, "guard-tool-call", { tool_input: { command }, cwd: dir });
+        expect(r.code, command).toBe(0);
+        expect(existsSync(forwardingPath(dir)), command).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 });

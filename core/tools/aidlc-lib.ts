@@ -1748,14 +1748,20 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
   return { command, args };
 }
 
-function isTerminalUtilityNext(invocation: { command: string; args: string[] }): boolean {
-  const args = invocation.args.slice();
+function parsedNextArgv(invocation: { command: string; args: string[] }): string[] | null {
+  const args = invocation.args;
+  let index = 0;
   if (invocation.command === "aidlc") {
-    if (args[0] === "orchestrate") args.shift();
+    if (args[0] === "orchestrate") index++;
   } else if (!/^aidlc-orchestrate(?:\.ts)?$/.test(invocation.command)) {
-    return false;
+    return null;
   }
-  if (args.shift() !== "next" || args.some((arg) => arg.includes("$"))) return false;
+  return args[index] === "next" ? args.slice(index + 1) : null;
+}
+
+function isTerminalUtilityNext(invocation: { command: string; args: string[] }): boolean {
+  const args = parsedNextArgv(invocation);
+  if (args === null || args.some((arg) => arg.includes("$"))) return false;
   // Legacy entry points do not extract the dispatcher's bare global flags.
   // Keep mixed positional/global forms conservative; trailing list flags remain valid.
   if (
@@ -1853,6 +1859,11 @@ export function isEngineEngagementSegment(
   }
   if (invocation) {
     if (isTerminalUtilityNext(invocation) || isTerminalConfigurationDispatch(invocation, observedOutput)) return false;
+    // The engine consumes valued flags first: --report --status composes from a file
+    // named "--status", and -- --status is intent text. A parsed non-read-only next
+    // engages, so the raw read-only regex below must not decide it.
+    const nextArgv = parsedNextArgv(invocation);
+    if (nextArgv !== null && !isReadOnlyNextArgv(nextArgv)) return true;
     seg = `${invocation.command} ${invocation.args.join(" ")}`;
   }
   if (

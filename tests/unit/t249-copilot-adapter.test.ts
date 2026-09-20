@@ -2111,6 +2111,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ["next", "intent", "list"],
       ["next", "team-board"],
       ["next", "team-board", "--status"],
+      ["next", "--config", "bogus"],
     ]) {
       for (const form of ["direct", "source"] as const) {
         const spec = commandSpec(dir, form, args);
@@ -2129,7 +2130,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const executed = runShell(dir, spec.text);
         expect(executed.status, executed.stderr).toBe(0);
         expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
-          kind: args[1] === "team-board" && args.length > 2 ? "error" : "print",
+          kind: (args[1] === "team-board" && args.length > 2) || (args[1] === "--config" && args[2] === "bogus") ? "error" : "print",
         });
         const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
         expect(post.code, spec.text).toBe(0);
