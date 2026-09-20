@@ -1024,6 +1024,13 @@ describe("t294 trust diagnostics", () => {
         .toBe(false);
       expect(pristine.checks.some((check) => check.label === driftLabel)).toBe(false);
 
+      const strayHook = "aidlc-evil-instructions.ts";
+      writeFileSync(join(project, ".claude", "hooks", strayHook), "// project-owned hook\n");
+      const withStray = doctor();
+      expect(withStray.checks.some((check) => check.label.includes(strayHook))).toBe(false);
+      expect(withStray.failed).toBe(pristine.failed);
+      expect(withStray.status).toBe(pristine.status);
+
       const guardIndex = settings.hooks.PreToolUse.findIndex(
         (registration: { hooks: Array<{ command: string }> }) =>
           registration.hooks.some((entry) => entry.command.includes("plan-approval-guard")),
@@ -1092,9 +1099,8 @@ describe("t294 trust diagnostics", () => {
         timeout: 60_000,
       });
       if (human.error) throw human.error;
-      expect(human.status, human.stdout + human.stderr).toBe(1);
       expect(human.stdout).not.toContain("\u001b");
-      expect(human.stdout).toContain("aidlc-x?[31mfake.ts shipped but not wired");
+      expect(human.stdout).not.toContain("aidlc-x");
     }
   }, 120_000);
 });
@@ -2492,6 +2498,48 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("clean for codex");
+  }, 120_000);
+
+  test("keep-current removes the documented commented-out legacy Codex block", () => {
+    const env = runtimeEnv();
+    for (const effort of ["high", "medium"]) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const shipped = readFileSync(configPath, "utf-8");
+      const legacy =
+        `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\n# model_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "${effort}"\n\n` +
+        `# [model_providers.amazon-bedrock.aws]\n` +
+        `# # Set to your AWS profile/region with Bedrock model access.\n` +
+        `# profile = "default"\n# region = "us-east-1"\n\n` +
+        shipped;
+      writeFileSync(configPath, legacy);
+      const changed = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        "current",
+        "--yes",
+      ], project, env);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      expect(readFileSync(configPath, "utf-8")).toBe(effort === "high" ? shipped : legacy);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).toContain("clean for codex");
+      expect(check.stdout).not.toContain("provider-codex-project-override");
+    }
   }, 120_000);
 
   test("keep-current preserves a legacy Codex table that carries a user key after a blank line", () => {

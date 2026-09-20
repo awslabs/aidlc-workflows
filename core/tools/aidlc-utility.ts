@@ -3149,28 +3149,30 @@ export async function collectDoctorReport(
         });
       }
     }
-    // Reverse check: the file is the project's, so a registration the user
-    // removed or rewrote is kept by refresh; doctor is where that shows up.
-    const hooksDir = join(projectDir, harness, "hooks");
-    if (settingsReadable && expectedHooks.length > 0 && existsSync(hooksDir)) {
-      for (const hook of readdirSync(hooksDir, { withFileTypes: true })) {
-        if (
-          !hook.isFile() || !hook.name.startsWith("aidlc-") ||
-          !hook.name.endsWith(".ts") || expectedHooks.includes(hook.name)
-        ) continue;
-        results.push({
-          pass: false,
-          label: `${hook.name} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
-          fix: `re-add the hook entry, or delete the hooks key and rerun \`${aidlcInvocation()} config\` to restore the shipped wiring`,
-        });
-      }
-    }
     if (settingsReadable) {
       try {
         const manifest = JSON.parse(readFileSync(
           join(projectDir, harness, "tools", "data", "aidlc-manifest.json"),
           "utf-8",
-        )) as { entries?: Record<string, Record<string, string>> };
+        )) as {
+          files?: Record<string, string>;
+          entries?: Record<string, Record<string, string>>;
+        };
+        // Refresh preserves the project's registrations. Compare only with the
+        // install baseline: extra hook files belong to the project, not AI-DLC.
+        if (expectedHooks.length > 0) {
+          const hooksPrefix = `${harness}/hooks/`;
+          for (const file of Object.keys(manifest?.files ?? {})) {
+            if (!file.startsWith(hooksPrefix)) continue;
+            const basename = file.slice(hooksPrefix.length);
+            if (!/^aidlc-[^/]*\.ts$/.test(basename) || expectedHooks.includes(basename)) continue;
+            results.push({
+              pass: false,
+              label: `${basename} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
+              fix: `re-add the hook entry, or delete the hooks key and rerun \`${aidlcInvocation()} config\` to restore the shipped wiring`,
+            });
+          }
+        }
         const shippedHooksHash = manifest?.entries?.[".claude/settings.json"]?.hooks;
         if (
           typeof shippedHooksHash === "string" &&

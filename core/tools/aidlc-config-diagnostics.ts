@@ -1243,19 +1243,23 @@ function clearClaudeProvider(
 const LEGACY_CODEX_BEDROCK_COMMENT =
   /^# D-9: Amazon Bedrock is the shipped default provider \(web_search is\r?\n# unavailable there; the market-research stage degrades gracefully\)\. For\r?\n# OpenAI-auth setups, comment out model_provider and the \[model_providers\]\r?\n# block\.\r?\n/m;
 
-function legacyCodexAwsTablePattern(profile: string, region: string): RegExp {
+const LEGACY_CODEX_MODEL_PROVIDER = /^(#[ \t]?)?model_provider\s*=\s*"amazon-bedrock"\s*$/m;
+
+function legacyCodexAwsTablePattern(profile: string, region: string, commented = false): RegExp {
   const escapedProfile = profile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapedRegion = region.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const prefix = commented ? "#[ \\t]?" : "";
   return new RegExp(
-    `^\\[model_providers\\.amazon-bedrock\\.aws\\]\\r?\\n` +
-      `(?:# Set to your AWS profile/region with Bedrock model access\\.\\r?\\n)?` +
-      `profile = "${escapedProfile}"\\r?\\nregion = "${escapedRegion}"` +
+    `^${prefix}\\[model_providers\\.amazon-bedrock\\.aws\\]\\r?\\n` +
+      `(?:${prefix}# Set to your AWS profile/region with Bedrock model access\\.\\r?\\n)?` +
+      `${prefix}profile = "${escapedProfile}"\\r?\\n${prefix}region = "${escapedRegion}"` +
       `(?:\\r?\\n(?:\\r?\\n)?|(?![\\s\\S]))`,
     "m",
   );
 }
 
 const LEGACY_CODEX_AWS_TABLE = legacyCodexAwsTablePattern("default", "us-east-1");
+const LEGACY_CODEX_COMMENTED_AWS_TABLE = legacyCodexAwsTablePattern("default", "us-east-1", true);
 
 function clearCodexProvider(
   projectionRoot: string,
@@ -1272,7 +1276,7 @@ function clearCodexProvider(
     "",
   );
   content = content.replace(
-    /^model_provider\s*=\s*"amazon-bedrock"\s*(?:\r?\n|$)/m,
+    /^(?:#[ \t]?)?model_provider\s*=\s*"amazon-bedrock"\s*(?:\r?\n|$)/m,
     "",
   );
   content = content.replace(
@@ -1284,11 +1288,13 @@ function clearCodexProvider(
     "",
   );
   // Remove only the exact shipped or previously written table and its separator.
-  if (LEGACY_CODEX_AWS_TABLE.test(original)) {
-    content = content.replace(LEGACY_CODEX_AWS_TABLE, "");
+  const commented = !!LEGACY_CODEX_MODEL_PROVIDER.exec(original)?.[1];
+  const shippedTable = commented ? LEGACY_CODEX_COMMENTED_AWS_TABLE : LEGACY_CODEX_AWS_TABLE;
+  if (shippedTable.test(original)) {
+    content = content.replace(shippedTable, "");
   } else if (previousProvider?.provider === "amazon-bedrock" && previousProvider.region) {
     content = content.replace(
-      legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region),
+      legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region, commented),
       "",
     );
   }
@@ -1299,22 +1305,33 @@ export function hasLegacyCodexProviderConfig(
   content: string,
   previousProvider: ProvidersRecord | null = null,
 ): boolean {
+  const provider = LEGACY_CODEX_MODEL_PROVIDER.exec(content);
   if (
     !LEGACY_CODEX_BEDROCK_COMMENT.test(content) ||
     !/^model\s*=\s*"openai\.gpt-5\.5"\s*$/m.test(content) ||
-    !/^model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(content) ||
+    !provider ||
     !/^model_context_window\s*=\s*1000000\s*$/m.test(content) ||
     !/^model_reasoning_effort\s*=\s*"high"\s*$/m.test(content)
   ) return false;
-  const table = LEGACY_CODEX_AWS_TABLE.exec(content) ?? (
+  // The provider line and every table line must all be active or all commented.
+  const commented = !!provider[1];
+  const shippedTable = commented ? LEGACY_CODEX_COMMENTED_AWS_TABLE : LEGACY_CODEX_AWS_TABLE;
+  const table = shippedTable.exec(content) ?? (
     previousProvider?.provider === "amazon-bedrock" && previousProvider.region
-      ? legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region).exec(content)
+      ? legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region, commented).exec(content)
       : null
   );
   if (!table) return false;
   // A TOML table continues across blank lines and comments until the next header.
+  let inCommentedBody = commented;
   for (const line of content.slice(table.index + table[0].length).split(/\r?\n/)) {
     if (line.startsWith("[")) return true;
+    if (inCommentedBody) {
+      if (/^#[ \t]?(?:profile|region)\s*=/.test(line)) return false;
+      // An ordinary comment ends the commented body; later active keys are
+      // still foreign until the next real TOML header, just as for active tables.
+      if (/^\s*#/.test(line)) inCommentedBody = false;
+    }
     if (!/^\s*(?:#.*)?$/.test(line)) return false;
   }
   return true;
