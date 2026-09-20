@@ -482,9 +482,20 @@ function narrowSelection(raw: unknown): Selection {
   if (!isRecord(raw)) {
     fail("selections-json malformed: each selection must be an object", 1);
   }
-  const candidateId = str(raw.candidate_id);
+  // `surface` emits each candidate keyed `id`; a selection refers back to that
+  // same value as `candidate_id`. The values are identical -- only the key
+  // differs -- so an author who copies the key straight out of surface's output
+  // produced a file persist rejected (#1084). Accept either. `candidate_id`
+  // stays authoritative when both are present, and it remains the only name
+  // written onward, so the dedup keys, legacy markers and `Candidate-ID` audit
+  // field are unchanged.
+  //
+  // Only the TOP-LEVEL `id` is read here. A sensor selection's
+  // `manifest_fields.id` is the sensor's own stable manifest id and is a
+  // different thing; it is nested, so it is never reached by this fallback.
+  const candidateId = str(raw.candidate_id) ?? str(raw.id);
   if (candidateId === undefined) {
-    fail("selections-json malformed: selection missing candidate_id", 1);
+    fail("selections-json malformed: selection missing candidate_id (or id, as surface emits it)", 1);
   }
   const source = raw.source === "user_addition" ? "user_addition" : raw.source === "orchestrator" ? "orchestrator" : undefined;
 

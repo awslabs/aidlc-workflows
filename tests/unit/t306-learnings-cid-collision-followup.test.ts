@@ -13,7 +13,7 @@
 // legacyLineMatchesText) are not exported, so the contract is exercised
 // behaviourally through the process boundary exactly as t112/t199 do.
 //
-// TWELVE findings fixed here, one test group each:
+// THIRTEEN findings fixed here, one test group each:
 //   1. Same-intent repeat-stage collision (P1) — candidate ids restart at
 //      c1 on every surface() call, so two DIFFERENT learnings landing on
 //      the same positional c1 within the SAME intent must both persist,
@@ -47,6 +47,11 @@
 //      persist runs; syntactically valid ghost records must fail closed.
 //  12. The optional CLI slug must not override the stage bound into the
 //      selections file at surface time.
+//  13. (#1084) `surface` prints each candidate keyed `id` while `persist`'s
+//      canonical name is `candidate_id`, so a selections file that copied the
+//      key straight out of surface's output was rejected. `id` is accepted as
+//      an alias; `candidate_id` still wins when both are present, and a
+//      selection carrying neither key still fails closed.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-learnings.ts):
 //   cidMarker(intentSlug, slug, hash) => `<!-- cid:${intentSlug}:${slug}:${hash} -->`
@@ -106,12 +111,21 @@ function mkProject(): string {
 }
 
 /** Write a `type: "learning"` selections file for one candidate, with
- *  provenance pinned exactly as surface() would bind it. */
+ *  provenance pinned exactly as surface() would bind it.
+ *
+ *  `key` selects which name carries the candidate id. `candidate_id` is the
+ *  canonical name; `id` is the alias persist accepts because that is the key
+ *  surface prints (#1084). */
 function selectionsFile(
   pd: string,
   name: string,
   text: string,
-  opts: { intent?: string | null; space?: string; candidateId?: string } = {},
+  opts: {
+    intent?: string | null;
+    space?: string;
+    candidateId?: string;
+    key?: "candidate_id" | "id";
+  } = {},
 ): string {
   const p = join(pd, `${name}.json`);
   writeFileSync(
@@ -122,7 +136,7 @@ function selectionsFile(
       intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
       selections: [
         {
-          candidate_id: opts.candidateId ?? CANDIDATE_ID,
+          [opts.key ?? "candidate_id"]: opts.candidateId ?? CANDIDATE_ID,
           type: "learning",
           scope: "project",
           heading: "Corrections",
@@ -871,6 +885,85 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const result = runPersist(pd, selection, { slug: "requirements-analysis" });
       expect(result.status).not.toBe(0);
       expect(result.out).toContain("slug mismatch");
+      const practicePath = join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md");
+      const practice = existsSync(practicePath) ? readFileSync(practicePath, "utf-8") : "";
+      expect(practice).not.toContain(text);
+    }, 30000);
+  });
+
+  describe("finding #13 (#1084) — persist accepts the key surface actually emits", () => {
+    test("a selection keyed `id` (as surface prints it) persists", () => {
+      const pd = mkProject();
+      const text = "Keyed the way surface emitted it";
+      const selection = selectionsFile(pd, "keyed-by-id", text, { key: "id" });
+
+      const result = runPersist(pd, selection);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.out).rule_learned).toBe(1);
+      expect(projectMd(pd)).toContain(text);
+    }, 30000);
+
+    test("the canonical `candidate_id` keeps working unchanged", () => {
+      const pd = mkProject();
+      const text = "Keyed canonically";
+      const selection = selectionsFile(pd, "keyed-canonically", text);
+
+      const result = runPersist(pd, selection);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.out).rule_learned).toBe(1);
+      expect(projectMd(pd)).toContain(text);
+    }, 30000);
+
+    test("`candidate_id` wins when a selection carries both keys", () => {
+      const pd = mkProject();
+      const text = "Both keys present";
+      const p = join(pd, "both-keys.json");
+      writeFileSync(
+        p,
+        JSON.stringify({
+          stage_slug: STAGE_SLUG,
+          space: DEFAULT_SPACE,
+          intent: DEFAULT_RECORD_DIR,
+          selections: [
+            {
+              candidate_id: "c7",
+              id: "c9",
+              type: "learning",
+              scope: "project",
+              heading: "Corrections",
+              text,
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const result = runPersist(pd, p);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.out).rule_learned).toBe(1);
+      expect(projectMd(pd)).toContain(text);
+    }, 30000);
+
+    test("a selection carrying neither key still fails closed", () => {
+      const pd = mkProject();
+      const text = "No identifying key at all";
+      const p = join(pd, "no-key.json");
+      writeFileSync(
+        p,
+        JSON.stringify({
+          stage_slug: STAGE_SLUG,
+          space: DEFAULT_SPACE,
+          intent: DEFAULT_RECORD_DIR,
+          selections: [
+            { type: "learning", scope: "project", heading: "Corrections", text },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const result = runPersist(pd, p);
+      expect(result.status).not.toBe(0);
+      expect(result.out).toContain("missing candidate_id");
       const practicePath = join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md");
       const practice = existsSync(practicePath) ? readFileSync(practicePath, "utf-8") : "";
       expect(practice).not.toContain(text);
