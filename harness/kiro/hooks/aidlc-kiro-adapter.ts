@@ -55,6 +55,7 @@ import {
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   stateFilePath,
+  stripOrchestratorLauncherOptions,
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -485,7 +486,10 @@ if (target === "guard-tool-call") {
   const m = cmdStr.match(
     /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\b([^\n]*)/,
   );
-  const nextArgs = m ? splitKiroCommandArgs(m[1].trim()) : [];
+  // The engine strips launcher options anywhere before reading the subcommand.
+  // Otherwise next --project-dir <d> team-board looked bare-advancing, and the
+  // forwarding latch compared arguments the user never typed (#1259).
+  const nextArgs = m ? stripOrchestratorLauncherOptions(splitKiroCommandArgs(m[1].trim())) : [];
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
   // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing

@@ -2102,6 +2102,48 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   }, 30000);
 
+  test("24c: read-only next forms are not claimed as coordination and stay conversational at Stop", () => {
+    const dir = orchestrationProject();
+    const session = "read-only-next-owner";
+    driveToRunStage(dir, session);
+    for (const args of [
+      ["next", "--status"],
+      ["next", "intent", "list"],
+      ["next", "team-board"],
+      ["next", "team-board", "--status"],
+    ]) {
+      for (const form of ["direct", "source"] as const) {
+        const spec = commandSpec(dir, form, args);
+        const attempt = `${session}-${form}-${args.slice(1).join("-")}`;
+        const human = runAdapter(dir, "record-human-turn", {
+          ...FIXTURES.userPromptSubmit,
+          cwd: dir,
+          session_id: session,
+          prompt: `/aidlc ${args.slice(1).join(" ")}`,
+        });
+        expect(human.code, spec.text).toBe(0);
+        const engineSequence = marker(dir).engine_sequence;
+        const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
+        expect(pre.code, spec.text).toBe(0);
+        expect(pre.stdout, spec.text).toBe("");
+        const executed = runShell(dir, spec.text);
+        expect(executed.status, executed.stderr).toBe(0);
+        expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
+          kind: args[1] === "team-board" && args.length > 2 ? "error" : "print",
+        });
+        const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
+        expect(post.code, spec.text).toBe(0);
+        expect(marker(dir).engine_sequence, spec.text).toBe(engineSequence);
+        const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+        expect(stopped.code, spec.text).toBe(0);
+        expect(stopped.stdout, spec.text).toBe("");
+      }
+    }
+    runLifecycle(dir, session, "direct", ["next"], `${session}-control`);
+    const control = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect(JSON.parse(control.stdout)).toMatchObject({ decision: "block" });
+  }, 60000);
+
   test("25: execution-shaped classification allows inspection, wrappers, and one terminal redirect", () => {
     const dir = orchestrationProject();
     for (const command of [

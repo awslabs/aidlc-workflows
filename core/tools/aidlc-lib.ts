@@ -771,6 +771,40 @@ export function leadingOrchestratorVerb(args: readonly string[]): OrchestratorVe
   return null;
 }
 
+// One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
+// parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
+export function isReadOnlyNextArgv(args: readonly string[]): boolean {
+  if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
+  const verb = leadingOrchestratorVerb(args);
+  if (verb === "team-board") return true;
+  if (verb === "park") return false;
+  if (args[0] === "--config" && args.length <= 2) return true;
+  const workspace = parseWorkspaceCommand(args);
+  if (workspace.kind !== "not-workspace") return workspace.kind !== "create-intent";
+  for (const arg of args) {
+    if (arg === "--") break;
+    if (READ_ONLY_FLAGS.has(arg)) return true;
+  }
+  return false;
+}
+
+// Match aidlc-orchestrate.main's launcher-option extraction before subcommand
+// routing; the literal delimiter preserves all following intent text.
+export function stripOrchestratorLauncherOptions(args: readonly string[]): string[] {
+  const normalized: string[] = [];
+  let literal = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") literal = true;
+    if (!literal && (arg === "--project-dir" || arg === "--aidlc-attempt-id")) {
+      i++;
+    } else {
+      normalized.push(arg);
+    }
+  }
+  return normalized;
+}
+
 export type WorkspaceNoun = "intent" | "space";
 
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
@@ -874,14 +908,14 @@ function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecy
 // in either order after the verb. `--all` (intents only) includes archived
 // records, which the default listing hides; the `all` field is set only when
 // requested so the plain list keeps its two-field shape.
-function explicitWorkspaceList(noun: WorkspaceNoun, tokens: string[]): WorkspaceCommand {
+function explicitWorkspaceList(noun: WorkspaceNoun, tokens: readonly string[]): WorkspaceCommand {
   const flags = tokens.slice(2);
   const command: WorkspaceCommand = { kind: "list", noun, json: flags.includes("--json") };
   if (noun === "intent" && flags.includes("--all")) command.all = true;
   return command;
 }
 
-export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
+export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceCommand {
   const head = tokens[0];
 
   if (head === "space-create") {
@@ -1702,10 +1736,6 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
     return false;
   }
   if (args.shift() !== "next" || args.some((arg) => arg.includes("$"))) return false;
-  // team-board is a read-only board: routeNext Branch 1c answers with a terminal print
-  // before state inspection, without touching the engine marker, accepted or refused alike.
-  // park stays engagement because the park it names mutates.
-  if (leadingOrchestratorVerb(args) === "team-board") return true;
   // Legacy entry points do not extract the dispatcher's bare global flags.
   // Keep mixed positional/global forms conservative; trailing list flags remain valid.
   if (
@@ -1714,11 +1744,8 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
       ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)
     )
   ) return false;
-  // The --config alias (including a refused section name) returns before
-  // workflow inspection. Depth/review modifiers do not share that guarantee.
-  if (args[0] === "--config" && args.length <= 2) return true;
-  const workspace = parseWorkspaceCommand(args);
-  return workspace.kind !== "not-workspace" && workspace.kind !== "create-intent";
+  // Share the terminal early-return rule with the Copilot adapter claim gate.
+  return isReadOnlyNextArgv(args);
 }
 
 // A modifier-only next can initialize work or dispatch configuration depending

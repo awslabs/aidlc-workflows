@@ -911,6 +911,24 @@ describe("detector corpus", () => {
     )).toBe(true);
   });
 
+  test("read-only next argv is one rule for the transcript classifier", () => {
+    for (const entry of [
+      "aidlc engine orchestrate",
+      "aidlc",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+    ]) {
+      expect(d1(`${entry} next help`)).toBe(false);
+      expect(d1(`${entry} next -h`)).toBe(false);
+      expect(d1(`${entry} next --version`)).toBe(false);
+      expect(d1(`${entry} next --doctor --export`)).toBe(false);
+      expect(d1(`${entry} next --status --stage intent-capture`)).toBe(false);
+      expect(d1(`${entry} next help me build auth`)).toBe(true);
+      expect(d1(`${entry} next plugin list`)).toBe(true);
+      expect(d1(`${entry} next intent create --scope poc`)).toBe(true);
+    }
+  });
+
   test("team-board through next is terminal; park through next is engagement", () => {
     for (const entry of [
       "aidlc engine orchestrate",
