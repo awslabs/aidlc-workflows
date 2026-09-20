@@ -348,7 +348,7 @@ describe("t294 provider diagnostics", () => {
       pendingActions: [
         { id: "bedrock-model-access", status: "done" },
       ],
-    }, "claude");
+    }, "claude", "mutation");
 
     const claude = temp("aidlc-t294-provider-claude-");
     cpSync(join(DIST, "claude"), claude, { recursive: true });
@@ -595,7 +595,7 @@ describe("t294 provider diagnostics", () => {
       schemaVersion: 1,
       provider: "amazon-bedrock",
       region: "us-east-1",
-    }, "claude");
+    }, "claude", "mutation");
     const dataPath = join(project, ".claude", "tools", "data", "harness.json");
     const data = JSON.parse(readFileSync(dataPath, "utf-8"));
     data.providers = record;
@@ -1114,14 +1114,26 @@ describe("t294 config diagnostics CLI", () => {
     const project = install("codex");
     const dataPath = join(project, ".codex", "tools", "data", "harness.json");
     const data = JSON.parse(readFileSync(dataPath, "utf-8"));
-    data.providers = {
+    const legacyRecord: ProvidersRecord = {
       schemaVersion: 1,
       provider: "amazon-bedrock",
       region: "us-east-1",
+      acknowledged: true,
       pendingActions: [
         { id: "bedrock-model-access", status: "done" },
       ],
     };
+    expect(reconcileProviderActions(legacyRecord, "codex", "stored").pendingActions)
+      .toContainEqual({
+        id: "codex-provider-configuration",
+        status: "pending",
+      });
+    expect(reconcileProviderActions(legacyRecord, "codex", "mutation").pendingActions)
+      .toContainEqual({
+        id: "codex-provider-configuration",
+        status: "done",
+      });
+    data.providers = legacyRecord;
     writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
 
     expect(
@@ -1153,6 +1165,34 @@ describe("t294 config diagnostics CLI", () => {
       id: "codex-provider-configuration",
       status: "pending",
     });
+    const refreshedCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(refreshedCheck.status).toBe(1);
+    expect(refreshedCheck.stdout).toContain("codex-provider-configuration");
+
+    const acknowledged = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--acknowledge",
+      "--yes",
+    ], project, runtimeEnv());
+    expect(acknowledged.status, acknowledged.stdout + acknowledged.stderr).toBe(0);
+    const acknowledgedCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, runtimeEnv());
+    expect(acknowledgedCheck.status, acknowledgedCheck.stdout + acknowledgedCheck.stderr)
+      .toBe(0);
   }, 60_000);
 
   test("completed Codex Bedrock setup stays visibly self-attested", () => {
@@ -1496,6 +1536,39 @@ describe("t294 config diagnostics CLI", () => {
         if (change === "env") expect(after.MY_TEAM_SETTING).toBe("preserved");
       }
     }
+
+    for (const provider of ["current", "amazon-bedrock"]) {
+      const project = install("claude");
+      const configured = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--provider",
+        provider,
+        ...(provider === "amazon-bedrock" ? ["--region", "us-east-1"] : []),
+        "--yes",
+      ], project, env);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      settings.disableAllHooks = true;
+      const edited = `${JSON.stringify(settings, null, 2)}\n`;
+      writeFileSync(settingsPath, edited);
+      const refreshed = run([
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(DIST_RELEASE, "claude"),
+        "--harness",
+        "claude",
+        "--yes",
+      ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+      expect(refreshed.stdout + refreshed.stderr).toContain(".claude/settings.json");
+      expect(readFileSync(settingsPath, "utf-8")).toBe(edited);
+    }
   }, 120_000);
 
   test("opting out of a recorded Bedrock answer removes shipped Claude aliases and keeps customized ones", () => {
@@ -1608,6 +1681,59 @@ describe("t294 config diagnostics CLI", () => {
       }
     }
   }, 120_000);
+
+  test("reset removes the exact legacy Codex Bedrock block", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const shipped = readFileSync(configPath, "utf-8");
+    writeFileSync(
+      configPath,
+      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n` +
+        shipped,
+    );
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--yes",
+    ], project, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const reset = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--reset",
+      "--yes",
+    ], project, env);
+    expect(reset.status, reset.stdout + reset.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).not.toContain('model_provider = "amazon-bedrock"');
+    expect(after).not.toContain('model = "openai.gpt-5.5"');
+    expect(after).not.toContain("[model_providers.amazon-bedrock.aws]");
+    expect(after).toBe(shipped);
+    const check = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--check",
+    ], project, env);
+    expect(check.status, check.stdout + check.stderr).toBe(0);
+    expect(check.stdout).toContain("no recorded answer");
+  }, 60_000);
 
   test("check warns and show stops calling a partially edited legacy Codex block provider-neutral", () => {
     const project = install("codex");

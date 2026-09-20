@@ -1658,6 +1658,7 @@ function providerRecordFromArgs(
   let reconciled = reconcileProviderActions(
     normalizeProvidersRecord(next) as ProvidersRecord,
     selected.harness,
+    "mutation",
   );
   const done = new Set(valuesAfter(argv, "--mark-done"));
   if (done.size > 0) {
@@ -3648,12 +3649,14 @@ function preserveClaudeProviderFields(
   const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
   const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
   for (const [key, value] of Object.entries(current)) {
+    // Shipped keys plus the hook kill-switch stay framework-owned.
     if (
       key !== "companyAnnouncements" &&
       key !== "permissions" &&
       key !== "statusLine" &&
       key !== "env" &&
-      key !== "hooks"
+      key !== "hooks" &&
+      key !== "disableAllHooks"
     ) {
       staged[key] = value;
     }
@@ -3976,6 +3979,7 @@ function prepareRefreshSource(
     staged.providers = reconcileProviderActions(
       providers,
       modelHarness(distribution),
+      "stored",
     );
   } else {
     delete staged.providers;

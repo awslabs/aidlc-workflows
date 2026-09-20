@@ -492,7 +492,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
     providers: providers
       ? harnessOwnsModelAccess(distribution)
         ? providers
-        : reconcileProviderActions(providers, distribution)
+        : reconcileProviderActions(providers, distribution, "stored")
       : null,
     trust: normalizeTrustRecord(value.trust),
     project: normalizeProjectChoicesRecord(value.project),
@@ -1019,6 +1019,7 @@ export function requiredProviderActions(
 export function reconcileProviderActions(
   record: ProvidersRecord,
   harness: ModelHarness,
+  source: "mutation" | "stored",
 ): ProvidersRecord {
   const current = new Map(
     (record.pendingActions ?? []).map((action) => [action.id, action.status]),
@@ -1030,9 +1031,11 @@ export function reconcileProviderActions(
       id === "copilot-byok-configuration" ||
       id === "cursor-provider-configuration" ||
       id === "non-bedrock-provider-configuration";
+    // A stored record's generic acknowledgement cannot complete an action
+    // introduced after that record was written.
     return {
       id,
-      status: record.acknowledged && acknowledgeGated
+      status: source === "mutation" && record.acknowledged && acknowledgeGated
         ? "done"
         : current.get(id) ?? "pending",
     } as ProviderPendingAction;
@@ -1184,8 +1187,9 @@ function clearCodexProvider(
     /^model_reasoning_effort\s*=\s*"high"\s*(?:\r?\n|$)/m,
     "",
   );
+  // Stop at the legacy table's blank separator, preserving following comments.
   content = content.replace(
-    /^\[model_providers\.amazon-bedrock\.aws\]\r?\n(?:^(?!\[).*(?:\r?\n|$))*/gm,
+    /^\[model_providers\.amazon-bedrock\.aws\]\r?\n(?:(?!\[)\S.*(?:\r?\n|$))*(?:\r?\n)?/gm,
     "",
   );
   writeFileSync(path, content.replace(/\n{3,}/g, "\n\n"));
@@ -1365,7 +1369,9 @@ export function applyConfigDiagnosticRecords(
   if (harnessOwnsModelAccess(harness)) return;
   const provider = records.providers;
   if (!provider?.provider) {
-    if (harness === "opencode") {
+    if (harness === "claude") clearClaudeProvider(projectionRoot, harnessDir);
+    else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir);
+    else if (harness === "opencode") {
       clearOpenCodeProvider(projectionRoot, previousProvider);
     }
     return;
