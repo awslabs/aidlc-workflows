@@ -11,6 +11,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 
 const MAX_CHANGED_FILES = 500;
 const MAX_REVIEW_BYTES = 100_000;
+const CURRENT_AI_REVIEWS_FILE = "current-ai-reviews.json";
+const AI_REVIEW_MARKER = "<!-- ai-pr-review context=";
 
 export type Priority = "P0" | "P1" | "P2" | "P3";
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
@@ -61,6 +63,45 @@ export interface ReviewMetadata {
   body: string;
 }
 
+export interface DiscussionActor {
+  login: string;
+  association: string;
+  maintainer: boolean;
+}
+
+export interface DiscussionEntry {
+  id: number;
+  kind: "issue-comment" | "review" | "review-comment" | "ai-review";
+  actor: DiscussionActor;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  state?: string;
+  commitId?: string;
+  path?: string;
+  line?: number | null;
+  side?: string | null;
+  replyToId?: number | null;
+}
+
+export interface LinkedIssueDiscussion {
+  number: number;
+  title: string;
+  state: string;
+  body: string;
+  actor: DiscussionActor;
+  comments: DiscussionEntry[];
+}
+
+export interface ReviewDiscussion {
+  version: 1;
+  pullRequest: number;
+  issueComments: DiscussionEntry[];
+  reviews: DiscussionEntry[];
+  reviewComments: DiscussionEntry[];
+  linkedIssues: LinkedIssueDiscussion[];
+}
+
 export interface Finding {
   priority: Priority;
   title: string;
@@ -108,6 +149,226 @@ function git(args: string[], encoding?: BufferEncoding, cwd = process.cwd()): Bu
     maxBuffer: Number.POSITIVE_INFINITY,
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+function gh(args: string[], executable = "gh"): unknown {
+  return JSON.parse(execFileSync(executable, args, {
+    encoding: "utf8",
+    maxBuffer: Number.POSITIVE_INFINITY,
+    stdio: ["ignore", "pipe", "pipe"],
+  }));
+}
+
+function record(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function records(value: unknown, label: string): Record<string, unknown>[] {
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  return value.map((entry, index) => record(entry, `${label}[${index}]`));
+}
+
+function paginatedRecords(endpoint: string, ghExecutable = "gh"): Record<string, unknown>[] {
+  const pages = gh(["api", "--paginate", "--slurp", endpoint], ghExecutable);
+  if (!Array.isArray(pages)) throw new Error(`${endpoint} pagination did not return pages`);
+  return pages.flatMap((page, index) => records(page, `${endpoint} page ${index}`));
+}
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function integer(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${label} must be an integer`);
+  }
+  return value;
+}
+
+function actor(value: unknown, association: unknown): DiscussionActor {
+  const user = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const login = text(user.login) || "[deleted]";
+  const normalizedAssociation = text(association).toUpperCase();
+  return {
+    login,
+    association: normalizedAssociation,
+    maintainer: ["OWNER", "MEMBER", "COLLABORATOR"].includes(normalizedAssociation),
+  };
+}
+
+function date(value: unknown): string {
+  return text(value);
+}
+
+function commentEntry(
+  value: Record<string, unknown>,
+  kind: "issue-comment" | "review-comment",
+): DiscussionEntry {
+  const entry: DiscussionEntry = {
+    id: integer(value.id, `${kind} id`),
+    kind,
+    actor: actor(value.user, value.author_association),
+    body: text(value.body),
+    createdAt: date(value.created_at),
+    updatedAt: date(value.updated_at),
+  };
+  if (kind === "review-comment") {
+    entry.commitId = text(value.commit_id);
+    entry.path = text(value.path);
+    entry.line = typeof value.line === "number" ? value.line : null;
+    entry.side = typeof value.side === "string" ? value.side : null;
+    entry.replyToId = typeof value.in_reply_to_id === "number" ? value.in_reply_to_id : null;
+  }
+  return entry;
+}
+
+function reviewEntry(value: Record<string, unknown>): DiscussionEntry {
+  const body = text(value.body);
+  const reviewActor = actor(value.user, value.author_association);
+  return {
+    id: integer(value.id, "review id"),
+    kind: reviewActor.login === "github-actions[bot]" && body.startsWith(AI_REVIEW_MARKER)
+      ? "ai-review"
+      : "review",
+    actor: reviewActor,
+    body,
+    createdAt: date(value.submitted_at),
+    updatedAt: date(value.submitted_at),
+    state: text(value.state),
+    commitId: text(value.commit_id),
+  };
+}
+
+function byTimeAndId(left: DiscussionEntry, right: DiscussionEntry): number {
+  return left.createdAt.localeCompare(right.createdAt) || left.id - right.id;
+}
+
+export function normalizeDiscussion(
+  pullRequest: number,
+  head: string,
+  issueCommentsRaw: Record<string, unknown>[],
+  reviewsRaw: Record<string, unknown>[],
+  reviewCommentsRaw: Record<string, unknown>[],
+  linkedIssuesRaw: Array<{
+    issue: Record<string, unknown>;
+    comments: Record<string, unknown>[];
+  }>,
+): { discussion: ReviewDiscussion; currentAiReviews: DiscussionEntry[] } {
+  if (!Number.isInteger(pullRequest) || pullRequest < 1) {
+    throw new Error("pull request number must be a positive integer");
+  }
+  assertSha(head, "head");
+  const normalizedReviews = reviewsRaw.map(reviewEntry).sort(byTimeAndId);
+  const currentAiReviews = normalizedReviews.filter(
+    entry => entry.kind === "ai-review" && entry.commitId === head,
+  );
+  const discussion: ReviewDiscussion = {
+    version: 1,
+    pullRequest,
+    issueComments: issueCommentsRaw.map(value => commentEntry(value, "issue-comment")).sort(byTimeAndId),
+    reviews: normalizedReviews.filter(
+      entry => entry.kind !== "ai-review" || entry.commitId !== head,
+    ),
+    reviewComments: reviewCommentsRaw
+      .map(value => commentEntry(value, "review-comment"))
+      .sort(byTimeAndId),
+    linkedIssues: linkedIssuesRaw
+      .map(({ issue, comments }) => ({
+        number: integer(issue.number, "linked issue number"),
+        title: text(issue.title),
+        state: text(issue.state),
+        body: text(issue.body),
+        actor: actor(issue.user, issue.author_association),
+        comments: comments
+          .map(value => commentEntry(value, "issue-comment"))
+          .sort(byTimeAndId),
+      }))
+      .sort((left, right) => left.number - right.number),
+  };
+  return { discussion, currentAiReviews };
+}
+
+function linkedIssueNumbers(
+  repository: string,
+  pullRequest: number,
+  ghExecutable = "gh",
+): number[] {
+  const [owner, name, extra] = repository.split("/");
+  if (!owner || !name || extra) throw new Error("repository must be owner/name");
+  const query = `query($owner:String!,$name:String!,$number:Int!,$endCursor:String) {
+    repository(owner:$owner,name:$name) {
+      pullRequest(number:$number) {
+        closingIssuesReferences(first:100,after:$endCursor) {
+          nodes { number }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }`;
+  const pages = gh([
+    "api", "graphql", "--paginate", "--slurp",
+    "-f", `query=${query}`,
+    "-F", `owner=${owner}`,
+    "-F", `name=${name}`,
+    "-F", `number=${pullRequest}`,
+  ], ghExecutable);
+  if (!Array.isArray(pages)) throw new Error("linked issue query did not return pages");
+  const numbers = new Set<number>();
+  for (const [index, pageValue] of pages.entries()) {
+    const page = record(pageValue, `linked issue page ${index}`);
+    const data = record(page.data, `linked issue page ${index} data`);
+    const repositoryValue = record(data.repository, `linked issue page ${index} repository`);
+    const pr = record(repositoryValue.pullRequest, `linked issue page ${index} pull request`);
+    const references = record(pr.closingIssuesReferences, `linked issue page ${index} references`);
+    for (const node of records(references.nodes, `linked issue page ${index} nodes`)) {
+      numbers.add(integer(node.number, "linked issue number"));
+    }
+  }
+  return [...numbers].sort((left, right) => left - right);
+}
+
+export function buildDiscussion(
+  repository: string,
+  pullRequest: number,
+  head: string,
+  output: string,
+  currentAiOutput: string,
+  ghExecutable = "gh",
+): void {
+  const issueComments = paginatedRecords(
+    `repos/${repository}/issues/${pullRequest}/comments`,
+    ghExecutable,
+  );
+  const reviews = paginatedRecords(
+    `repos/${repository}/pulls/${pullRequest}/reviews`,
+    ghExecutable,
+  );
+  const reviewComments = paginatedRecords(
+    `repos/${repository}/pulls/${pullRequest}/comments`,
+    ghExecutable,
+  );
+  const linkedIssues = linkedIssueNumbers(repository, pullRequest, ghExecutable).map(number => ({
+    issue: record(
+      gh(["api", `repos/${repository}/issues/${number}`], ghExecutable),
+      `linked issue ${number}`,
+    ),
+    comments: paginatedRecords(`repos/${repository}/issues/${number}/comments`, ghExecutable),
+  }));
+  const normalized = normalizeDiscussion(
+    pullRequest,
+    head,
+    issueComments,
+    reviews,
+    reviewComments,
+    linkedIssues,
+  );
+  writeFileSync(output, `${JSON.stringify(normalized.discussion, null, 2)}\n`);
+  writeFileSync(currentAiOutput, `${JSON.stringify(normalized.currentAiReviews, null, 2)}\n`);
 }
 
 function safeRepoPath(path: string): string {
@@ -188,12 +449,13 @@ function contextDigest(root: string): string {
   const hash = createHash("sha256");
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory).sort()) {
-      if (entry === "context-id.txt") continue;
       const path = join(directory, entry);
+      const contextPath = relative(root, path);
+      if (contextPath === "context-id.txt" || contextPath === CURRENT_AI_REVIEWS_FILE) continue;
       const stats = statSync(path);
       if (stats.isDirectory()) visit(path);
       else {
-        hash.update(relative(root, path));
+        hash.update(contextPath);
         hash.update("\0");
         hash.update(readFileSync(path));
         hash.update("\0");
@@ -525,6 +787,16 @@ let lastValidateInput: string | null = null;
 
 function main(): void {
   const [command, ...args] = process.argv.slice(2);
+  if (command === "build-discussion") {
+    buildDiscussion(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--pr")),
+      argValue(args, "--head"),
+      argValue(args, "--output"),
+      argValue(args, "--current-ai-output"),
+    );
+    return;
+  }
   if (command === "build-context") {
     buildContext(
       argValue(args, "--base"),
@@ -557,7 +829,7 @@ function main(): void {
     return;
   }
   throw new Error(
-    "usage: ai-pr-review.ts build-context|validate (run with --help in repository docs)",
+    "usage: ai-pr-review.ts build-discussion|build-context|validate (run with --help in repository docs)",
   );
 }
 

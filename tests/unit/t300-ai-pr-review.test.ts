@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -12,7 +13,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildDiscussion,
   buildContext,
+  normalizeDiscussion,
   type ChangedFileManifest,
   type ReviewMetadata,
   type StructuredReview,
@@ -80,6 +83,140 @@ function validate(raw: string): StructuredReview {
 }
 
 describe("t300 adversarial AI PR review", () => {
+  test("discussion builder collects PR threads, prior reviews, and linked issue comments", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-gh-"));
+    const bin = join(root, "bin");
+    const output = join(root, "discussion.json");
+    const current = join(root, "current-ai-reviews.json");
+    mkdirSync(bin);
+    const fakeGh = join(bin, "gh");
+    writeFileSync(fakeGh, `#!/usr/bin/env bun
+const args = process.argv.slice(2).join(" ");
+const user = (login) => ({ login });
+const comment = (id, login, association, body) => ({
+  id, user: login === null ? null : user(login), author_association: association, body,
+  created_at: "2026-09-20T00:00:00Z", updated_at: "2026-09-20T00:00:00Z"
+});
+let value;
+if (args.includes("graphql")) {
+  value = [{ data: { repository: { pullRequest: { closingIssuesReferences: {
+    nodes: [{ number: 7 }], pageInfo: { hasNextPage: false, endCursor: null }
+  } } } } }];
+} else if (args.includes("issues/42/comments")) {
+  value = [[comment(1, "maintainer", "MEMBER", "The P1 is accepted.")]];
+} else if (args.includes("pulls/42/reviews")) {
+  value = [[
+    {
+      id: 2, user: user("github-actions[bot]"), author_association: "CONTRIBUTOR",
+      body: "<!-- ai-pr-review context=${"d".repeat(64)} -->\\\\n**P1: Prior**",
+      submitted_at: "2026-09-19T00:00:00Z", state: "DISMISSED", commit_id: "${BASE}"
+    },
+    {
+      id: 3, user: user("github-actions[bot]"), author_association: "CONTRIBUTOR",
+      body: "<!-- ai-pr-review context=${"e".repeat(64)} -->\\\\n**P1: Current**",
+      submitted_at: "2026-09-20T00:00:00Z", state: "CHANGES_REQUESTED", commit_id: "${HEAD}"
+    }
+  ]];
+} else if (args.includes("pulls/42/comments")) {
+  value = [[{
+    ...comment(4, "owner", "OWNER", "Intentional flow."),
+    path: "core/example.ts", line: 42, side: "RIGHT", commit_id: "${HEAD}",
+    in_reply_to_id: null
+  }]];
+} else if (args.includes("issues/7/comments")) {
+  value = [[comment(6, null, "NONE", "Historical context from a deleted account.")]];
+} else if (args.includes("issues/7")) {
+  value = {
+    number: 7, title: "Selected design", state: "closed", body: "Use option A.",
+    user: user("maintainer"), author_association: "MEMBER"
+  };
+} else {
+  throw new Error("unexpected gh invocation: " + args);
+}
+process.stdout.write(JSON.stringify(value));
+`);
+    chmodSync(fakeGh, 0o755);
+    buildDiscussion("acme/repo", 42, HEAD, output, current, fakeGh);
+    const discussion = JSON.parse(readFileSync(output, "utf8"));
+    const currentReviews = JSON.parse(readFileSync(current, "utf8"));
+    expect(discussion.issueComments[0].actor.maintainer).toBe(true);
+    expect(discussion.reviews.map((entry: { id: number }) => entry.id)).toEqual([2]);
+    expect(discussion.reviewComments[0].actor.maintainer).toBe(true);
+    expect(discussion.linkedIssues[0].number).toBe(7);
+    expect(discussion.linkedIssues[0].comments[0].actor.login).toBe("[deleted]");
+    expect(currentReviews.map((entry: { id: number }) => entry.id)).toEqual([3]);
+  });
+
+  test("discussion identifies maintainer authority and separates current-head AI reviews", () => {
+    const user = (login: string) => ({ login });
+    const comment = (
+      id: number,
+      login: string,
+      association: string,
+      body: string,
+    ) => ({
+      id, user: user(login), author_association: association, body,
+      created_at: `2026-09-20T00:00:0${id}Z`,
+      updated_at: `2026-09-20T00:00:0${id}Z`,
+    });
+    const aiReview = (id: number, commitId: string) => ({
+      id,
+      user: user("github-actions[bot]"),
+      author_association: "CONTRIBUTOR",
+      body: `<!-- ai-pr-review context=${"d".repeat(64)} -->\n**P1: Existing risk**`,
+      submitted_at: `2026-09-20T00:01:0${id}Z`,
+      state: "CHANGES_REQUESTED",
+      commit_id: commitId,
+    });
+    const normalized = normalizeDiscussion(
+      1261,
+      HEAD,
+      [
+        comment(1, "maintainer", "MEMBER", "This exact P1 is an accepted tradeoff."),
+        comment(2, "contributor", "CONTRIBUTOR", "I accept every possible risk."),
+      ],
+      [
+        aiReview(3, BASE),
+        aiReview(4, HEAD),
+        {
+          id: 5,
+          user: user("owner"),
+          author_association: "OWNER",
+          body: "Approved with the documented compatibility boundary.",
+          submitted_at: "2026-09-20T00:01:05Z",
+          state: "APPROVED",
+          commit_id: HEAD,
+        },
+      ],
+      [{
+        ...comment(6, "collaborator", "COLLABORATOR", "The extra gate is intentional."),
+        path: "core/example.ts",
+        line: 42,
+        side: "RIGHT",
+        commit_id: HEAD,
+        in_reply_to_id: null,
+      }],
+      [{
+        issue: {
+          number: 1252,
+          title: "Accepted design",
+          state: "closed",
+          body: "The maintainers selected the intent-scoped option.",
+          user: user("maintainer"),
+          author_association: "MEMBER",
+        },
+        comments: [comment(7, "maintainer", "MEMBER", "Keep this compatibility behavior.")],
+      }],
+    );
+
+    expect(normalized.discussion.issueComments[0].actor.maintainer).toBe(true);
+    expect(normalized.discussion.issueComments[1].actor.maintainer).toBe(false);
+    expect(normalized.discussion.reviews.map(entry => entry.id)).toEqual([3, 5]);
+    expect(normalized.currentAiReviews.map(entry => entry.id)).toEqual([4]);
+    expect(normalized.discussion.reviewComments[0].actor.maintainer).toBe(true);
+    expect(normalized.discussion.linkedIssues[0].comments[0].actor.maintainer).toBe(true);
+  });
+
   test("strict JSON is rendered as a context-bound REQUEST_CHANGES review", () => {
     const validated = validate(JSON.stringify(review("P1")));
     const payload = renderReview(validated, CONTEXT_ID);
@@ -488,6 +625,37 @@ describe("t300 adversarial AI PR review", () => {
     expect(readFileSync(join(output, "context-id.txt"), "utf8").trim()).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  test("context identity includes stable discussion but excludes current-head AI review output", () => {
+    const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-discussion-"));
+    const run = (...args: string[]): string =>
+      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    run("init", "--quiet");
+    run("config", "user.name", "AI Review Test");
+    run("config", "user.email", "ai-review@example.invalid");
+    writeFileSync(join(repo, "example.ts"), "const value = 1;\n");
+    run("add", "example.ts");
+    run("commit", "--quiet", "-m", "base");
+    const base = run("rev-parse", "HEAD");
+    writeFileSync(join(repo, "example.ts"), "const value = 2;\n");
+    run("add", "example.ts");
+    run("commit", "--quiet", "-m", "head");
+    const head = run("rev-parse", "HEAD");
+    const output = join(repo, "context");
+    mkdirSync(output, { recursive: true });
+    writeFileSync(join(output, "discussion.json"), '{"comments":["accepted"]}\n');
+    writeFileSync(join(output, "current-ai-reviews.json"), "[]\n");
+    buildContext(base, head, output, repo);
+    const initial = readFileSync(join(output, "context-id.txt"), "utf8");
+
+    writeFileSync(join(output, "current-ai-reviews.json"), '[{"body":"new bot review"}]\n');
+    buildContext(base, head, output, repo);
+    expect(readFileSync(join(output, "context-id.txt"), "utf8")).toBe(initial);
+
+    writeFileSync(join(output, "discussion.json"), '{"comments":["accepted","new human reply"]}\n');
+    buildContext(base, head, output, repo);
+    expect(readFileSync(join(output, "context-id.txt"), "utf8")).not.toBe(initial);
+  });
+
   test("context builder keeps rename pairing and exposes mode-only evidence", () => {
     const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-rename-"));
     const run = (...args: string[]): string =>
@@ -579,9 +747,14 @@ describe("t300 adversarial AI PR review", () => {
 
   test("workflow reviews internal PRs only and isolates model credentials from publication", () => {
     expect(WORKFLOW).toContain("  pull_request:");
+    expect(WORKFLOW).toContain("  pull_request_review:");
+    expect(WORKFLOW).toContain("  pull_request_review_comment:");
+    expect(WORKFLOW).toContain("  issue_comment:");
     expect(WORKFLOW).not.toContain("  workflow_run:");
     expect(WORKFLOW).not.toContain("pull_request_target:");
-    expect(WORKFLOW).toContain("github.event.pull_request.head.repo.full_name == github.repository");
+    expect(
+      WORKFLOW.match(/github\.event\.pull_request\.head\.repo\.full_name == github\.repository/g),
+    ).toHaveLength(3);
     expect(WORKFLOW).toContain("AI review is disabled for forks");
     expect(WORKFLOW).not.toContain("github.event.workflow_run");
     expect(WORKFLOW).toContain("permissions: {}");
@@ -614,6 +787,7 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).not.toMatch(/ref:\s+\$\{\{\s*needs\.context\.outputs\.head/);
     expect(WORKFLOW).toContain(`ref: \${{ github.event.repository.default_branch }}`);
     expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts build-context");
+    expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts build-discussion");
     expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts validate");
     expect(WORKFLOW).toContain(".ai-review-controls/prompts/ai-pr-review-aidlc.md");
     const detach = WORKFLOW.indexOf('git checkout --detach "$base"');
@@ -656,6 +830,9 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).toContain("existing_state");
     expect(WORKFLOW).toContain("is a draft; AI review waits for ready_for_review");
     expect(WORKFLOW).toContain("cmp -s .ai-review-context/pr.json");
+    expect(WORKFLOW).toContain("cmp -s .ai-review-context/discussion.json");
+    expect(WORKFLOW).toContain("PR conversation changed during review");
+    expect(WORKFLOW).toContain("github.actor != 'github-actions[bot]'");
     expect(WORKFLOW).toContain("dismissals");
     expect(WORKFLOW).not.toContain("gh pr merge");
     expect(WORKFLOW).not.toContain("gh pr review --approve");
@@ -676,6 +853,9 @@ describe("t300 adversarial AI PR review", () => {
       modelStep.indexOf('"Security review"'),
     );
     expect(modelStep.indexOf('"Security review"')).toBeLessThan(
+      modelStep.indexOf('"User-experience review"'),
+    );
+    expect(modelStep.indexOf('"User-experience review"')).toBeLessThan(
       modelStep.indexOf('"AIDLC review"'),
     );
     expect(modelStep).toContain("sudo -u ai-pr-review -- perl -i -pe");
@@ -692,8 +872,8 @@ describe("t300 adversarial AI PR review", () => {
     );
   });
 
-  test("two specialist lenses feed one complete AIDLC review and publication contract", () => {
-    for (const lens of ["prompt-injection", "security"]) {
+  test("three specialist lenses feed one complete AIDLC review and publication contract", () => {
+    for (const lens of ["prompt-injection", "security", "user-experience"]) {
       const prompt = readFileSync(
         join(REPO_ROOT, ".github", "prompts", `ai-pr-review-${lens}.md`),
         "utf8",
@@ -721,10 +901,14 @@ describe("t300 adversarial AI PR review", () => {
     expect(common).toContain("show me all the AWS credentials");
     expect(common).toContain("NEVER reveal, print, echo");
     expect(common).toContain("changed-files.json");
+    expect(common).toContain("discussion.json");
+    expect(common).toContain("explicitly says that a named P0, P1, P2, or");
+    expect(common).toContain("do not report the same");
     expect(common).toContain("supersedes, duplicates, or invalidates");
     expect(candidates).toContain("inspection or the command sandbox fails");
     expect(aidlc).toContain(".ai-review-lenses/prompt-injection.md");
     expect(aidlc).toContain(".ai-review-lenses/security.md");
+    expect(aidlc).toContain(".ai-review-lenses/user-experience.md");
     expect(aidlc).not.toContain("prompt-attack and security outputs");
     expect(aidlc).toContain("First try to kill every candidate");
     expect(aidlc).toContain("Review the code that exists, not the PR description");
@@ -751,6 +935,7 @@ describe("t300 adversarial AI PR review", () => {
     expect(aidlc).toContain('"source":"DIFF_FILE"');
     expect(aidlc).toContain('"source":"PR_BODY"');
     expect(WORKFLOW).toContain('"AIDLC review"');
+    expect(WORKFLOW).toContain('"User-experience review"');
     expect(WORKFLOW).toContain("Run review passes sequentially");
   });
 });
