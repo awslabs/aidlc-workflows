@@ -771,6 +771,23 @@ export function leadingOrchestratorVerb(args: readonly string[]): OrchestratorVe
   return null;
 }
 
+// parseNextFlags in aidlc-orchestrate.ts consumes these values regardless of
+// spelling: `--report --status` composes from a file named "--status", not a
+// read-only mode switch. --review, --change-control and ceremony flags refuse
+// --prefixed values and are deliberately absent.
+const VALUED_NEXT_FLAGS: ReadonlySet<string> = new Set([
+  "--scope",
+  "--stage",
+  "--phase",
+  "--depth",
+  "--test-strategy",
+  "--report",
+  "--claim",
+  "--release",
+  "--team",
+  "--rhythm",
+]);
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(args: readonly string[]): boolean {
@@ -781,9 +798,11 @@ export function isReadOnlyNextArgv(args: readonly string[]): boolean {
   if (args[0] === "--config" && args.length <= 2) return true;
   const workspace = parseWorkspaceCommand(args);
   if (workspace.kind !== "not-workspace") return workspace.kind !== "create-intent";
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === "--") break;
     if (READ_ONLY_FLAGS.has(arg)) return true;
+    if (VALUED_NEXT_FLAGS.has(arg)) i++;
   }
   return false;
 }

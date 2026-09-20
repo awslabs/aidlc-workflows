@@ -2139,6 +2139,24 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(stopped.stdout, spec.text).toBe("");
       }
     }
+    const negative = commandSpec(dir, "direct", ["next", "--report", "--status"]);
+    const human = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit,
+      cwd: dir,
+      session_id: session,
+      prompt: "/aidlc --report --status",
+    });
+    expect(human.code, negative.text).toBe(0);
+    const before = marker(dir);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, negative.text, `${session}-valued`));
+    expect(pre.code, negative.text).toBe(0);
+    expect(rewrittenCommand(pre), negative.text).toContain("--aidlc-attempt-id");
+    expect(marker(dir).engine_sequence, negative.text).toBe(Number(before.event_sequence) + 1);
+    expect(Number(marker(dir).engine_sequence), negative.text).toBeGreaterThan(Number(before.engine_sequence));
+    // Claim only: --status is the report path, not a read-only mode switch.
+    const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect(stopped.code, negative.text).toBe(0);
+    expect(JSON.parse(stopped.stdout)).toMatchObject({ decision: "block" });
     runLifecycle(dir, session, "direct", ["next"], `${session}-control`);
     const control = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     expect(JSON.parse(control.stdout)).toMatchObject({ decision: "block" });
