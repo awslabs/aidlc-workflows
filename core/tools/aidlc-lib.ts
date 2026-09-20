@@ -797,6 +797,8 @@ export function isReadOnlyNextArgv(args: readonly string[]): boolean {
   if (verb === "park") return false;
   // parseNextFlags returns on --config at any position (config print or usage refusal) before workflow inspection, without honoring the -- delimiter.
   if (args.includes("--config")) return true;
+  // Leading plugin/knowledge nouns own the argv and are not in routeNext's marker exclusion, so a trailing read-only spelling is theirs, not a mode switch.
+  if (parsePluginCommand(args).kind !== "not-plugin" || parseKnowledgeCommand(args).kind !== "not-knowledge") return false;
   const workspace = parseWorkspaceCommand(args);
   if (workspace.kind !== "not-workspace") return workspace.kind !== "create-intent";
   for (let i = 0; i < args.length; i++) {
@@ -1174,7 +1176,7 @@ export type PluginCommand =
   | { kind: "error"; message: string }
   | { kind: "run"; argv: string[] };
 
-export function parsePluginCommand(args: string[]): PluginCommand {
+export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (args[0] !== "plugin") return { kind: "not-plugin" };
   const verb = args[1];
   if (verb === "help" || verb === "-h" || verb === "--help") {
@@ -1279,7 +1281,7 @@ export type KnowledgeCommand =
 //
 // Unlike `plugin`, the verb IS the subcommand: the DocumentKB tool owns its own
 // verb names, so there is no translation table to keep in sync.
-export function parseKnowledgeCommand(args: string[]): KnowledgeCommand {
+export function parseKnowledgeCommand(args: readonly string[]): KnowledgeCommand {
   if (args[0] !== "knowledge") return { kind: "not-knowledge" };
   const verb = args[1];
   if (verb === "help" || verb === "-h" || verb === "--help") {

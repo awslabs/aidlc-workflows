@@ -2159,6 +2159,27 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     expect(stopped.code, negative.text).toBe(0);
     expect(JSON.parse(stopped.stdout)).toMatchObject({ decision: "block" });
+    // A fresh workflow keeps the prior Stop's no-progress cap out of this claim check.
+    const pluginDir = orchestrationProject();
+    driveToRunStage(pluginDir, session);
+    const pluginNegative = commandSpec(pluginDir, "direct", ["next", "plugin", "list", "--status"]);
+    const pluginHuman = runAdapter(pluginDir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit,
+      cwd: pluginDir,
+      session_id: session,
+      prompt: "/aidlc plugin list --status",
+    });
+    expect(pluginHuman.code, pluginNegative.text).toBe(0);
+    const pluginBefore = marker(pluginDir);
+    const pluginPre = runAdapter(pluginDir, "guard-tool-call", commandPayload(pluginDir, session, pluginNegative.text, `${session}-plugin`));
+    expect(pluginPre.code, pluginNegative.text).toBe(0);
+    expect(rewrittenCommand(pluginPre), pluginNegative.text).toContain("--aidlc-attempt-id");
+    expect(marker(pluginDir).engine_sequence, pluginNegative.text).toBe(Number(pluginBefore.event_sequence) + 1);
+    expect(Number(marker(pluginDir).engine_sequence), pluginNegative.text).toBeGreaterThan(Number(pluginBefore.engine_sequence));
+    // Claim only: --status belongs to the plugin argv, not a read-only mode switch.
+    const pluginStopped = runAdapter(pluginDir, "continue-workflow", { ...FIXTURES.stop, cwd: pluginDir, session_id: session });
+    expect(pluginStopped.code, pluginNegative.text).toBe(0);
+    expect(JSON.parse(pluginStopped.stdout)).toMatchObject({ decision: "block" });
     runLifecycle(dir, session, "direct", ["next"], `${session}-control`);
     const control = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     expect(JSON.parse(control.stdout)).toMatchObject({ decision: "block" });

@@ -278,6 +278,9 @@ test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
     ["intent", "create", "--scope", "poc"],
     ["--", "--status"],
     ["plugin", "list"],
+    ["plugin", "sync", "--status"],
+    ["plugin", "help"],
+    ["knowledge", "list", "--status"],
     ["help", "me"],
   ]) {
     expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);

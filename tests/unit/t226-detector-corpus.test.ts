@@ -928,6 +928,8 @@ describe("detector corpus", () => {
       expect(d1(`${entry} next --config project --stage intent-capture`)).toBe(false);
       expect(d1(`${entry} next help me build auth`)).toBe(true);
       expect(d1(`${entry} next plugin list`)).toBe(true);
+      expect(d1(`${entry} next plugin sync --status`)).toBe(true);
+      expect(d1(`${entry} next knowledge list --status`)).toBe(true);
       expect(d1(`${entry} next intent create --scope poc`)).toBe(true);
       expect(d1(`${entry} next --report --status`)).toBe(true);
       expect(d1(`${entry} next --scope --status`)).toBe(true);
