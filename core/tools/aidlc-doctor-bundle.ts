@@ -502,6 +502,51 @@ function extractStatus(stateContent: string): string {
   return m ? m[1] : UNKNOWN;
 }
 
+function extractCurrentStage(stateContent: string): string {
+  const m = stateContent.match(/^- \*\*Current Stage\*\*:\s*(\S+)/m);
+  return m ? m[1] : UNKNOWN;
+}
+
+// The checkbox the orchestrator routes on, per stage. First-wins: a state file
+// carrying more than one per-unit Stage Progress block repeats a slug, and
+// setCheckbox flips the FIRST match, so a last-wins map would read a stage the
+// engine considers complete as pending.
+function checkboxStateBySlug(stateContent: string): Map<string, string> {
+  const bySlug = new Map<string, string>();
+  for (const line of parseCheckboxes(stateContent)) {
+    if (!bySlug.has(line.slug)) bySlug.set(line.slug, line.state);
+  }
+  return bySlug;
+}
+
+// Stages the ledger says are underway or done in the CURRENT attempt.
+// Scoped from the latest WORKFLOW_STARTED *or* STAGE_JUMPED: a backward jump
+// resets the downstream checkboxes to pending on purpose while their earlier
+// STAGE_STARTED/STAGE_COMPLETED rows stay in the buffer, so flooring only at
+// WORKFLOW_STARTED would read a routine jump as drift. Isolated `--single`
+// runs are dropped for the same reason they are dropped everywhere else: they
+// deliberately leave the main workflow's checkboxes untouched.
+function ledgerStageActivity(audit: string): { started: Set<string>; completed: Set<string> } {
+  const events = parseAuditEvents(audit);
+  let floor = 0;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].event === "WORKFLOW_STARTED" || events[i].event === "STAGE_JUMPED") {
+      floor = i;
+      break;
+    }
+  }
+  const started = new Set<string>();
+  const completed = new Set<string>();
+  for (const event of events.slice(floor)) {
+    if (event.event !== "STAGE_STARTED" && event.event !== "STAGE_COMPLETED") continue;
+    if ((auditBlockField(event.block, "Workflow") ?? "").startsWith("single-stage:")) continue;
+    const slug = auditBlockField(event.block, "Stage") ?? auditBlockField(event.block, "Slug");
+    if (!slug) continue;
+    (event.event === "STAGE_STARTED" ? started : completed).add(slug);
+  }
+  return { started, completed };
+}
+
 // Gate outcome for a stage: the LATEST gate event wins, honouring order. `evs`
 // is timestamp-sorted (parseAuditEvents) and scoped to one run, so a re-opened
 // gate — an STAGE_AWAITING_APPROVAL recorded AFTER an earlier GATE_APPROVED —
@@ -589,6 +634,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     authoredInputsNewestMtimeMs,
     markers,
     stateContent,
+    audit,
   } = input;
 
   // Rule 1 — open / unresolved gates. A stage whose gate never resolved is the
@@ -690,6 +736,56 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
         remedy:
           "A state write was lost after the audit event landed. Set Status=Completed " +
           "in aidlc-state.md, or restart the workflow if the state is otherwise inconsistent.",
+        safeToAutomate: false,
+      });
+    }
+  }
+
+  // Rule 3b — per-stage state / audit divergence. Rule 3 above compares exactly
+  // one pair (WORKFLOW_COMPLETED vs Status); nothing compared the per-stage
+  // checkboxes, which are what the orchestrator routes on and what `--status`
+  // and the statusline render. A lost state write therefore left the ledger and
+  // every status surface disagreeing in silence, and `report` refused the stage
+  // as "still pending" with no diagnostic naming the cause (#1190).
+  if (stateContent) {
+    const boxes = checkboxStateBySlug(stateContent);
+    const ledger = ledgerStageActivity(audit);
+    const completedButPending = [...ledger.completed].filter((slug) => boxes.get(slug) === "pending");
+    const startedButPending = [...ledger.started].filter(
+      (slug) => boxes.get(slug) === "pending" && !ledger.completed.has(slug),
+    );
+    if (completedButPending.length > 0 || startedButPending.length > 0) {
+      const named = [...completedButPending, ...startedButPending].sort();
+      findings.push({
+        id: "stage-state-audit-drift",
+        severity: "warning",
+        summary:
+          `The audit records ${named.length === 1 ? "a stage" : `${named.length} stages`} as ` +
+          `underway or complete whose Stage Progress checkbox is still unchecked: ${named.join(", ")}.`,
+        evidence: { completedButPending, startedButPending },
+        remedy:
+          "A state write was lost after the audit event landed, so aidlc-state.md understates " +
+          "progress. `report --result` refuses a stage whose checkbox is unchecked, and " +
+          "`--status` and the statusline read the same file, so both under-report the run. " +
+          "Reconcile aidlc-state.md with the audit before continuing.",
+        safeToAutomate: false,
+      });
+    }
+
+    // The same divergence, without needing the ledger: Current Stage naming a
+    // stage whose checkbox never left pending is the exact state `report` keys
+    // on when it refuses. A hand-corrected state file reaches this shape with
+    // no STAGE_STARTED of its own, so the ledger comparison above stays silent.
+    const currentStage = extractCurrentStage(stateContent);
+    if (currentStage !== UNKNOWN && boxes.get(currentStage) === "pending") {
+      findings.push({
+        id: "current-stage-not-started",
+        severity: "warning",
+        summary: `Current Stage is ${currentStage} but its Stage Progress checkbox is unchecked.`,
+        evidence: { currentStage, checkbox: "pending" },
+        remedy:
+          `\`report --result\` will refuse ${currentStage} as still pending while its checkbox ` +
+          "is unchecked. Reconcile the checkbox with the stage the workflow is actually on.",
         safeToAutomate: false,
       });
     }

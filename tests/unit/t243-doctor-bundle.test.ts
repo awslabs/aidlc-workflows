@@ -935,6 +935,98 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(withWf.some((f) => f.id === "runtime-graph-missing")).toBe(true);
   });
 
+  describe("stage-level state/audit drift (#1190)", () => {
+    const ev = (event: string, stage: string, ts: string, workflow?: string) =>
+      `## x\n**Timestamp**: ${ts}\n**Event**: ${event}\n**Stage**: ${stage}` +
+      (workflow ? `\n**Workflow**: ${workflow}` : "");
+    const state = (lines: string, current = "alpha") =>
+      `- **Current Stage**: ${current}\n- **Status**: Running\n\n## Stage Progress\n${lines}`;
+    const drift = (over: Partial<DiagnosisInput>) =>
+      runDiagnosis(diagInput(over)).filter((f) => f.id === "stage-state-audit-drift");
+
+    test("26: a stage the ledger completed while its checkbox is unchecked is reported", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "alpha", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      const found = drift({ audit, stateContent: state("- [ ] alpha — EXECUTE\n") });
+      expect(found).toHaveLength(1);
+      expect(found[0].evidence).toMatchObject({ completedButPending: ["alpha"] });
+    });
+
+    test("27: the #1190 shape — started, never completed, checkbox still unchecked", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "build-and-test", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const found = drift({
+        audit,
+        stateContent: state("- [ ] build-and-test — EXECUTE\n", "build-and-test"),
+      });
+      expect(found).toHaveLength(1);
+      expect(found[0].evidence).toMatchObject({ startedButPending: ["build-and-test"] });
+    });
+
+    test("28: a backward jump is not drift — it resets downstream checkboxes on purpose", () => {
+      // aidlc-jump resets every stage from the target onward to pending and
+      // emits STAGE_JUMPED; the earlier STAGE_COMPLETED rows stay in the buffer.
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "beta", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "beta", "2026-01-01T02:00:00Z"),
+        ev("STAGE_JUMPED", "alpha", "2026-01-01T03:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T03:00:01Z"),
+      ].join("\n\n");
+      expect(
+        drift({ audit, stateContent: state("- [-] alpha — EXECUTE\n- [ ] beta — EXECUTE\n") }),
+      ).toEqual([]);
+    });
+
+    test("29: an isolated single-stage run is not drift — it never touches the main checkbox", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "beta", "2026-01-01T01:00:00Z", "single-stage:beta"),
+        ev("STAGE_COMPLETED", "beta", "2026-01-01T02:00:00Z", "single-stage:beta"),
+      ].join("\n\n");
+      expect(
+        drift({ audit, stateContent: state("- [-] alpha — EXECUTE\n- [ ] beta — EXECUTE\n") }),
+      ).toEqual([]);
+    });
+
+    test("30: a repeated slug resolves first-wins, the way setCheckbox flips it", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "alpha", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      // Per-unit blocks repeat the slug; the FIRST is the one the engine flips.
+      const stateContent = state(
+        "Per unit: one\n- [x] alpha — EXECUTE\nPer unit: two\n- [ ] alpha — EXECUTE\n",
+      );
+      expect(drift({ audit, stateContent })).toEqual([]);
+    });
+
+    test("31: Current Stage pointing at an unchecked stage is reported without any ledger", () => {
+      const found = runDiagnosis(
+        diagInput({ stateContent: state("- [ ] alpha — EXECUTE\n") }),
+      ).filter((f) => f.id === "current-stage-not-started");
+      expect(found).toHaveLength(1);
+      expect(found[0].summary).toContain("alpha");
+    });
+
+    test("32: a started stage that left pending is not reported", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const clean = runDiagnosis(
+        diagInput({ audit, stateContent: state("- [-] alpha — EXECUTE\n") }),
+      ).filter((f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started");
+      expect(clean).toEqual([]);
+    });
+  });
+
   test("24: repeated-stage timeline renders chronologically with no negative gap (Arden r3 #8)", () => {
     // alpha (day1) -> beta (day1) -> alpha jumped back (day5). The day-5 alpha
     // attempt must render AFTER beta, and beta's gap must be non-negative.
