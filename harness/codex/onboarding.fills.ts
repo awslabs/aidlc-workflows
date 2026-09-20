@@ -36,8 +36,6 @@ gate).`,
 
     structure_extra: "",
 
-    guide_pointer: `The Codex-specific guide (prerequisites, trust pre-seed, Bedrock config, the git-repo requirement) is \`docs/guide/harnesses/codex-cli.md\`.`,
-
     sections_before_resumption: `## What's different on this harness
 
 This is the same AI-DLC core that ships to every harness, rendered onto Codex CLI. On Codex:
@@ -48,6 +46,8 @@ This is the same AI-DLC core that ships to every harness, rendered onto Codex CL
 - **Swarm floor** is \`codex exec\`-per-unit workers; \`AIDLC_USE_SWARM=1\` has no Workflow tool here and loud-degrades (\`SWARM_DEGRADED\`).
 - **Session lifecycle**: Codex has no SessionEnd event (an unclosed session is reconciled as an inferred \`SESSION_ENDED\` at the next start); after compaction, Codex emits SessionStart with \`source=compact\`, which re-injects the workflow mission before the first post-compaction continuation (the reason Codex >= 0.145.0 is required).
 - **The AIDLC method** (the layered practice files \`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) lives once at the workspace root under \`aidlc/spaces/<active-space>/memory/\` — the single hand-editable source of truth, identical on every harness, NOT a per-harness copy. Codex auto-merges the root \`AGENTS.md\` and the orchestrator injects the active-space memory paths into context on demand; AI-DLC's own stage resolver reads the same tree directly (via the \`AIDLC_RULES_DIR\` seam in the shipped \`config.toml\`). Edit the method there, never under \`.codex/\`. (\`.codex/rules/default.rules\` remains Codex's native Starlark permission-rules file — distinct from the AIDLC method, and the two must not collide.)
+
+The Codex-specific guide (prerequisites, trust pre-seed, Bedrock config, the git-repo requirement) is \`docs/guide/harnesses/codex-cli.md\`.
 `,
 
     sections_after_resumption: "",

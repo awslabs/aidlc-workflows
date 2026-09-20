@@ -2133,14 +2133,20 @@ function instructionStates(
     "aidlc-manifest.json",
   );
   if (!existsSync(baselinePath)) {
-    const instructionPath = onboardingPath ?? "AGENTS.md";
-    return [{
-      path: instructionPath,
-      kind: "whole-file",
-      state: existsSync(join(projectDir, instructionPath))
-        ? "intact"
-        : "missing",
-    }];
+    const instructionPaths = harness === "claude" ? [] : ["AGENTS.md"];
+    if (onboardingPath && !instructionPaths.includes(onboardingPath)) {
+      instructionPaths.push(onboardingPath);
+    }
+    return instructionPaths.map((path) => {
+      const target = join(projectDir, path);
+      return {
+        path,
+        kind: "whole-file",
+        state: existsSync(target) && lstatSync(target).isFile()
+          ? "intact"
+          : "missing",
+      };
+    });
   }
   const baseline = JSON.parse(
     readFileSync(baselinePath, "utf-8"),
@@ -2159,23 +2165,21 @@ function instructionStates(
       tracked.push({ path, contribution });
     }
   }
-  if (onboardingPath) {
-    const hash = baseline.files?.[onboardingPath];
-    if (hash) {
-      tracked.push({
-        path: onboardingPath,
-        contribution: { policy: "whole-file", hash },
-      });
-    }
+  const onboardingHash = onboardingPath ? baseline.files?.[onboardingPath] : undefined;
+  if (onboardingPath && onboardingHash) {
+    tracked.push({
+      path: onboardingPath,
+      contribution: { policy: "whole-file", hash: onboardingHash },
+    });
   }
-  if (tracked.length === 0) {
+  if (tracked.length === 0 && !onboardingPath) {
     return [{
       path: baselinePath,
       kind: "whole-file",
       state: "missing",
     }];
   }
-  return tracked.map(({ path, contribution }) => {
+  const states: InstructionState[] = tracked.map(({ path, contribution }) => {
     const target = join(projectDir, path);
     if (!existsSync(target) || !lstatSync(target).isFile()) {
       return {
@@ -2214,6 +2218,14 @@ function instructionStates(
       state: sha256Bytes(block) === contribution.hash ? "intact" : "conflict",
     };
   });
+  if (onboardingPath && !onboardingHash) {
+    states.push({
+      path: onboardingPath,
+      kind: "whole-file",
+      state: "missing",
+    });
+  }
+  return states;
 }
 
 export function instructionFileDoctorCheck(

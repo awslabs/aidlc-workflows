@@ -3186,6 +3186,19 @@ function siblingDescriptor(sibling: ProjectHarness): Pick<ProjectionDescriptor, 
   }
 }
 
+function predatesFrameworkVersion(version: string | undefined, incoming: string): boolean {
+  const installed = version?.split(".");
+  if (installed?.length !== 3 || installed.some((part) => !/^\d+$/.test(part))) {
+    return true;
+  }
+  const selected = incoming.split(".").map(Number);
+  for (let index = 0; index < 3; index++) {
+    const part = Number(installed[index]);
+    if (part !== selected[index]) return part < selected[index];
+  }
+  return false;
+}
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {
@@ -6511,8 +6524,8 @@ export async function main(
     if (existing.distribution && existing.distribution !== stamp.distribution) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
+    const installed = discoverProjectHarnesses(projectDir);
     if (!existing.distribution) {
-      const installed = discoverProjectHarnesses(projectDir);
       const collision = installed.find(
         (candidate) => candidate.harnessDir === descriptor.harnessDir,
       );
@@ -6521,29 +6534,38 @@ export async function main(
           `harness ${stamp.distribution} shares directory ${descriptor.harnessDir} with installed ${collision.distribution}; they cannot coexist in one project`,
         );
       }
-      for (const sibling of installed) {
-        const siblingProjection = siblingDescriptor(sibling);
-        if (!siblingProjection) {
-          throw new Error(
-            `harness ${stamp.distribution} cannot be added while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
-          );
-        }
-        for (const integration of descriptor.rootIntegrations) {
-          if (integration.policy !== "managed-block" || integration.shared === "union") continue;
-          const collision = siblingProjection.rootIntegrations.find((candidate) =>
-            candidate.path === integration.path && candidate.policy === "managed-block" &&
-            !(integration.shared === "identical" && candidate.shared === "identical")
-          );
-          if (collision) {
-            if (integration.shared === "identical") {
-              throw new Error(
-                `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${sibling.distribution} first`,
-              );
-            }
+    }
+    for (const sibling of installed) {
+      if (sibling.harnessDir === descriptor.harnessDir) continue;
+      const siblingProjection = siblingDescriptor(sibling);
+      if (!siblingProjection) {
+        throw new Error(
+          `${existing.distribution ? `refusing to refresh ${stamp.distribution}` : `harness ${stamp.distribution} cannot be added`} while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
+        );
+      }
+      for (const integration of descriptor.rootIntegrations) {
+        if (integration.policy !== "managed-block" || integration.shared === "union") continue;
+        const collision = siblingProjection.rootIntegrations.find((candidate) =>
+          candidate.path === integration.path && candidate.policy === "managed-block" &&
+          !(integration.shared === "identical" && candidate.shared === "identical")
+        );
+        if (collision) {
+          if (existing.distribution && !integration.shared && collision.shared === "identical") {
             throw new Error(
-              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}; they cannot coexist in one project`,
+              `refusing to refresh ${stamp.distribution} from a release whose ${integration.path} is not shared while installed ${sibling.distribution} shares it; use a release that declares it shared`,
             );
           }
+          if (
+            integration.shared === "identical" &&
+            predatesFrameworkVersion(sibling.frameworkVersion, stamp.frameworkVersion)
+          ) {
+            throw new Error(
+              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${sibling.distribution} first`,
+            );
+          }
+          throw new Error(
+            `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}; they cannot coexist in one project`,
+          );
         }
       }
     }

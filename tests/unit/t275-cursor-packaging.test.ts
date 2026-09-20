@@ -505,6 +505,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc.mdc"), "utf-8"),
       ).toContain("aidlc/spaces/team-b/memory/");
+      expect(
+        readFileSync(join(project, ".cursor", "rules", "aidlc-onboarding.mdc"), "utf-8"),
+      ).toContain("aidlc/spaces/<space>/memory/");
       for (const phase of ["ideation", "inception", "construction", "operation"]) {
         const installedRule = readFileSync(
           join(project, ".cursor", "rules", `aidlc-phase-${phase}.mdc`),

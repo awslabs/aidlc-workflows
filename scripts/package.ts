@@ -1160,7 +1160,7 @@ function rewriteNativeInvocations(
   );
   const bareToolCheck = new RegExp(bareToolPattern.source, "i");
   for (const file of walk(outRoot)) {
-    if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
+    if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
     let value = readFileSync(file, "utf-8");
     // Claude's source hook/statusline dispatcher is rooted at the project, so
     // it still loads after an application command changes cwd. JSON escapes
@@ -1288,7 +1288,7 @@ function rewriteNativeInvocations(
 
   const leftovers: string[] = [];
   for (const file of walk(outRoot)) {
-    if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
+    if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
     const value = readFileSync(file, "utf-8");
     for (const token of ["{{INVOKE}}", "{{TOOL_PREFIX}}"]) {
       if (value.includes(token)) {

@@ -45,12 +45,11 @@ describe("t151 neutral and native onboarding", () => {
     expect(renderNeutralOnboarding(NEUTRAL)).toBe(NEUTRAL);
   });
 
-  test("the native skeleton exposes every supported fill and starts with frontmatter", () => {
+  test("the native skeleton exposes frontmatter and eight body fills", () => {
     expect(HARNESS.startsWith("{{SLOT:frontmatter}}\n{{SLOT:title_block}}\n")).toBe(true);
     expect(declaredSlots(HARNESS).sort()).toEqual([
       "agents_note",
       "frontmatter",
-      "guide_pointer",
       "hook_permissions_note",
       "prereq_bullets",
       "prereq_bullets_tail",
@@ -108,6 +107,9 @@ describe("t151 neutral and native onboarding", () => {
           `${native ? "aidlc" : `bun ${harness.manifest.harnessDir}/tools/aidlc.ts`} engine runtime summary --json`,
         );
         expect(setup, harness.name).not.toContain(`${fills.invoke} engine`);
+        expect(setup, harness.name).toContain(
+          `${native ? "aidlc" : `bun ${harness.manifest.harnessDir}/tools/aidlc.ts`} knowledge <verb>`,
+        );
         if (harness.manifest.onboarding?.harnessDst) {
           expect(root, harness.name).toBe(NEUTRAL);
           expect(setup, harness.name).not.toContain("## Where things live");
@@ -137,7 +139,7 @@ describe("t151 neutral and native onboarding", () => {
       const paragraphs = root.split("\n").filter((line) => line.includes("Document knowledge (DocumentKB)"));
       expect(paragraphs, harness.name).toHaveLength(1);
       const paragraph = paragraphs[0];
-      expect(paragraph).toContain("`aidlc knowledge <verb>`");
+      expect(paragraph).toContain("`knowledge <verb>`");
       expect(paragraph.match(/`summarize <id>/g), harness.name).toHaveLength(1);
       for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"]) {
         expect(paragraph, `${harness.name}: ${verb}`).toContain(verb);

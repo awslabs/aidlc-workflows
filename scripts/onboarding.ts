@@ -76,7 +76,7 @@ export function renderOnboarding(skeleton: string, fills: OnboardingFills): stri
   }
 
   // Strip per-line trailing whitespace — an inline slot filled with "" can leave
-  // a trailing space (e.g. "… `docs/README.md`. " when guide_pointer is empty).
+  // a trailing space after the surrounding prose.
   out = out.replace(/[ \t]+$/gm, "");
   // Collapse any run of 3+ blank lines an omitted slot may have left to 2.
   out = out.replace(/\n{3,}/g, "\n\n");

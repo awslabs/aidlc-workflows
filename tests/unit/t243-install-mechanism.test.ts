@@ -75,6 +75,7 @@ import {
   serveReleaseFixture,
   writeReleaseFixture,
 } from "../harness/release-fixture.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -1407,6 +1408,10 @@ describe("t243 project initialization", () => {
       if (integration.path === "AGENTS.md") delete integration.shared;
     }
     writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+    stamp.frameworkVersion = "0.0.0";
+    writeFileSync(stampPath, JSON.stringify(stamp, null, 2) + "\n");
 
     const addCodex = run(INIT, [
       "config",
@@ -1462,6 +1467,94 @@ describe("t243 project initialization", () => {
     );
     expect(existsSync(join(project, ".aidlc"))).toBe(false);
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
+  }, 60_000);
+
+  test("a neutral-sharing harness added next to a current Copilot install is refused as exclusive", () => {
+    const project = temp("aidlc-t243-current-exclusive-agents-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      COPILOT_RELEASE,
+      "--harness",
+      "copilot",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const agents = readFileSync(join(project, "AGENTS.md"), "utf-8");
+
+    const addKiro = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(addKiro.status).toBe(4);
+    expect(addKiro.stdout).toContain(
+      "harness kiro shares AGENTS.md with installed copilot; they cannot coexist in one project",
+    );
+    expect(addKiro.stdout).not.toContain("predates");
+    expect(existsSync(join(project, ".kiro"))).toBe(false);
+    expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
+  }, 60_000);
+
+  test("refreshing a coexisting harness from a release that does not share AGENTS.md is refused", () => {
+    const project = temp("aidlc-t243-exclusive-refresh-");
+    mkdirSync(join(project, ".git"));
+    for (const [harness, source] of [["kiro", KIRO_RELEASES[0]], ["codex", CODEX_RELEASE]]) {
+      const initialized = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        source,
+        "--harness",
+        harness,
+        "--mcp",
+        "none",
+      ], project);
+      expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    }
+    const agents = readFileSync(join(project, "AGENTS.md"));
+    const source = temp("aidlc-t243-exclusive-refresh-source-");
+    cpSync(KIRO_RELEASES[0], source, { recursive: true });
+    const descriptorPath = join(source, ".kiro", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<{ path: string; shared?: string }>;
+    };
+    for (const integration of descriptor.rootIntegrations) {
+      if (integration.path === "AGENTS.md") delete integration.shared;
+    }
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+
+    for (const extra of [[], ["--force"]]) {
+      const refreshed = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        source,
+        "--harness",
+        "kiro",
+        "--mcp",
+        "none",
+        ...extra,
+      ], project);
+      expect(refreshed.status).toBe(4);
+      expect(refreshed.stdout).toContain(
+        "refusing to refresh kiro from a release whose AGENTS.md is not shared while installed codex shares it; use a release that declares it shared",
+      );
+      expect(readFileSync(join(project, "AGENTS.md"))).toEqual(agents);
+      expect(existsSync(join(project, ".kiro", "steering", "aidlc-onboarding.md"))).toBe(true);
+    }
   }, 60_000);
 
   test("config without --harness on a multi-harness project demands --harness", () => {
@@ -4620,7 +4713,7 @@ describe("t243 projection channel", () => {
       distribution: "claude",
     }));
     for (const path of walkFiles(CLAUDE_RELEASE)) {
-      if (!/\.(md|json|toml|hook|ts)$/.test(path)) continue;
+      if (!/\.(md|mdc|json|toml|hook|ts)$/.test(path)) continue;
       const text = readFileSync(join(CLAUDE_RELEASE, path), "utf-8");
       expect(text).not.toMatch(/\bbun\s+[^\n]*\.claude\/(?:tools|hooks)\/aidlc/);
       expect(text).not.toContain("{{INVOKE}}");
@@ -4646,11 +4739,11 @@ describe("t243 projection channel", () => {
         ),
       ) as { harnessDir: string };
       const copyText = walkFiles(copy)
-        .filter((path) => /\.(md|json|toml|hook|ts)$/.test(path))
+        .filter((path) => /\.(md|mdc|json|toml|hook|ts)$/.test(path))
         .map((path) => readFileSync(join(copy, path), "utf-8"))
         .join("\n");
       const releaseText = walkFiles(release)
-        .filter((path) => /\.(md|json|toml|hook|ts)$/.test(path))
+        .filter((path) => /\.(md|mdc|json|toml|hook|ts)$/.test(path))
         .map((path) => readFileSync(join(release, path), "utf-8"))
         .join("\n");
       expect(copyText).toContain(`bun ${manifest.harnessDir}/tools/aidlc.ts`);
@@ -4663,6 +4756,15 @@ describe("t243 projection channel", () => {
         expect(existsSync(join(copy, ".vscode", "settings.json"))).toBe(false);
         expect(existsSync(join(release, ".vscode", "settings.json"))).toBe(true);
       }
+    }
+    for (const harness of HARNESS_MATRIX) {
+      if (harness.capabilities.onboarding.harnessDist === harness.capabilities.onboarding.dist) continue;
+      const onboarding = readFileSync(
+        join(REPO_ROOT, "dist-release", harness.name, harness.capabilities.onboarding.harnessDist),
+        "utf-8",
+      );
+      expect(onboarding, harness.name).toContain("- **Runtime**:");
+      expect(onboarding, harness.name).not.toMatch(/\bbun\b/);
     }
   });
 
@@ -4698,7 +4800,8 @@ describe("t243 projection channel", () => {
           "sha256:412776ee4595c453511a911e06c7729285bb5338b30584f8570908b273e27296",
           "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
           "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
-          "sha256:aa2fc57fac969b9df1d546570ef18254164778099082f6509ac7eca1fdd7a840",
+          "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
+          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
         ],
       },
       kiro: {
@@ -4716,7 +4819,8 @@ describe("t243 projection channel", () => {
           "sha256:1abeb3cb19943bc1537c413dc45298c43a14ce7544444c88c13b53ea48a607a6",
           "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
           "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
-          "sha256:aa2fc57fac969b9df1d546570ef18254164778099082f6509ac7eca1fdd7a840",
+          "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
+          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
         ],
       },
       "kiro-ide": {
@@ -4734,7 +4838,35 @@ describe("t243 projection channel", () => {
           "sha256:68be79dc053e88931557484ef37b7f63248cddcf02cb44db89c5bd2522980967",
           "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
-          "sha256:aa2fc57fac969b9df1d546570ef18254164778099082f6509ac7eca1fdd7a840",
+          "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
+          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
+        ],
+      },
+      cursor: {
+        "AGENTS.md": [
+          "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
+          "sha256:2907b5293bfd8bd9d5f8b7a8025bfe23edd0ffcd31f925761916088517880936",
+          "sha256:2ef8a8cd1b72e59d017013b8d261721b1c5dedb82499b44dc9a97be01b6a73cb",
+          "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
+          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
+        ],
+      },
+      opencode: {
+        "AGENTS.md": [
+          "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
+          "sha256:d86a61b7376772dcc7afdaefd63ce185f99d9c32d0e455668cf3b52f91a13d40",
+          "sha256:db6e65ed85d6b47ca47d72b5a323ddc4dca76d021cce92591c1a28b26d9f237a",
+          "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
+          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
+        ],
+      },
+      copilot: {
+        "AGENTS.md": [
+          "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
+          "sha256:1b8b3b4b10de3307a927429a676f5dd7440099a6d18859f603328b5ed239e6c7",
+          "sha256:bf3077a6520e2735f618bad386858afc57edceaa791d98de7a6c269d71861e56",
+          "sha256:55b31ba55f6e7ebc47fe76a00039e2ec16e020503fb63791cbd8665438ff32ac",
+          "sha256:76bf3ef612062087aebafb0274c3d2fbf9f87a113d98f63c15bf1bc55b92efa1",
         ],
       },
     };
@@ -4743,6 +4875,9 @@ describe("t243 projection channel", () => {
       codex: ".codex",
       kiro: ".kiro",
       "kiro-ide": ".kiro",
+      cursor: ".cursor",
+      opencode: ".aidlc",
+      copilot: ".aidlc",
     };
     for (const [harness, paths] of Object.entries(expected)) {
       const descriptor = JSON.parse(

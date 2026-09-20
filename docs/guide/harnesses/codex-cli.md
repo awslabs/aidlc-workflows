@@ -7,10 +7,11 @@ byte-identical across every distribution — only the shell differs. The
 source/development tree is **generated** into ignored local `dist/codex/` from
 `core/` + `harness/codex/` by `bun scripts/package.ts codex`; never hand-edit it.
 
-Harness-specific onboarding lives in `.codex/onboarding.md`; read it when
-working in Codex. Both the root instructions and `.codex/config.toml` point
-there. The root `AGENTS.md` block is harness-neutral and shared with other
-installed harnesses whose engine directories differ.
+Harness-specific onboarding lives in `.codex/onboarding.md`. The harness-neutral
+root `AGENTS.md` block tells Codex to read it when working in Codex and is shared
+with other installed harnesses whose engine directories differ.
+`.codex/config.toml` carries a human-readable comment pointing at that file, not
+a load path.
 
 ## Prerequisites
 

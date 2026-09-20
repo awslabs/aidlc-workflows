@@ -61,6 +61,8 @@ const manifest: HarnessManifest = {
           "sha256:d86a61b7376772dcc7afdaefd63ce185f99d9c32d0e455668cf3b52f91a13d40",
           // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
           "sha256:db6e65ed85d6b47ca47d72b5a323ddc4dca76d021cce92591c1a28b26d9f237a",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
         ],
       },
     },

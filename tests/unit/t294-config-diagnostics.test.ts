@@ -992,6 +992,55 @@ describe("t294 post-apply outstanding actions", () => {
 });
 
 describe("t294 instruction-file doctor row", () => {
+  test("copied Codex instructions require both root guidance and onboarding without config", () => {
+    const project = temp("aidlc-t294-copy-instructions-");
+    cpSync(join(DIST, "codex", "AGENTS.md"), join(project, "AGENTS.md"));
+    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+    cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+    expect(existsSync(join(project, ".codex", "tools", "data", "aidlc-manifest.json")))
+      .toBe(false);
+
+    const intact = instructionFileDoctorCheck(project, ".codex");
+    expect(intact.pass).toBe(true);
+    expect(intact.label).toContain("framework-owned file intact");
+
+    const agentsPath = join(project, "AGENTS.md");
+    rmSync(agentsPath);
+    const missingRoot = instructionFileDoctorCheck(project, ".codex");
+    expect(missingRoot.pass).toBe(false);
+    expect(missingRoot.label).toContain("missing (AGENTS.md)");
+
+    mkdirSync(agentsPath);
+    const directoryRoot = instructionFileDoctorCheck(project, ".codex");
+    expect(directoryRoot.pass).toBe(false);
+    expect(directoryRoot.label).toContain("missing (AGENTS.md)");
+
+    rmSync(agentsPath, { recursive: true });
+    cpSync(join(DIST, "codex", "AGENTS.md"), agentsPath);
+    rmSync(join(project, ".codex", "onboarding.md"));
+    const missingOnboarding = instructionFileDoctorCheck(project, ".codex");
+    expect(missingOnboarding.pass).toBe(false);
+    expect(missingOnboarding.label).toContain("missing (.codex/onboarding.md)");
+  });
+
+  test("declared onboarding absent from the baseline remains a missing instruction", () => {
+    const project = install("codex");
+    const baselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    delete baseline.files[".codex/onboarding.md"];
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+
+    const missingBaseline = instructionFileDoctorCheck(project, ".codex");
+    expect(missingBaseline.pass).toBe(false);
+    expect(missingBaseline.label).toContain("missing (.codex/onboarding.md)");
+
+    rmSync(join(project, "AGENTS.md"));
+    const missingBoth = instructionFileDoctorCheck(project, ".codex");
+    expect(missingBoth.pass).toBe(false);
+    expect(missingBoth.label).toContain("AGENTS.md");
+    expect(missingBoth.label).toContain(".codex/onboarding.md");
+  }, 60_000);
+
   test("marker-managed instruction block reports intact, missing, and modified", async () => {
     const project = install("kiro");
     const path = join(project, "AGENTS.md");

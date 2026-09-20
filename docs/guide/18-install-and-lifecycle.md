@@ -732,11 +732,15 @@ directories differ and they do not share an exclusive managed block. `AGENTS.md`
 is neutral and byte-identical (`shared: "identical"`) across Kiro CLI, Kiro IDE,
 Codex, Cursor, and OpenCode, so any of those with distinct engine directories
 may coexist. Claude Code may coexist with any other harness. Copilot's `AGENTS.md`
-stays exclusive: pairing it with another harness that ships that block is refused.
+stays exclusive: pairing it with another harness that ships that block is refused
+with `cannot coexist in one project`, regardless of which is installed first.
 Kiro CLI and Kiro IDE still share `.kiro/`, and OpenCode and Copilot share `.aidlc/`,
-so those pairs cannot coexist. An installed harness from a release before shared
-onboarding must be refreshed first; the `predates shared onboarding` error names
-the required `aidlc config --harness <name>` command.
+so those pairs cannot coexist. An older installed harness whose root block is not
+shared must be refreshed first; the `predates shared onboarding` error names the
+required `aidlc config --harness <name>` command. A refresh source that no longer
+declares `AGENTS.md` shared is also refused while another installed harness shares
+it: `refusing to refresh <harness> from a release whose AGENTS.md is not shared`.
+Use a release that declares the block shared; `--force` cannot bypass this guard.
 
 `.gitignore` declares `shared: "union"`, so `aidlc config` writes one block combining every installed
 harness's shipped entries; extra entries appear under `# <harness> harness`.
