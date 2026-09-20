@@ -137,14 +137,15 @@ describe("t148 dist/kiro file structure", () => {
     for (const p of ["ideation", "inception", "construction", "operation"]) {
       expect(existsSync(mem("phases", `${p}.md`))).toBe(true);
     }
-    // The old in-harness rules dir must NOT ship (the relocation is complete).
-    expect(existsSync(join(K, "steering"))).toBe(false);
+    // Steering now carries onboarding, not copies of the workspace method.
+    expect(readdirSync(join(K, "steering"))).toEqual(["aidlc-onboarding.md"]);
   });
 
   test("authored shell files present", () => {
     for (const f of [
       "skills/aidlc/SKILL.md",
       "skills/aidlc/question-rendering.md",
+      "steering/aidlc-onboarding.md",
       "hooks/aidlc-kiro-adapter.ts",
       "agents/aidlc.json",
       "agents/aidlc-developer-agent.json",
@@ -169,6 +170,7 @@ describe("t148 dist/kiro file structure", () => {
     expect(existsSync(path)).toBe(true);
     const steering = readFileSync(path, "utf-8");
     expect(steering).toMatch(/^---\ninclusion: always\n---/);
+    expect(frontmatter(join(KI, "steering", "aidlc-onboarding.md"))).toBe("inclusion: always");
     for (const file of [
       "org.md",
       "team.md",

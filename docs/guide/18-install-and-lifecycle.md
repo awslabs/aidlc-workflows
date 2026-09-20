@@ -723,14 +723,22 @@ project content.
 |---------|-----------|--------|
 | `.gitignore` | All | Own one marked AI-DLC block containing the union of installed harnesses' shipped entries; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
-| `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, OpenCode | Own one marked onboarding block; preserve project instructions |
+| `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
 | `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
 | `opencode.json` | OpenCode | Whole-file ownership; an unknown existing file is a conflict |
 
 **More than one harness in a project.** Harnesses may coexist when their engine
-directories differ and they do not share an exclusive managed block (`AGENTS.md`
-today)—effectively Claude Code plus one other harness. `.gitignore` declares
-`shared: "union"`, so `aidlc config` writes one block combining every installed
+directories differ and they do not share an exclusive managed block. `AGENTS.md`
+is neutral and byte-identical (`shared: "identical"`) across Kiro CLI, Kiro IDE,
+Codex, Cursor, and OpenCode, so any of those with distinct engine directories
+may coexist. Claude Code may coexist with any other harness. Copilot's `AGENTS.md`
+stays exclusive: pairing it with another harness that ships that block is refused.
+Kiro CLI and Kiro IDE still share `.kiro/`, and OpenCode and Copilot share `.aidlc/`,
+so those pairs cannot coexist. An installed harness from a release before shared
+onboarding must be refreshed first; the `predates shared onboarding` error names
+the required `aidlc config --harness <name>` command.
+
+`.gitignore` declares `shared: "union"`, so `aidlc config` writes one block combining every installed
 harness's shipped entries; extra entries appear under `# <harness> harness`.
 Adding a harness combines an unchanged sibling-owned block when that sibling's
 shipped block copy is available (`merge (combined with <harness>)`); older

@@ -8,6 +8,11 @@ differs. The source/development tree is **generated** into ignored local
 `dist/opencode/` from `core/` + `harness/opencode/` by
 `bun scripts/package.ts opencode`; never hand-edit it.
 
+Harness-specific onboarding lives in `.aidlc/onboarding.md`, loaded by the
+`instructions` list in `opencode.json`. The root `AGENTS.md` block is
+harness-neutral and shared with other installed harnesses whose engine
+directories differ; opencode and Copilot cannot share one `.aidlc/` install.
+
 ## Layout: two dot-dirs, on purpose
 
 opencode auto-imports every `*.ts` under `.opencode/tools/` and

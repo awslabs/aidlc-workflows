@@ -59,6 +59,7 @@ const manifest: HarnessManifest = {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
+      shared: "identical",
       legacySignatures: {
         wholeFileHashes: [
           // Keep pre-engine-directory unmarked root files recognizable.
@@ -122,7 +123,7 @@ const manifest: HarnessManifest = {
 
   // AGENTS.md at the project root — Cursor auto-reads it (root + nested) as
   // plain ambient instructions (no @-import expansion; live-verified).
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "rules/aidlc-onboarding.mdc", fills: onboardingFills },
 
   // .cursor/rules/ is Cursor's native rules dir and our stub deliberately
   // lives there; core projects no rules/ dir, so nothing needs renaming.

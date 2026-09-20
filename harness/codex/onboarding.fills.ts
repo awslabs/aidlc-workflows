@@ -1,12 +1,7 @@
 // harness/codex/onboarding.fills.ts — Codex CLI's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts inside
-// emit.ts into dist/codex/AGENTS.md (project root). emit() applies the
-// {{HARNESS_DIR}} → .codex substitution + rules/ → aidlc-rules/ rename itself.
-//
-// This RETIRES the old read-CLAUDE.md + regex-rewrite path: Codex no longer
-// derives its onboarding doc from Claude's, so Claude prose can no longer leak
-// through (the F-ONBOARDING-LEAK class). The Codex-specific header + Prerequisites
-// are authored here directly.
+// The packager fills core/templates/onboarding-harness.md into
+// dist/codex/.codex/onboarding.md; emit.ts then projects its skills paths.
+// The root AGENTS.md stays neutral, identical to the other sharing harnesses.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
@@ -56,8 +51,6 @@ This is the same AI-DLC core that ships to every harness, rendered onto Codex CL
 `,
 
     sections_after_resumption: "",
-
-    gitignore_extra: "",
   },
 };
 

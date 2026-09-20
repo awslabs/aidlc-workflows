@@ -1315,8 +1315,119 @@ describe("t243 project initialization", () => {
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
   }, 60_000);
 
-  test("a harness that shares AGENTS.md with an installed harness cannot coexist", () => {
+  test("harnesses sharing the neutral AGENTS.md block coexist and converge", () => {
     const project = temp("aidlc-t243-shared-agents-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const agents = readFileSync(join(project, "AGENTS.md"), "utf-8");
+
+    const addCodex = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CODEX_RELEASE,
+      "--harness",
+      "codex",
+      "--mcp",
+      "none",
+    ], project);
+    expect(addCodex.status, addCodex.stdout + addCodex.stderr).toBe(0);
+    expect(existsSync(join(project, ".codex"))).toBe(true);
+    expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
+    expect(agents.split("<!-- BEGIN AI-DLC:agents -->").length - 1).toBe(1);
+    const hashes = [".kiro", ".codex"].map((harnessDir) => {
+      const baseline = JSON.parse(readFileSync(
+        join(project, harnessDir, "tools", "data", "aidlc-manifest.json"),
+        "utf-8",
+      )) as { rootContributions: Record<string, { hash: string }> };
+      return baseline.rootContributions["AGENTS.md"].hash;
+    });
+    expect(hashes[0]).toBe(hashes[1]);
+
+    for (const [harness, source] of [["kiro", KIRO_RELEASES[0]], ["codex", CODEX_RELEASE]]) {
+      const args = [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        source,
+        "--harness",
+        harness,
+        "--mcp",
+        "none",
+      ];
+      const dry = run(INIT, [...args, "--dry-run", "--json"], project);
+      expect(dry.status, dry.stdout + dry.stderr).toBe(0);
+      const plan = JSON.parse(dry.stdout) as {
+        data: { actions: Array<{ path: string; action: string; detail?: string }> };
+      };
+      expect(plan.data.actions.find((action) => action.path === "AGENTS.md")).toEqual({
+        path: "AGENTS.md",
+        action: "preserve",
+      });
+      const refresh = run(INIT, args, project);
+      expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+      expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
+    }
+  }, 60_000);
+
+  test("adding a harness is refused when the installed sibling's AGENTS.md predates shared onboarding", () => {
+    const project = temp("aidlc-t243-legacy-shared-agents-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const agents = readFileSync(join(project, "AGENTS.md"), "utf-8");
+    const descriptorPath = join(project, ".kiro", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<{ path: string; shared?: string }>;
+    };
+    for (const integration of descriptor.rootIntegrations) {
+      if (integration.path === "AGENTS.md") delete integration.shared;
+    }
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+
+    const addCodex = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CODEX_RELEASE,
+      "--harness",
+      "codex",
+      "--mcp",
+      "none",
+      "--force",
+    ], project);
+    expect(addCodex.status).toBe(4);
+    expect(addCodex.stdout).toContain("predates shared onboarding");
+    expect(existsSync(join(project, ".codex"))).toBe(false);
+    expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
+  }, 60_000);
+
+  test("copilot's AGENTS.md stays exclusive", () => {
+    const project = temp("aidlc-t243-exclusive-agents-");
     mkdirSync(join(project, ".git"));
     const initialized = run(INIT, [
       "config",
@@ -1333,21 +1444,23 @@ describe("t243 project initialization", () => {
     const agents = readFileSync(join(project, "AGENTS.md"), "utf-8");
     rmSync(join(project, ".kiro", "tools", "data", "aidlc-manifest.json"));
 
-    const addCodex = run(INIT, [
+    const addCopilot = run(INIT, [
       "config",
       "--project-dir",
       project,
       "--from",
-      CODEX_RELEASE,
+      COPILOT_RELEASE,
       "--harness",
-      "codex",
+      "copilot",
       "--mcp",
       "none",
       "--force",
     ], project);
-    expect(addCodex.status).toBe(4);
-    expect(addCodex.stdout).toContain("harness codex shares AGENTS.md with installed kiro");
-    expect(existsSync(join(project, ".codex"))).toBe(false);
+    expect(addCopilot.status).toBe(4);
+    expect(addCopilot.stdout).toContain(
+      "harness copilot shares AGENTS.md with installed kiro; they cannot coexist in one project",
+    );
+    expect(existsSync(join(project, ".aidlc"))).toBe(false);
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
   }, 60_000);
 
@@ -2029,7 +2142,7 @@ describe("t243 project initialization", () => {
     expect(malformedJson.stdout).toContain("malformed JSON");
   }, 60_000);
 
-  test("removed AGENTS markers with the managed body left behind refuse refresh", () => {
+  test("an unmarked AGENTS body is adopted only when it matches the shipped file exactly", () => {
     const project = temp("aidlc-t243-agents-markers-removed-");
     mkdirSync(join(project, ".git"));
     expect(run(INIT, [
@@ -2046,16 +2159,53 @@ describe("t243 project initialization", () => {
       .replace("<!-- BEGIN AI-DLC:agents -->\n", "")
       .replace("<!-- END AI-DLC:agents -->\n", "");
     writeFileSync(path, withoutMarkers);
-    const refreshed = run(INIT, [
+    const args = [
       "config",
       "--project-dir",
       project,
       "--from",
       KIRO_RELEASES[0],
-    ], project);
-    expect(refreshed.status).toBe(4);
-    expect(refreshed.stdout).toContain("legacy root integration ambiguous");
-    expect(readFileSync(path, "utf-8")).toBe(withoutMarkers);
+    ];
+    const dry = run(INIT, [...args, "--dry-run", "--json"], project);
+    expect(dry.status, dry.stdout + dry.stderr).toBe(0);
+    const plan = JSON.parse(dry.stdout) as {
+      data: { actions: Array<{ path: string; action: string; detail?: string }> };
+    };
+    expect(plan.data.actions.find((action) => action.path === "AGENTS.md")).toEqual({
+      path: "AGENTS.md",
+      action: "merge",
+      detail: "adopted exact legacy signature",
+    });
+    const refreshed = run(INIT, args, project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(path, "utf-8").match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
+
+    const modifiedProject = temp("aidlc-t243-agents-markers-removed-modified-");
+    mkdirSync(join(modifiedProject, ".git"));
+    expect(run(INIT, [
+      "config",
+      "--project-dir",
+      modifiedProject,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+    ], modifiedProject).status).toBe(0);
+    const modifiedPath = join(modifiedProject, "AGENTS.md");
+    const modified = readFileSync(modifiedPath, "utf-8")
+      .replace("<!-- BEGIN AI-DLC:agents -->\n", "")
+      .replace("<!-- END AI-DLC:agents -->\n", "") + "\nTeam note: aidlc conventions apply here.\n";
+    writeFileSync(modifiedPath, modified);
+    const refused = run(INIT, [
+      "config",
+      "--project-dir",
+      modifiedProject,
+      "--from",
+      KIRO_RELEASES[0],
+    ], modifiedProject);
+    expect(refused.status).toBe(4);
+    expect(refused.stdout).toContain("legacy root integration ambiguous");
+    expect(readFileSync(modifiedPath, "utf-8")).toBe(modified);
   }, 60_000);
 
   test("two managed AGENTS blocks from different versions are a conflict", () => {
@@ -4548,7 +4698,7 @@ describe("t243 projection channel", () => {
           "sha256:412776ee4595c453511a911e06c7729285bb5338b30584f8570908b273e27296",
           "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
           "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
-          "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
+          "sha256:aa2fc57fac969b9df1d546570ef18254164778099082f6509ac7eca1fdd7a840",
         ],
       },
       kiro: {
@@ -4566,7 +4716,7 @@ describe("t243 projection channel", () => {
           "sha256:1abeb3cb19943bc1537c413dc45298c43a14ce7544444c88c13b53ea48a607a6",
           "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
           "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
-          "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
+          "sha256:aa2fc57fac969b9df1d546570ef18254164778099082f6509ac7eca1fdd7a840",
         ],
       },
       "kiro-ide": {
@@ -4584,7 +4734,7 @@ describe("t243 projection channel", () => {
           "sha256:68be79dc053e88931557484ef37b7f63248cddcf02cb44db89c5bd2522980967",
           "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
-          "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
+          "sha256:aa2fc57fac969b9df1d546570ef18254164778099082f6509ac7eca1fdd7a840",
         ],
       },
     };
@@ -4690,7 +4840,7 @@ describe("t243 projection channel", () => {
           expect(allowed.some((command) => command.includes(`aidlc ${namespace}`))).toBe(false);
         }
       }
-      expect(readFileSync(join(root, "AGENTS.md"), "utf-8"))
+      expect(readFileSync(join(root, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8"))
         .toContain(
           "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
         );
@@ -4798,7 +4948,7 @@ describe("t243 projection channel", () => {
         }
       }
     }
-    expect(readFileSync(join(CODEX_RELEASE, "AGENTS.md"), "utf-8"))
+    expect(readFileSync(join(CODEX_RELEASE, ".codex", "onboarding.md"), "utf-8"))
       .toContain(
         "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
       );

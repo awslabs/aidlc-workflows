@@ -2113,6 +2113,18 @@ function instructionStates(
   harnessDir: string,
   harness: ModelHarness,
 ): InstructionState[] {
+  let onboardingPath = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
+  try {
+    const descriptor: unknown = JSON.parse(readFileSync(
+      join(projectDir, harnessDir, "tools", "data", "aidlc-projection.json"),
+      "utf-8",
+    ));
+    if (isRecord(descriptor) && typeof descriptor.onboarding === "string" && descriptor.onboarding) {
+      onboardingPath = descriptor.onboarding;
+    }
+  } catch {
+    // Legacy installations may not have a readable onboarding descriptor.
+  }
   const baselinePath = join(
     projectDir,
     harnessDir,
@@ -2121,9 +2133,7 @@ function instructionStates(
     "aidlc-manifest.json",
   );
   if (!existsSync(baselinePath)) {
-    const instructionPath = harness === "claude"
-      ? `${harnessDir}/CLAUDE.md`
-      : "AGENTS.md";
+    const instructionPath = onboardingPath ?? "AGENTS.md";
     return [{
       path: instructionPath,
       kind: "whole-file",
@@ -2149,12 +2159,11 @@ function instructionStates(
       tracked.push({ path, contribution });
     }
   }
-  if (harness === "claude") {
-    const path = `${harnessDir}/CLAUDE.md`;
-    const hash = baseline.files?.[path];
+  if (onboardingPath) {
+    const hash = baseline.files?.[onboardingPath];
     if (hash) {
       tracked.push({
-        path,
+        path: onboardingPath,
         contribution: { policy: "whole-file", hash },
       });
     }

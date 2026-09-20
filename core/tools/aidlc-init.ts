@@ -6529,12 +6529,17 @@ export async function main(
           );
         }
         for (const integration of descriptor.rootIntegrations) {
-          if (integration.policy !== "managed-block") continue;
+          if (integration.policy !== "managed-block" || integration.shared === "union") continue;
           const collision = siblingProjection.rootIntegrations.find((candidate) =>
             candidate.path === integration.path && candidate.policy === "managed-block" &&
-            integration.shared !== "union"
+            !(integration.shared === "identical" && candidate.shared === "identical")
           );
           if (collision) {
+            if (integration.shared === "identical") {
+              throw new Error(
+                `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${sibling.distribution} first`,
+              );
+            }
             throw new Error(
               `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}; they cannot coexist in one project`,
             );

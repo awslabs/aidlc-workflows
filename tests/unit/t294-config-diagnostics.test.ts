@@ -1044,15 +1044,33 @@ describe("t294 instruction-file doctor row", () => {
 
   test("instruction row selects the invoking harness in a dual-harness project", () => {
     const project = install("claude");
-    const codex = install("codex");
-    cpSync(join(codex, ".codex"), join(project, ".codex"), { recursive: true });
-    cpSync(join(codex, ".agents"), join(project, ".agents"), { recursive: true });
-    cpSync(join(codex, "AGENTS.md"), join(project, "AGENTS.md"));
+    const kiro = install("kiro");
+    cpSync(join(kiro, ".kiro"), join(project, ".kiro"), { recursive: true });
+    cpSync(join(kiro, "AGENTS.md"), join(project, "AGENTS.md"));
+    const onboardingPath = join(project, ".kiro", "steering", "aidlc-onboarding.md");
+    const onboarding = readFileSync(onboardingPath, "utf-8");
+    const claudePath = join(project, ".claude", "CLAUDE.md");
     expect(instructionFileDoctorCheck(project, ".claude").pass).toBe(true);
-    expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+    const intact = instructionFileDoctorCheck(project, ".kiro");
+    expect(intact.pass).toBe(true);
+    expect(intact.label).toContain("framework-owned file intact");
+
+    writeFileSync(onboardingPath, onboarding + "\nLocal onboarding change\n");
+    const modified = instructionFileDoctorCheck(project, ".kiro");
+    expect(modified.pass).toBe(false);
+    expect(modified.label).toContain("hand-modified - conflict (.kiro/steering/aidlc-onboarding.md)");
+    expect(instructionFileDoctorCheck(project, ".claude").pass).toBe(true);
+
+    writeFileSync(onboardingPath, onboarding);
     rmSync(join(project, "AGENTS.md"));
     expect(instructionFileDoctorCheck(project, ".claude").pass).toBe(true);
-    expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(false);
+    expect(instructionFileDoctorCheck(project, ".kiro").label)
+      .toContain("block or file missing (AGENTS.md)");
+
+    writeFileSync(claudePath, readFileSync(claudePath, "utf-8") + "\nLocal Claude change\n");
+    const claudeModified = instructionFileDoctorCheck(project, ".claude");
+    expect(claudeModified.pass).toBe(false);
+    expect(claudeModified.label).toContain("hand-modified - conflict (.claude/CLAUDE.md)");
   }, 60_000);
 });
 

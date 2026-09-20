@@ -1,8 +1,7 @@
 // harness/copilot/onboarding.fills.ts — Copilot's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/copilot/AGENTS.md (project root — BOTH Copilot surfaces auto-read it:
-// Copilot CLI and VS Code agent mode). {{HARNESS_DIR}} → .aidlc is applied by
-// the packager transform afterwards.
+// The packager concatenates onboarding-harness.md, filled here, then neutral
+// onboarding in dist/copilot/AGENTS.md. Both Copilot surfaces auto-read it;
+// the native method imports must remain in this exclusive root file.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
@@ -56,8 +55,6 @@ active space's method layers into ambient context (the native include —
 @aidlc/spaces/default/memory/phases/construction.md
 @aidlc/spaces/default/memory/phases/operation.md
 `,
-
-    gitignore_extra: "",
   },
 };
 

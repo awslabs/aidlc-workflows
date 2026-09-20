@@ -1,7 +1,7 @@
 // harness/kiro/onboarding.fills.ts — Kiro CLI's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/kiro/AGENTS.md (project root). {{HARNESS_DIR}} → .kiro and the
-// rules/ → steering/ rename are applied by the packager transform afterwards.
+// The packager fills core/templates/onboarding-harness.md into
+// dist/kiro/.kiro/steering/aidlc-onboarding.md, loaded by agent resources.
+// The root AGENTS.md stays neutral, identical to the other sharing harnesses.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
@@ -38,8 +38,6 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 `,
 
     sections_after_resumption: "",
-
-    gitignore_extra: "",
   },
 };
 

@@ -99,12 +99,15 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     // there is silently ignored). Anything else in the dir is a shipping bug.
     const rules = readdirSync(join(ENGINE, "rules")).sort();
     expect(rules).toEqual([
+      "aidlc-onboarding.mdc",
       "aidlc-phase-construction.mdc",
       "aidlc-phase-ideation.mdc",
       "aidlc-phase-inception.mdc",
       "aidlc-phase-operation.mdc",
       "aidlc.mdc",
     ]);
+    expect(readFileSync(join(ENGINE, "rules", "aidlc-onboarding.mdc"), "utf-8"))
+      .toMatch(/^---\ndescription: AI-DLC onboarding for Cursor\nalwaysApply: true\n---/);
     const standing = readFileSync(join(ENGINE, "rules", "aidlc.mdc"), "utf-8");
     expect(standing).toMatch(/^alwaysApply: true$/m);
     for (const f of ["org.md", "team.md", "project.md"]) {

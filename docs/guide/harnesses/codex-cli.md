@@ -7,6 +7,11 @@ byte-identical across every distribution — only the shell differs. The
 source/development tree is **generated** into ignored local `dist/codex/` from
 `core/` + `harness/codex/` by `bun scripts/package.ts codex`; never hand-edit it.
 
+Harness-specific onboarding lives in `.codex/onboarding.md`; read it when
+working in Codex. Both the root instructions and `.codex/config.toml` point
+there. The root `AGENTS.md` block is harness-neutral and shared with other
+installed harnesses whose engine directories differ.
+
 ## Prerequisites
 
 - **Codex CLI >= 0.145.0** - earlier releases defer compact-source

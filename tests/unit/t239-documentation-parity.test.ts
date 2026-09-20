@@ -337,7 +337,7 @@ describe("documentation parity derives current behavior from authored implementa
 
     for (const doc of [
       read("README.md"),
-      read("core", "templates", "onboarding.md"),
+      read("core", "templates", "onboarding-harness.md"),
       read("docs", "guide", "06-agents.md"),
     ]) {
       expect(doc).toContain(String(agentNames.length));
@@ -440,7 +440,7 @@ describe("documentation parity derives current behavior from authored implementa
       `exactly ${numberWord(engineCommands.length)} subcommands: ${codeList(engineCommands)}`;
 
     for (const path of [
-      ["core", "templates", "onboarding.md"],
+      ["core", "templates", "onboarding-harness.md"],
       ["docs", "guide", "glossary.md"],
       ["docs", "harness-engineering", "00-overview.md"],
       ["docs", "reference", "03-orchestrator.md"],
@@ -545,10 +545,10 @@ describe("documentation parity derives current behavior from authored implementa
 
   test("Codex onboarding fills and rendered output name the emitted agent TOML directory", () => {
     const rendered = renderOnboarding(
-      read("core", "templates", "onboarding.md"),
+      read("core", "templates", "onboarding-harness.md"),
       codexOnboardingFills,
     );
-    for (const body of [rendered, read("dist", "codex", "AGENTS.md")]) {
+    for (const body of [rendered, read("dist", "codex", ".codex", "onboarding.md")]) {
       expect(body).toContain("`.codex/agents/` TOMLs");
       expect(body).not.toContain("transposed into `.agents/` TOMLs");
     }

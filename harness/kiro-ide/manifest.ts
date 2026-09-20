@@ -81,6 +81,7 @@ const manifest: HarnessManifest = {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
+      shared: "identical",
       legacySignatures: {
         wholeFileHashes: [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -188,7 +189,7 @@ const manifest: HarnessManifest = {
     lines: personaFrontmatter(agent),
   })),
 
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 
   rulesRename: "steering",
 

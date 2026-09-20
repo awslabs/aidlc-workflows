@@ -14,7 +14,8 @@ export type RootIntegration = {
   path: string;
   policy: "managed-block" | "json-map" | "json-array" | "whole-file";
   marker?: string;
-  shared?: "union";
+  /** union combines shipped line sets (.gitignore); identical lets any declaring harness own byte-identical content; absent is exclusive. */
+  shared?: "union" | "identical";
   jsonKey?: string;
   optional?: boolean;
   legacySignatures?: {
@@ -29,6 +30,7 @@ export type ProjectionDescriptor = {
   productName: string;
   configNextStep: string;
   harnessDir: string;
+  onboarding?: string;
   managedDirectories: string[];
   legacyManagedFileHashes?: Record<string, string[]>;
   rootIntegrations: RootIntegration[];

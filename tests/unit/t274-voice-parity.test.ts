@@ -145,6 +145,7 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
   function scannedFiles(): string[] {
     return [
       "core/templates/onboarding.md",
+      "core/templates/onboarding-harness.md",
       // The per-stage diary template. Its first line renders inside the Write
       // diff of EVERY stage, which makes it one of the most-seen strings the
       // framework ships; it read "maintained by the orchestrator" until the

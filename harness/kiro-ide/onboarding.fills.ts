@@ -1,13 +1,14 @@
 // harness/kiro-ide/onboarding.fills.ts — Kiro IDE's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/kiro-ide/AGENTS.md (project root). {{HARNESS_DIR}} → .kiro and the
-// rules/ → steering/ rename are applied by the packager transform afterwards.
+// The packager fills core/templates/onboarding-harness.md into the always-on
+// dist/kiro-ide/.kiro/steering/aidlc-onboarding.md, with .kiro token projection.
+// The root AGENTS.md stays neutral, identical to the other sharing harnesses.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
 const fills: OnboardingFills = {
   invoke: "/aidlc",
   slots: {
+    frontmatter: "---\ninclusion: always\n---",
     title_block: `# Project Name <!-- Replace with your project name -->
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro IDE harness**. The workspace shell ships in \`.kiro/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
@@ -38,8 +39,6 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 `,
 
     sections_after_resumption: "",
-
-    gitignore_extra: "",
   },
 };
 

@@ -45,6 +45,7 @@ const manifest: HarnessManifest = {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
+      shared: "identical",
       legacySignatures: {
         wholeFileHashes: [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -122,12 +123,8 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // AGENTS.md renders from the shared skeleton with Kiro's fills, at the project
-  // root (outside .kiro/). The {{HARNESS_DIR}} → .kiro substitution + rules/ →
-  // steering/ rename run on it like any core .md. Replaces the hand-forked
-  // harness/kiro/AGENTS.md (which had drifted to "two harnesses" + missing the
-  // Documentation/Automated-Testing sections the skeleton now supplies for free).
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  // Neutral root guidance is shared; native setup is loaded through agent resources.
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 
   // rules/ → steering/ (applied after the token substitution, anchored).
   rulesRename: "steering",

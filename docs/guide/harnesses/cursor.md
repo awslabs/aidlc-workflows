@@ -9,13 +9,18 @@ distribution - only the shell differs. The source/development tree is
 **generated** into ignored local `dist/cursor/` from `core/` +
 `harness/cursor/` by `bun scripts/package.ts cursor`; never hand-edit it.
 
+Harness-specific onboarding lives in `.cursor/rules/aidlc-onboarding.mdc`,
+loaded automatically through `alwaysApply: true`. The root `AGENTS.md` block
+is harness-neutral and shared with other installed harnesses whose engine
+directories differ.
+
 ## Layout
 
 Cursor is the most "native" port so far - it consumes the standard core
 projection directly (no `emit.ts`, no split dot-dir). The distribution is:
 
 - **`.cursor/`** - the framework tree. Cursor reads only a few subdirs as
-  native meaning: `rules/` (one standing and four phase method pointers),
+  native meaning: `rules/` (always-applied onboarding, one standing and four phase method pointers),
   `agents/` (the 14 personas as native subagents), `skills/` (the orchestrator,
   utility shortcuts, and generated stage runners), `hooks.json` + `hooks/`
   (the hook wiring and adapter), `cli.json` (permissions), and `mcp.json` (MCP

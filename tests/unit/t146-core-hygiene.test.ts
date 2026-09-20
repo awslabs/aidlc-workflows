@@ -22,6 +22,11 @@
 //     only for that harness.
 //   - stage-protocol-reviewer.md preserves the original Codex reviewer-binding
 //     clause verbatim, including the literal `.codex/agents/` resolution path.
+//   - templates/onboarding.md is the harness-neutral root instruction block
+//     shared byte-identically by every harness. Its engine-directory list and
+//     per-harness onboarding file list enumerate each harness directory by name;
+//     it cannot carry the token, so every harness-dir literal in it is truthful
+//     enumeration.
 // Both are exactly what survives the proven anchored migration by NON-MATCH
 // (the anchors only rewrite `.claude/<subdir>` path forms), so this carve-out
 // list is the same set the packager and the kiro/codex dist trees already prove.
@@ -61,6 +66,9 @@ function isCarvedOut(relPath: string, line: string): boolean {
   ) {
     return true;
   }
+  // The neutral root onboarding is shared verbatim by every harness and
+  // enumerates each harness directory by name; it must stay token-free.
+  if (relPath === "templates/onboarding.md") return true;
   return false;
 }
 

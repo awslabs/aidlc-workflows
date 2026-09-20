@@ -53,6 +53,7 @@ const manifest: HarnessManifest = {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
+      shared: "identical",
       legacySignatures: {
         wholeFileHashes: [
           // Keep pre-engine-directory unmarked root files recognizable.
@@ -95,9 +96,8 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // AGENTS.md at the project root — opencode auto-reads it (its primary rules
-  // file), the same skeleton + fills mechanism as Kiro/Claude.
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  // Neutral root guidance is shared; opencode.json loads the native setup separately.
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "onboarding.md", fills: onboardingFills },
 
   // .aidlc/ is AIDLC's own dir; core's rules/ name has nothing to collide with.
   rulesRename: null,

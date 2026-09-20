@@ -517,8 +517,11 @@ describe("t-active-space-includes: Cursor rules + persona bodies", () => {
     const ruleNames = readdirSync(join(root, ".cursor", "rules"))
       .filter((file) => file.endsWith(".mdc"))
       .sort();
-    expect(ruleNames).toHaveLength(5);
-    for (const name of ruleNames) {
+    expect(ruleNames).toContain("aidlc-onboarding.mdc");
+    expect(written).not.toContain(".cursor/rules/aidlc-onboarding.mdc");
+    expect(readFileSync(join(root, ".cursor", "rules", "aidlc-onboarding.mdc"), "utf-8"))
+      .toContain("aidlc/spaces/<space>/memory/");
+    for (const name of ruleNames.filter((file) => file !== "aidlc-onboarding.mdc")) {
       const rule = readFileSync(join(root, ".cursor", "rules", name), "utf-8");
       expect(rule, name).toContain("aidlc/spaces/teamB/memory/");
       expect(rule, name).not.toContain("aidlc/spaces/default/memory/");

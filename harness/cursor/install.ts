@@ -800,11 +800,12 @@ function managedContent(
     /^\.cursor\/rules\/.+\.mdc$/.test(rel) ||
     /^\.cursor\/agents\/[^/]+-agent\.md$/.test(rel)
   ) {
+    // <space>-style documentation placeholders are never space names.
     return Buffer.from(
       source
         .toString("utf-8")
         .replace(
-          /aidlc\/spaces\/[^/]+\/memory\//g,
+          /aidlc\/spaces\/(?!<)[^/]+\/memory\//g,
           `aidlc/spaces/${activeSpace}/memory/`,
         ),
       "utf-8",
