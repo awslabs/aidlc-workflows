@@ -113,7 +113,11 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 
-**Run:** `bun tests/run-tests.ts` (default, no flags needed). `bash tests/run-tests.sh` is a compatibility wrapper for existing POSIX commands.
+**Run:** `bun tests/run-tests.ts --no-llm`. The default profile includes the
+integration level, so the run needs the LLM and opens the live-model gate
+whenever the `claude` CLI is on PATH. `--no-llm` closes that gate and keeps this
+layer LLM-free; the deterministic tests still run. `bash tests/run-tests.sh` is a
+compatibility wrapper for existing POSIX commands.
 
 ## Layer 2: Stage (CI push, LLM, minutes)
 
