@@ -10777,16 +10777,17 @@ export function resolveBoltIdentity(
     return newBoltIdentity(projectDir, intentId8, slug);
   }
   // A legacy Bolt is adopted only on immutable provenance binding it to the
-  // selected intent: its metadata's `intentRecord`, or — for metadata that
-  // predates that field, and for cleanup-only state where the directory is
-  // already gone — a single OPEN legacy WORKTREE_CREATED for this slug and path
-  // on the causal frontier of the selected intent's own audit shards. Shards are
-  // not time-ordered by filename, so an older creation in a lexically-later
-  // shard must not reopen a Bolt a newer terminal row closed; an unreadable
-  // shard or a cross-shard tie at the frontier fails closed. Nothing is ever
-  // inferred from how many intents a space or workspace holds: the legacy name
-  // is repository-global, so a wrong answer here would let one intent land or
-  // discard another intent's unmerged work.
+  // selected intent: a single OPEN legacy WORKTREE_CREATED for this slug and
+  // path on the causal frontier of the selected intent's own audit shards. The
+  // worktree's writable metadata can only CORROBORATE that (its `intentRecord`,
+  // when present, must name the selected intent); it never authorizes adoption
+  // by itself, because rewriting one gitignored JSON file must not hand another
+  // intent's branch to this intent's merge. Shards are not time-ordered by
+  // filename, so an older creation in a lexically-later shard must not reopen a
+  // Bolt a newer terminal row closed; an unreadable shard or a cross-shard tie
+  // at the frontier fails closed. Nothing is ever inferred from how many intents
+  // a space or workspace holds: the legacy name is repository-global, so a wrong
+  // answer here would let one intent land or discard another intent's work.
   const legacyDir = legacyWorktreePath(projectDir, slug);
   const openLegacyCreation = (): boolean => {
     const unreadableShards: string[] = [];
@@ -10806,7 +10807,7 @@ export function resolveBoltIdentity(
   };
   if (existsSync(legacyDir)) {
     const intentRecord = readWorktreeMetaIntentRecord(legacyDir);
-    if (intentRecord === record || (intentRecord === null && openLegacyCreation())) {
+    if ((intentRecord === record || intentRecord === null) && openLegacyCreation()) {
       return legacyBoltIdentity(projectDir, intentId8, slug);
     }
   } else if (openLegacyCreation()) {

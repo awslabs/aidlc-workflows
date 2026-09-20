@@ -29,17 +29,19 @@ Pre-upgrade legacy `bolt-<slug>` Bolts keep their directory, branch, and legacy
 `refs/aidlc/reviewed-source/<slug>/<commit>` and
 `refs/aidlc/parked/<slug>/<stamp>/…` namespaces through merge, discard, and purge
 to completion. No new Bolt is created in the old shape. Legacy resolution is
-provenance-gated: metadata `intentRecord` must match the selected intent's
-relative record dir. For pre-P7 metadata without `intentRecord`, and for
-cleanup after the directory is gone, the selected intent's own audit shards must
-hold a single open legacy `WORKTREE_CREATED` for that slug and path on the
-causal frontier — a later `WORKTREE_MERGED` or `WORKTREE_DISCARDED` (by
-timestamp and append order, not shard filename), a cross-shard timestamp tie, or
-an unreadable shard resolves to the namespaced identity and touches nothing
-legacy. Ownership is never inferred from how many intents a space or workspace
-holds. After discard, restore and purge admit a legacy parked namespace only
-when that intent's own `WORKTREE_DISCARDED` recorded its exact `Parked ref` and
-stamp; unknown legacy parks are ignored. Directory existence alone never proves
+provenance-gated by the committed audit, never by the worktree's writable
+metadata: the selected intent's own audit shards must hold a single open legacy
+`WORKTREE_CREATED` for that slug and path on the causal frontier — a later
+`WORKTREE_MERGED` or `WORKTREE_DISCARDED` (by timestamp and append order, not
+shard filename), a cross-shard timestamp tie, or an unreadable shard resolves to
+the namespaced identity and touches nothing legacy. A live legacy directory's
+`worktree-meta.json` `intentRecord` only corroborates: when present it must name
+the selected intent, and a value naming another intent strands the Bolt for both
+(conflicting evidence is a `doctor` matter, not something either intent may act
+on). Ownership is never inferred from how many intents a space or workspace
+holds. After discard, restore and purge admit a legacy parked namespace only when
+that intent's own `WORKTREE_DISCARDED` recorded its exact `Parked ref` and stamp;
+unknown legacy parks are ignored. Directory existence alone never proves
 ownership. `doctor` reports both shapes.
 
 Creation without an intent registry UUID fails closed:

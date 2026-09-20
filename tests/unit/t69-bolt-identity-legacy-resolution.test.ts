@@ -133,6 +133,44 @@ describe("resolveBoltIdentity legacy provenance", () => {
     expect(identity.name).toBe(boltName(idSuffix(UUID), SLUG));
   });
 
+  test("metadata naming this intent is corroboration, not authority: no open creation, no adoption", () => {
+    const metadataDir = join(legacyWorktreePath(project, SLUG), ".aidlc");
+    mkdirSync(metadataDir, { recursive: true });
+    writeFileSync(join(metadataDir, "worktree-meta.json"), JSON.stringify({
+      intentRecord: `aidlc/spaces/${SPACE}/intents/${RECORD}`,
+    }));
+
+    expect(resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project)).legacy).toBe(false);
+
+    seedShard("a-aaaa.md", lifecycleBlock("WORKTREE_CREATED", CREATED_AT));
+    expect(resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project)).legacy).toBe(true);
+  });
+
+  test("metadata rewritten to another intent strands the Bolt for both intents", () => {
+    // A (the selected default intent) holds the open creation; the writable
+    // metadata now names B. Conflicting evidence fails closed on both sides:
+    // B has no creation authority and A's metadata no longer corroborates it.
+    seedShard("a-aaaa.md", lifecycleBlock("WORKTREE_CREATED", CREATED_AT));
+    const otherUuid = "00000000000000000000000000000def";
+    const otherRecord = `demo-${idSuffix(otherUuid)}`;
+    const otherIntents = join(project, "aidlc", "spaces", "platform", "intents");
+    mkdirSync(join(otherIntents, otherRecord, "audit"), { recursive: true });
+    writeFileSync(join(otherIntents, otherRecord, "aidlc-state.md"), "# AI-DLC State\n");
+    writeFileSync(join(otherIntents, "intents.json"), `${JSON.stringify([
+      { uuid: otherUuid, slug: SLUG, dirName: otherRecord, status: "in-flight" },
+    ], null, 2)}\n`);
+    const metadataDir = join(legacyWorktreePath(project, SLUG), ".aidlc");
+    mkdirSync(metadataDir, { recursive: true });
+    writeFileSync(join(metadataDir, "worktree-meta.json"), JSON.stringify({
+      intentRecord: `aidlc/spaces/platform/intents/${otherRecord}`,
+    }));
+
+    expect(resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project)).legacy).toBe(false);
+    const asB = resolveBoltIdentity(project, SLUG, resolveWorkflowSelection(project, { space: "platform", intent: otherRecord }));
+    expect(asB.legacy).toBe(false);
+    expect(asB.name).toBe(boltName(idSuffix(otherUuid), SLUG));
+  });
+
   test("live metadata without intentRecord is adopted only on this intent's open creation", () => {
     const metadataDir = join(legacyWorktreePath(project, SLUG), ".aidlc");
     mkdirSync(metadataDir, { recursive: true });
