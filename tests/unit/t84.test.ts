@@ -241,6 +241,44 @@ describe("t84 aidlc-utility doctor — Check 2 stale branches (migrated from t84
     // line alongside the count) can't slip past the count-only grep.
     expect(r.out).not.toContain("Stale branches: 1 drift");
   });
+
+  test("a re-created slug's stale branch is not excused by its previous discard", () => {
+    const p = proj();
+    initGitRepo(p);
+    const slug = "recreated";
+    const branch = boltName(fixtureIntentId8(p), slug);
+    const path = worktreePath(p, fixtureIntentId8(p), slug);
+    git(p, "branch", branch);
+    for (const [event, timestamp] of [
+      ["WORKTREE_CREATED", "2026-05-19T10:00:00Z"],
+      ["WORKTREE_DISCARDED", "2026-05-19T10:01:00Z"],
+    ]) appendAudit(p, [
+      `## ${event}`,
+      `**Timestamp**: ${timestamp}`,
+      `**Event**: ${event}`,
+      `**Bolt slug**: ${slug}`,
+      `**Worktree path**: ${path}`,
+    ].join("\n"));
+
+    const discarded = doctor(p);
+    expect(discarded.out).toContain(`Stale branches: 0 (1 bolt-* observed: ${branch})`);
+    expect(discarded.out).not.toContain("Stale branches: 1 drift");
+
+    // Re-creating a slug starts a new attempt after the earlier discard.
+    // Its missing checkout must not inherit the previous attempt's terminal row.
+    appendAudit(p, [
+      "## Worktree Created",
+      "**Timestamp**: 2026-05-19T10:02:00Z",
+      "**Event**: WORKTREE_CREATED",
+      `**Bolt slug**: ${slug}`,
+      `**Worktree path**: ${path}`,
+    ].join("\n"));
+    const recreated = doctor(p);
+    expect(recreated.out).toContain("Stale branches: 1 drift");
+    expect(recreated.out).toContain(branch);
+    expect(recreated.status).toBe(1);
+  });
+
   test("mixed namespaced and legacy branches are classified independently", () => {
     const p = proj();
     initGitRepo(p);

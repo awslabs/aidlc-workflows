@@ -684,6 +684,44 @@ describe("t83 doctor parked attempts", () => {
     }
   }, 30000);
 
+  test("a legacy park's sole recording owner cannot offer recovery when its id8 collides across spaces", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    const ownerId8 = fixtureIntentId8(proj);
+    const stamp = "20240101T000000Z";
+    const prefix = `${legacyParkedRefPrefix("saved")}${stamp}`;
+    git(proj, "update-ref", `${prefix}/head`, "HEAD");
+    git(proj, "update-ref", `${prefix}/snapshot`, "HEAD");
+    recordParkedAttempt(proj, "saved", prefix);
+    const foreign = createIntent(proj, "other-intent", "platform");
+    const registryPath = join(proj, "aidlc", "spaces", foreign.space, "intents", "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8"));
+    registry[0].uuid = "ffffffff-ffff-7fff-8fff-ffffffffffff";
+    writeFileSync(registryPath, JSON.stringify(registry));
+
+    const [recorded] = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(recorded).toMatchObject({ slug: "saved", stamp, mode: "snapshot" });
+    expect(recorded).not.toHaveProperty("note");
+    expect(recorded.restore_operation).toEqual({
+      route: "worktree", args: ["restore", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
+    });
+    expect(recorded.purge_operation).toEqual({
+      route: "worktree", args: ["purge", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
+    });
+
+    // Ambiguous id8 owners cannot execute recovery, even with a sole discard row.
+    // Doctor must not offer operations that identity resolution will reject.
+    registry[0].uuid = `ffffffff-ffff-7fff-8fff-ffff${ownerId8}`;
+    writeFileSync(registryPath, JSON.stringify(registry));
+    const [ambiguous] = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(ambiguous).toMatchObject({ slug: "saved", stamp, mode: "unrecorded" });
+    expect(ambiguous.note).toContain(prefix);
+    expect(ambiguous).not.toHaveProperty("restore_operation");
+    expect(ambiguous).not.toHaveProperty("purge_operation");
+    expect(ambiguous).not.toHaveProperty("restore_command");
+    expect(ambiguous).not.toHaveProperty("purge_command");
+  }, 30000);
+
   test("a parked snapshot lists recovery actions without changing health severity", () => {
     const proj = freshProject();
     initRepo(proj);

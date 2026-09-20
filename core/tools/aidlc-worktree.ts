@@ -866,6 +866,7 @@ interface DiscardCreationAuthority {
   repo?: string | null;
   space?: string;
   legacyDiscardRef?: string | null;
+  legacyMergeRecorded?: boolean;
 }
 
 function discardCreationAuthority(
@@ -1102,6 +1103,7 @@ function discardCreationAuthority(
     );
   }
   let legacyDiscardRef: string | null | undefined;
+  let legacyMergeRecorded = false;
   if (identity.legacy && !existsSync(identity.dir)) {
     const lifecycle = audit.rows.filter((row) =>
       VALID_VERIFY_EVENTS.has(row.event) && auditBlockField(row.block, "Bolt slug") === slug);
@@ -1114,12 +1116,20 @@ function discardCreationAuthority(
       }));
       if (discarded.length > 0) {
         legacyDiscardRef = discarded.length === 1 ? auditBlockField(discarded[0].block, "Parked ref") : null;
+      } else {
+        // The frontier is a WORKTREE_MERGED with no discard: this intent's Bolt
+        // either merged completely or died mid-cleanup. Either way a leftover
+        // legacy branch is not discard's to park — the cleanup-only merge retry
+        // owns it and checks the tip against the landed source commit — and it
+        // may belong to a later pre-upgrade intent that reused the global name.
+        legacyMergeRecorded = true;
       }
     }
   }
   return {
     evidenceExists: true,
     legacyDiscardRef,
+    legacyMergeRecorded,
     ...(auditRepo === undefined
       ? {}
       : {
@@ -3231,6 +3241,12 @@ function handleDiscard(args: string[]): void {
     if (recordedTip !== branch.stdout.trim()) {
       errorWithSlug(slug, `legacy branch ${branchName} tip does not match this intent's recorded discard; leaving it for inspection`);
     }
+  }
+  if (identity.legacy && !dirExists && branchExists && authority.legacyMergeRecorded) {
+    errorWithSlug(
+      slug,
+      `legacy Bolt ${slug} recorded a merge; finish it with merge --slug ${slug} (cleanup-only) instead of discard — the leftover branch ${branchName} may belong to a later attempt`,
+    );
   }
   const retained = retainedSourceRefs(repoCwd, identity);
   if (retained === null) {

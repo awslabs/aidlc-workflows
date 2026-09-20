@@ -235,6 +235,7 @@ import {
   clearSessionRebindOffer,
   CURRENT_STATE_VERSION,
   type AuditShardEvent,
+  maximalAttemptEvents,
   idSuffix,
   lastWorkspaceSourceFailure,
   hookExecutionRecoveryText,
@@ -2560,7 +2561,7 @@ export type DoctorReport = {
 // Share repository trust with restore/purge without importing the worktree CLI.
 function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
   const rows: AuditShardEvent[] = [];
-  type Owner = { intent: string; space: string; rows: AuditShardEvent[]; parkedRefs: Set<string> };
+  type Owner = { id8: string; intent: string; space: string; rows: AuditShardEvent[]; parkedRefs: Set<string> };
   const owners = new Map<string, Owner | null>();
   const legacyOwners = new Map<string, Owner | null>();
   const ownerRepositories = new Map<Owner, Map<string | null, Set<string> | null>>();
@@ -2582,7 +2583,7 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
       const registered = registeredIntents.find((entry) => entry.dirName === intent);
       if (intent === undefined || !registered?.uuid) continue;
       const id8 = idSuffix(registered.uuid);
-      const owner: Owner = { intent, space, rows: selectedRows, parkedRefs: new Set() };
+      const owner: Owner = { id8, intent, space, rows: selectedRows, parkedRefs: new Set() };
       owners.set(id8, owners.has(id8) ? null : owner);
       for (const row of selectedRows) {
         if (row.event !== "WORKTREE_DISCARDED") continue;
@@ -2639,8 +2640,11 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
       const parsed = parseBoltName(name);
       if (parsed === null || (slugs !== null && !slugs.has(slug))) continue;
       const prefix = `${id8 === undefined ? legacyParkedRefPrefix(slug) : parkedRefPrefix(id8, slug)}${stamp}`;
+      // A legacy owner whose id8 collides with another registered intent cannot
+      // run any identity-resolving command, so it cannot be offered operations.
+      const legacyOwner = id8 === undefined ? legacyOwners.get(prefix) : undefined;
       const owner = id8 === undefined
-        ? legacyOwners.get(prefix)
+        ? (legacyOwner && owners.get(legacyOwner.id8) === legacyOwner ? legacyOwner : undefined)
         : owners.get(id8);
       if (owner) {
         let candidates = ownerRepositories.get(owner);
@@ -4499,11 +4503,21 @@ export async function collectDoctorReport(
     return m ? m[1].trim() : null;
   };
 
-  type BoltDoctorRecord = { audit: string; refs: string[]; recordPrefix: string | null };
+  type BoltDoctorRecord = { audit: string; events: AuditShardEvent[]; refs: string[]; recordPrefix: string | null };
   const selectedBoltRecord: BoltDoctorRecord = {
     audit: auditMd,
+    events: auditShardEvents,
     refs: boltRefs,
     recordPrefix: relativeRecordDir(projectDir, doctorIntent, doctorSelection.space),
+  };
+  // A slug is terminated only when the causal frontier of its own lifecycle rows
+  // is a single WORKTREE_MERGED/WORKTREE_DISCARDED. A slug may be re-created, so
+  // an older terminal row must not excuse a newer attempt whose branch is stale.
+  const boltSlugTerminated = (record: BoltDoctorRecord, slug: string): boolean => {
+    const frontier = maximalAttemptEvents(record.events.filter((row) =>
+      (row.event === "WORKTREE_CREATED" || row.event === "WORKTREE_MERGED" || row.event === "WORKTREE_DISCARDED") &&
+      auditBlockField(row.block, "Bolt slug") === slug));
+    return frontier.length === 1 && frontier[0].event !== "WORKTREE_CREATED";
   };
   let boltIntentSelectors: Map<string, { intent: string; space: string } | null> | undefined;
   const boltRecords = new Map<string, BoltDoctorRecord | null>();
@@ -4533,6 +4547,7 @@ export async function collectDoctorReport(
     const state = existsSync(path) ? readFileSync(path, "utf-8") : "";
     const record: BoltDoctorRecord = {
       audit: readAllAuditShards(projectDir, selector.intent, selector.space),
+      events: readAuditShardEvents(projectDir, selector.intent, selector.space),
       refs: parseRefsList(getField(state, "Bolt Refs") ?? ""),
       recordPrefix: relativeRecordDir(projectDir, selector.intent, selector.space),
     };
@@ -4705,8 +4720,7 @@ export async function collectDoctorReport(
           ? legacyWorktreePath(projectDir, slug)
           : worktreePath(projectDir, intentId8, slug);
         if (existsSync(wtDir)) continue;
-        if (findAllEvents(record.audit, "WORKTREE_MERGED", slug).length > 0 ||
-          findAllEvents(record.audit, "WORKTREE_DISCARDED", slug).length > 0) continue;
+        if (boltSlugTerminated(record, slug)) continue;
         stale.push(label);
       }
 

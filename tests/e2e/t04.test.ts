@@ -373,6 +373,67 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/reviewed-source/demo/")).toBe("");
   }, 30000);
 
+  test("a completed legacy merge never lets discard claim a later attempt's reuse of the legacy name", () => {
+    // After A's legacy merge fully completed, the only lifecycle frontier A has
+    // is WORKTREE_MERGED. A pre-upgrade intent B may then have reused the global
+    // `bolt-demo` name and left an unchecked-out branch behind. A's discard has
+    // no recorded parked tip to check against, so it must refuse rather than park
+    // and delete B's branch; the cleanup-only merge retry refuses too because the
+    // tip is not A's landed source.
+    const p = freshFixture();
+    const legacy = plantLegacyBolt(p);
+    writeFileSync(join(legacy.dir, "landed.txt"), "legacy reviewed source\n");
+    git(legacy.dir, "add", "landed.txt");
+    git(legacy.dir, "commit", "-qm", "legacy reviewed source");
+    const sourceCommit = git(legacy.dir, "rev-parse", "HEAD");
+    const authority = {
+      "Batch number": "1",
+      "Unit name": "demo",
+      Stage: "code-generation",
+      "Run floor": "2026-01-01T00:00:00Z",
+      "Source Commit": sourceCommit,
+    };
+    appendAuditEntry("SWARM_UNIT_CONVERGED", authority, p, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    appendAuditEntry("WORKTREE_MERGED", {
+      "Bolt slug": "demo",
+      "Worktree path": relative(p, legacy.dir).replaceAll("\\", "/"),
+      "Target branch": "main",
+      Strategy: "merge",
+    }, p, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    git(p, "merge", "--ff-only", legacy.branch);
+    appendAuditEntry("SWARM_SOURCE_MERGED", {
+      ...authority,
+      "Merge commit": sourceCommit,
+      Repo: "-",
+    }, p, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    // A's cleanup completed: checkout and branch gone.
+    git(p, "worktree", "remove", "--force", legacy.dir);
+    git(p, "branch", "-D", legacy.branch);
+
+    // B reused the legacy name, did work, and only its unchecked-out branch and
+    // retained ref remain (its own records live elsewhere).
+    git(p, "branch", legacy.branch, "main");
+    git(p, "worktree", "add", "-q", join(p, "scratch-b"), legacy.branch);
+    writeFileSync(join(p, "scratch-b", "b.txt"), "intent B work\n");
+    git(join(p, "scratch-b"), "add", "b.txt");
+    git(join(p, "scratch-b"), "commit", "-qm", "intent B work");
+    git(p, "worktree", "remove", "--force", join(p, "scratch-b"));
+    const bTip = git(p, "rev-parse", legacy.branch);
+    const bRetained = `refs/aidlc/reviewed-source/demo/${bTip}`;
+    git(p, "update-ref", bRetained, bTip);
+    expect(bTip).not.toBe(sourceCommit);
+
+    const discarded = wt(p, ["discard", "--slug", "demo"]);
+    expect(discarded.status, discarded.out).not.toBe(0);
+    expect(discarded.out).toContain("recorded a merge; finish it with merge --slug demo");
+    const retried = wt(p, ["merge", "--slug", "demo", "--target", "main", "--strategy", "merge"]);
+    expect(retried.status, retried.out).not.toBe(0);
+    expect(retried.out).toContain("moved after source landing");
+    expect(git(p, "rev-parse", legacy.branch)).toBe(bTip);
+    expect(git(p, "rev-parse", bRetained)).toBe(bTip);
+    expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/parked/demo/")).toBe("");
+  }, 30000);
+
   test("discard after a failed legacy merge parks source and removes the checkout, branch and review refs", () => {
     // R4(c): the failed merge's terminal audit row must not strand a live legacy Bolt.
     const p = freshFixture();
