@@ -88,6 +88,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { boltName, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   fixtureIntentId8,
@@ -595,6 +596,18 @@ main(process.argv.slice(2));
       const result = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
       expect(result.status, result.stderr).toBe(0);
     }
+    // An intent-scoped Bolt is only discard's to park when this intent recorded
+    // creating it; model the checkout having vanished after an audit-first create.
+    const name = boltName(fixtureIntentId8(proj), slug);
+    appendAuditEntry("WORKTREE_CREATED", {
+      "Bolt slug": slug,
+      "Worktree path": `.aidlc/worktrees/${name}`,
+      "Branch name": name,
+      "Base branch": "main",
+      "Base commit": spawnSync("git", ["rev-parse", "HEAD"], { cwd: proj, encoding: "utf-8" }).stdout.trim(),
+      Repo: "-",
+      "Intent record": `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`,
+    }, proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
     const env = { ...process.env, AIDLC_HARNESS_DIR: ".claude;echo injected" };
     const aborted = spawnSync(BUN, [TOOL, "abort", "--name", "Unsafe Harness", "--slug", slug,
       "--reason", "retry safely", "--discard", "--project-dir", proj], {
