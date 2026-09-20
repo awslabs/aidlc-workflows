@@ -13,6 +13,8 @@
 //   3. Spawn the per-sensor script (no lock held; long-running is fine).
 //   4. Decide outcome via the truth table below (no lock held).
 //   5. If FAILED: write detail file via `wx`-flag + rename (race-free).
+//      Then drop this sensor's superseded detail files for the stage, so a pass
+//      does not leave an earlier failure's report on disk.
 //   6. Acquire lock → emit terminal row → release.
 //   7. Print one compact JSON verdict line for deterministic callers.
 //   8. Exit 0. (Sensor failure ≠ CLI failure.)
@@ -33,7 +35,7 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -610,6 +612,11 @@ function handleFire(args: string[]): void {
 		}
 	}
 
+	// --- 7b. Drop this sensor's superseded detail files for the stage ---
+	// Named per fire id, so a pass cannot overwrite an earlier failure's report;
+	// without this the directory keeps showing a failure that no longer exists.
+	pruneSupersededDetailFiles(detailDir, id, detailPath, startedAt);
+
 	// --- 8. Lock window B — emit terminal row ---
 	withAuditLock(projectDir, () => {
 		emitTerminal(ctx, finalOutcome, projectDir);
@@ -645,6 +652,63 @@ function handleFire(args: string[]): void {
 // discarded as script-error: bad-output. When startChar is absent the string
 // is returned unchanged so the caller's JSON.parse still throws and degrades
 // gracefully.
+// pruneSupersededDetailFiles — remove this sensor's detail files left behind by
+// earlier fires against the same stage.
+//
+// A detail file is named `<id>-<fireId>.md`, and the fire id is fresh per fire,
+// so a later fire never overwrites an earlier one. Without a prune a failure's
+// report stays on disk indefinitely: once the sensor passes again, the directory
+// still shows a failure that no longer exists. The authoritative record is the
+// audit ledger (SENSOR_PASSED / SENSOR_FAILED) plus the verdict's `detail_path`,
+// which is already null on a pass — so removing a superseded file loses nothing.
+//
+// Two scoping rules keep the prune safe:
+//   - only `<sensorId>-<8 hex>.md` is considered, so a sibling sensor sharing the
+//     stage directory is never touched (an exact fire-id shape, not a prefix, so
+//     one sensor id cannot match another whose id extends it);
+//   - only files last modified BEFORE this fire began are removed, so a
+//     concurrent per-Unit swarm fire's live report survives.
+//
+// Returns the number of files removed. Never throws: hygiene must not change a
+// sensor's outcome.
+export function pruneSupersededDetailFiles(
+	detailDir: string,
+	sensorId: string,
+	keepPath: string,
+	cutoffMs: number,
+): number {
+	let removed = 0;
+	try {
+		if (!existsSync(detailDir)) {
+			return 0;
+		}
+		const detailName = new RegExp(
+			`^${sensorId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[0-9a-f]{8}\\.md$`,
+		);
+		for (const name of readdirSync(detailDir)) {
+			if (!detailName.test(name)) {
+				continue;
+			}
+			const path = join(detailDir, name);
+			if (path === keepPath) {
+				continue;
+			}
+			try {
+				if (statSync(path).mtimeMs >= cutoffMs) {
+					continue;
+				}
+				unlinkSync(path);
+				removed += 1;
+			} catch {
+				// A file that vanished or cannot be read belongs to another fire.
+			}
+		}
+	} catch {
+		// Hygiene only — a prune failure must not change the sensor's outcome.
+	}
+	return removed;
+}
+
 export function stripStdoutNoise(stdout: string, startChar: string): string {
 	const idx = stdout.indexOf(startChar);
 	return idx >= 0 ? stdout.slice(idx) : stdout;
