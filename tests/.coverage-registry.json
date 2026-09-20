@@ -20,11 +20,11 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1052,
+    "total": 1053,
     "enumeratedByClass": {
       "function": 732,
       "audit": 102,
-      "scope": 11,
+      "scope": 12,
       "stage": 33,
       "hook": 18,
       "subcommand": 149,
@@ -9657,6 +9657,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "express-plus",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "scope",

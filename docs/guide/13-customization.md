@@ -106,7 +106,7 @@ Why only scope and not depth or test-strategy? Each scope declares a depth, and 
 
 ## Scope Configuration
 
-Scopes control which stages execute and at what depth and test strategy. AI-DLC provides 11 named scopes; the full table (EXECUTE/total stage counts, default depth, test strategy, and use case for each) is the single source in [Scopes, Depth, and Test Strategy § The 11 Core Scopes](05-scopes-and-depth.md#the-11-core-scopes). This section covers *configuring* and overriding them.
+Scopes control which stages execute and at what depth and test strategy. AI-DLC provides 12 named scopes; the full table (EXECUTE/total stage counts, default depth, test strategy, and use case for each) is the single source in [Scopes, Depth, and Test Strategy § The 12 Core Scopes](05-scopes-and-depth.md#the-12-core-scopes). This section covers *configuring* and overriding them.
 
 ### Choosing a scope
 
