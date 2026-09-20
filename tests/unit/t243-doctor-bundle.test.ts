@@ -77,6 +77,7 @@ import type {
   GraphStageLite,
 } from "../../dist/claude/.claude/tools/aidlc-doctor-bundle.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { aidlcToolInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -935,6 +936,25 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(withWf.some((f) => f.id === "runtime-graph-missing")).toBe(true);
   });
 
+  test("23b: both runtime-graph remedies name the compiler that writes the file", () => {
+    // aidlc-graph.ts compiles stage-graph.json + scope-grid.json and never
+    // writes runtime-graph.json; aidlc-runtime.ts does. A remedy naming the
+    // former is a no-op for the finding that printed it.
+    const missing = runDiagnosis(
+      diagInput({ runtimeGraphExists: false, stateContent: "- **Status**: In-Progress\n" }),
+    ).find((f) => f.id === "runtime-graph-missing");
+    const stale = runDiagnosis(
+      diagInput({ runtimeGraphMtimeMs: 1, authoredInputsNewestMtimeMs: 2 }),
+    ).find((f) => f.id === "runtime-graph-stale");
+    for (const finding of [missing, stale]) {
+      expect(finding).toBeDefined();
+      expect(finding?.remedy, "remedy names the runtime compiler")
+        .toContain(`${aidlcToolInvocation("runtime")} compile`);
+      expect(finding?.remedy, "remedy must not send the user to the stage-graph compiler")
+        .not.toContain(aidlcToolInvocation("graph"));
+    }
+  });
+
   describe("stage-level state/audit drift (#1190)", () => {
     const ev = (event: string, stage: string, ts: string, workflow?: string) =>
       `## x\n**Timestamp**: ${ts}\n**Event**: ${event}\n**Stage**: ${stage}` +
@@ -944,7 +964,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const drift = (over: Partial<DiagnosisInput>) =>
       runDiagnosis(diagInput(over)).filter((f) => f.id === "stage-state-audit-drift");
 
-    test("26: a stage the ledger completed while its checkbox is unchecked is reported", () => {
+    test("27: a stage the ledger completed while its checkbox is unchecked is reported", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
@@ -955,7 +975,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(found[0].evidence).toMatchObject({ completedButPending: ["alpha"] });
     });
 
-    test("27: the #1190 shape — started, never completed, checkbox still unchecked", () => {
+    test("28: the #1190 shape — started, never completed, checkbox still unchecked", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "build-and-test", "2026-01-01T01:00:00Z"),
@@ -968,7 +988,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(found[0].evidence).toMatchObject({ startedButPending: ["build-and-test"] });
     });
 
-    test("28: a backward jump is not drift — it resets downstream checkboxes on purpose", () => {
+    test("29: a backward jump is not drift — it resets downstream checkboxes on purpose", () => {
       // aidlc-jump resets every stage from the target onward to pending and
       // emits STAGE_JUMPED; the earlier STAGE_COMPLETED rows stay in the buffer.
       const audit = [
@@ -983,7 +1003,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       ).toEqual([]);
     });
 
-    test("29: an isolated single-stage run is not drift — it never touches the main checkbox", () => {
+    test("30: an isolated single-stage run is not drift — it never touches the main checkbox", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "beta", "2026-01-01T01:00:00Z", "single-stage:beta"),
@@ -994,7 +1014,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       ).toEqual([]);
     });
 
-    test("30: a repeated slug resolves first-wins, the way setCheckbox flips it", () => {
+    test("31: a repeated slug resolves first-wins, the way setCheckbox flips it", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
@@ -1007,7 +1027,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(drift({ audit, stateContent })).toEqual([]);
     });
 
-    test("31: Current Stage pointing at an unchecked stage is reported without any ledger", () => {
+    test("32: Current Stage pointing at an unchecked stage is reported without any ledger", () => {
       const found = runDiagnosis(
         diagInput({ stateContent: state("- [ ] alpha — EXECUTE\n") }),
       ).filter((f) => f.id === "current-stage-not-started");
@@ -1015,7 +1035,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(found[0].summary).toContain("alpha");
     });
 
-    test("32: a started stage that left pending is not reported", () => {
+    test("33: a started stage that left pending is not reported", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
