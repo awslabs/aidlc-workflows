@@ -193,17 +193,21 @@ the artefact atomically via `writeFileAtomic` inside `withAuditLock`.
 ### The window before the first compile
 
 `init`, `intent create` and `orchestrate next` are not transition-class
-commands, so a fresh workflow has NO runtime-graph.json until its first
-gate reports — the file appears at the `orchestrate report --result
-awaiting-approval` on the first gated stage, not before. A fresh clone,
+commands, so a fresh workflow that has run only those commands still has
+no `runtime-graph.json` when its first gate reports. In the common path,
+the file first appears at the `orchestrate report --result
+awaiting-approval` on the first gated stage. An earlier `aidlc status`,
+`config set`, or copy-channel utility `intent-create` route compiles it
+sooner when one happens to run, but the file MAY still be absent at the
+first gate: consumers cannot assume it exists. A fresh clone,
 a `git clean`, or a single dropped hook compile leaves the same hole
 mid-workflow, because the file is gitignored and machine-local.
 Consumers must therefore treat an absent file as ordinary state and
 recompute or degrade, never fail: `learnings surface` recomputes the one
 field it reads (`memory_path`, derived exactly as the compile derives
 it) and warns on stderr naming the rebuild command, so the §13 ritual
-still runs on the first gate. A MALFORMED file is different — that is
-corruption, and it fails.
+still runs on the first gate. A MALFORMED file, or a row that exists
+without a `memory_path`, is different — that is corruption, and it fails.
 
 ---
 

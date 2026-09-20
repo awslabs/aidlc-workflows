@@ -372,6 +372,28 @@ describe("t199 per-intent memory path (write + read)", () => {
     expect(s.stderr).toContain("runtime-graph.json is malformed");
   }, TIMEOUT);
 
+  // A recorded row without memory_path is corruption too, not an absent row
+  // that surface can replace with a recomputed path.
+  test("a recorded row without memory_path still fails instead of falling back", () => {
+    const pd = mkWorkspaceProject();
+    writeFileSync(
+      join(seededRecordDir(pd), "runtime-graph.json"),
+      JSON.stringify({
+        workflow_id: "w1",
+        scope: "feature",
+        started_at: "2026-05-28T08:00:00Z",
+        stages: [{ stage_slug: "user-stories" }],
+      }),
+    );
+    const s = spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
+      { encoding: "utf-8" },
+    );
+    expect(s.status).toBe(1);
+    expect(s.stderr).toContain("has no memory_path in runtime-graph.json");
+  }, TIMEOUT);
+
   // A guard-rail: the runtime-graph.json must exist where surface reads it (the
   // seeded record root), proving compile wrote to the per-intent record dir.
   test("compile writes runtime-graph.json under the per-intent record dir", () => {

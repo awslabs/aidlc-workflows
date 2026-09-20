@@ -137,8 +137,9 @@ import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 
 // --- Exit-code convention (plan §2) ---
 //   0 success
-//   1 missing/malformed state, malformed runtime-graph, unresolvable stage
-//     diary, slug mismatch, framework-tier sensor path, lock-acquire failure
+//   1 missing/malformed state, malformed runtime-graph, row without memory_path,
+//     unresolvable stage diary, slug mismatch, framework-tier sensor path,
+//     lock-acquire failure
 //     (an ABSENT runtime-graph is not a failure — surface recomputes the diary
 //     path it would have read; see resolveMemoryPath)
 //   2 unknown subcommand / argument validation
@@ -307,14 +308,18 @@ function readRuntimeStageRow(
 // the same recompute-and-warn posture aidlc-orchestrate.ts takes for a missing
 // or stale bolt_dag. The record prefix is resolved against the space + intent
 // PINNED at surface time, not the live cursor compile happens to read.
+// A row that exists without a memory_path is corruption and still fails.
 function resolveMemoryPath(
   projectDir: string,
   slug: string,
   intent?: string,
   space?: string
 ): string {
-  const recorded = readRuntimeStageRow(projectDir, slug, intent, space)?.memory_path;
-  if (recorded) return recorded;
+  const row = readRuntimeStageRow(projectDir, slug, intent, space);
+  if (row !== null) {
+    if (row.memory_path) return row.memory_path;
+    fail(`stage "${slug}" has no memory_path in runtime-graph.json`, 1);
+  }
 
   const stage = findStageBySlug(slug);
   if (!stage) {
