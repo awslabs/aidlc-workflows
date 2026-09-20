@@ -519,6 +519,27 @@ describe("t247 claim-sources sensor", () => {
     );
   });
 
+  test("a non-list paragraph in the confirmation section does not accept a retained assumption", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\nA procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "retained assumption is not listed in ## Assumption Confirmation",
+    );
+  });
+
   for (const answer of [
     "A. Accept assumptions? No",
     "A. Accept assumptions with caveats",

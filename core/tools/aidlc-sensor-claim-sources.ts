@@ -476,7 +476,10 @@ function parseSourceUniverse(
 	const acceptedAssumptions = new Set(
 		claimBlocksFromLines(confirmationEntries)
 			.blocks.map((block) => block.text)
-			.filter((text) => sourceTags(text, labels).includes("assumption"))
+			.filter(
+				(text) =>
+					isListItem(text) && sourceTags(text, labels).includes("assumption"),
+			)
 			.map(normalizedAssumption)
 			.filter((entry) => entry.length > 0),
 	);
