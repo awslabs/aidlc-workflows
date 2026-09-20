@@ -295,6 +295,7 @@ describe("t114 in-session config alias", () => {
         "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
       );
       expect(out).not.toContain('"kind":"run-stage"');
+      expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
     }
   });
 
@@ -305,6 +306,11 @@ describe("t114 in-session config alias", () => {
     const out = runNext(proj, ["--config", "trust"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).not.toContain('"kind":"run-stage"');
+    const refused = runNext(proj, ["--config", "bogus"]).out;
+    expect(refused).toContain('"kind":"error"');
+    expect(refused).toContain("Usage: /aidlc --config");
+    // markEngineTouch self-gates without a workflow; refusal must also stay terminal with one.
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 

@@ -227,20 +227,51 @@ and follow the named stage-restart or explicit human-approved bypass remedy.
 
 **Recoverable abort/discard.** In every harness's recovery path below, aborting
 and discarding the old Bolt means park/discard: snapshot tracked and non-ignored
-untracked files and park reviewed source refs before removing the live checkout
-and branch. The conductor must obtain the human's selection and execute the
-returned recovery command unchanged. Recover parked work with
-`{{INVOKE}} engine worktree restore --slug <slug>`; it creates an isolated
-`.aidlc/restored/bolt-<slug>-<stamp>` checkout on
-`restore/bolt-<slug>-<stamp>`, never overwriting a new live Bolt. Restored artifacts
-and receipts are not current-attempt evidence; retry still requires a fresh
-`prepare` and review boundary as described below.
+untracked files (or keep the remaining branch tip when the checkout is gone) and
+park reviewed source refs before removing the live checkout and branch. The
+conductor must obtain the human's selection and execute the returned recovery
+command unchanged. When present, the returned `restore_operation` recovers
+parked work in an isolated `.aidlc/restored/bolt-<slug>-<stamp>` checkout on
+`restore/bolt-<slug>-<stamp>`, never overwriting a new live Bolt. If only review
+evidence remained, there are no saved working files to restore, so neither
+`restore_operation` nor `restore_hint` is returned. Restored artifacts and receipts are not
+current-attempt evidence; retry still requires a fresh `prepare` and review
+boundary as described below.
 
 ### Claude Code
 
 The engine selected an eligible Construction batch for swarm execution. Execution is explicit on new workflows and may use gated or autonomous completion approval; a legacy workflow without the execution field retains its autonomy-based route. **You — the live `/aidlc` session — are the conductor: you own the fan-out and the retry loop; `aidlc-swarm.ts` is the deterministic referee you consult, never a loop-owner.** **Before step (1), read and follow `aidlc-common/protocols/stage-protocol-construction.md` §12b "Autonomous Code Generation Plan Contract"; planning, fingerprinted Plan Approval, and the two worker-brief markers are mandatory for every emitted unit.** Apply **Continuing a partially completed batch**, **Before initial protected prepare**, and **Resuming a reviewed batch after Request Changes** above to select continuation or preparation before the steps below; no automatic commit is authorized by an autonomy grant. (1) **`prepare`** the batch: `{{INVOKE}} engine swarm prepare --batch <n> --units <directive.units joined by comma> [--base main] [--repo <name>]` creates the initial isolated worktrees only after the batch preflight; with `--resume-existing`, use the two resume paths above. Pass `--repo` = the directive's `repo` field when present; for a MULTI-REPO intent where the directive omits `repo`, supply `--repo <name>` for the sibling repo this batch targets (read the recorded set from `/aidlc intent --json`.repos) — `prepare` errors without it on a multi-repo intent. (2) **Fan out per `AIDLC_USE_SWARM`:** unset / not `"1"` → the floor — issue N parallel `Task` calls in one assistant message, one per unit, each implementing its unit in its worktree until the project's convergence check passes; `="1"` → author an inline Dynamic Workflow (`Workflow({script, args})`, batch in `args`) whose JS owns the per-unit `pipeline` and the iteration cap. If `="1"` but the Workflow tool is unavailable, **loud-degrade to the floor** and pass `--degraded-from ultracode` on the next referee call so the tool emits `SWARM_DEGRADED`. (3) Under checkpoints, both `check` and `finalize` use the intent's recorded, human-authorized **Construction Verification Command**; omit `--check-cmd` (if supplied, it must match). If authorization is missing, complete the Construction module's command-consent procedure and `set-construction-verification-command` before running either. Legacy autonomy still requires `--check-cmd "<the project's build/test convergence check>"` on both commands. After each unit's worker turn, consult **`check <unit> [--test-file <protected spec>]`** — exit `0` = genuinely converged (the real check passed and no protected file was tampered); non-zero = not yet, and you judge retry-vs-escalate (knowledge). (4) When the loop settles, **`finalize --batch <n> --units <all> --claimed <the units you believe converged> [--reasons <unit>=<unsatisfiable|budget-exhausted|cap-exhausted>,…]`** re-verifies every claimed unit before merging (a unit you wrongly claim is refused — the lying-conductor guard) and serialised-merges the genuine passes. For any unit you did NOT claim, attribute *why* it gave up via `--reasons` (your knowledge call — `unsatisfiable` when it is fundamentally unbuildable, `budget-exhausted` when the ultracode token ceiling stopped it; an unlisted declined unit defaults to `cap-exhausted`); the tool records your attribution faithfully but never lets it override a claimed-but-red unit's `error` verdict. **Branch on `finalize`'s exit code:** `0` → this batch's reviewed record evidence and metadata converged; after the required source-landing step above, re-run `next` rather than reporting the stage yet. The engine may first return a `swarm_checkpoint` for the completed batch; resolve it before the next batch. Otherwise it returns the next `invoke-swarm` or the final `run-stage` settle directive; only on that settle directive do you apply the metadata-aware settled-swarm rule above and report its lifecycle outcome. Reporting approved after an intermediate batch would complete the stage with later batches unbuilt. `2` → it returns a failure envelope (a unit unsatisfiable, claimed-but-red, tampered, or a merge failed) — **take the baton back**: halt and re-engage the human via the halt-and-ask seam (`aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure" — failure always halts and asks regardless of autonomy mode). For a `merge_failures` unit (converged but its merge-back failed; no `SWARM_UNIT_CONVERGED` row lands until the merge does), resolve the blocker and re-run `finalize` scoped to that unit: the worktree is preserved and `release-merge` is idempotent, so the retry is a pure re-invocation. Do NOT re-run `prepare` for it (the existing worktree makes `prepare` error). The swarm never escapes the conductor — the referee owns the verdict + merge + audit, you own the fan-out + retry decision. *(Optional: a human may type `/goal` at the autonomy grant to run-until-a-condition keyed off the referee's transcript output — never as the convergence judge, which stays `finalize`'s exit code.)*
 
 **Autonomous reviewer boundary.** When an `invoke-swarm` carries `directive.reviewer`, a unit is not claimable at `finalize` merely because `check` passed. In that unit's `prepare`-created worktree, follow the reviewer contract (stage-protocol-reviewer.md §12a): record `REVIEW_REQUESTED` with `{{INVOKE}} engine log review --stage "<directive.stage>" --unit "<unit>" --reviewer "<directive.reviewer>" --iteration <n> --project-dir "<worktree>"`, dispatch the reviewer against `directive.stage_file` plus that worktree's unit artifacts and contracts, then record `REVIEW_COMPLETED` with the same command plus `--verdict <READY|NOT-READY>`. The logger stays in the main workspace while `--project-dir` targets the worktree, which also works when a multi-repo worktree contains only the selected sibling repo. A NOT-READY verdict re-invokes the lead in the same worktree, reruns the convergence check, and repeats the reviewer up to `directive.reviewer_max_iterations`. If the one recovery receipt is invalidated again, do not put the Unit in `--claimed` and do not run `finalize`: halt for a human Retry/Abort decision. On Retry, return to the main workspace, abort and discard the old Bolt, then call `next` and follow **Retry after a native worker discard** above for that Unit with the original batch/repo selection; the fresh `BOLT_STARTED` boundary resets review accounting without claiming convergence. Put a unit in `--claimed` only after its terminal review receipt exists; `finalize` verifies the receipt before merge and then merges it into the main audit. When `next` returns the settle `run-stage` after all units converge, do not dispatch the reviewer again; the per-unit receipts already cover the stage, so apply only the metadata-aware settled-swarm completion procedure above. This is model work inside autonomous Construction, not another human prompt.
+
+**After a successful retry discard.** After the `--discard` abort succeeds and
+confirms the old attempt was parked, but before rerunning `prepare`, use this
+SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+use `I`, never implying a human remedy choice that did not happen. Do not
+announce a saved snapshot if the abort failed or did not park an attempt.
+
+Select `[saved-files text]` from the returned `parked_mode`:
+
+- `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+- `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+- `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+
+If the human later asks for that attempt back, use the saved abort result's
+`restore_operation`: invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+as a separate argv argument. Never join those arguments into a shell command or
+rebuild a slug-only selection. `restore_hint` is human display text only, never
+an execution input. If safe rendering fails (for example, an invalid harness
+directory), the hint is omitted and `restore_hint_error` explains why; the
+operation remains available and the restoration offer still applies.
+After restoration succeeds, announce the returned restored path plainly:
+**SAY:** "I restored the previous attempt at [returned restored path]."
+Restoration does not resume the old attempt or make its review current.
 
 ---
 
@@ -250,6 +281,35 @@ The engine selected an eligible Construction batch for swarm execution. Executio
 
 **Autonomous reviewer boundary.** When an `invoke-swarm` carries `directive.reviewer`, a unit is not claimable at `finalize` merely because `check` passed. In that unit's `prepare`-created worktree, follow stage-protocol-reviewer.md §12a: record `REVIEW_REQUESTED` with `{{INVOKE}} engine log review --stage "<directive.stage>" --unit "<unit>" --reviewer "<directive.reviewer>" --iteration <n> --project-dir "<worktree>"`, delegate to the reviewer agent against `directive.stage_file` plus that worktree's unit artifacts and contracts, then record `REVIEW_COMPLETED` with the same command plus `--verdict <READY|NOT-READY>`. The logger stays in the main workspace while `--project-dir` targets the worktree, which also works when a multi-repo worktree contains only the selected sibling repo. A NOT-READY verdict re-invokes the lead in the same worktree, reruns the convergence check, and repeats the reviewer up to `directive.reviewer_max_iterations`. If the one recovery receipt is invalidated again, do not put the Unit in `--claimed` and do not run `finalize`: halt for a human Retry/Abort decision. On Retry, return to the main workspace, abort and discard the old Bolt, then call `next` and follow **Retry after a native worker discard** above for that Unit with the original batch/repo selection; the fresh `BOLT_STARTED` boundary resets review accounting without claiming convergence. Put a unit in `--claimed` only after its terminal review receipt exists; `finalize` verifies the receipt before merge and then merges it into the main audit. When `next` returns the settle `run-stage` after all units converge, do not delegate to the reviewer again; the per-unit receipts already cover the stage, so apply only the metadata-aware settled-swarm completion procedure above. This is model work inside autonomous Construction, not another human prompt.
 
+**After a successful retry discard.** After the `--discard` abort succeeds and
+confirms the old attempt was parked, but before rerunning `prepare`, use this
+SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+use `I`, never implying a human remedy choice that did not happen. Do not
+announce a saved snapshot if the abort failed or did not park an attempt.
+
+Select `[saved-files text]` from the returned `parked_mode`:
+
+- `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+- `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+- `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+
+If the human later asks for that attempt back, use the saved abort result's
+`restore_operation`: invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+as a separate argv argument. Never join those arguments into a shell command or
+rebuild a slug-only selection. `restore_hint` is human display text only, never
+an execution input. If safe rendering fails (for example, an invalid harness
+directory), the hint is omitted and `restore_hint_error` explains why; the
+operation remains available and the restoration offer still applies.
+After restoration succeeds, announce the returned restored path plainly:
+**SAY:** "I restored the previous attempt at [returned restored path]."
+Restoration does not resume the old attempt or make its review current.
+
 ---
 
 ### Kiro IDE
@@ -257,6 +317,35 @@ The engine selected an eligible Construction batch for swarm execution. Executio
 The engine selected an eligible Construction batch for swarm execution. Execution is explicit on new workflows and may use gated or autonomous completion approval; a legacy workflow without the execution field retains its autonomy-based route. **You — the live `/aidlc` session — are the conductor: you own the fan-out and the retry loop; `aidlc-swarm.ts` is the deterministic referee you consult, never a loop-owner.** **Before step (1), read and follow `aidlc-common/protocols/stage-protocol-construction.md` §12b "Autonomous Code Generation Plan Contract"; planning, fingerprinted Plan Approval, and the two worker-brief markers are mandatory for every emitted unit.** Apply **Continuing a partially completed batch**, **Before initial protected prepare**, and **Resuming a reviewed batch after Request Changes** above to select continuation or preparation before the steps below; no automatic commit is authorized by an autonomy grant. (1) **`prepare`** the batch: `{{INVOKE}} engine swarm prepare --batch <n> --units <directive.units joined by comma> [--base main] [--repo <name>]` creates the initial isolated worktrees only after the batch preflight; with `--resume-existing`, use the two resume paths above. Pass `--repo` = the directive's `repo` field when present; for a MULTI-REPO intent where the directive omits `repo`, supply `--repo <name>` for the sibling repo this batch targets (read the recorded set from `/aidlc intent --json`.repos) — `prepare` errors without it on a multi-repo intent. (2) **Fan out via the `subagent` tool**: delegate every unit in the batch in ONE delegation (whole batches are fine — concurrency is the harness's queueing concern), one parallel task per unit targeting `aidlc-developer-agent`, each implementing its unit in its worktree until the project's convergence check passes. On this harness the subagent fan-out is the ONLY swarm mode: `AIDLC_USE_SWARM=1` has no effect here (no Workflow tool exists) — if it is set, say so out loud and proceed with the fan-out, passing `--degraded-from ultracode` on the next referee call so the tool emits `SWARM_DEGRADED`. (3) Under checkpoints, both `check` and `finalize` use the intent's recorded, human-authorized **Construction Verification Command**; omit `--check-cmd` (if supplied, it must match). If authorization is missing, complete the Construction module's command-consent procedure and `set-construction-verification-command` before running either. Legacy autonomy still requires `--check-cmd "<the project's build/test convergence check>"` on both commands. After each unit's worker turn, consult **`check <unit> [--test-file <protected spec>]`** — exit `0` = genuinely converged; non-zero = not yet, and you judge retry-vs-escalate. (4) When the loop settles, **`finalize --batch <n> --units <all> --claimed <the units you believe converged> [--reasons <unit>=<unsatisfiable|budget-exhausted|cap-exhausted>,…]`** re-verifies every claimed unit before merging (the lying-conductor guard) and serialised-merges the genuine passes. **Branch on `finalize`'s exit code:** `0` → this batch's reviewed record evidence and metadata converged; after the required source-landing step above, re-run `next` rather than reporting the stage yet. The engine may first return a `swarm_checkpoint` for the completed batch; resolve it before the next batch. Otherwise it returns the next `invoke-swarm` or the final `run-stage` settle directive; only on that settle directive do you apply the metadata-aware settled-swarm rule above and report its lifecycle outcome. Reporting approved after an intermediate batch would complete the stage with later batches unbuilt. `2` → failure envelope — **take the baton back**: halt and re-engage the human via the halt-and-ask seam (`aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure"). For a `merge_failures` unit (converged but its merge-back failed; no `SWARM_UNIT_CONVERGED` row lands until the merge does), resolve the blocker and re-run `finalize` scoped to that unit: the worktree is preserved and `release-merge` is idempotent, so the retry is a pure re-invocation; do NOT re-run `prepare` for it. The swarm never escapes the conductor.
 
 **Autonomous reviewer boundary.** When an `invoke-swarm` carries `directive.reviewer`, a unit is not claimable at `finalize` merely because `check` passed. In that unit's `prepare`-created worktree, follow stage-protocol-reviewer.md §12a: record `REVIEW_REQUESTED` with `{{INVOKE}} engine log review --stage "<directive.stage>" --unit "<unit>" --reviewer "<directive.reviewer>" --iteration <n> --project-dir "<worktree>"`, delegate to the reviewer agent against `directive.stage_file` plus that worktree's unit artifacts and contracts, then record `REVIEW_COMPLETED` with the same command plus `--verdict <READY|NOT-READY>`. The logger stays in the main workspace while `--project-dir` targets the worktree, which also works when a multi-repo worktree contains only the selected sibling repo. A NOT-READY verdict re-invokes the lead in the same worktree, reruns the convergence check, and repeats the reviewer up to `directive.reviewer_max_iterations`. If the one recovery receipt is invalidated again, do not put the Unit in `--claimed` and do not run `finalize`: halt for a human Retry/Abort decision. On Retry, return to the main workspace, abort and discard the old Bolt, then call `next` and follow **Retry after a native worker discard** above for that Unit with the original batch/repo selection; the fresh `BOLT_STARTED` boundary resets review accounting without claiming convergence. Put a unit in `--claimed` only after its terminal review receipt exists; `finalize` verifies the receipt before merge and then merges it into the main audit. When `next` returns the settle `run-stage` after all units converge, do not delegate to the reviewer again; the per-unit receipts already cover the stage, so apply only the metadata-aware settled-swarm completion procedure above. This is model work inside autonomous Construction, not another human prompt.
+
+**After a successful retry discard.** After the `--discard` abort succeeds and
+confirms the old attempt was parked, but before rerunning `prepare`, use this
+SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+use `I`, never implying a human remedy choice that did not happen. Do not
+announce a saved snapshot if the abort failed or did not park an attempt.
+
+Select `[saved-files text]` from the returned `parked_mode`:
+
+- `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+- `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+- `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+
+If the human later asks for that attempt back, use the saved abort result's
+`restore_operation`: invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+as a separate argv argument. Never join those arguments into a shell command or
+rebuild a slug-only selection. `restore_hint` is human display text only, never
+an execution input. If safe rendering fails (for example, an invalid harness
+directory), the hint is omitted and `restore_hint_error` explains why; the
+operation remains available and the restoration offer still applies.
+After restoration succeeds, announce the returned restored path plainly:
+**SAY:** "I restored the previous attempt at [returned restored path]."
+Restoration does not resume the old attempt or make its review current.
 
 ---
 
@@ -266,6 +355,35 @@ The engine selected an eligible Construction batch for swarm execution. Executio
 
 **Autonomous reviewer boundary.** When an `invoke-swarm` carries `directive.reviewer`, a unit is not claimable at `finalize` merely because `check` passed. In that unit's `prepare`-created worktree, follow stage-protocol-reviewer.md §12a: record `REVIEW_REQUESTED` with `{{INVOKE}} engine log review --stage "<directive.stage>" --unit "<unit>" --reviewer "<directive.reviewer>" --iteration <n> --project-dir "<worktree>"`, spawn the reviewer role against `directive.stage_file` plus that worktree's unit artifacts and contracts, then record `REVIEW_COMPLETED` with the same command plus `--verdict <READY|NOT-READY>`. The logger stays in the main workspace while `--project-dir` targets the worktree, which also works when a multi-repo worktree contains only the selected sibling repo. A NOT-READY verdict re-invokes the lead in the same worktree, reruns the convergence check, and repeats the reviewer up to `directive.reviewer_max_iterations`. If the one recovery receipt is invalidated again, do not put the Unit in `--claimed` and do not run `finalize`: halt for a human Retry/Abort decision. On Retry, return to the main workspace, abort and discard the old Bolt, then call `next` and follow **Retry after a native worker discard** above for that Unit with the original batch/repo selection; the fresh `BOLT_STARTED` boundary resets review accounting without claiming convergence. Put a unit in `--claimed` only after its terminal review receipt exists; `finalize` verifies the receipt before merge and then merges it into the main audit. When `next` returns the settle `run-stage` after all units converge, do not spawn the reviewer again; the per-unit receipts already cover the stage, so apply only the metadata-aware settled-swarm completion procedure above. This is model work inside autonomous Construction, not another human prompt.
 
+**After a successful retry discard.** After the `--discard` abort succeeds and
+confirms the old attempt was parked, but before rerunning `prepare`, use this
+SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+use `I`, never implying a human remedy choice that did not happen. Do not
+announce a saved snapshot if the abort failed or did not park an attempt.
+
+Select `[saved-files text]` from the returned `parked_mode`:
+
+- `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+- `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+- `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+
+If the human later asks for that attempt back, use the saved abort result's
+`restore_operation`: invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+as a separate argv argument. Never join those arguments into a shell command or
+rebuild a slug-only selection. `restore_hint` is human display text only, never
+an execution input. If safe rendering fails (for example, an invalid harness
+directory), the hint is omitted and `restore_hint_error` explains why; the
+operation remains available and the restoration offer still applies.
+After restoration succeeds, announce the returned restored path plainly:
+**SAY:** "I restored the previous attempt at [returned restored path]."
+Restoration does not resume the old attempt or make its review current.
+
 ---
 
 ### Cursor
@@ -273,6 +391,35 @@ The engine selected an eligible Construction batch for swarm execution. Executio
 The engine selected an eligible Construction batch for swarm execution. Execution is explicit on new workflows and may use gated or autonomous completion approval; a legacy workflow without the execution field retains its autonomy-based route. **You — the live `/aidlc` session — are the conductor: you own the fan-out and the retry loop; `aidlc-swarm.ts` is the deterministic referee you consult, never a loop-owner.** **Before step (1), read and follow `aidlc-common/protocols/stage-protocol-construction.md` §12b "Autonomous Code Generation Plan Contract"; planning, fingerprinted Plan Approval, and the two worker-brief markers are mandatory for every emitted unit.** Apply **Continuing a partially completed batch**, **Before initial protected prepare**, and **Resuming a reviewed batch after Request Changes** above to select continuation or preparation before the steps below; no automatic commit is authorized by an autonomy grant. (1) **`prepare`** the batch: `{{INVOKE}} engine swarm prepare --batch <n> --units <directive.units joined by comma> [--base main] [--repo <name>]` creates the initial isolated worktrees only after the batch preflight; with `--resume-existing`, use the two resume paths above. Pass `--repo` = the directive's `repo` field when present; for a MULTI-REPO intent where the directive omits `repo`, supply `--repo <name>` for the sibling repo this batch targets (read the recorded set from `/aidlc intent --json`.repos) — `prepare` errors without it on a multi-repo intent. (2) **Fan out via the `task` tool**: delegate every unit in the batch in ONE turn, one parallel task per unit targeting `aidlc-developer-agent`, each implementing its unit in its worktree until the project's convergence check passes. On this harness the subagent fan-out is the ONLY swarm mode: `AIDLC_USE_SWARM=1` has no effect here (no Workflow tool exists) — if it is set, say so out loud and proceed with the fan-out, passing `--degraded-from ultracode` on the next referee call so the tool emits `SWARM_DEGRADED`. (3) Under checkpoints, both `check` and `finalize` use the intent's recorded, human-authorized **Construction Verification Command**; omit `--check-cmd` (if supplied, it must match). If authorization is missing, complete the Construction module's command-consent procedure and `set-construction-verification-command` before running either. Legacy autonomy still requires `--check-cmd "<the project's build/test convergence check>"` on both commands. After each unit's worker turn, consult **`check <unit> [--test-file <protected spec>]`** — exit `0` = genuinely converged; non-zero = not yet, and you judge retry-vs-escalate. (4) When the loop settles, **`finalize --batch <n> --units <all> --claimed <the units you believe converged> [--reasons <unit>=<unsatisfiable|budget-exhausted|cap-exhausted>,…]`** re-verifies every claimed unit before merging (the lying-conductor guard) and serialised-merges the genuine passes. **Branch on `finalize`'s exit code:** `0` → this batch's reviewed record evidence and metadata converged; after the required source-landing step above, re-run `next` rather than reporting the stage yet. The engine may first return a `swarm_checkpoint` for the completed batch; resolve it before the next batch. Otherwise it returns the next `invoke-swarm` or the final `run-stage` settle directive; only on that settle directive do you apply the metadata-aware settled-swarm rule above and report its lifecycle outcome. Reporting approved after an intermediate batch would complete the stage with later batches unbuilt. `2` → failure envelope — **take the baton back**: halt and re-engage the human via the halt-and-ask seam (`aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure"). For a `merge_failures` unit (converged but its merge-back failed; no `SWARM_UNIT_CONVERGED` row lands until the merge does), resolve the blocker and re-run `finalize` scoped to that unit: the worktree is preserved and `release-merge` is idempotent, so the retry is a pure re-invocation; do NOT re-run `prepare` for it. The swarm never escapes the conductor.
 
 **Autonomous reviewer boundary.** When an `invoke-swarm` carries `directive.reviewer`, a unit is not claimable at `finalize` merely because `check` passed. In that unit's `prepare`-created worktree, follow stage-protocol-reviewer.md §12a: record `REVIEW_REQUESTED` with `{{INVOKE}} engine log review --stage "<directive.stage>" --unit "<unit>" --reviewer "<directive.reviewer>" --iteration <n> --project-dir "<worktree>"`, dispatch the reviewer task against `directive.stage_file` plus that worktree's unit artifacts and contracts, then record `REVIEW_COMPLETED` with the same command plus `--verdict <READY|NOT-READY>`. The logger stays in the main workspace while `--project-dir` targets the worktree, which also works when a multi-repo worktree contains only the selected sibling repo. A NOT-READY verdict re-invokes the lead in the same worktree, reruns the convergence check, and repeats the reviewer up to `directive.reviewer_max_iterations`. If the one recovery receipt is invalidated again, do not put the Unit in `--claimed` and do not run `finalize`: halt for a human Retry/Abort decision. On Retry, return to the main workspace, abort and discard the old Bolt, then call `next` and follow **Retry after a native worker discard** above for that Unit with the original batch/repo selection; the fresh `BOLT_STARTED` boundary resets review accounting without claiming convergence. Put a unit in `--claimed` only after its terminal review receipt exists; `finalize` verifies the receipt before merge and then merges it into the main audit. When `next` returns the settle `run-stage` after all units converge, do not dispatch the reviewer again; the per-unit receipts already cover the stage, so apply only the metadata-aware settled-swarm completion procedure above. This is model work inside autonomous Construction, not another human prompt.
+
+**After a successful retry discard.** After the `--discard` abort succeeds and
+confirms the old attempt was parked, but before rerunning `prepare`, use this
+SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+use `I`, never implying a human remedy choice that did not happen. Do not
+announce a saved snapshot if the abort failed or did not park an attempt.
+
+Select `[saved-files text]` from the returned `parked_mode`:
+
+- `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+- `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+- `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+
+If the human later asks for that attempt back, use the saved abort result's
+`restore_operation`: invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+as a separate argv argument. Never join those arguments into a shell command or
+rebuild a slug-only selection. `restore_hint` is human display text only, never
+an execution input. If safe rendering fails (for example, an invalid harness
+directory), the hint is omitted and `restore_hint_error` explains why; the
+operation remains available and the restoration offer still applies.
+After restoration succeeds, announce the returned restored path plainly:
+**SAY:** "I restored the previous attempt at [returned restored path]."
+Restoration does not resume the old attempt or make its review current.
 
 ---
 
@@ -282,6 +429,35 @@ The engine selected an eligible Construction batch for swarm execution. Executio
 
 **Autonomous reviewer boundary.** When an `invoke-swarm` carries `directive.reviewer`, a unit is not claimable at `finalize` merely because `check` passed. In that unit's `prepare`-created worktree, follow stage-protocol-reviewer.md §12a: record `REVIEW_REQUESTED` with `{{INVOKE}} engine log review --stage "<directive.stage>" --unit "<unit>" --reviewer "<directive.reviewer>" --iteration <n> --project-dir "<worktree>"`, dispatch the reviewer task against `directive.stage_file` plus that worktree's unit artifacts and contracts, then record `REVIEW_COMPLETED` with the same command plus `--verdict <READY|NOT-READY>`. The logger stays in the main workspace while `--project-dir` targets the worktree, which also works when a multi-repo worktree contains only the selected sibling repo. A NOT-READY verdict re-invokes the lead in the same worktree, reruns the convergence check, and repeats the reviewer up to `directive.reviewer_max_iterations`. If the one recovery receipt is invalidated again, do not put the Unit in `--claimed` and do not run `finalize`: halt for a human Retry/Abort decision. On Retry, return to the main workspace, abort and discard the old Bolt, then call `next` and follow **Retry after a native worker discard** above for that Unit with the original batch/repo selection; the fresh `BOLT_STARTED` boundary resets review accounting without claiming convergence. Put a unit in `--claimed` only after its terminal review receipt exists; `finalize` verifies the receipt before merge and then merges it into the main audit. When `next` returns the settle `run-stage` after all units converge, do not dispatch the reviewer again; the per-unit receipts already cover the stage, so apply only the metadata-aware settled-swarm completion procedure above. This is model work inside autonomous Construction, not another human prompt.
 
+**After a successful retry discard.** After the `--discard` abort succeeds and
+confirms the old attempt was parked, but before rerunning `prepare`, use this
+SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+use `I`, never implying a human remedy choice that did not happen. Do not
+announce a saved snapshot if the abort failed or did not park an attempt.
+
+Select `[saved-files text]` from the returned `parked_mode`:
+
+- `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+- `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+- `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+
+If the human later asks for that attempt back, use the saved abort result's
+`restore_operation`: invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+as a separate argv argument. Never join those arguments into a shell command or
+rebuild a slug-only selection. `restore_hint` is human display text only, never
+an execution input. If safe rendering fails (for example, an invalid harness
+directory), the hint is omitted and `restore_hint_error` explains why; the
+operation remains available and the restoration offer still applies.
+After restoration succeeds, announce the returned restored path plainly:
+**SAY:** "I restored the previous attempt at [returned restored path]."
+Restoration does not resume the old attempt or make its review current.
+
 ---
 
 ### GitHub Copilot
@@ -289,3 +465,32 @@ The engine selected an eligible Construction batch for swarm execution. Executio
 The engine selected an eligible Construction batch for swarm execution. Execution is explicit on new workflows and may use gated or autonomous completion approval; a legacy workflow without the execution field retains its autonomy-based route. **You — the live `/aidlc` session — are the conductor: you own the fan-out and the retry loop; `aidlc-swarm.ts` is the deterministic referee you consult, never a loop-owner.** **Before step (1), read and follow `aidlc-common/protocols/stage-protocol-construction.md` §12b "Autonomous Code Generation Plan Contract"; planning, fingerprinted Plan Approval, and the two worker-brief markers are mandatory for every emitted unit.** Apply **Continuing a partially completed batch**, **Before initial protected prepare**, and **Resuming a reviewed batch after Request Changes** above to select continuation or preparation before the steps below; no automatic commit is authorized by an autonomy grant. (1) **`prepare`** the batch: `{{INVOKE}} engine swarm prepare --batch <n> --units <directive.units joined by comma> [--base main] [--repo <name>]` creates the initial isolated worktrees only after the batch preflight; with `--resume-existing`, use the two resume paths above. Pass `--repo` = the directive's `repo` field when present; for a MULTI-REPO intent where the directive omits `repo`, supply `--repo <name>` for the sibling repo this batch targets (read the recorded set from `/aidlc intent --json`.repos) — `prepare` errors without it on a multi-repo intent. (2) **Fan out via subagent delegation**: delegate every unit in the batch in ONE turn, one parallel delegation per unit targeting `aidlc-developer-agent`, each implementing its unit in its worktree until the project's convergence check passes. On this harness the subagent fan-out is the ONLY swarm mode: `AIDLC_USE_SWARM=1` has no effect here (no Workflow tool exists) — if it is set, say so out loud and proceed with the fan-out, passing `--degraded-from ultracode` on the next referee call so the tool emits `SWARM_DEGRADED`. (3) Under checkpoints, both `check` and `finalize` use the intent's recorded, human-authorized **Construction Verification Command**; omit `--check-cmd` (if supplied, it must match). If authorization is missing, complete the Construction module's command-consent procedure and `set-construction-verification-command` before running either. Legacy autonomy still requires `--check-cmd "<the project's build/test convergence check>"` on both commands. After each unit's worker turn, consult **`check <unit> [--test-file <protected spec>]`** — exit `0` = genuinely converged; non-zero = not yet, and you judge retry-vs-escalate. (4) When the loop settles, **`finalize --batch <n> --units <all> --claimed <the units you believe converged> [--reasons <unit>=<unsatisfiable|budget-exhausted|cap-exhausted>,…]`** re-verifies every claimed unit before merging (the lying-conductor guard) and serialised-merges the genuine passes. **Branch on `finalize`'s exit code:** `0` → this batch's reviewed record evidence and metadata converged; after the required source-landing step above, re-run `next` rather than reporting the stage yet. The engine may first return a `swarm_checkpoint` for the completed batch; resolve it before the next batch. Otherwise it returns the next `invoke-swarm` or the final `run-stage` settle directive; only on that settle directive do you apply the metadata-aware settled-swarm rule above and report its lifecycle outcome. Reporting approved after an intermediate batch would complete the stage with later batches unbuilt. `2` → failure envelope — **take the baton back**: halt and re-engage the human via the halt-and-ask seam (`aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure"). For a `merge_failures` unit (converged but its merge-back failed; no `SWARM_UNIT_CONVERGED` row lands until the merge does), resolve the blocker and re-run `finalize` scoped to that unit: the worktree is preserved and `release-merge` is idempotent, so the retry is a pure re-invocation; do NOT re-run `prepare` for it. The swarm never escapes the conductor.
 
 **Autonomous reviewer boundary.** When an `invoke-swarm` carries `directive.reviewer`, a unit is not claimable at `finalize` merely because `check` passed. In that unit's `prepare`-created worktree, follow stage-protocol-reviewer.md §12a: record `REVIEW_REQUESTED` with `{{INVOKE}} engine log review --stage "<directive.stage>" --unit "<unit>" --reviewer "<directive.reviewer>" --iteration <n> --project-dir "<worktree>"`, dispatch the reviewer task against `directive.stage_file` plus that worktree's unit artifacts and contracts, then record `REVIEW_COMPLETED` with the same command plus `--verdict <READY|NOT-READY>`. The logger stays in the main workspace while `--project-dir` targets the worktree, which also works when a multi-repo worktree contains only the selected sibling repo. A NOT-READY verdict re-invokes the lead in the same worktree, reruns the convergence check, and repeats the reviewer up to `directive.reviewer_max_iterations`. If the one recovery receipt is invalidated again, do not put the Unit in `--claimed` and do not run `finalize`: halt for a human Retry/Abort decision. On Retry, return to the main workspace, abort and discard the old Bolt, then call `next` and follow **Retry after a native worker discard** above for that Unit with the original batch/repo selection; the fresh `BOLT_STARTED` boundary resets review accounting without claiming convergence. Put a unit in `--claimed` only after its terminal review receipt exists; `finalize` verifies the receipt before merge and then merges it into the main audit. When `next` returns the settle `run-stage` after all units converge, do not dispatch the reviewer again; the per-unit receipts already cover the stage, so apply only the metadata-aware settled-swarm completion procedure above. This is model work inside autonomous Construction, not another human prompt.
+
+**After a successful retry discard.** After the `--discard` abort succeeds and
+confirms the old attempt was parked, but before rerunning `prepare`, use this
+SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+use `I`, never implying a human remedy choice that did not happen. Do not
+announce a saved snapshot if the abort failed or did not park an attempt.
+
+Select `[saved-files text]` from the returned `parked_mode`:
+
+- `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+- `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+- `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+
+If the human later asks for that attempt back, use the saved abort result's
+`restore_operation`: invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+as a separate argv argument. Never join those arguments into a shell command or
+rebuild a slug-only selection. `restore_hint` is human display text only, never
+an execution input. If safe rendering fails (for example, an invalid harness
+directory), the hint is omitted and `restore_hint_error` explains why; the
+operation remains available and the restoration offer still applies.
+After restoration succeeds, announce the returned restored path plainly:
+**SAY:** "I restored the previous attempt at [returned restored path]."
+Restoration does not resume the old attempt or make its review current.

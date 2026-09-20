@@ -55,6 +55,7 @@ import {
   auditBlockField,
   isTeamUnitOwnership,
   isWalkingSkeletonUnitOnMain,
+  parseParkedStampInstant,
   relativeRecordDir,
   readStateFile,
   resolveAuditWorktreePath,
@@ -72,6 +73,7 @@ import {
   VERIFICATION_COMMAND_RECOVERY,
 } from "./aidlc-lib.js";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   askConstructionCheckpoint,
   approveConstructionCheckpoint,
@@ -833,6 +835,9 @@ function handleAbort(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   const useDiscard = booleans.has("discard");
   let parkedRef: string | null = null;
+  let parkedStamp: string | null = null;
+  let parkedMode: "snapshot" | "branch-tip" | "evidence-only" | null = null;
+  let parkedRepo: string | null = null;
 
   // Discard-FIRST when --discard set, audit-AFTER. If we emitted BOLT_FAILED
   // (Reason: aborted) before discard and discard then timed out / errored,
@@ -861,8 +866,19 @@ function handleAbort(args: string[]): void {
     try {
       const discarded = JSON.parse(result.stdout);
       if (typeof discarded?.parked_ref === "string") parkedRef = discarded.parked_ref;
+      if (typeof discarded?.parked_stamp === "string" &&
+        (discarded.parked_mode === "snapshot" || discarded.parked_mode === "branch-tip" || discarded.parked_mode === "evidence-only") &&
+        (discarded.parked_repo === null || typeof discarded.parked_repo === "string")) {
+        parkedStamp = discarded.parked_stamp;
+        parkedMode = discarded.parked_mode;
+        parkedRepo = discarded.parked_repo;
+      } else if (parkedRef !== null) {
+        const prefix = `refs/aidlc/parked/${flags.slug}/`;
+        const stamp = parkedRef.startsWith(prefix) ? parkedRef.slice(prefix.length) : "";
+        if (parseParkedStampInstant(stamp) !== null) parkedStamp = stamp;
+      }
     } catch {
-      // Older sibling versions or no-op output may not carry a parked ref.
+      // Older sibling versions or no-op output may not carry a recovery descriptor.
     }
   }
 
@@ -883,14 +899,53 @@ function handleAbort(args: string[]): void {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
+  let restoreOperation: EngineInvocation | undefined;
+  let restoreHint: string | undefined;
+  let restoreHintError: string | undefined;
+  let recoveryHint: string | undefined;
+  if (parkedRef !== null && (parkedMode === "snapshot" || parkedMode === "branch-tip")) {
+    restoreOperation = {
+      route: "worktree",
+      args: [
+        "restore", "--slug", flags.slug,
+        ...(parkedStamp === null ? [] : ["--parked", parkedStamp]),
+        "--repo", parkedRepo ?? ".",
+      ],
+    };
+    try {
+      restoreHint = renderEngineInvocation(restoreOperation);
+    } catch (e) {
+      restoreHintError = errorMessage(e);
+    }
+  } else if (parkedRef !== null && parkedMode === null) {
+    // Legacy output identifies a namespace, not its repository or saved mode.
+    // Doctor can inspect the parked refs without guessing a restore target.
+    recoveryHint = "run doctor to list set-aside attempts and their exact restore commands";
+  }
+
   console.log(
     JSON.stringify({
       emitted: "BOLT_FAILED",
       reason: "aborted",
+      abort_reason: flags.reason,
       failed_bolt: flags.name,
       slug: flags.slug,
       discarded: useDiscard,
       parked_ref: parkedRef,
+      ...(parkedRef !== null ? {
+        parked_stamp: parkedStamp,
+        parked_mode: parkedMode,
+        parked_repo: parkedRepo,
+      } : {}),
+      ...(recoveryHint === undefined ? {} : { recovery_hint: recoveryHint }),
+      ...(restoreOperation === undefined ? {} : {
+        restore_operation: restoreOperation,
+        restore_hint: restoreHint,
+        restore_hint_error: restoreHintError,
+        parked_excludes: parkedMode === "branch-tip"
+          ? ["uncommitted files (no working tree existed)"]
+          : ["ignored files", "eol/text=auto normalization"],
+      }),
     })
   );
 }

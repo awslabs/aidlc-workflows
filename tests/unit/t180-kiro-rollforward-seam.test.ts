@@ -18,6 +18,7 @@
 //     is consumed only by an exact shell-normalized match.
 //
 // covers: file:harness/kiro/hooks/aidlc-kiro-adapter.ts
+// covers: function:stripOrchestratorLauncherOptions
 //
 // WHY SUBPROCESS. The seam IS a subprocess shim — it reads/writes files under
 // <cwd>/aidlc/ and signals Kiro purely via stdout + exit code. In-process
@@ -702,6 +703,29 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
       });
       expect(r.code).toBe(0);
       expect(existsSync(forwardingPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("11: launcher options are stripped before the leading-token exemptions", () => {
+    const dir = scratchProject();
+    try {
+      seedClock(dir, 3, 3);
+      for (const command of [
+        `${BARE_NEXT} --project-dir ${dir} compose x`,
+        `${BARE_NEXT} --project-dir ${dir} team-board`,
+        `${BARE_NEXT} --project-dir ${dir} intent list`,
+        `${BARE_NEXT} --aidlc-attempt-id a1 team-board`,
+      ]) {
+        const r = runAdapter(dir, "guard-tool-call", { tool_input: { command }, cwd: dir });
+        expect(r.code, command).toBe(0);
+      }
+      const bare = runAdapter(dir, "guard-tool-call", {
+        tool_input: { command: `${BARE_NEXT} --project-dir ${dir}` },
+        cwd: dir,
+      });
+      expect(bare.code).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

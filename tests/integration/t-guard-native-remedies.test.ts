@@ -745,7 +745,8 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(p.guard("Bash", { command: `${remedy.command} > src/unapproved.ts` }).status).toBe(2);
       const aborted = json(p.exact(remedy.command!));
       expect(aborted).toMatchObject({
-        emitted: "BOLT_FAILED", reason: "aborted", failed_bolt: unit, slug, discarded: true,
+        emitted: "BOLT_FAILED", reason: "aborted", abort_reason: "stale review recovery exhausted",
+        failed_bolt: unit, slug, discarded: true,
       });
       expect(existsSync(worktree)).toBe(false);
       expect(succeeded(run(["git", "worktree", "list", "--porcelain"], p.project, p.env)).stdout)

@@ -911,6 +911,32 @@ describe("detector corpus", () => {
     )).toBe(true);
   });
 
+  test("read-only next argv is one rule for the transcript classifier", () => {
+    for (const entry of [
+      "aidlc engine orchestrate",
+      "aidlc",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+    ]) {
+      expect(d1(`${entry} next help`)).toBe(false);
+      expect(d1(`${entry} next -h`)).toBe(false);
+      expect(d1(`${entry} next --version`)).toBe(false);
+      expect(d1(`${entry} next --doctor --export`)).toBe(false);
+      expect(d1(`${entry} next --status --stage intent-capture`)).toBe(false);
+      expect(d1(`${entry} next --config trust extra`)).toBe(false);
+      expect(d1(`${entry} next --scope feature --config`)).toBe(false);
+      expect(d1(`${entry} next --config project --stage intent-capture`)).toBe(false);
+      expect(d1(`${entry} next help me build auth`)).toBe(true);
+      expect(d1(`${entry} next plugin list`)).toBe(true);
+      expect(d1(`${entry} next plugin sync --status`)).toBe(true);
+      expect(d1(`${entry} next knowledge list --status`)).toBe(true);
+      expect(d1(`${entry} next intent create --scope poc`)).toBe(true);
+      expect(d1(`${entry} next --report --status`)).toBe(true);
+      expect(d1(`${entry} next --scope --status`)).toBe(true);
+      expect(d1(`${entry} next -- --status`)).toBe(true);
+    }
+  });
+
   test("team-board through next is terminal; park through next is engagement", () => {
     for (const entry of [
       "aidlc engine orchestrate",
@@ -975,9 +1001,7 @@ describe("detector corpus", () => {
       `aidlc report --result approved; ${terminal}`,
       `${terminal} & aidlc next`,
       "aidlc next space $(aidlc next)",
-      // Config/flag refusals are a separate classification question.
       "aidlc next --depth invalid",
-      "aidlc next --config project --stage intent-capture",
     ]) {
       expect(d1(command), command).toBe(true);
     }
@@ -1080,12 +1104,14 @@ describe("detector corpus", () => {
     }
   });
 
-  test("the unconditional configuration alias is terminal without exempting workflow modifiers", () => {
+  test("every --config form is terminal: the engine returns before workflow inspection", () => {
+    // A refused --config emits a usage error without touching state or the engine marker, so it is not engagement.
+    // The chained && aidlc report row still engages through its second segment.
     for (const args of ["--config", "--config project", "--config trust", "--config unknown"]) {
       expect(d1(`aidlc engine orchestrate next ${args}`), args).toBe(false);
     }
+    expect(d1("aidlc next --config project --scope feature")).toBe(false);
     for (const command of [
-      "aidlc next --config project --scope feature",
       "aidlc next --depth minimal --stage intent-capture",
       "aidlc next --depth minimal --new-intent",
       "aidlc next --config project && aidlc report --result approved",

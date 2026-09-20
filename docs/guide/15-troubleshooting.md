@@ -27,6 +27,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
+| A Bolt attempt was set aside | Ask the assistant to invoke the saved abort result's `restore_operation` with its exact argv; hints are display-only. Evidence-only attempts have no saved files to restore. See [getting the files back](#a-bolt-attempt-was-set-aside-getting-the-files-back) |
 
 ---
 
@@ -47,6 +48,12 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `refusing to refresh while ... workflow(s) are active` | Complete every named workflow, including parked workflows, then rerun `aidlc config`. `--force`, `--yes`, and a plan token cannot bypass this guard. `update` or `use` may proceed because they do not modify projects. |
 | `config plan changed after approval` | Rerun `aidlc config --dry-run --json`, review `data.actions`, and apply the new `data.planToken` with exactly the same source and behavior options. |
 | `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. Claude `settings.json` keys and Codex `config.toml` tables keep your edits instead of raising ownership conflicts. |
+| `cannot coexist in one project` | The second harness shares an engine directory (`kiro` / `kiro-ide` use `.kiro`; `opencode` / `copilot` use `.aidlc`) or the `AGENTS.md` block with an installed harness. Only `.gitignore` can be shared: choose one harness per engine directory and per `AGENTS.md` block. |
+| `multiple project harnesses are present; pass one --harness <name>` | Every `aidlc config` on a multi-harness project must name the target with `--harness <name>`. |
+| `.gitignore` shows `preserve (owned by <harness>)` (`action: "preserve"`, `detail: "owned by <harness>"` in `aidlc config --dry-run --json`) | This fallback appears when the owning harness was installed by a release without `tools/data/root-blocks/`. Run `aidlc config --harness <owner>` to refresh it, after which both harnesses converge on one combined block. |
+| `managed block has no ownership baseline` | The block was written by an install that no longer exists or has no baseline, for example a removed harness tree. Review `aidlc config --dry-run --json`, then use `--force` to replace it with the current shipped block (the combined entries for a shared `.gitignore`). |
+| `has no readable projection descriptor` | Repair the named installed harness with `aidlc config --harness <name>` before adding another harness. |
+| `is missing its shipped block copy` | The named harness's install lost `tools/data/root-blocks/<marker>`. Run `aidlc config --harness <name>` to restore it, then rerun the refresh. `--force` writes the block without that harness's entries. |
 | `unowned whole file` from an ordinary `aidlc config` release refresh | Move or merge the existing file manually before refresh. OpenCode's `opencode.json` cannot be claimed with `--force` during release refresh; provider, scope, and model answers instead edit the current file in place and do not conflict with unrelated edits. |
 | `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Move or delete the old unmarked AI-DLC block in the named root file, preserve any project-owned text elsewhere, then rerun `aidlc config`. This release intentionally refuses to guess ownership. |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc config`. |
@@ -286,6 +293,140 @@ the checks it overrode, and writes a receipt bound to the plan content and stage
 attempt only. The typed phrase is single-use. The conductor never proposes or
 initiates this; if you did not type the phrase, the command refuses with "Plan
 Approval override is human-only".
+
+---
+
+## A Bolt attempt was set aside — getting the files back
+
+A recovery can set aside an attempt when its reviewed files changed again and
+its one allowed re-review was already used. The recovery abort's `--discard`
+saves tracked files and non-ignored untracked files (or the remaining branch
+tip when the checkout is already gone) plus reviewed source refs in local Git
+before removing the old checkout and branch, so a fresh attempt can start.
+An ordinary Abort without `--discard` leaves the checkout in place and returns
+`parked_ref: null`, with no `parked_stamp`, `parked_mode`, `parked_repo`,
+`restore_operation`, `restore_hint`, `restore_hint_error`, or `parked_excludes`.
+After a discard, the assistant tells you why it set the attempt aside and offers
+restoration only when `restore_operation` is present, regardless of whether a
+display hint could be rendered.
+Every successful abort retains `reason: "aborted"` and echoes the supplied
+`--reason` text in the additive `abort_reason` field. When an attempt was parked,
+the result includes the saved descriptor:
+`parked_ref`, `parked_stamp`, `parked_mode` (`snapshot`, `branch-tip`, or
+`evidence-only`), and `parked_repo` (`null` for the project root, otherwise the
+sibling repository name).
+
+If files were saved, ask to restore them. The assistant uses the saved result's
+`restore_operation`: route `worktree`, args
+`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? "."]` when the
+stamp is known. It invokes the installed `{{INVOKE}} engine worktree <args...>`
+route with each listed arg exactly as a separate argv argument, never joined
+into a shell command. `restore_hint` is human display text only, not the
+assistant's execution input. The equivalent manual command, run from the main
+project checkout, is:
+
+```bash
+aidlc engine worktree restore --slug <slug> --parked <stamp> --repo <name|.>
+```
+
+The operation always includes `--repo <name>` for a sibling repository or
+`--repo .` for the root. Its optional display hint is safely rendered for the
+selected shell; a native install uses the prefix above, while a Bun-based copy
+install uses `bun .claude/tools/aidlc-worktree.ts`, substituting your harness
+directory. If safe rendering fails, for example because the harness directory
+is invalid, the result omits `restore_hint` and supplies `restore_hint_error`
+with the reason. The typed operation remains available; this does not mean
+that only evidence was saved or withdraw the restoration offer.
+
+Do not drop the operation's exact stamp or repository selector: without
+`--parked`, restore chooses the latest saved head. For manual invocation an exact
+stamp found in only one repository selects it before generic slug ambiguity;
+if selection is still ambiguous, use doctor's exact operation with `--repo <name>`
+or `--repo .` for the project root.
+
+If a saved namespace is known but its discard descriptor is unavailable, the
+fallback retains `parked_ref` and derives `parked_stamp` from its namespace
+only when the stamp parses strictly; otherwise `parked_stamp` is `null`.
+It reports `parked_mode: null` and `parked_repo: null` and omits
+`restore_operation`, `restore_hint`, `restore_hint_error`, and `parked_excludes`,
+rather than guessing a repository, saved mode, or latest-attempt selection.
+Instead, `recovery_hint` asks you to run doctor to list set-aside attempts and
+their exact restore commands. The hint is plain guidance, not an executable
+operation. The assistant must not claim what files were saved or offer restoration
+from the fallback alone. If no namespace was saved, `parked_ref` is `null`;
+`parked_stamp`, `parked_mode`, `parked_repo`, `restore_operation`, `restore_hint`,
+`restore_hint_error`, `parked_excludes`, and `recovery_hint` are absent.
+
+If only review evidence remained, discard reports `parked_mode: "evidence-only"`
+and `parked_commit: "-"`. Abort keeps the ref, stamp, mode, and repository but
+omits `restore_operation`, `restore_hint`, `restore_hint_error`, and
+`parked_excludes`. The assistant says: "Nothing of its
+working files remained to save; only its review evidence was kept." It does
+not offer restoration. Selecting that attempt with restore, even with `--raw`,
+refuses with `no restorable files were parked for <slug> <stamp>; only review evidence was kept`.
+
+After a successful restore, open the returned `worktree_path`, normally
+`.aidlc/restored/bolt-<slug>-<stamp>`. It is separate from any new live attempt;
+restoring files does not resume the old attempt or make its review current.
+This is local recovery, not a remote backup. If the old checkout was already
+gone, only its remaining branch tip and review evidence could be saved; if its
+branch was gone too, only review evidence could remain.
+
+**Limits depend on `parked_mode`:** a snapshot reports
+`parked_excludes: ["ignored files", "eol/text=auto normalization"]`. Ignored
+untracked files are not saved (tracked files remain included), and normalization
+may change line endings while saving; normalized bytes cannot be recovered,
+even with `--raw`. A branch tip instead reports
+`["uncommitted files (no working tree existed)"]`, and the assistant says:
+"I kept its committed work; there were no uncommitted files to save."
+Snapshots restore stored blobs directly; branch tips use ordinary checkout
+conversions unless `--raw` is given.
+See the [restore command reference](12-cli-commands.md#aidlc-engine-worktree-restore-recover-files-from-a-set-aside-attempt)
+for filter failures and raw recovery details.
+
+Run `/aidlc --doctor` (or `aidlc doctor`) to find saved attempts. Its informational
+**Parked attempts** section lists slug, stamp, age, mode, restored-checkout
+presence, and typed recovery operations with exact `--parked <stamp>` and
+explicit `--repo <name>` or `--repo .` args. Every JSON entry has
+`purge_operation`; only restorable entries have `restore_operation`. Each has
+route `worktree` and args to pass exactly as argv, never a shell command string.
+Optional `restore_command` and `purge_command` are safe human display text;
+if rendering fails, the corresponding command is omitted and
+`restore_command_error` or `purge_command_error` explains why, without removing
+the operation. Evidence-only entries have only the purge operation and its
+command-or-error fields. Impossible dates or times have `age_days: null` in JSON
+and show `unknown` in human-readable output. Saved attempts are not warnings or
+failures. Once you no longer need one, remove any restored checkout first, then:
+
+```bash
+aidlc engine worktree purge --slug <slug> --parked <stamp> --repo <name|.>
+aidlc engine worktree purge --slug <slug> --older-than 30 --repo <name|.>
+```
+
+Purge without either selector removes every saved stamp for the slug.
+`--older-than` accepts nonnegative finite days and selects strictly older UTC
+stamp timestamps, ignoring any `-N` suffix. The strict calendar parser rejects
+impossible dates and times rather than normalizing them. Age-filtered purge
+keeps unparseable stamps and reports them in `skipped_unparseable`. This JSON
+array is always present and otherwise empty; exact-stamp or all-stamp purge
+can remove unparseable stamps. `--older-than` cannot be combined with
+`--parked`. Purge refuses while a selected restored checkout exists, even if
+moved; it never removes a live Bolt checkout. Use the same Bun tool prefix for
+copy installs. See the [purge reference](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs).
+
+Restore and purge reject unknown or duplicate flags before selecting or changing
+anything; use only the flags in the command reference. Recovery selectors and
+doctor accept the project root (`.`) and valid Git repositories named in the
+same slug's `WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields even
+when those sibling names are symlinks: the framework may recover exactly where
+it recorded the attempt's worktree or parking. This admission is slug-scoped;
+records for other slugs never widen this slug's repository set. Membership in
+a current or historical intent's repo list alone cannot admit a symlink.
+Intent-list candidates and unrecorded discovered siblings must be real
+immediate child directories whose canonical paths stay directly under the
+canonical workspace root (`isWorkspaceRepoDir`). Arbitrary paths and symlink
+aliases without same-slug audit provenance are refused. These recovery selectors
+do not change live create/discard commands or the required human consent.
 
 ---
 

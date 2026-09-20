@@ -9,7 +9,6 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
-  aidlcToolInvocation,
   resolveHarnessPath,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
@@ -772,6 +771,63 @@ export function leadingOrchestratorVerb(args: readonly string[]): OrchestratorVe
   return null;
 }
 
+// parseNextFlags in aidlc-orchestrate.ts consumes these values regardless of
+// spelling: `--report --status` composes from a file named "--status", not a
+// read-only mode switch. --review, --change-control and ceremony flags refuse
+// --prefixed values and are deliberately absent.
+const VALUED_NEXT_FLAGS: ReadonlySet<string> = new Set([
+  "--scope",
+  "--stage",
+  "--phase",
+  "--depth",
+  "--test-strategy",
+  "--report",
+  "--claim",
+  "--release",
+  "--team",
+  "--rhythm",
+]);
+
+// One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
+// parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
+export function isReadOnlyNextArgv(args: readonly string[]): boolean {
+  if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
+  const verb = leadingOrchestratorVerb(args);
+  if (verb === "team-board") return true;
+  if (verb === "park") return false;
+  // parseNextFlags returns on --config at any position (config print or usage refusal) before workflow inspection, without honoring the -- delimiter.
+  if (args.includes("--config")) return true;
+  // Leading plugin/knowledge nouns own the argv and are not in routeNext's marker exclusion, so a trailing read-only spelling is theirs, not a mode switch.
+  if (parsePluginCommand(args).kind !== "not-plugin" || parseKnowledgeCommand(args).kind !== "not-knowledge") return false;
+  const workspace = parseWorkspaceCommand(args);
+  if (workspace.kind !== "not-workspace") return workspace.kind !== "create-intent";
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") break;
+    if (READ_ONLY_FLAGS.has(arg)) return true;
+    if (VALUED_NEXT_FLAGS.has(arg)) i++;
+  }
+  return false;
+}
+
+// Match aidlc-orchestrate.main's launcher-option extraction before subcommand
+// routing; the literal delimiter preserves all following intent text. A trailing
+// option without a value stays, as in main().
+export function stripOrchestratorLauncherOptions(args: readonly string[]): string[] {
+  const normalized: string[] = [];
+  let literal = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") literal = true;
+    if (!literal && (arg === "--project-dir" || arg === "--aidlc-attempt-id") && i + 1 < args.length) {
+      i++;
+    } else {
+      normalized.push(arg);
+    }
+  }
+  return normalized;
+}
+
 export type WorkspaceNoun = "intent" | "space";
 
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
@@ -875,14 +931,14 @@ function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecy
 // in either order after the verb. `--all` (intents only) includes archived
 // records, which the default listing hides; the `all` field is set only when
 // requested so the plain list keeps its two-field shape.
-function explicitWorkspaceList(noun: WorkspaceNoun, tokens: string[]): WorkspaceCommand {
+function explicitWorkspaceList(noun: WorkspaceNoun, tokens: readonly string[]): WorkspaceCommand {
   const flags = tokens.slice(2);
   const command: WorkspaceCommand = { kind: "list", noun, json: flags.includes("--json") };
   if (noun === "intent" && flags.includes("--all")) command.all = true;
   return command;
 }
 
-export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
+export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceCommand {
   const head = tokens[0];
 
   if (head === "space-create") {
@@ -1120,7 +1176,7 @@ export type PluginCommand =
   | { kind: "error"; message: string }
   | { kind: "run"; argv: string[] };
 
-export function parsePluginCommand(args: string[]): PluginCommand {
+export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (args[0] !== "plugin") return { kind: "not-plugin" };
   const verb = args[1];
   if (verb === "help" || verb === "-h" || verb === "--help") {
@@ -1225,7 +1281,7 @@ export type KnowledgeCommand =
 //
 // Unlike `plugin`, the verb IS the subcommand: the DocumentKB tool owns its own
 // verb names, so there is no translation table to keep in sync.
-export function parseKnowledgeCommand(args: string[]): KnowledgeCommand {
+export function parseKnowledgeCommand(args: readonly string[]): KnowledgeCommand {
   if (args[0] !== "knowledge") return { kind: "not-knowledge" };
   const verb = args[1];
   if (verb === "help" || verb === "-h" || verb === "--help") {
@@ -1695,18 +1751,20 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
   return { command, args };
 }
 
-function isTerminalUtilityNext(invocation: { command: string; args: string[] }): boolean {
-  const args = invocation.args.slice();
+function parsedNextArgv(invocation: { command: string; args: string[] }): string[] | null {
+  const args = invocation.args;
+  let index = 0;
   if (invocation.command === "aidlc") {
-    if (args[0] === "orchestrate") args.shift();
+    if (args[0] === "orchestrate") index++;
   } else if (!/^aidlc-orchestrate(?:\.ts)?$/.test(invocation.command)) {
-    return false;
+    return null;
   }
-  if (args.shift() !== "next" || args.some((arg) => arg.includes("$"))) return false;
-  // team-board is a read-only board: routeNext Branch 1c answers with a terminal print
-  // before state inspection, without touching the engine marker, accepted or refused alike.
-  // park stays engagement because the park it names mutates.
-  if (leadingOrchestratorVerb(args) === "team-board") return true;
+  return args[index] === "next" ? args.slice(index + 1) : null;
+}
+
+function isTerminalUtilityNext(invocation: { command: string; args: string[] }): boolean {
+  const args = parsedNextArgv(invocation);
+  if (args === null || args.some((arg) => arg.includes("$"))) return false;
   // Legacy entry points do not extract the dispatcher's bare global flags.
   // Keep mixed positional/global forms conservative; trailing list flags remain valid.
   if (
@@ -1715,11 +1773,8 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
       ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)
     )
   ) return false;
-  // The --config alias (including a refused section name) returns before
-  // workflow inspection. Depth/review modifiers do not share that guarantee.
-  if (args[0] === "--config" && args.length <= 2) return true;
-  const workspace = parseWorkspaceCommand(args);
-  return workspace.kind !== "not-workspace" && workspace.kind !== "create-intent";
+  // Share the terminal early-return rule with the Copilot adapter claim gate.
+  return isReadOnlyNextArgv(args);
 }
 
 // A modifier-only next can initialize work or dispatch configuration depending
@@ -1807,6 +1862,11 @@ export function isEngineEngagementSegment(
   }
   if (invocation) {
     if (isTerminalUtilityNext(invocation) || isTerminalConfigurationDispatch(invocation, observedOutput)) return false;
+    // The engine consumes valued flags first: --report --status composes from a file
+    // named "--status", and -- --status is intent text. A parsed non-read-only next
+    // engages, so the raw read-only regex below must not decide it.
+    const nextArgv = parsedNextArgv(invocation);
+    if (nextArgv !== null && !isReadOnlyNextArgv(nextArgv)) return true;
     seg = `${invocation.command} ${invocation.args.join(" ")}`;
   }
   if (
@@ -10556,6 +10616,25 @@ export function readAuditShardEvents(
 
 export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
+}
+
+/** Parse a parked-attempt stamp without normalizing impossible calendar dates. */
+export function parseParkedStampInstant(stamp: string): number | null {
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-[2-9]|-[1-9]\d+)?$/.exec(stamp);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const instant = new Date(Date.UTC(year, month, day, hour, minute, second));
+  // Date.UTC treats years 00–99 as 1900–1999; restore the literal year and date.
+  if (year < 100) instant.setUTCFullYear(year, month, day);
+  if (instant.getUTCFullYear() !== year || instant.getUTCMonth() !== month ||
+    instant.getUTCDate() !== day || instant.getUTCHours() !== hour ||
+    instant.getUTCMinutes() !== minute || instant.getUTCSeconds() !== second) return null;
+  return instant.getTime();
 }
 
 export function resolveAuditProjectPath(
@@ -19551,9 +19630,22 @@ const NON_REPO_WORKSPACE_DIRS = new Set([
   "node_modules",
 ]);
 
+/** Unrecorded recovery candidates must be real immediate children, not symlinks or junctions. */
+export function isWorkspaceRepoDir(projectDir: string, name: string): boolean {
+  if (basename(name) !== name || name === "." || name === "..") return false;
+  const dir = join(projectDir, name);
+  try {
+    const stat = lstatSync(dir);
+    return !stat.isSymbolicLink() && stat.isDirectory() &&
+      realpathSync(dir) === join(realpathSync(projectDir), name) && isGitRepoDir(dir);
+  } catch {
+    return false;
+  }
+}
+
 // Auto-discover the code repos that are immediate children of the workspace root:
-// any child dir holding a `.git`, excluding the workspace's own internal dirs and
-// the harness engine dir. Sorted + deduped. Returns [] when the workspace root is
+// any child directory holding a `.git`, following directory symlinks but excluding
+// workspace internal dirs and the harness engine dir. Sorted + deduped. Returns [] when the workspace root is
 // unreadable or holds no sibling repos (the legacy single-repo / fresh-greenfield
 // case — the caller records no repos row and the lone repo is inferred later).
 export function discoverSiblingRepos(projectDir: string): string[] {
@@ -19569,11 +19661,10 @@ export function discoverSiblingRepos(projectDir: string): string[] {
     if (isHarnessDirName(name)) continue; // .claude / .kiro / .codex
     const dir = join(projectDir, name);
     try {
-      if (!statSync(dir).isDirectory()) continue;
+      if (statSync(dir).isDirectory() && isGitRepoDir(dir)) found.push(name);
     } catch {
-      continue;
+      // Ignore unreadable entries and dangling directory symlinks.
     }
-    if (isGitRepoDir(dir)) found.push(name);
   }
   return [...new Set(found)].sort();
 }
@@ -19625,6 +19716,54 @@ export function intentRepos(
     return entry.repos ?? [];
   }
   return [];
+}
+
+/** Recovery operates exactly where the framework recorded parking this slug;
+ * records never widen to other slugs; unrecorded discovery requires a real child.
+ * Intent membership alone does not authorize recovery through a repository symlink.
+ * A null slug set admits every parked slug in a real workspace repository.
+ */
+export function recoveryRepoCandidates(
+  projectDir: string,
+  rows: readonly AuditShardEvent[],
+): Map<string | null, Set<string> | null> {
+  const candidates = new Map<string | null, Set<string> | null>([[null, null]]);
+  for (const repo of discoverSiblingRepos(projectDir)) {
+    if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo)) candidates.set(repo, null);
+  }
+  const checkedRepos = new Map<string, boolean>();
+  const isRecordedRepo = (repo: string): boolean => {
+    const checked = checkedRepos.get(repo);
+    if (checked !== undefined) return checked;
+    const valid = isValidRepoName(repo) && isGitRepoDir(repoDir(projectDir, repo));
+    checkedRepos.set(repo, valid);
+    return valid;
+  };
+  const checkedIntents = new Set<string>();
+  for (const row of rows) {
+    // Derive the historical intent from the shard, never the active cursor.
+    const shard = relative(spacesRoot(projectDir), row.shard).replaceAll("\\", "/");
+    const record = /^([^/]+)\/intents\/([^/]+)\/audit\/[^/]+$/.exec(shard);
+    if (record !== null) {
+      const [, space, intent] = record;
+      const key = `${space}\0${intent}`;
+      if (!checkedIntents.has(key)) {
+        checkedIntents.add(key);
+        for (const repo of intentRepos(projectDir, intent, space)) {
+          if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo)) candidates.set(repo, null);
+        }
+      }
+    }
+    if (row.event !== "WORKTREE_CREATED" && row.event !== "WORKTREE_DISCARDED") continue;
+    const repo = auditBlockField(row.block, "Repo");
+    const slug = auditBlockField(row.block, "Bolt slug");
+    if (repo === null || slug === null || validateBoltSlug(slug) !== null ||
+      candidates.get(repo) === null || !isRecordedRepo(repo)) continue;
+    const slugs = candidates.get(repo) ?? new Set<string>();
+    slugs.add(slug);
+    candidates.set(repo, slugs);
+  }
+  return candidates;
 }
 
 export interface RepoResolution {
@@ -20086,8 +20225,9 @@ export function turnMarkersShowConversational(
 }
 
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
-// record. The conductor writes it at stage-protocol-reviewer.md §12a step 1 (per-unit
-// stages only) before invoking the reviewer sub-agent, and deletes it at step
+// record. The conductor writes it at stage-protocol-reviewer.md §12a step 1
+// (per-unit stages, and each unit reviewed under an `invoke-swarm`) before invoking
+// the reviewer sub-agent, and deletes it at step
 // 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
 // it back to learn WHICH unit is under review and which contract paths are
 // exempt — the two facts no harness payload carries. Lives under the intent's
@@ -22509,9 +22649,10 @@ export function evaluateGuardRefusal(
       op: "abort-bolt",
       action:
         `Halt and ask the human whether to restart autonomous Unit ` +
-        `"${input.autonomousBolt.unit}". On approval, abort and park (discard) the old ` +
-        `attempt, restorable with \`${aidlcToolInvocation("worktree")} restore --slug ${slug}\`, ` +
-        `then rerun the current prepare step in${batch} so a fresh ` +
+        `"${input.autonomousBolt.unit}". On approval, execute the returned abort ` +
+        "command unchanged. After success, use the post-discard SAY line in " +
+        "stage-protocol-construction.md under Halt-and-ask on failure, then " +
+        `rerun the current prepare step in${batch} so a fresh ` +
         "BOLT_STARTED boundary creates a new review allowance.",
       ...guardOperation({ kind: "abort-bolt", unit: input.autonomousBolt.unit, slug }),
       requiresHuman: true,

@@ -146,7 +146,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { aidlcToolInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -1630,8 +1630,8 @@ export function reviewRecoverySpentMessage(
       "not run finalize or merge it. Halt and ask the human whether to restart " +
       `the Bolt attempt. On an approved retry, return to the main workspace, run ` +
       `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
-      `--reason "stale review recovery exhausted" --discard\`. The old attempt is ` +
-      `parked and restorable with \`${aidlcToolInvocation("worktree")} restore --slug ${slug}\`. Then rerun the ` +
+      `--reason "stale review recovery exhausted" --discard\`. After success, ` +
+      "use the retry-discard SAY line in stage-protocol-reviewer.md §12a. Then rerun the " +
       `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
       `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
       "restores one review allowance without claiming convergence. Do not " +

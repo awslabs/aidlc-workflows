@@ -330,12 +330,45 @@ When Code Generation returns failure, **always halt and present the halt-and-ask
 
 This ordinary Abort pauses Construction without discarding its checkout. When
 a stale-review recovery command explicitly includes `--discard`, abort instead
-parks the Bolt's tracked and non-ignored untracked files plus reviewed source
-refs, then removes the live checkout and branch. Obtain the human's selection
-before executing the unchanged returned command. The parked work is recoverable
-with `{{INVOKE}} engine worktree restore --slug <slug>` in an isolated restored
-checkout; restoring files does not resume the aborted Bolt or revive its review
-authority.
+parks the Bolt's tracked and non-ignored untracked files (or its remaining branch
+tip when the checkout is gone) plus reviewed source refs, then removes the live
+checkout and branch. Obtain the human's selection before executing the unchanged
+returned command. When present, the returned `restore_operation` recovers the
+parked work in an isolated restored checkout; restoring files does not resume
+the aborted Bolt or revive its review authority. If only review evidence
+remained, there are no saved working files to restore, so neither
+`restore_operation` nor `restore_hint` is returned.
+
+**After a successful discard.** Only after the `--discard` abort succeeds and
+confirms the attempt was parked, and before starting the replacement attempt,
+use the following SAY line. Fill `[reason]` from the returned `abort_reason` in plain
+project terms. Use `On your go-ahead I` only when the human selected the remedy;
+use `I` when no human remedy choice was involved (including an automatic
+loop-back). Do not announce a saved snapshot if the abort failed or did not
+park an attempt.
+
+Select `[saved-files text]` from the returned `parked_mode`:
+
+- `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+- `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+- `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+
+**SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because [reason], and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+
+If the human later asks for that attempt back, use the saved abort result's
+`restore_operation`: invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+as a separate argv argument. Never join those arguments into a shell command or
+rebuild a slug-only selection. `restore_hint` is human display text only, never
+an execution input. If safe rendering fails (for example, an invalid harness
+directory), the hint is omitted and `restore_hint_error` explains why; the
+operation remains available and the restoration offer still applies.
+After restoration succeeds, announce the returned restored path plainly:
+**SAY:** "I restored the previous attempt at [returned restored path]."
+This does not resume the old attempt or make its review current.
 
 The orchestrator runs `{{INVOKE}} engine worktree info --slug <slug>` to obtain the worktree `<path>` and `<branch_name>` deterministically before composing the halt-and-ask question. See `SKILL.md` § "Halt-and-ask failure handling" for the full tool-call sequence and the `worktree-info-schema.md` knowledge file for the JSON contract.
 

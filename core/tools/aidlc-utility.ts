@@ -95,6 +95,7 @@ import {
   formatCeremony,
   parseCeremonySetting,
   parseCeremonyStateLine,
+  parseParkedStampInstant,
   resolveCeremony,
   scopeCeremonyDefault,
   type ChangeControlMemoryDeclaration,
@@ -144,6 +145,7 @@ import {
   RESERVED_RECORD_NAMES,
   scopePathCovered,
   gridCostSummary,
+  listIntentDirs,
   listIntents,
   listSpaces,
   ARCHIVED_INTENT_STATUS,
@@ -173,12 +175,14 @@ import {
   parseStateStageSuffixes,
   readAllAuditShards,
   readAuditShardEvents,
+  recoveryRepoCandidates,
   readActiveDirectiveMarker,
   readUnitClaimRegistryCache,
   readUnitScopeStamp,
   recordHookDrop,
   readCurrentSessionId,
   readProjectDescriptionAuthority,
+  repoDir,
   resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
@@ -257,6 +261,7 @@ import {
   resolveSkillsPath,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
+import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   activeVersion,
   binRoot,
@@ -2519,12 +2524,136 @@ export type DoctorCheck = {
   fix?: string;
 };
 
+type DoctorParkedAttempt = {
+  slug: string;
+  stamp: string;
+  age_days: number | null;
+  mode: "snapshot" | "branch-tip" | "legacy" | "evidence-only";
+  repo: string | null;
+  restored_path: string;
+  restored_exists: boolean;
+  restore_operation?: EngineInvocation;
+  purge_operation: EngineInvocation;
+  restore_command?: string;
+  restore_command_error?: string;
+  purge_command?: string;
+  purge_command_error?: string;
+};
+
 export type DoctorReport = {
   checks: DoctorCheck[];
   passed: number;
   warnings: number;
   failed: number;
+  parked_attempts: DoctorParkedAttempt[];
 };
+
+// Share repository trust with restore/purge without importing the worktree CLI.
+function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
+  const rows: AuditShardEvent[] = [];
+  for (const { name: space } of listSpaces(projectDir)) {
+    const intents = new Set(listIntentDirs(projectDir, space));
+    try {
+      for (const entry of readdirSync(intentsDir(projectDir, space), { withFileTypes: true })) {
+        if (entry.isDirectory() && existsSync(join(intentsDir(projectDir, space), entry.name, "audit"))) {
+          intents.add(entry.name);
+        }
+      }
+    } catch {
+      // Missing records must not hide recoverable refs in discovered repositories.
+    }
+    for (const intent of [undefined, ...[...intents].sort()]) {
+      rows.push(...readAuditShardEvents(projectDir, intent, space));
+    }
+  }
+
+  const attempts: DoctorParkedAttempt[] = [];
+  const now = Date.now();
+  for (const [repo, slugs] of recoveryRepoCandidates(projectDir, rows)) {
+    const cwd = repo === null ? projectDir : repoDir(projectDir, repo);
+    if (!existsSync(join(cwd, ".git"))) continue;
+    const listed = spawnSync("git", ["for-each-ref", "--format=%(refname)", "refs/aidlc/parked/"], {
+      cwd,
+      encoding: "utf-8",
+    });
+    if (listed.status !== 0) continue;
+    const refs = new Set(listed.stdout.split(/\r?\n/).filter(Boolean));
+    if (refs.size === 0) continue;
+    const worktrees = spawnSync("git", ["worktree", "list", "--porcelain", "-z"], {
+      cwd,
+      encoding: "utf-8",
+    });
+    const restoredBranches = new Map<string, string>();
+    if (worktrees.status === 0) {
+      for (const block of worktrees.stdout.split("\0\0")) {
+        const fields = block.split("\0");
+        const branch = fields.find((field) => field.startsWith("branch "))?.slice(7);
+        const path = fields.find((field) => field.startsWith("worktree "))?.slice(9);
+        if (!path || !branch?.startsWith("refs/heads/restore/bolt-")) continue;
+        try {
+          restoredBranches.set(realpathSync(path), branch);
+        } catch {
+          // A stale registration without a checkout is not a restored attempt.
+        }
+      }
+    }
+    const inventoried = new Set<string>();
+    for (const ref of refs) {
+      const match = /^refs\/aidlc\/parked\/([^/]+)\/(\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?)\/(?:head|reviewed-source\/(?:[a-f0-9]{40}|[a-f0-9]{64}))$/.exec(ref);
+      if (!match) continue;
+      const [, slug, stamp] = match;
+      if (validateBoltSlug(slug) !== null || (slugs !== null && !slugs.has(slug))) continue;
+      const prefix = `refs/aidlc/parked/${slug}/${stamp}`;
+      if (inventoried.has(prefix)) continue;
+      inventoried.add(prefix);
+      const mode = !refs.has(`${prefix}/head`) ? "evidence-only"
+        : refs.has(`${prefix}/snapshot`) ? "snapshot"
+        : refs.has(`${prefix}/branch-tip`) ? "branch-tip" : "legacy";
+      const milliseconds = parseParkedStampInstant(stamp);
+      const ageDays = milliseconds === null
+        ? null
+        : Math.max(0, Math.floor((now - milliseconds) / 86_400_000));
+      const restoredPath = resolve(projectDir, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
+      let restoredExists = false;
+      if (restoredBranches.size > 0) {
+        try {
+          restoredExists = restoredBranches.get(realpathSync(restoredPath)) === `refs/heads/restore/bolt-${slug}-${stamp}`;
+        } catch {
+          // The canonical restore checkout does not exist or cannot be resolved.
+        }
+      }
+      const args = ["--slug", slug, "--parked", stamp, "--repo", repo ?? "."];
+      const attempt: DoctorParkedAttempt = {
+        slug,
+        stamp,
+        age_days: ageDays,
+        mode,
+        repo,
+        restored_path: restoredPath,
+        restored_exists: restoredExists,
+        ...(mode === "evidence-only" ? {} : {
+          restore_operation: { route: "worktree", args: ["restore", ...args] },
+        }),
+        purge_operation: { route: "worktree", args: ["purge", ...args] },
+      };
+      if (attempt.restore_operation !== undefined) {
+        try {
+          attempt.restore_command = renderEngineInvocation(attempt.restore_operation);
+        } catch (e) {
+          attempt.restore_command_error = errorMessage(e);
+        }
+      }
+      try {
+        attempt.purge_command = renderEngineInvocation(attempt.purge_operation);
+      } catch (e) {
+        attempt.purge_command_error = errorMessage(e);
+      }
+      attempts.push(attempt);
+    }
+  }
+  return attempts.sort((a, b) => a.slug.localeCompare(b.slug) ||
+    a.stamp.localeCompare(b.stamp, "en", { numeric: true }) || (a.repo ?? "").localeCompare(b.repo ?? ""));
+}
 
 function collapseLegacyPolicyChecks(checks: readonly DoctorCheck[]): DoctorCheck[] {
   const marker = "harness.json contains legacy policy key(s)";
@@ -5410,6 +5539,9 @@ export async function collectDoctorReport(
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
+  // Retained attempts are recoverable history, not a health failure or warning.
+  const parkedAttempts = doctorParkedAttempts(projectDir);
+
   results.push(...extraChecks);
   const reportResults = collapseLegacyPolicyChecks(results);
 
@@ -5450,7 +5582,7 @@ export async function collectDoctorReport(
     });
   }
 
-  return { checks: reportResults, passed, warnings, failed };
+  return { checks: reportResults, passed, warnings, failed, parked_attempts: parkedAttempts };
 }
 
 // ---------------------------------------------------------------------------

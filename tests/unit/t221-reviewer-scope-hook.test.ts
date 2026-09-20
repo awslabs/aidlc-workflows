@@ -691,6 +691,32 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(r.code).toBe(0);
   });
 
+  // The dispatch record lives in the main workspace (§12a), while the swarm
+  // reviewer reads inside its unit worktree. The hook judges construction/<unit>/
+  // tokens in those absolute paths.
+  test("fresh record in the main workspace + swarm reviewer reading inside a unit worktree -> sibling blocks, own unit passes", () => {
+    const proj = scratchProject();
+    seedRecord(proj);
+    const worktree = mkdtempSync(join(tmpdir(), "t221-wt-"));
+    const sibling = runHook(proj, {
+      ...SIBLING_SWEEP,
+      tool_name: "Read",
+      tool_input: {
+        file_path: join(worktree, "aidlc", "spaces", "default", "intents", "construction", "U01-infra", "private.md"),
+      },
+    });
+    expect(sibling.code).toBe(2);
+    expect(sibling.stderr).toContain("This review cannot open");
+    const own = runHook(proj, {
+      ...SIBLING_SWEEP,
+      tool_name: "Read",
+      tool_input: {
+        file_path: join(worktree, "aidlc", "spaces", "default", "intents", "construction", "U03-scoring", "design.md"),
+      },
+    });
+    expect(own.code).toBe(0);
+  });
+
   test("piped no-operand grep (reads stdin) -> exit 0 while a first-segment recursive grep blocks", () => {
     const proj = scratchProject();
     seedRecord(proj);
@@ -1068,8 +1094,10 @@ describe("t221 (c) harness registration and protocol prose", () => {
       "utf-8",
     );
     expect(body).toContain(".aidlc-engine/reviewer-dispatch.json");
-    // Step 1: the write, per-unit only, exempt list carries the carve-out.
-    expect(body).toMatch(/Dispatch record \(per-unit stages; enforcement-capable harnesses only\)/);
+    // Step 1: the write, owed per unit under a run-stage AND under a swarm
+    // (the hook's perUnitReviewOwed mirrors both), exempt list carries the carve-out.
+    expect(body).toMatch(/\*\*Dispatch record \([^)]*enforcement-capable harnesses only\)\.\*\*/);
+    expect(body).toMatch(/`directive\.unit` present, or one unit of an `invoke-swarm`/);
     expect(body).toMatch(/append its path to `exempt`/);
     expect(body).toContain("On a harness without reviewer-scope enforcement");
     expect(body).toContain("do not write the record");
