@@ -1620,7 +1620,9 @@ function parseNextFlags(args: string[]): ParsedFlags {
       (trailing.length === 1 &&
         !(CONFIG_SECTIONS as readonly string[]).includes(trailing[0]))
     ) {
+      // Classify refusals as config so routeNext's marker exclusion and both harnesses' isReadOnlyNextArgv agree a refused alias is not engagement.
       return {
+        config: true,
         parseError:
           "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
       };

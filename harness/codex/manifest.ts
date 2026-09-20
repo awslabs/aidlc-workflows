@@ -30,6 +30,7 @@ const manifest: HarnessManifest = {
       path: ".gitignore",
       policy: "managed-block",
       marker: "gitignore",
+      shared: "union",
       legacySignatures: {
         wholeFileHashes: [
           "sha256:f919e4bac1790bd1a371d371af473ccbc644f3bb80e4569d190c9364fad771b3",
@@ -66,6 +67,8 @@ const manifest: HarnessManifest = {
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:412776ee4595c453511a911e06c7729285bb5338b30584f8570908b273e27296",
           "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
+          // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
+          "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
         ],
       },
     },

@@ -75,6 +75,12 @@ export type RootIntegration = {
   policy: "managed-block" | "json-map" | "json-array" | "whole-file";
   /** Stable marker identity for managed-block integrations. */
   marker?: string;
+  /**
+   * Managed-block content has line-set semantics, combined by `aidlc config`
+   * across every installed harness. Absence is exclusive: only one installed
+   * harness may ship this path.
+   */
+  shared?: "union";
   /** Top-level object key merged for json-map integrations. */
   jsonKey?: string;
   /** Optional integrations may be omitted by an init mode such as --mcp none. */

@@ -27,6 +27,7 @@ const manifest: HarnessManifest = {
       path: ".gitignore",
       policy: "managed-block",
       marker: "gitignore",
+      shared: "union",
       legacySignatures: {
         wholeFileHashes: [
           "sha256:3da36b2d01551aeae2e366caa08be8cce0dbc9110e252445dcaa4e758e24a0b6",

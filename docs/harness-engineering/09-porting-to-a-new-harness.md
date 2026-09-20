@@ -71,6 +71,8 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and
   exact legacy adoption hashes here. The packager rejects an emitted top-level
   entry that is neither a managed directory nor a declared root integration.
+  `shared: "union"` combines managed-block line sets across installed harnesses;
+  absent `shared`, the block is exclusive to one installed harness.
 - `nativeRootIntegrations` (optional) — release-channel-only root files, such as
   a trust seed, with the same merge contract plus an authored `src`.
 - `tierFlavor` — selects the existing Claude/Codex/Kiro/OpenCode agent

@@ -1,5 +1,6 @@
 // covers: function:classifyTerminalCommand function:parsePluginCommand function:parseKnowledgeCommand function:RESERVED_RECORD_NAMES
 // covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS function:ORCHESTRATOR_VERBS function:leadingOrchestratorVerb
+// covers: function:isReadOnlyNextArgv
 //
 // t178 — classifyTerminalCommand() in aidlc-lib.ts, plus the two exported sets
 // READ_ONLY_FLAGS and WORKSPACE_VERBS that it classifies off.
@@ -34,12 +35,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   classifyTerminalCommand,
+  isReadOnlyNextArgv,
   KNOWLEDGE_VERBS,
   leadingOrchestratorVerb,
   parseKnowledgeCommand,
   ORCHESTRATOR_VERBS,
   READ_ONLY_FLAGS,
   RESERVED_RECORD_NAMES,
+  stripOrchestratorLauncherOptions,
   WORKSPACE_VERBS,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -236,6 +239,64 @@ describe("classifyTerminalCommand() - orchestrator verbs stay on the engine path
     expect(classifyTerminalCommand(["team-board", "--status"])).toBeNull();
     expect(classifyTerminalCommand(["unpark"])).toBeNull();
   });
+});
+
+test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
+  for (const args of [
+    ["help"],
+    ["-h"],
+    ["--status"],
+    ["--doctor", "--export"],
+    ["--scope", "poc", "--status"],
+    ["--status", "--scope", "poc"],
+    ["--review", "--status"],
+    ["--report", "x", "--status"],
+    ["--config"],
+    ["--config", "models"],
+    ["--config", "bogus"],
+    ["--config", "models", "extra"],
+    ["--scope", "poc", "--config"],
+    ["--", "--config"],
+    ["intent"],
+    ["intent", "list"],
+    ["space", "teamb"],
+    ["team-board"],
+    ["team-board", "--status"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(true);
+  }
+  for (const args of [
+    [],
+    ["park"],
+    ["compose", "x"],
+    ["--resume"],
+    ["--stage", "x"],
+    ["--report", "--status"],
+    ["--scope", "--status"],
+    ["--stage", "--help"],
+    ["--claim", "--doctor"],
+    ["intent", "create", "--scope", "poc"],
+    ["--", "--status"],
+    ["plugin", "list"],
+    ["plugin", "sync", "--status"],
+    ["plugin", "help"],
+    ["knowledge", "list", "--status"],
+    ["help", "me"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);
+  }
+});
+
+test("stripOrchestratorLauncherOptions preserves only command argv before the literal delimiter", () => {
+  expect(stripOrchestratorLauncherOptions(["--project-dir", "/x", "team-board"]))
+    .toEqual(["team-board"]);
+  expect(stripOrchestratorLauncherOptions(["--aidlc-attempt-id", "a1", "--project-dir", "/x", "--status"]))
+    .toEqual(["--status"]);
+  expect(stripOrchestratorLauncherOptions(["--", "--project-dir", "/x"]))
+    .toEqual(["--", "--project-dir", "/x"]);
+  expect(stripOrchestratorLauncherOptions(["--project-dir"])).toEqual(["--project-dir"]);
+  expect(stripOrchestratorLauncherOptions(["team-board", "--aidlc-attempt-id"]))
+    .toEqual(["team-board", "--aidlc-attempt-id"]);
 });
 
 describe("classifyTerminalCommand() - sole bare help tokens are terminal", () => {
