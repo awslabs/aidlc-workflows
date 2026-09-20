@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
+  worktreePath,
   type ActiveDirectiveGuardRemedy,
   type AttemptView,
   type AuditShardEvent,
@@ -69,6 +70,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { guardPreflight } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -501,7 +503,7 @@ describe("bounded guard-remedy liveness", () => {
     ).toBe(0);
     expect(aborted.stdout).toContain('"emitted":"BOLT_FAILED"');
     expect(
-      existsSync(join(project, ".aidlc", "worktrees", "bolt-alpha")),
+      existsSync(worktreePath(project, fixtureIntentId8(project), "alpha")),
     ).toBe(false);
     expect(readAllAuditShards(project)).toContain("**Reason**: aborted");
   }, 60000);

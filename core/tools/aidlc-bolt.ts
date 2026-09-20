@@ -44,6 +44,7 @@ import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   boltSlugForUnit,
+  BOLT_INTENT_ID8_REGEX,
   emitError,
   errorMessage,
   claimAttemptFields,
@@ -61,16 +62,19 @@ import {
   resolveAuditWorktreePath,
   requireLiveClaimForTeamUnit,
   resolveBoltDag,
+  resolveBoltIdentity,
   resolveProjectDir,
+  resolveWorkflowSelection,
   setOrInsertField,
   validateUnitName,
   slugify,
   validateLiveUnitScope,
   withAuditLock,
-  worktreePath,
   worktreeStateFilePath,
   writeStateFile,
   VERIFICATION_COMMAND_RECOVERY,
+  type BoltIdentity,
+  legacyParkedRefPrefix,
 } from "./aidlc-lib.js";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
@@ -236,8 +240,9 @@ function parseFlags(args: string[]): Record<string, string> {
 function latestWorktreeCreationFields(
   projectDir: string,
   slug: string,
+  identity: BoltIdentity,
 ): { modern: boolean; baseCommit: string | null; baseSourceListing: string | null } | null {
-  const currentWorktreePath = worktreePath(projectDir, slug);
+  const currentWorktreePath = identity.dir;
   const rows = readAuditShardEvents(projectDir)
     .filter(
       (row) =>
@@ -270,9 +275,10 @@ function latestWorktreeCreationFields(
 function worktreeBaseFields(
   projectDir: string,
   slug: string,
+  identity: BoltIdentity,
 ): { baseCommit: string; baseSourceListing: string } | null {
-  const creation = latestWorktreeCreationFields(projectDir, slug);
-  const metaPath = join(worktreePath(projectDir, slug), ".aidlc", "worktree-meta.json");
+  const creation = latestWorktreeCreationFields(projectDir, slug, identity);
+  const metaPath = join(identity.dir, ".aidlc", "worktree-meta.json");
   if (!existsSync(metaPath)) {
     if (creation?.modern) {
       throw new Error(`modern WORKTREE_CREATED for "${slug}" requires worktree metadata at ${metaPath}`);
@@ -293,6 +299,8 @@ function worktreeBaseFields(
   const allowed = new Set([
     "version",
     "boltSlug",
+    "intentId8",
+    "branch",
     "baseBranch",
     "baseCommit",
     "baseSourceListing",
@@ -318,6 +326,15 @@ function worktreeBaseFields(
     throw new Error(
       `invalid worktree metadata at ${metaPath}: boltSlug must equal ${JSON.stringify(slug)}`,
     );
+  }
+  if (
+    "intentId8" in meta &&
+    (typeof meta.intentId8 !== "string" || !BOLT_INTENT_ID8_REGEX.test(meta.intentId8))
+  ) {
+    throw new Error(`invalid worktree metadata at ${metaPath}: intentId8 must be 8 lowercase hex characters when present`);
+  }
+  if ("branch" in meta && (typeof meta.branch !== "string" || meta.branch.length === 0)) {
+    throw new Error(`invalid worktree metadata at ${metaPath}: branch must be non-empty when present`);
   }
   if (typeof meta.baseBranch !== "string" || meta.baseBranch.length === 0) {
     throw new Error(`invalid worktree metadata at ${metaPath}: baseBranch must be non-empty`);
@@ -460,8 +477,10 @@ function handleStart(args: string[]): void {
   let baseFields: { baseCommit: string; baseSourceListing: string } | null = null;
   if (useWorktree) {
     try {
+      const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+      const identity = resolveBoltIdentity(pd, flags.slug, selection);
       readStateFile(pd);
-      baseFields = worktreeBaseFields(pd, flags.slug);
+      baseFields = worktreeBaseFields(pd, flags.slug, identity);
     } catch (e) {
       failJson("start-worktree", flags.slug, "state-or-worktree-meta-read-failed", errorMessage(e));
     }
@@ -833,6 +852,9 @@ function handleAbort(args: string[]): void {
   if (!flags.reason) error("Missing --reason <text>");
 
   const pd = resolveProjectDir(projectDir);
+  const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+  if (selection.intent !== null) flags.intent = selection.intent;
+  flags.space = selection.space;
   const useDiscard = booleans.has("discard");
   let parkedRef: string | null = null;
   let parkedStamp: string | null = null;
@@ -848,6 +870,7 @@ function handleAbort(args: string[]): void {
   // Default path (no --discard) preserves the worktree per US-1 AC line 51,
   // so emit-before-noop is safe and the ordering only matters for --discard.
   if (useDiscard) {
+    const identity = resolveBoltIdentity(pd, flags.slug, selection);
     const result = spawnSibling(pd, "aidlc-worktree.ts", [
       "discard",
       "--slug",
@@ -873,8 +896,10 @@ function handleAbort(args: string[]): void {
         parkedMode = discarded.parked_mode;
         parkedRepo = discarded.parked_repo;
       } else if (parkedRef !== null) {
-        const prefix = `refs/aidlc/parked/${flags.slug}/`;
-        const stamp = parkedRef.startsWith(prefix) ? parkedRef.slice(prefix.length) : "";
+        const namespace = parkedRef;
+        const prefix = [identity.parkedRefPrefix, legacyParkedRefPrefix(flags.slug)]
+          .find((candidate) => namespace.startsWith(candidate));
+        const stamp = prefix === undefined ? "" : parkedRef.slice(prefix.length);
         if (parseParkedStampInstant(stamp) !== null) parkedStamp = stamp;
       }
     } catch {
@@ -910,6 +935,7 @@ function handleAbort(args: string[]): void {
         "restore", "--slug", flags.slug,
         ...(parkedStamp === null ? [] : ["--parked", parkedStamp]),
         "--repo", parkedRepo ?? ".",
+        ...selectorArgs(flags),
       ],
     };
     try {
@@ -955,8 +981,7 @@ function handleAbort(args: string[]): void {
 //        aidlc-bolt release-merge --slug <slug>
 //
 // HOLD-MERGE invariant tooling. Sets / clears the `Merge-Held` field in
-// the per-Bolt forked state file at
-// `<projectDir>/.aidlc/worktrees/bolt-<slug>/aidlc-docs/aidlc-state.md`.
+// the per-Bolt forked state file in the selected intent's worktree record.
 // Idempotent — re-running hold-merge on an already-held Bolt or
 // release-merge on an unheld Bolt succeeds without error. The field is
 // inserted under `## Project Information` on first hold-merge so the
@@ -1002,7 +1027,9 @@ function forkedStateFilePath(
   intent?: string,
   space?: string,
 ): string | null {
-  const wtPath = worktreePath(pd, slug);
+  const selection = resolveWorkflowSelection(pd, { intent, space });
+  const identity = resolveBoltIdentity(pd, slug, selection);
+  const wtPath = identity.dir;
   // Pin the worktree mirror to the SAME record the state fork wrote (null ->
   // flat legacy mirror, today's behaviour).
   const recordPrefix = relativeRecordDir(pd, intent, space);

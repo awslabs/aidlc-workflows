@@ -10,6 +10,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, write
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  boltName, legacyBoltName, legacyWorktreePath, worktreePath,
   activeIntentUuid, artifactFilename, auditBlockField, boltSlugForUnit,
   findStageBySlug, latestMainWorkflowStageRunFloorForProject, readAuditShardEvents,
   readPlanApprovalReceipt, recordDir,
@@ -17,13 +18,15 @@ import {
   writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  bindCodeGenerationWorktreeApproval,
   approvalFingerprint, beginCodeGeneration, codeGenerationRecordDir,
   evaluateCodeGenerationApproval, renderTestingContract, resolveCodeGenerationAuthority,
   resolveTestingPosture, readCodeGenerationWorktreeSourceBaseline,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC, cleanupWorktreeFixture, resetAidlcEnv, seedAidlcMemory,
-  runOrchestrateNext, seedBoltDagBatches, seededStateFile, setupWorktreeFixture,
+  runOrchestrateNext, seedBoltDagBatches, seededAuditDir, seededStateFile, setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
 resetAidlcEnv();
@@ -65,7 +68,7 @@ function git(pd: string, args: string[]): string {
 }
 
 function wt(pd: string, unit = "alpha"): string {
-  return join(pd, ".aidlc", "worktrees", `bolt-${boltSlugForUnit(unit)}`);
+  return worktreePath(pd, fixtureIntentId8(pd), boltSlugForUnit(unit));
 }
 
 function publish(pd: string, units: string[]): void {
@@ -472,6 +475,51 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(starts(pd)).toHaveLength(startedCount);
   }, 60_000);
 
+  test("native discard of a provenance-bound legacy Bolt recreates its approved baseline in the intent namespace", () => {
+    const pd = fixture();
+    const interrupted = interruptAfterBoltStart(pd, false);
+    expect(interrupted.code, `${interrupted.out}\n${interrupted.err}`).toBe(2);
+    const id8 = fixtureIntentId8(pd);
+    const currentName = boltName(id8, "alpha");
+    // Convert the real unbound fork to a pre-upgrade fixture BEFORE delegation,
+    // whose provenance digest binds the exact WORKTREE_CREATED block.
+    const oldName = legacyBoltName("alpha");
+    const legacy = legacyWorktreePath(pd, "alpha");
+    git(wt(pd), ["branch", "-m", oldName]);
+    git(pd, ["worktree", "move", wt(pd), legacy]);
+    const metadataPath = join(legacy, ".aidlc", "worktree-meta.json");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
+    delete metadata.intentId8;
+    delete metadata.branch;
+    writeFileSync(metadataPath, JSON.stringify(metadata));
+    for (const project of [pd, legacy]) {
+      const auditDir = seededAuditDir(project);
+      for (const shard of readdirSync(auditDir)) {
+        if (!shard.endsWith(".md")) continue;
+        const path = join(auditDir, shard);
+        writeFileSync(path, readFileSync(path, "utf-8").replaceAll(currentName, oldName));
+      }
+    }
+    writeFileSync(seededStateFile(legacy), readFileSync(seededStateFile(legacy), "utf-8").replaceAll(currentName, oldName));
+    bindCodeGenerationWorktreeApproval(pd, legacy, "alpha");
+    const approved = evaluateCodeGenerationApproval(legacy, { unit: "alpha" });
+    expect(approved.ok, approved.reason).toBe(true);
+    const baseline = git(legacy, ["rev-parse", "HEAD"]);
+    writeFileSync(join(legacy, "src", "alpha.ts"), "export const alpha = 99;\n");
+    const removed = tool(pd, "tools/aidlc-worktree.ts", ["discard", "--slug", "alpha", "--project-dir", pd]);
+    expect(removed.code, `${removed.out}\n${removed.err}`).toBe(0);
+    expect(existsSync(legacy)).toBe(false);
+    expect(auditBlockField(discarded(pd, "alpha").at(-1)!.block, "Approval Source Commit")).toBe(baseline);
+    const recreated = prepare(pd);
+    expect(recreated.code, `${recreated.out}\n${recreated.err}`).toBe(0);
+    expect(git(wt(pd), ["symbolic-ref", "--short", "HEAD"])).toBe(currentName);
+    expect(git(wt(pd), ["rev-parse", "HEAD"])).toBe(baseline);
+    expect(readFileSync(join(wt(pd), "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 1;\n");
+    expect(evaluateCodeGenerationApproval(wt(pd), { unit: "alpha" })).toMatchObject({
+      ok: true, approvalFingerprint: approved.approvalFingerprint,
+    });
+  }, 60_000);
+
   test("failed initial fork preserves source and releases registration so discard then retry works", () => {
     const executable = process.platform === "win32"
       ? `"${process.execPath.replaceAll('"', '""')}"`
@@ -854,7 +902,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       const parentHead = git(pd, ["rev-parse", "HEAD"]);
       const approval = approvalSnapshot(pd, "alpha");
       git(pd, ["worktree", "remove", "--force", wt(pd)]);
-      git(pd, ["branch", "-D", `bolt-${boltSlugForUnit("alpha")}`]);
+      git(pd, ["branch", "-D", boltName(fixtureIntentId8(pd), boltSlugForUnit("alpha"))]);
       nextDirective(pd);
       const refused = prepare(pd, ["alpha"], true);
       expect(refused.code, `${refused.out}\n${refused.err}`).not.toBe(0);

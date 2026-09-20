@@ -146,6 +146,7 @@ import {
   scopePathCovered,
   gridCostSummary,
   listIntentDirs,
+  legacyWorktreePath,
   listIntents,
   listSpaces,
   ARCHIVED_INTENT_STATUS,
@@ -169,6 +170,7 @@ import {
   nextInScopeStage,
   PHASES,
   parseArgs,
+  parseBoltName,
   parseCheckboxes,
   parseRefsList,
   parseStageFrontmatter,
@@ -181,6 +183,9 @@ import {
   readUnitScopeStamp,
   recordHookDrop,
   readCurrentSessionId,
+  relativeRecordDir,
+  resolveAuditWorktreePath,
+  resolveBoltIdentity,
   readProjectDescriptionAuthority,
   repoDir,
   resolveWorkflowSelection,
@@ -213,7 +218,6 @@ import {
   sourceBaselineAuditFields,
   unitDependencyPath,
   withAuditLock,
-  validateBoltSlug,
   validScopes,
   worktreeAuditFilePath,
   worktreePath,
@@ -237,6 +241,11 @@ import {
   hookLiveness,
   workspaceSourceState,
   type WorkspaceSourceState,
+  boltName,
+  legacyBoltIdentity,
+  legacyBoltName,
+  legacyParkedRefPrefix,
+  newBoltIdentity,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -2551,8 +2560,13 @@ export type DoctorReport = {
 // Share repository trust with restore/purge without importing the worktree CLI.
 function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
   const rows: AuditShardEvent[] = [];
+  type Owner = { id8: string; intent: string; space: string; rows: AuditShardEvent[] };
+  const owners = new Map<string, Owner | null>();
+  const legacyOwners = new Map<string, Owner | null>();
+  const ownerRepositories = new Map<Owner, Map<string | null, Set<string> | null>>();
   for (const { name: space } of listSpaces(projectDir)) {
     const intents = new Set(listIntentDirs(projectDir, space));
+    const registeredIntents = listIntents(projectDir, space);
     try {
       for (const entry of readdirSync(intentsDir(projectDir, space), { withFileTypes: true })) {
         if (entry.isDirectory() && existsSync(join(intentsDir(projectDir, space), entry.name, "audit"))) {
@@ -2563,7 +2577,21 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
       // Missing records must not hide recoverable refs in discovered repositories.
     }
     for (const intent of [undefined, ...[...intents].sort()]) {
-      rows.push(...readAuditShardEvents(projectDir, intent, space));
+      const selectedRows = readAuditShardEvents(projectDir, intent, space);
+      rows.push(...selectedRows);
+      const registered = registeredIntents.find((entry) => entry.dirName === intent);
+      if (intent === undefined || !registered?.uuid) continue;
+      const id8 = idSuffix(registered.uuid);
+      const owner: Owner = { id8, intent, space, rows: selectedRows };
+      owners.set(id8, owners.has(id8) ? null : owner);
+      for (const row of selectedRows) {
+        if (row.event !== "WORKTREE_DISCARDED") continue;
+        const slug = auditBlockField(row.block, "Bolt slug");
+        const parkedRef = auditBlockField(row.block, "Parked ref");
+        if (slug === null || parkedRef === null || !parkedRef.startsWith(legacyParkedRefPrefix(slug))) continue;
+        const existing = legacyOwners.get(parkedRef);
+        legacyOwners.set(parkedRef, existing === undefined || existing === owner ? owner : null);
+      }
     }
   }
 
@@ -2599,11 +2627,26 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
     }
     const inventoried = new Set<string>();
     for (const ref of refs) {
-      const match = /^refs\/aidlc\/parked\/([^/]+)\/(\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?)\/(?:head|reviewed-source\/(?:[a-f0-9]{40}|[a-f0-9]{64}))$/.exec(ref);
+      const match = /^refs\/aidlc\/parked\/(?:([0-9a-f]{8})\/)?([^/]+)\/(\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?)\/(?:head|reviewed-source\/(?:[a-f0-9]{40}|[a-f0-9]{64}))$/.exec(ref);
       if (!match) continue;
-      const [, slug, stamp] = match;
-      if (validateBoltSlug(slug) !== null || (slugs !== null && !slugs.has(slug))) continue;
-      const prefix = `refs/aidlc/parked/${slug}/${stamp}`;
+      const [, id8, slug, stamp] = match;
+      const parsed = parseBoltName(id8 === undefined ? legacyBoltName(slug) : boltName(id8, slug));
+      if (parsed === null || (slugs !== null && !slugs.has(slug))) continue;
+      const owner = id8 === undefined
+        ? legacyOwners.get(`${legacyParkedRefPrefix(slug)}${stamp}`)
+        : owners.get(id8);
+      if (!owner) continue;
+      let candidates = ownerRepositories.get(owner);
+      if (candidates === undefined) {
+        candidates = recoveryRepoCandidates(projectDir, owner.rows);
+        ownerRepositories.set(owner, candidates);
+      }
+      const allowedSlugs = candidates.get(repo);
+      if (allowedSlugs === undefined || (allowedSlugs !== null && !allowedSlugs.has(slug))) continue;
+      const identity = id8 === undefined
+        ? legacyBoltIdentity(projectDir, owner.id8, slug)
+        : newBoltIdentity(projectDir, owner.id8, slug);
+      const prefix = `${identity.parkedRefPrefix}${stamp}`;
       if (inventoried.has(prefix)) continue;
       inventoried.add(prefix);
       const mode = !refs.has(`${prefix}/head`) ? "evidence-only"
@@ -2613,16 +2656,16 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
       const ageDays = milliseconds === null
         ? null
         : Math.max(0, Math.floor((now - milliseconds) / 86_400_000));
-      const restoredPath = resolve(projectDir, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
+      const restoredPath = resolve(projectDir, ".aidlc", "restored", `${identity.name}-${stamp}`);
       let restoredExists = false;
       if (restoredBranches.size > 0) {
         try {
-          restoredExists = restoredBranches.get(realpathSync(restoredPath)) === `refs/heads/restore/bolt-${slug}-${stamp}`;
+          restoredExists = restoredBranches.get(realpathSync(restoredPath)) === `refs/heads/restore/${identity.name}-${stamp}`;
         } catch {
           // The canonical restore checkout does not exist or cannot be resolved.
         }
       }
-      const args = ["--slug", slug, "--parked", stamp, "--repo", repo ?? "."];
+      const args = ["--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", owner.intent, "--space", owner.space];
       const attempt: DoctorParkedAttempt = {
         slug,
         stamp,
@@ -3816,9 +3859,11 @@ export async function collectDoctorReport(
 
   // Read across every per-clone audit shard (single shard in the common case).
   // Both hook-health and state-drift checks use the same intent-scoped ledger.
-  const auditAllShards = readAllAuditShards(projectDir);
-  const auditShardEvents = readAuditShardEvents(projectDir);
-  const stateMdPath = stateFilePath(projectDir);
+  const doctorSelection = resolveWorkflowSelection(projectDir);
+  const doctorIntent = doctorSelection.intent ?? undefined;
+  const auditAllShards = readAllAuditShards(projectDir, doctorIntent, doctorSelection.space);
+  const auditShardEvents = readAuditShardEvents(projectDir, doctorIntent, doctorSelection.space);
+  const stateMdPath = stateFilePath(projectDir, doctorIntent, doctorSelection.space);
   let stateContent = "";
   try {
     if (existsSync(stateMdPath)) {
@@ -4442,16 +4487,48 @@ export async function collectDoctorReport(
     return m ? m[1].trim() : null;
   };
 
-  // Helper: was a slug terminated (worktree merged or discarded) in audit?
-  const slugTerminated = (slug: string): boolean => {
-    if (
-      findAllEvents(auditMd, "WORKTREE_MERGED", slug).length > 0 ||
-      findAllEvents(auditMd, "WORKTREE_DISCARDED", slug).length > 0
-    ) {
-      return true;
-    }
-    return false;
+  type BoltDoctorRecord = { audit: string; refs: string[]; recordPrefix: string | null };
+  const selectedBoltRecord: BoltDoctorRecord = {
+    audit: auditMd,
+    refs: boltRefs,
+    recordPrefix: relativeRecordDir(projectDir, doctorIntent, doctorSelection.space),
   };
+  let boltIntentSelectors: Map<string, { intent: string; space: string } | null> | undefined;
+  const boltRecords = new Map<string, BoltDoctorRecord | null>();
+  // Each namespace must consult its owner's record, never a same-named Unit in
+  // the selected intent. Legacy names have no namespace and remain selection-scoped.
+  const boltDoctorRecord = (intentId8: string | null): BoltDoctorRecord | null => {
+    if (intentId8 === null) return selectedBoltRecord;
+    if (boltRecords.has(intentId8)) return boltRecords.get(intentId8)!;
+    if (!boltIntentSelectors) {
+      boltIntentSelectors = new Map();
+      for (const space of listSpaces(projectDir)) {
+        for (const intent of listIntents(projectDir, space.name)) {
+          if (!intent.uuid || !intent.dirName) continue;
+          const id8 = idSuffix(intent.uuid);
+          boltIntentSelectors.set(id8, boltIntentSelectors.has(id8)
+            ? null
+            : { intent: intent.dirName, space: space.name });
+        }
+      }
+    }
+    const selector = boltIntentSelectors.get(intentId8);
+    if (!selector) {
+      boltRecords.set(intentId8, null);
+      return null;
+    }
+    const path = stateFilePath(projectDir, selector.intent, selector.space);
+    const state = existsSync(path) ? readFileSync(path, "utf-8") : "";
+    const record: BoltDoctorRecord = {
+      audit: readAllAuditShards(projectDir, selector.intent, selector.space),
+      refs: parseRefsList(getField(state, "Bolt Refs") ?? ""),
+      recordPrefix: relativeRecordDir(projectDir, selector.intent, selector.space),
+    };
+    boltRecords.set(intentId8, record);
+    return record;
+  };
+  const boltDoctorLabel = (name: string, intentId8: string | null): string =>
+    intentId8 === null ? `${name} (legacy; selected intent only)` : name;
 
   // ---------------------------------------------------------------------------
   // Check 1 — Orphan worktrees
@@ -4469,8 +4546,8 @@ export async function collectDoctorReport(
   try {
     const worktreesDir = join(projectDir, ".aidlc", "worktrees");
     let observed = 0;
-    let activeForks = 0;
-    let preservedByAbort = 0;
+    const activeForks: string[] = [];
+    const preservedByAbort: string[] = [];
     const orphanActive: string[] = []; // dir present but no audit/Bolt Refs trail
     const cleanupOrphans: string[] = []; // dir present, merge succeeded, cleanup failed
 
@@ -4480,8 +4557,8 @@ export async function collectDoctorReport(
     // Bolt Refs but it's not "in flight" — it's awaiting /aidlc --resume.
     // Doctor output distinguishes "3 active forks (in flight)" from "3
     // preserved-by-abort (awaiting resume)".
-    const isAbortedSlug = (slug: string): boolean => {
-      return findAllEvents(auditMd, "BOLT_FAILED", slug).some((b) => {
+    const isAbortedSlug = (audit: string, slug: string): boolean => {
+      return findAllEvents(audit, "BOLT_FAILED", slug).some((b) => {
         const reason = blockField(b.block, "Reason") ?? "";
         return reason === "aborted";
       });
@@ -4490,19 +4567,29 @@ export async function collectDoctorReport(
     if (existsSync(worktreesDir)) {
       for (const entry of readdirSync(worktreesDir)) {
         if (!entry.startsWith("bolt-")) continue;
-        const slug = entry.slice("bolt-".length);
-        if (validateBoltSlug(slug) !== null) continue;
         observed++;
+        const parsed = parseBoltName(entry);
+        if (!parsed) {
+          orphanActive.push(`${entry} (unrecognised)`);
+          continue;
+        }
+        const { intentId8, slug } = parsed;
+        const name = boltDoctorLabel(entry, intentId8);
+        const record = boltDoctorRecord(intentId8);
+        if (!record) {
+          orphanActive.push(`${name} (unknown intent)`);
+          continue;
+        }
 
         // Active fork — slug is in main state's Bolt Refs. Expected; not orphan.
         // Sub-classify into "preserved-by-abort" (BOLT_FAILED Reason: aborted
         // exists for the slug — the user aborted multi-failure AUQ at index k
         // and these dirs are awaiting /aidlc --resume) vs "in flight".
-        if (boltRefs.includes(slug)) {
-          if (isAbortedSlug(slug)) {
-            preservedByAbort++;
+        if (record.refs.includes(slug)) {
+          if (isAbortedSlug(record.audit, slug)) {
+            preservedByAbort.push(name);
           } else {
-            activeForks++;
+            activeForks.push(name);
           }
           continue;
         }
@@ -4510,24 +4597,24 @@ export async function collectDoctorReport(
         // Cleanup-orphan: a WORKTREE_MERGED landed (or ERROR_LOGGED carries
         // [merge-succeeded:<sha>] on a post-merge cleanup failure) but the
         // directory persists. The worktree primitive guarantees the tag.
-        const errBlocks = findAllEvents(auditMd, "ERROR_LOGGED");
+        const errBlocks = findAllEvents(record.audit, "ERROR_LOGGED");
         const matchesMergeSucceeded = errBlocks.some((b) => {
           const tag = b.block.match(MERGE_SUCCEEDED_TAG_REGEX);
           if (!tag) return false;
           const slugTag = b.block.match(SLUG_TAG_REGEX);
           return slugTag !== null && slugTag[1] === slug;
         });
-        if (matchesMergeSucceeded || findAllEvents(auditMd, "WORKTREE_MERGED", slug).length > 0) {
-          cleanupOrphans.push(slug);
+        if (matchesMergeSucceeded || findAllEvents(record.audit, "WORKTREE_MERGED", slug).length > 0) {
+          cleanupOrphans.push(name);
           continue;
         }
-        if (findAllEvents(auditMd, "WORKTREE_DISCARDED", slug).length > 0) {
+        if (findAllEvents(record.audit, "WORKTREE_DISCARDED", slug).length > 0) {
           // Terminated explicitly via discard but directory persists — discard
           // failed mid-cleanup. Surface so the operator can `rm -rf` manually.
-          cleanupOrphans.push(slug);
+          cleanupOrphans.push(name);
           continue;
         }
-        orphanActive.push(slug);
+        orphanActive.push(name);
       }
     }
 
@@ -4538,8 +4625,8 @@ export async function collectDoctorReport(
       label = "Orphan worktrees: 0 observed";
     } else if (pass) {
       const segments: string[] = [];
-      if (activeForks > 0) segments.push(`${activeForks} active fork${activeForks === 1 ? "" : "s"}`);
-      if (preservedByAbort > 0) segments.push(`${preservedByAbort} preserved-by-abort (awaiting resume)`);
+      if (activeForks.length > 0) segments.push(`${activeForks.length} active fork${activeForks.length === 1 ? "" : "s"}: ${activeForks.join(", ")}`);
+      if (preservedByAbort.length > 0) segments.push(`${preservedByAbort.length} preserved-by-abort (awaiting resume): ${preservedByAbort.join(", ")}`);
       label = `Orphan worktrees: 0 (${segments.join(", ")})`;
     } else {
       const parts: string[] = [];
@@ -4551,8 +4638,8 @@ export async function collectDoctorReport(
           `${cleanupOrphans.length} cleanup-orphan${cleanupOrphans.length === 1 ? "" : "s"} (merge/discard landed, dir persists): ${cleanupOrphans.join(", ")}`,
         );
       }
-      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift`;
-      fix = `${parts.join("; ")}. Inspect, then remove via 'aidlc-worktree discard --slug <slug>'.`;
+      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift — ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
+      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>'.`;
     }
     results.push({ pass, label, fix });
   } catch (e) {
@@ -4566,13 +4653,10 @@ export async function collectDoctorReport(
   // ---------------------------------------------------------------------------
   // Check 2 — Stale branches
   //
-  // Walk `git branch --list 'bolt-*'`; flag any `bolt-<slug>` branch whose
-  // worktree directory is gone but no terminal WORKTREE_DISCARDED or
-  // WORKTREE_MERGED audit row landed for that slug.
-  //
-  // Skips branches that aren't valid Bolt slugs — e.g. user-created
-  // `bolt-experiment` outside the framework. Skips silently when not a git
-  // repo (smoke / fresh fixtures) so doctor remains usable in non-git contexts.
+  // Walk `git branch --list 'bolt-*'`; flag branches whose worktree directory
+  // is gone but their owning intent has no terminal WORKTREE_DISCARDED or
+  // WORKTREE_MERGED row. Unrecognised names cannot be certified as Bolts.
+  // Skip silently when not a git repo so doctor remains usable in non-git contexts.
   // ---------------------------------------------------------------------------
   try {
     const proc = Bun.spawnSync({
@@ -4585,34 +4669,45 @@ export async function collectDoctorReport(
       results.push({ pass: true, label: "Stale branches: 0 observed (not a git repo)" });
     } else {
       const stdout = new TextDecoder().decode(proc.stdout);
-      const branchSlugs: string[] = [];
-      for (const line of stdout.split("\n")) {
-        const trimmed = line.replace(/^\*?\s+/, "").trim();
-        if (!trimmed.startsWith("bolt-")) continue;
-        const slug = trimmed.slice("bolt-".length);
-        if (validateBoltSlug(slug) !== null) continue;
-        branchSlugs.push(slug);
-      }
-
+      const observed: string[] = [];
       const stale: string[] = [];
-      for (const slug of branchSlugs) {
-        const wtDir = worktreePath(projectDir, slug);
-        if (existsSync(wtDir)) continue; // worktree intact — branch is live
-        // Worktree gone — needs a terminal audit row to be legitimate.
-        if (slugTerminated(slug)) continue;
-        stale.push(slug);
+      for (const line of stdout.split("\n")) {
+        const name = line.replace(/^[*+]\s*/, "").trim();
+        if (!name.startsWith("bolt-")) continue;
+        const parsed = parseBoltName(name);
+        if (!parsed) {
+          const label = `${name} (unrecognised)`;
+          observed.push(label);
+          stale.push(label);
+          continue;
+        }
+        const { intentId8, slug } = parsed;
+        const label = boltDoctorLabel(name, intentId8);
+        observed.push(label);
+        const record = boltDoctorRecord(intentId8);
+        if (!record) {
+          stale.push(`${label} (unknown intent)`);
+          continue;
+        }
+        const wtDir = intentId8 === null
+          ? legacyWorktreePath(projectDir, slug)
+          : worktreePath(projectDir, intentId8, slug);
+        if (existsSync(wtDir)) continue;
+        if (findAllEvents(record.audit, "WORKTREE_MERGED", slug).length > 0 ||
+          findAllEvents(record.audit, "WORKTREE_DISCARDED", slug).length > 0) continue;
+        stale.push(label);
       }
 
       if (stale.length === 0) {
         results.push({
           pass: true,
-          label: `Stale branches: 0 (${branchSlugs.length} bolt-* observed)`,
+          label: `Stale branches: 0 (${observed.length} bolt-* observed${observed.length > 0 ? `: ${observed.join(", ")}` : ""})`,
         });
       } else {
         results.push({
           pass: false,
-          label: `Stale branches: ${stale.length} drift`,
-          fix: `branches ${stale.join(", ")} have no worktree directory and no WORKTREE_MERGED/_DISCARDED audit row. Delete via 'git branch -D bolt-<slug>' if abandoned.`,
+          label: `Stale branches: ${stale.length} drift — ${stale.join(", ")}`,
+          fix: "Inspect unrecognised names and unknown intent ownership. Recognised branches have no worktree directory and no owning WORKTREE_MERGED/_DISCARDED audit row. Delete via 'git branch -D <full-bolt-name>' only if abandoned.",
         });
       }
     }
@@ -4636,34 +4731,47 @@ export async function collectDoctorReport(
   try {
     const worktreesDir = join(projectDir, ".aidlc", "worktrees");
     const orphan: string[] = [];
-    let observed = 0;
+    const observed: string[] = [];
 
     if (existsSync(worktreesDir)) {
       for (const entry of readdirSync(worktreesDir)) {
         if (!entry.startsWith("bolt-")) continue;
-        const slug = entry.slice("bolt-".length);
-        if (validateBoltSlug(slug) !== null) continue;
-        const wtStatePath = worktreeStateFilePath(join(worktreesDir, entry));
+        const parsed = parseBoltName(entry);
+        if (!parsed) {
+          orphan.push(`${entry} (unrecognised)`);
+          continue;
+        }
+        const { intentId8, slug } = parsed;
+        const name = boltDoctorLabel(entry, intentId8);
+        const record = boltDoctorRecord(intentId8);
+        if (!record) {
+          orphan.push(`${name} (unknown intent)`);
+          continue;
+        }
+        const wtDir = intentId8 === null
+          ? legacyWorktreePath(projectDir, slug)
+          : worktreePath(projectDir, intentId8, slug);
+        const wtStatePath = worktreeStateFilePath(wtDir, record.recordPrefix);
         if (!existsSync(wtStatePath)) continue;
-        observed++;
-        if (boltRefs.includes(slug)) continue;
-        if (findAllEvents(auditMd, "WORKTREE_DISCARDED", slug).length > 0) continue;
-        orphan.push(slug);
+        observed.push(name);
+        if (record.refs.includes(slug)) continue;
+        if (findAllEvents(record.audit, "WORKTREE_DISCARDED", slug).length > 0) continue;
+        orphan.push(name);
       }
     }
 
     if (orphan.length === 0) {
       results.push({
         pass: true,
-        label: observed === 0
+        label: observed.length === 0
           ? "Orphan state files: 0 observed"
-          : `Orphan state files: 0 (${observed} active)`,
+          : `Orphan state files: 0 (${observed.length} active: ${observed.join(", ")})`,
       });
     } else {
       results.push({
         pass: false,
-        label: `Orphan state files: ${orphan.length} drift`,
-        fix: `state files for ${orphan.join(", ")} exist but slug not in Bolt Refs and no WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug>' (idempotent).`,
+        label: `Orphan state files: ${orphan.length} drift — ${orphan.join(", ")}`,
+        fix: "Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>' (idempotent).",
       });
     }
   } catch (e) {
@@ -4710,7 +4818,11 @@ export async function collectDoctorReport(
       // Sub-case (a): no terminal pairing — is the worktree audit on disk?
       // If yes, we're mid-fork (orphan-delta — sub-case b). If no, the fork
       // emitted but disk copy never landed.
-      const wtAudit = worktreeAuditFilePath(worktreePath(projectDir, slug));
+      const recordedPath = blockField(fork.block, "Worktree path");
+      const wtPath = recordedPath
+        ? resolveAuditWorktreePath(projectDir, recordedPath)
+        : resolveBoltIdentity(projectDir, slug, doctorSelection).dir;
+      const wtAudit = worktreeAuditFilePath(wtPath, selectedBoltRecord.recordPrefix);
       if (!existsSync(wtAudit)) {
         forkedDriftDisk.push(slug);
         continue;
