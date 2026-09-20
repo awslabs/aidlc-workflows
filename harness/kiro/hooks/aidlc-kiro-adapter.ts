@@ -93,6 +93,7 @@ import {
   humanPresenceGuardDisabled,
   isAutonomousMode,
   kiroIdeLegacyPlanApprovalSessionId,
+  leadingOrchestratorVerb,
   markKiroIdeLegacyPlanApprovalHost,
   readActiveDirectiveMarker,
   readPlanApprovalLegacyWindow,
@@ -1643,9 +1644,13 @@ if (target === "guard-tool-call") {
   // A leading `compose` verb is a deliberate composer dispatch (the engine's
   // Branch 0 exempts flags.compose the same way) - never the spurious bare
   // roll-forward this backstop exists to block.
+  // A sole park / leading team-board deliberately dispatches an orchestrator verb
+  // (engine Branch 1c), using the engine's rule so park <description> stays freeform
+  // and this guard still blocks it.
   const isBareAdvancing =
     m !== null &&
     nextArgs[0] !== "compose" &&
+    leadingOrchestratorVerb(nextArgs) === null &&
     !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
     classifyTerminalCommand(nextArgs) === null;
 

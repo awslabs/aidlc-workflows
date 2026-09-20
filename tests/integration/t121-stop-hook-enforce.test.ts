@@ -2470,6 +2470,32 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
   }, 30000);
 
+  test("(h) a read-only team-board through next allows the stop in both transcript formats", () => {
+    for (const format of ["claude", "codex"] as const) {
+      const proj = makeProject();
+      seedActive(proj, "intent-capture");
+      const tp = seedTranscriptEntries(proj, format, [
+        { kind: "human", text: "/aidlc team-board" },
+        {
+          kind: "bash",
+          command: "bun .claude/tools/aidlc.ts engine orchestrate next team-board",
+        },
+        {
+          kind: "bash",
+          command: "bun .claude/tools/aidlc.ts team-board",
+        },
+        { kind: "text" },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "run-stage",
+      );
+      expect(r.rc, format).toBe(0);
+      expect(r.out, format).toBe("");
+    }
+  }, 30000);
+
   const depthNext = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
   const configSet = "bun .claude/tools/aidlc.ts engine config set depth extreme";
   const workflowNext = "bun .claude/tools/aidlc.ts engine orchestrate next";

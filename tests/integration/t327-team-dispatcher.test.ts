@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:team-board, function:buildTeamConstructionBoard, function:buildTeamConstructionBoardForIntent, function:renderTeamConstructionBoard, function:localUnitClaimOverviewForIntent, function:unitMergeTransactionsForIdentity, function:CLAIM_ACTIVITY_STALE_HOURS
+// covers: subcommand:aidlc-orchestrate:team-board, function:parseTeamBoardArgs, function:buildTeamConstructionBoard, function:buildTeamConstructionBoardForIntent, function:renderTeamConstructionBoard, function:localUnitClaimOverviewForIntent, function:unitMergeTransactionsForIdentity, function:CLAIM_ACTIVITY_STALE_HOURS
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -437,7 +437,7 @@ function selectorFixture(): {
   const { project } = boardFixture();
   const space = "secondary";
   const intentDir = "secondary-work-55555555";
-  const intentUuid = "00000000-0000-0000-0000-000055555555";
+  const intentUuid = "abcdef00-0000-0000-0000-000055555555";
   const state = teamState()
     .replace("- **Project**: dispatcher fixture", "- **Project**: secondary fixture")
     .replace(
@@ -755,6 +755,14 @@ describe("t327 team construction dispatcher", () => {
     expect(byIntent.status, byIntent.out).toBe(0);
     expect(byIntent.stdout).toBe(expected);
 
+    const byUppercaseUuid = run(
+      ORCH,
+      ["team-board", "--space", fixture.space, "--intent", fixture.intentUuid.toUpperCase()],
+      fixture.project,
+    );
+    expect(byUppercaseUuid.status, byUppercaseUuid.out).toBe(0);
+    expect(byUppercaseUuid.stdout).toContain("Unit Progress");
+
     const statusBySpace = run(
       UTILITY,
       ["status", "--space", fixture.space],
@@ -795,6 +803,20 @@ describe("t327 team construction dispatcher", () => {
     expect(missingSpace.out).toContain(
       "team-board --space requires a value",
     );
+    // The direct path shares the engine's allowlist: stray, duplicate, and
+    // path-escaping tokens are refused in a JSON error envelope before any board is resolved.
+    for (const [argv, message] of [
+      [["team-board", "--status"], 'does not accept "--status"'],
+      [["team-board", "--snapshot", "junk"], 'does not accept "junk"'],
+      [["team-board", "--snapshot", "--snapshot"], "--snapshot may be given once"],
+      [["team-board", "--space", "../../tmp"], "is not a valid name"],
+    ] as const) {
+      const refused = run(ORCH, [...argv], fixture.project);
+      expect(refused.status, refused.out).not.toBe(0);
+      const error = JSON.parse(refused.out.trim().split(/\r?\n/).filter(Boolean).at(-1)!) as { error: string };
+      expect(error.error).toContain(message);
+      expect(refused.stdout).not.toContain("Unit Progress");
+    }
   });
 
   test("multi-intent picker annotates team, parked, and complete while dormant paths stay byte-identical", () => {
