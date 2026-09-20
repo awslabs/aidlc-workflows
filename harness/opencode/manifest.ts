@@ -41,6 +41,7 @@ const manifest: HarnessManifest = {
       path: ".gitignore",
       policy: "managed-block",
       marker: "gitignore",
+      shared: "union",
       legacySignatures: {
         wholeFileHashes: [
           // Keep pre-engine-directory unmarked root files recognizable.
