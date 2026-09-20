@@ -135,6 +135,7 @@ import {
   isoTimestamp,
   isPackageJson,
   isValidRepoName,
+  isWorkspaceRepoDir,
   codekbDir,
   intentsDir,
   codekbRepoName,
@@ -2527,11 +2528,11 @@ type DoctorParkedAttempt = {
   slug: string;
   stamp: string;
   age_days: number | null;
-  mode: "snapshot" | "branch-tip" | "legacy";
+  mode: "snapshot" | "branch-tip" | "legacy" | "evidence-only";
   repo: string | null;
   restored_path: string;
   restored_exists: boolean;
-  restore_command: string;
+  restore_command?: string;
   purge_command: string;
 };
 
@@ -2568,6 +2569,7 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
         const slug = auditBlockField(row.block, "Bolt slug");
         if (repo === null || !isValidRepoName(repo) || slug === null || validateBoltSlug(slug) !== null) continue;
         if (candidates.get(repo) === null) continue;
+        if (!isWorkspaceRepoDir(projectDir, repo)) continue;
         const slugs = candidates.get(repo) ?? new Set<string>();
         slugs.add(slug);
         candidates.set(repo, slugs);
@@ -2575,8 +2577,9 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
     }
   }
 
-  const listings: { repo: string | null; refs: Set<string>; slugs: Set<string> | null }[] = [];
-  const reposBySlug = new Map<string, Set<string | null>>();
+  const attempts: DoctorParkedAttempt[] = [];
+  const invoke = aidlcToolInvocation("worktree");
+  const now = Date.now();
   for (const [repo, slugs] of candidates) {
     const cwd = repo === null ? projectDir : repoDir(projectDir, repo);
     if (!existsSync(join(cwd, ".git"))) continue;
@@ -2586,42 +2589,33 @@ function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
     });
     if (listed.status !== 0) continue;
     const refs = new Set(listed.stdout.split(/\r?\n/).filter(Boolean));
-    listings.push({ repo, refs, slugs });
+    const inventoried = new Set<string>();
     for (const ref of refs) {
-      const slug = ref.split("/")[3];
-      if (!slug || validateBoltSlug(slug) !== null || (slugs !== null && !slugs.has(slug))) continue;
-      const repos = reposBySlug.get(slug) ?? new Set<string | null>();
-      repos.add(repo);
-      reposBySlug.set(slug, repos);
-    }
-  }
-
-  const attempts: DoctorParkedAttempt[] = [];
-  const invoke = aidlcToolInvocation("worktree");
-  const now = Date.now();
-  for (const { repo, refs, slugs } of listings) {
-    for (const ref of refs) {
-      const match = /^refs\/aidlc\/parked\/([^/]+)\/(\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?)\/head$/.exec(ref);
+      const match = /^refs\/aidlc\/parked\/([^/]+)\/(\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?)\/(?:head|reviewed-source\/(?:[a-f0-9]{40}|[a-f0-9]{64}))$/.exec(ref);
       if (!match) continue;
       const [, slug, stamp] = match;
       if (validateBoltSlug(slug) !== null || (slugs !== null && !slugs.has(slug))) continue;
-      const prefix = ref.slice(0, -"/head".length);
+      const prefix = `refs/aidlc/parked/${slug}/${stamp}`;
+      if (inventoried.has(prefix)) continue;
+      inventoried.add(prefix);
+      const mode = !refs.has(`${prefix}/head`) ? "evidence-only"
+        : refs.has(`${prefix}/snapshot`) ? "snapshot"
+        : refs.has(`${prefix}/branch-tip`) ? "branch-tip" : "legacy";
       const milliseconds = parseParkedStampInstant(stamp);
       const ageDays = milliseconds === null
         ? null
         : Math.max(0, Math.floor((now - milliseconds) / 86_400_000));
       const restoredPath = resolve(projectDir, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
-      const selector = (reposBySlug.get(slug)?.size ?? 0) > 1 ? ` --repo ${repo ?? "."}` : "";
-      const args = `--slug ${slug} --parked ${stamp}${selector}`;
+      const args = `--slug ${slug} --parked ${stamp} --repo ${repo ?? "."}`;
       attempts.push({
         slug,
         stamp,
         age_days: ageDays,
-        mode: refs.has(`${prefix}/snapshot`) ? "snapshot" : refs.has(`${prefix}/branch-tip`) ? "branch-tip" : "legacy",
+        mode,
         repo,
         restored_path: restoredPath,
         restored_exists: existsSync(restoredPath),
-        restore_command: `${invoke} restore ${args}`,
+        ...(mode === "evidence-only" ? {} : { restore_command: `${invoke} restore ${args}` }),
         purge_command: `${invoke} purge ${args}`,
       });
     }

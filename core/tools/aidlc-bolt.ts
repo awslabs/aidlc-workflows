@@ -834,7 +834,7 @@ function handleAbort(args: string[]): void {
   const useDiscard = booleans.has("discard");
   let parkedRef: string | null = null;
   let parkedStamp: string | null = null;
-  let parkedMode: "snapshot" | "branch-tip" | null = null;
+  let parkedMode: "snapshot" | "branch-tip" | "evidence-only" | null = null;
   let parkedRepo: string | null = null;
 
   // Discard-FIRST when --discard set, audit-AFTER. If we emitted BOLT_FAILED
@@ -865,7 +865,7 @@ function handleAbort(args: string[]): void {
       const discarded = JSON.parse(result.stdout);
       if (typeof discarded?.parked_ref === "string") parkedRef = discarded.parked_ref;
       if (typeof discarded?.parked_stamp === "string" &&
-        (discarded.parked_mode === "snapshot" || discarded.parked_mode === "branch-tip") &&
+        (discarded.parked_mode === "snapshot" || discarded.parked_mode === "branch-tip" || discarded.parked_mode === "evidence-only") &&
         (discarded.parked_repo === null || typeof discarded.parked_repo === "string")) {
         parkedStamp = discarded.parked_stamp;
         parkedMode = discarded.parked_mode;
@@ -906,8 +906,8 @@ function handleAbort(args: string[]): void {
         parked_mode: parkedMode,
         parked_repo: parkedRepo,
       } : {}),
-      ...(parkedRef === null ? {} : {
-        restore_hint: `${aidlcToolInvocation("worktree")} restore --slug ${flags.slug}${parkedStamp === null ? "" : ` --parked ${parkedStamp}`}${parkedRepo === null ? "" : ` --repo ${parkedRepo}`}`,
+      ...(parkedRef === null || parkedMode === "evidence-only" ? {} : {
+        restore_hint: `${aidlcToolInvocation("worktree")} restore --slug ${flags.slug}${parkedStamp === null ? "" : ` --parked ${parkedStamp}`} --repo ${parkedRepo ?? "."}`,
         parked_excludes: parkedMode === "branch-tip"
           ? ["uncommitted files (no working tree existed)"]
           : ["ignored files", "eol/text=auto normalization"],

@@ -582,11 +582,16 @@ Conductor-prose-obtained abort consent remains the trust boundary: it is require
 by the protocol, not authenticated by this Plan Approval exception. A direct
 review refusal prints its ask without publishing a selection marker; requiring
 that absent marker here would prevent the offered abort. The unchanged
-`--discard` command now parks the working-tree snapshot and reviewed source refs
-before removing the live checkout and branch. A mistaken abort is recoverable
-with `aidlc engine worktree restore --slug <slug>` in a separate restored
-checkout, not by reviving the live Bolt. A mechanical selection receipt remains
-a candidate for later hardening, not a check added by this recovery behavior.
+`--discard` command now parks the working-tree snapshot or remaining branch tip
+and reviewed source refs before removing the live checkout and branch. When
+files were saved, recover them using the abort result's exact `restore_hint`,
+which includes `--parked <stamp>` and `--repo <name>` or `--repo .`, in a separate
+restored checkout, not by reviving the live Bolt. If only reviewed source refs
+remained, the `evidence-only` descriptor has `parked_commit: null` in discard;
+abort retains the ref, stamp, mode, and repository but omits `restore_hint` and
+`parked_excludes`. Restore refuses that selection; doctor offers purge only.
+A mechanical selection receipt remains a candidate for later hardening, not a
+check added by this recovery behavior.
 The native restart continuation has a recorded ask and separately verifies its
 human selection. Other Bolt commands gain no exemption, and abort admission
 never approves generation or a review verdict.

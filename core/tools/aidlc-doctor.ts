@@ -277,7 +277,9 @@ function humanReport(
     for (const attempt of report.parked_attempts) {
       output += `  ${okVerdict("ok   ", out)} ${attempt.slug} / ${attempt.stamp} (repo ${attempt.repo ?? "."}, age ${attempt.age_days ?? "unknown"} days, mode ${attempt.mode})\n`;
       output += `        restored checkout: ${attempt.restored_exists ? "present" : "absent"} - ${attempt.restored_path}\n`;
-      output += `        restore: ${attempt.restore_command}\n`;
+      if (attempt.restore_command !== undefined) {
+        output += `        restore: ${attempt.restore_command}\n`;
+      }
       output += `        purge: ${attempt.purge_command}\n`;
     }
   }

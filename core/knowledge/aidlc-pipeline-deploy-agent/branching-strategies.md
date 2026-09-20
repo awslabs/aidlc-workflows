@@ -45,7 +45,7 @@ When dispatched for trunk-based:
 
 - **Dirty tree on merge.** Local uncommitted changes on `main`; tool errors with the git message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; an explicit discard on abort sets the work aside before removing the live checkout and branch.
 - **Conflict on squash.** Squash conflicts with concurrent `main` motion (e.g. another Bolt landed first). Tool exits non-zero with `{status: "conflict", conflict_files, detail}`. Orchestrator quotes `detail` to the user.
-- **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should set the old attempt aside with `worktree discard` first only when authorized, or pick a different slug. Recover its files with `{{INVOKE}} engine worktree restore --slug <bolt-slug>` in the separate restored namespace.
+- **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should set the old attempt aside with `worktree discard` first only when authorized, or pick a different slug. Recover its files with the abort result's `restore_hint` verbatim, or doctor's exact-stamp, explicit-repository restore command, in the separate restored namespace.
 
 ---
 
@@ -283,8 +283,8 @@ The orchestrator's halt-and-ask quotes the `detail` field verbatim. See `aidlc-c
 If the checkout, branch, and reviewed source refs are already gone (idempotent path), `emitted` is `null` and `reason` is `already-discarded` — no audit event is re-emitted.
 That already-discarded response has no `parked_*` fields. A new discard keeps
 `parked_ref` and `parked_commit` and adds the exact `parked_stamp`, `parked_mode`
-(`snapshot` or `branch-tip`), and `parked_repo` (`null` for the project root,
-otherwise the sibling repository name).
+(`snapshot`, `branch-tip`, or `evidence-only`), and `parked_repo` (`null` for the
+project root, otherwise the sibling repository name).
 
 Discard snapshots tracked files and non-ignored untracked files with a temporary
 index and `commit-tree`; ignored untracked files are not backed up. Before audit
@@ -294,7 +294,9 @@ checkout is already gone but its branch remains, `/head` holds that branch tip
 instead, with a matching `/branch-tip` marker rather than `/snapshot`.
 Only then does it remove the live checkout and
 branch and compare-delete the original reviewed source refs. If only reviewed
-refs remain, `parked_commit` is `"-"`; there is no `/head` to restore.
+refs remain, `parked_mode` is `evidence-only` and `parked_commit` is `null`;
+`parked_ref`, `parked_stamp`, and `parked_repo` still identify the saved evidence,
+but there is no `/head` to restore.
 
 ### Abort response (success)
 
@@ -302,24 +304,31 @@ refs remain, `parked_commit` is `"-"`; there is no `/head` to restore.
 `--reason` text in `reason`, `failed_bolt`, `slug`, and `discarded`. Without
 `--discard`, it has no `parked_*` fields or `restore_hint`. With `--discard`, it
 echoes the returned `parked_ref`, `parked_stamp`, `parked_mode`, and `parked_repo`.
-The exact `restore_hint` is the rendered `aidlcToolInvocation("worktree")`
-prefix plus ` restore --slug <slug> --parked <stamp>`, with ` --repo <name>`
-appended only when `parked_repo` is non-null. Snapshot mode reports
+For restorable attempts, the exact `restore_hint` is the rendered
+`aidlcToolInvocation("worktree")` prefix plus
+` restore --slug <slug> --parked <stamp> --repo <name|.>`. The repository selector
+is always present: the sibling name or `.` when `parked_repo` is `null`.
+Snapshot mode reports
 `parked_excludes: ["ignored files", "eol/text=auto normalization"]`; branch-tip
 mode reports `["uncommitted files (no working tree existed)"]` instead.
+Evidence-only mode keeps the four descriptor fields but omits `restore_hint`
+and `parked_excludes` because no restorable files were saved.
 
 If a saved namespace is known but its discard descriptor is missing, the
 fallback has a non-null `parked_ref`, `parked_stamp: null`, `parked_mode: null`,
-and `parked_repo: null`, with a slug-only `restore_hint` and the snapshot-style
+and `parked_repo: null`, with a `restore_hint` ending in
+` restore --slug <slug> --repo .` (no exact stamp) and the snapshot-style
 exclusions. This unknown mode does not justify claiming a snapshot was saved.
 If no namespace was saved, all four descriptor fields are `null`, with no
 `restore_hint` or `parked_excludes`. The audit row still uses `Reason: aborted`;
 the success JSON preserves the caller's reason instead.
 Do not change the abort command or its human-consent requirement. Tell the human
 the attempt was **set aside**. For branch-tip mode, say: "I kept its committed
-work; there were no uncommitted files to save." On a later restore request, the
-conductor must execute the saved result's `restore_hint` verbatim and announce
-its returned `worktree_path` plainly.
+work; there were no uncommitted files to save." For evidence-only mode, say:
+"Nothing of its working files remained to save; only its review evidence was
+kept." Omit the final restoration offer whenever `restore_hint` is absent. On a
+later restore request, the conductor must execute the saved hint verbatim and
+announce its returned `worktree_path` plainly.
 
 ### Restore or purge set-aside work
 
@@ -334,6 +343,9 @@ It does not resume the aborted lifecycle or restore active review authority.
 Its JSON is `{restored: true, slug, parked_ref, worktree_path, branch,
 reviewed_source_refs, raw_bytes, restore_mode}` with `materialized` added only in raw mode.
 `reviewed_source_refs` counts retained parked reviewed refs, which are not copied into the active namespace.
+An exact stamp present in only one repository selects that repository before
+generic slug ambiguity. Selecting evidence-only storage, even with `--raw`,
+refuses with `no restorable files were parked for <slug> <stamp>; only review evidence was kept`.
 Classification checks the bare `--raw` flag first (`restore_mode: "raw-requested"`),
 then `/snapshot` (`"snapshot"`), then `/branch-tip` (`"branch-tip"`). Legacy parks
 have neither marker for either shape. An unmarked head is a snapshot only if the
@@ -381,13 +393,21 @@ exists or remains registered with Git, including moved checkouts. Its JSON is
 retains unparseable stamps; exact-stamp and all-stamp purges can remove them.
 For restore and purge, `--repo <name>` selects an existing sibling Git repository
 and `--repo .` selects the project root, independently of the current intent's
-repo list. These selectors do not change live create/discard behavior.
+repo list. Sibling repositories must be real immediate child directories, not
+symlinks, with canonical paths directly under the canonical workspace root;
+arbitrary paths and symlink aliases are refused. These selectors do not change
+live create/discard behavior. Restore and purge reject unknown and duplicate
+flags before selection or mutation; `--raw` is a bare restore-only flag.
 
-Doctor lists entries with a saved `/head` informationally, not as warnings or
-failures: slug, stamp, age in days, marker mode (`snapshot`, `branch-tip`, or
-`legacy`), existence of the canonical restored checkout, and rendered restore
-and purge commands for the exact stamp and repository. A moved checkout may not
-show as restored there, but purge still checks its Git registration. Doctor and
+Doctor lists saved `/head` entries and evidence-only namespaces containing actual
+reviewed source refs informationally, not as warnings or failures: slug, stamp,
+age in days, mode (`snapshot`, `branch-tip`, `legacy`, or `evidence-only`),
+existence of the canonical restored checkout, and rendered recovery commands
+for the exact stamp with an explicit repository selector. Evidence-only entries
+retain `purge_command` but omit `restore_command`. Doctor applies the same
+real-immediate-child boundary to both discovered and audit-derived sibling
+repositories. A moved checkout may not show as restored there, but purge still
+checks its Git registration. Doctor and
 purge share the strict stamp parser: impossible dates or times have
 `age_days: null` in doctor's JSON and `unknown` in human-readable output. Restore and
 purge add no audit events. See `aidlc-shared/worktree-info-schema.md` for the JSON

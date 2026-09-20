@@ -1635,29 +1635,40 @@ This recovers files saved by `worktree discard` or an authorized
 `bolt abort --discard`. Without `--parked`, it selects the latest saved `/head`
 for the slug; with it, it selects that exact stamp. Stamps are UTC
 `YYYYMMDDTHHMMSSZ` with an optional numeric `-N` collision suffix, ordered
-numerically for latest selection (`-10` follows `-2`). If the slug exists in
-several repositories, `--repo <name>` selects an existing sibling Git repository
-and `--repo .` selects the project root. Restore and purge resolve this explicit
-selector independently of the current intent's repo list; this does not change
-the selectors for live worktree create/discard commands. Use `--intent` /
-`--space` when needed to resolve workspace context.
+numerically for latest selection (`-10` follows `-2`). An exact stamp present in
+only one repository selects that repository before generic slug ambiguity.
+If selection remains ambiguous, `--repo <name>` selects an existing sibling Git
+repository and `--repo .` selects the project root. Siblings must be real
+immediate child directories, not symlinks, whose canonical paths remain directly
+under the canonical workspace root. Arbitrary paths and symlink aliases are
+refused. Restore and purge resolve this explicit selector independently of the
+current intent's repo list; this does not change the selectors for live worktree
+create/discard commands. Use `--intent` / `--space` when needed to resolve
+workspace context. Both recovery commands reject unknown flags and duplicate
+flags before selection or mutation. `--raw` is a bare restore-only flag and is
+not accepted by purge.
 
-Prefer the successful discard abort's returned `restore_hint` for recovering
-that attempt: execute it verbatim. Its exact form is the installed worktree
-invocation plus ` restore --slug <slug> --parked <stamp>`, with
-` --repo <name>` appended only for a sibling repository. `worktree discard`
-retains `parked_ref` and `parked_commit` and adds `parked_stamp`, `parked_mode`
-(`snapshot` or `branch-tip`), and `parked_repo` (`null` for the project root,
-otherwise the sibling name). `bolt abort --discard` echoes `parked_ref`,
-`parked_stamp`, `parked_mode`, and `parked_repo` alongside the hint.
+When present, prefer the successful discard abort's returned `restore_hint`
+for recovering that attempt: execute it verbatim. Its exact form is the
+installed worktree invocation plus
+` restore --slug <slug> --parked <stamp> --repo <name|.>`. The selector is always
+present: `--repo <name>` for a sibling, `--repo .` for the root.
+`worktree discard` retains `parked_ref` and `parked_commit` and adds
+`parked_stamp`, `parked_mode` (`snapshot`, `branch-tip`, or `evidence-only`), and
+`parked_repo` (`null` for the project root, otherwise the sibling name).
+`bolt abort --discard` echoes `parked_ref`, `parked_stamp`, `parked_mode`, and
+`parked_repo`. When only review evidence remained, discard reports
+`parked_mode: "evidence-only"` and `parked_commit: null`; abort keeps its four
+descriptor fields but omits both `restore_hint` and `parked_excludes`.
 
 For `snapshot`, abort reports
 `parked_excludes: ["ignored files", "eol/text=auto normalization"]`. For
 `branch-tip`, it reports `["uncommitted files (no working tree existed)"]`:
 only committed work could be kept. If a saved namespace is known but its
 discard descriptor is unavailable, the fallback sets `parked_stamp`,
-`parked_mode`, and `parked_repo` to `null`, returns a slug-only hint, and keeps
-the snapshot-style exclusions. That fallback can select a later attempt and
+`parked_mode`, and `parked_repo` to `null`, returns a hint ending in
+` restore --slug <slug> --repo .` without `--parked`, and keeps the
+snapshot-style exclusions. That fallback can select a later attempt and
 does not establish that a snapshot was saved. If no namespace was saved, all
 four descriptor fields are `null`, with no hint or exclusions. Abort without
 `--discard` has no `parked_*` fields or `restore_hint`.
@@ -1666,8 +1677,12 @@ Restore creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
 `restore/bolt-<slug>-<stamp>`. It never touches a live
 `.aidlc/worktrees/bolt-<slug>` checkout or `bolt-<slug>` branch, resumes the
 aborted lifecycle, or reinstates review authority. If the restore path or branch
-already exists, it refuses rather than overwriting it. Recovery refs containing
-only reviewed source evidence, with no `/head`, cannot restore a checkout.
+already exists, it refuses rather than overwriting it. Selecting evidence-only
+recovery refs, with no `/head`, refuses even with `--raw`:
+
+```text
+no restorable files were parked for <slug> <stamp>; only review evidence was kept
+```
 
 | Selection | Behavior |
 |-----------|----------|
@@ -1726,12 +1741,15 @@ unless `--older-than` skips unparseable stamps.
 Restore and purge add no audit events.
 
 `/aidlc --doctor` and `aidlc doctor` show a **Parked attempts** informational
-section when saved `/head` entries exist, in both ordinary and verbose output.
-Each entry includes slug, exact stamp, age in days, mode (`snapshot`,
-`branch-tip`, or `legacy`), canonical restored checkout existence, and rendered
-restore/purge commands. Commands include `--parked <stamp>` and, when the slug
-exists in several repositories, `--repo <name>` or `--repo .`. A moved checkout
-may not show as restored in doctor, but purge still checks its Git registration.
+section when saved `/head` entries or actual reviewed source refs exist, in both
+ordinary and verbose output. Each entry includes slug, exact stamp, age in days,
+mode (`snapshot`, `branch-tip`, `legacy`, or `evidence-only`), canonical restored
+checkout existence, and rendered recovery commands. Every command includes
+`--parked <stamp>` and `--repo <name>` or `--repo .`. Evidence-only entries have
+`purge_command` but no `restore_command`. Doctor applies the same real-immediate-child
+repository boundary to both discovered and audit-derived sibling candidates;
+symlinks and out-of-root paths are ignored. A moved checkout may not show as
+restored in doctor, but purge still checks its Git registration.
 Doctor uses the same strict stamp parser: impossible dates and times have
 `age_days: null` in JSON and show `unknown` in human-readable output.
 These entries do not produce warnings or failures. Use the copy-install prefix

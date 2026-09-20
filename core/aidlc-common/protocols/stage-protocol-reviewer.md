@@ -351,9 +351,10 @@ re-checked.`).
 > accounting without claiming convergence. Never synthesize `GATE_REJECTED`.
 > The discard parks tracked files and non-ignored untracked files (or the
 > remaining branch tip when the checkout is gone) plus reviewed source refs
-> before removing the live checkout and branch. The returned `restore_hint`
-> recovers the parked work in a separate checkout without reinstating the old
-> review authority.
+> before removing the live checkout and branch. When present, the returned
+> `restore_hint` recovers the parked work in a separate checkout without
+> reinstating the old review authority. If only review evidence remained, there
+> are no saved working files to restore and no `restore_hint` is returned.
 >
 > **After a successful retry discard.** After the `--discard` abort succeeds and
 > confirms the old attempt was parked, but before rerunning `prepare`, use this
@@ -365,9 +366,12 @@ re-checked.`).
 >
 > - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
 > - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+> - `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
 > - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
 >
 > **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+>
+> When `restore_hint` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore command for an evidence-only attempt.
 >
 > If the human later asks for that attempt back, the conductor must execute the
 > saved abort result's `restore_hint` verbatim, preserving its exact attempt and

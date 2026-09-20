@@ -230,11 +230,13 @@ and discarding the old Bolt means park/discard: snapshot tracked and non-ignored
 untracked files (or keep the remaining branch tip when the checkout is gone) and
 park reviewed source refs before removing the live checkout and branch. The
 conductor must obtain the human's selection and execute the returned recovery
-command unchanged. The returned `restore_hint` recovers parked work in an isolated
-`.aidlc/restored/bolt-<slug>-<stamp>` checkout on
-`restore/bolt-<slug>-<stamp>`, never overwriting a new live Bolt. Restored artifacts
-and receipts are not current-attempt evidence; retry still requires a fresh
-`prepare` and review boundary as described below.
+command unchanged. When present, the returned `restore_hint` recovers parked work
+in an isolated `.aidlc/restored/bolt-<slug>-<stamp>` checkout on
+`restore/bolt-<slug>-<stamp>`, never overwriting a new live Bolt. If only review
+evidence remained, there are no saved working files to restore and no
+`restore_hint` is returned. Restored artifacts and receipts are not
+current-attempt evidence; retry still requires a fresh `prepare` and review
+boundary as described below.
 
 ### Claude Code
 
@@ -252,9 +254,12 @@ Select `[saved-files text]` from the returned `parked_mode`:
 
 - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
 - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
 - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
 
 **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_hint` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore command for an evidence-only attempt.
 
 If the human later asks for that attempt back, the conductor must execute the
 saved abort result's `restore_hint` verbatim, preserving its exact attempt and
@@ -281,9 +286,12 @@ Select `[saved-files text]` from the returned `parked_mode`:
 
 - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
 - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
 - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
 
 **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_hint` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore command for an evidence-only attempt.
 
 If the human later asks for that attempt back, the conductor must execute the
 saved abort result's `restore_hint` verbatim, preserving its exact attempt and
@@ -310,9 +318,12 @@ Select `[saved-files text]` from the returned `parked_mode`:
 
 - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
 - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
 - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
 
 **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_hint` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore command for an evidence-only attempt.
 
 If the human later asks for that attempt back, the conductor must execute the
 saved abort result's `restore_hint` verbatim, preserving its exact attempt and
@@ -339,9 +350,12 @@ Select `[saved-files text]` from the returned `parked_mode`:
 
 - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
 - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
 - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
 
 **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_hint` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore command for an evidence-only attempt.
 
 If the human later asks for that attempt back, the conductor must execute the
 saved abort result's `restore_hint` verbatim, preserving its exact attempt and
@@ -368,9 +382,12 @@ Select `[saved-files text]` from the returned `parked_mode`:
 
 - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
 - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
 - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
 
 **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_hint` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore command for an evidence-only attempt.
 
 If the human later asks for that attempt back, the conductor must execute the
 saved abort result's `restore_hint` verbatim, preserving its exact attempt and
@@ -397,9 +414,12 @@ Select `[saved-files text]` from the returned `parked_mode`:
 
 - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
 - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
 - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
 
 **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_hint` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore command for an evidence-only attempt.
 
 If the human later asks for that attempt back, the conductor must execute the
 saved abort result's `restore_hint` verbatim, preserving its exact attempt and
@@ -426,9 +446,12 @@ Select `[saved-files text]` from the returned `parked_mode`:
 
 - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
 - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+- `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
 - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
 
 **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+
+When `restore_hint` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore command for an evidence-only attempt.
 
 If the human later asks for that attempt back, the conductor must execute the
 saved abort result's `restore_hint` verbatim, preserving its exact attempt and

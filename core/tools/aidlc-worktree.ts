@@ -33,6 +33,7 @@ import {
   gitCommitSourceListing,
   intentsDir,
   isValidRepoName,
+  isWorkspaceRepoDir,
   latestMainWorkflowStageRunFloorForProject,
   listIntentDirs,
   listSpaces,
@@ -101,6 +102,29 @@ function parseFlags(args: string[]): Record<string, string> {
     i++;
   }
   return flags;
+}
+
+const RECOVERY_FLAGS: Record<string, readonly string[]> = {
+  restore: ["slug", "parked", "raw", "repo", "intent", "space", "project-dir"],
+  purge: ["slug", "parked", "older-than", "repo", "intent", "space", "project-dir"],
+  list: ["project-dir"],
+  info: ["slug", "intent", "space", "project-dir"],
+};
+
+function validateRecoveryFlags(args: string[], valid: readonly string[]): void {
+  const seen = new Set<string>();
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith("--")) continue;
+    const name = arg.slice(2);
+    if (!valid.includes(name)) error(`Unknown flag ${arg}. Valid flags: ${valid.map((flag) => `--${flag}`).join(", ")}`);
+    if (seen.has(name)) error(`Duplicate flag ${arg}.`);
+    seen.add(name);
+    if (name === "raw") continue;
+    const value = args[++i];
+    if (value === undefined) error(`${arg} expects a value, got end of arguments.`);
+    if (value.startsWith("--")) error(`${arg} expects a value, got another flag: "${value}". Did you forget the value?`);
+  }
 }
 
 // --- Audit emit shorthand ---
@@ -814,7 +838,7 @@ function worktreeRepoCandidates(
     const field = auditBlockField(row.block, "Repo");
     if (field === "-") {
       selectors.set(repoSelectorKey(null), null);
-    } else if (field !== null && isValidRepoName(field)) {
+    } else if (field !== null && isValidRepoName(field) && isWorkspaceRepoDir(pd, field)) {
       selectors.set(repoSelectorKey(field), field);
     }
   }
@@ -2892,8 +2916,8 @@ function validateParkedStamp(stamp: string | undefined): void {
 
 interface ParkedAttempt {
   ref: string;
-  commit: string;
-  mode: "snapshot" | "branch-tip";
+  commit: string | null;
+  mode: "snapshot" | "branch-tip" | "evidence-only";
 }
 
 function parkAttempt(
@@ -2916,7 +2940,7 @@ function parkAttempt(
     if (!result.ok) throw new Error(result.stderr.trim() || `git ${args[0]} exited ${result.code}`);
     return result.stdout.trim();
   };
-  let commit = "-";
+  let commit: string | null = null;
   if (dirExists) {
     if (!registered) throw new Error("worktree directory is not registered with the creating repository");
     const idx = join(tmpdir(), `aidlc-park-${process.pid}-${randomUUID()}`);
@@ -3043,8 +3067,8 @@ function parkAttempt(
   } else if (branchExists) {
     commit = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
   }
-  const mode = dirExists ? "snapshot" : "branch-tip";
-  if (commit !== "-") {
+  const mode = dirExists ? "snapshot" : branchExists ? "branch-tip" : "evidence-only";
+  if (commit !== null) {
     requireGit(["update-ref", `${ref}/head`, commit, ""]);
     requireGit(["update-ref", `${ref}/${mode}`, commit, ""]);
   }
@@ -3191,7 +3215,7 @@ function handleDiscard(args: string[]): void {
       Reason: "agent-discard",
       ...discardedApproval,
       "Parked ref": parked.ref,
-      "Parked commit": parked.commit,
+      "Parked commit": parked.commit ?? "-",
     }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
@@ -3251,7 +3275,10 @@ function parkedRepoCwd(
   const candidates = worktreeRepoCandidates(pd, creationRows);
   if (flags.repo !== undefined) {
     const repo = flags.repo === "." ? null : flags.repo;
-    if (repo !== null && (!isValidRepoName(repo) || !candidates.has(repoSelectorKey(repo)))) {
+    if (repo !== null && isValidRepoName(repo) && lstatSync(repoDir(pd, repo), { throwIfNoEntry: false })?.isSymbolicLink()) {
+      errorWithSlug(slug, `"${repo}" is a symlink, not a workspace repository`);
+    }
+    if (repo !== null && (!isValidRepoName(repo) || !candidates.has(repoSelectorKey(repo)) || !isWorkspaceRepoDir(pd, repo))) {
       errorWithSlug(slug, `Invalid --repo "${flags.repo}": no matching recovery repository; use . for the project root or an existing sibling Git repository name.`);
     }
     const cwd = repo === null ? pd : repoDir(pd, repo);
@@ -3261,7 +3288,7 @@ function parkedRepoCwd(
     }
     return cwd;
   }
-  const parkedRepos: { cwd: string; repo: string | null }[] = [];
+  const parkedRepos: { cwd: string; repo: string | null; exact: boolean }[] = [];
   for (const repo of candidates.values()) {
     const cwd = repo === null ? pd : repoDir(pd, repo);
     if (!existsSync(join(cwd, ".git"))) continue;
@@ -3269,7 +3296,13 @@ function parkedRepoCwd(
       ["for-each-ref", "--format=%(refname)", `refs/aidlc/parked/${slug}/`],
       cwd,
     );
-    if (listed.ok && listed.stdout.trim()) parkedRepos.push({ cwd, repo });
+    if (listed.ok && listed.stdout.trim()) parkedRepos.push({ cwd, repo,
+      exact: flags.parked !== undefined && listed.stdout.split(/\r?\n/).some((ref) => parkedStamp(ref) === flags.parked),
+    });
+  }
+  if (flags.parked !== undefined) {
+    const exact = parkedRepos.filter((candidate) => candidate.exact);
+    if (exact.length === 1) return exact[0].cwd;
   }
   if (parkedRepos.length === 0) {
     errorWithSlug(slug, `no parked attempt for slug ${slug}`);
@@ -3347,6 +3380,15 @@ function handleRestore(args: string[]): void {
   heads.sort((a, b) => parkedStamp(a.ref).localeCompare(parkedStamp(b.ref), "en", { numeric: true }));
   const head = heads.at(-1);
   if (!head) {
+    const evidence = refs.filter(({ ref }) =>
+      /\/reviewed-source\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(ref) &&
+      PARKED_STAMP_RE.test(parkedStamp(ref)) &&
+      (flags.parked === undefined || parkedStamp(ref) === flags.parked));
+    evidence.sort((a, b) => parkedStamp(a.ref).localeCompare(parkedStamp(b.ref), "en", { numeric: true }));
+    const latestEvidence = evidence.at(-1);
+    if (latestEvidence) {
+      errorWithSlug(slug, `no restorable files were parked for ${slug} ${parkedStamp(latestEvidence.ref)}; only review evidence was kept`);
+    }
     errorWithSlug(slug, `no parked attempt for slug ${slug}${flags.parked ? ` at ${flags.parked}` : ""}`);
   }
   const stamp = parkedStamp(head.ref);
@@ -3769,6 +3811,8 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   try {
+    const validFlags = RECOVERY_FLAGS[subcommand];
+    if (validFlags) validateRecoveryFlags(rawArgs, validFlags);
     switch (subcommand) {
       case "create":
         handleCreate(filteredArgs.slice(1));

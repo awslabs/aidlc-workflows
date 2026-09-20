@@ -84,7 +84,10 @@ attempts strictly older than a nonnegative finite number of days. Age uses the
 stamp's UTC timestamp, ignoring its `-N` collision suffix; the two selectors are
 mutually exclusive. Purge refuses while a matching restored checkout exists,
 including one moved elsewhere. Doctor lists saved attempts informationally with
-their exact restore and purge commands. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
+their exact-stamp, explicit-repository restore and purge commands. If only
+reviewed source refs remained to save, the attempt is `evidence-only` with
+`parked_commit: null`: no files can be restored, abort omits its restore hint
+and exclusions, and doctor offers purge only. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
 for the recovery walkthrough and [CLI Commands](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs)
 for the flags.
 

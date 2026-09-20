@@ -27,7 +27,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
-| A Bolt attempt was set aside | Ask to restore its files, or execute the saved abort result's `restore_hint`; see [getting the files back](#a-bolt-attempt-was-set-aside-getting-the-files-back) |
+| A Bolt attempt was set aside | Execute the saved abort result's `restore_hint` when present; evidence-only attempts have no saved files to restore. See [getting the files back](#a-bolt-attempt-was-set-aside-getting-the-files-back) |
 
 ---
 
@@ -283,40 +283,51 @@ saves tracked files and non-ignored untracked files (or the remaining branch
 tip when the checkout is already gone) plus reviewed source refs in local Git
 before removing the old checkout and branch, so a fresh attempt can start.
 An ordinary Abort without `--discard` leaves the checkout in place and has no
-`parked_*` fields or `restore_hint`. The assistant tells you why it set the
-attempt aside and offers to restore it. The discard abort result includes the
-original `reason` and the saved descriptor: `parked_ref`, `parked_stamp`,
-`parked_mode` (`snapshot` or `branch-tip`), and `parked_repo` (`null` for the
-project root, otherwise the sibling repository name).
+`parked_*` fields or `restore_hint`. After a discard, the assistant tells you why
+it set the attempt aside and offers restoration only when a hint is present.
+The discard abort result includes the original `reason` and the saved descriptor:
+`parked_ref`, `parked_stamp`, `parked_mode` (`snapshot`, `branch-tip`, or
+`evidence-only`), and `parked_repo` (`null` for the project root, otherwise the
+sibling repository name).
 
-Ask to restore the attempt's files. The assistant must execute the saved
+If files were saved, ask to restore them. The assistant must execute the saved
 result's `restore_hint` verbatim; you can also run it from the main project
-checkout. The hint selects that exact attempt:
+checkout. The hint selects that exact attempt and repository:
 
 ```bash
-aidlc engine worktree restore --slug <slug> --parked <stamp>
+aidlc engine worktree restore --slug <slug> --parked <stamp> --repo <name|.>
 ```
 
-For a sibling repository the hint appends ` --repo <name>`; for the root it
-does not add a repository selector. A Bun-based copy install renders the prefix
-as `bun .claude/tools/aidlc-worktree.ts` instead, using your harness directory.
-Do not replace an exact hint with a slug-only command: without `--parked`,
-restore chooses the latest saved attempt. If selecting an attempt manually and
-its slug exists in several repositories, use doctor's exact command with
-`--repo <name>` or `--repo .` for the project root.
+The hint always includes `--repo <name>` for a sibling repository or `--repo .`
+for the root. A Bun-based copy install renders the prefix as
+`bun .claude/tools/aidlc-worktree.ts` instead, using your harness directory.
+Do not drop the hint's exact stamp or repository selector: without `--parked`,
+restore chooses the latest saved head. For manual invocation an exact stamp
+found in only one repository selects it before generic slug ambiguity; if
+selection is still ambiguous, use doctor's exact command with `--repo <name>`
+or `--repo .` for the project root.
 
 If a saved namespace is known but its discard descriptor is unavailable, the
 fallback retains `parked_ref`, reports `parked_stamp`, `parked_mode`, and
-`parked_repo` as `null`, and returns a slug-only hint with snapshot-style
+`parked_repo` as `null`, and returns a hint ending in
+` restore --slug <slug> --repo .` without `--parked`, with snapshot-style
 exclusions. Unknown mode does not establish that a snapshot was saved; the
 assistant must not make a saved-files claim from it. If no namespace was saved,
 all four descriptor fields are `null`, and the hint and exclusions are absent.
 
-Open the returned `worktree_path`, normally
+If only review evidence remained, discard reports `parked_mode: "evidence-only"`
+and `parked_commit: null`. Abort keeps the ref, stamp, mode, and repository but
+omits `restore_hint` and `parked_excludes`. The assistant says: "Nothing of its
+working files remained to save; only its review evidence was kept." It does
+not offer restoration. Selecting that attempt with restore, even with `--raw`,
+refuses with `no restorable files were parked for <slug> <stamp>; only review evidence was kept`.
+
+After a successful restore, open the returned `worktree_path`, normally
 `.aidlc/restored/bolt-<slug>-<stamp>`. It is separate from any new live attempt;
 restoring files does not resume the old attempt or make its review current.
 This is local recovery, not a remote backup. If the old checkout was already
-gone, only its remaining branch tip and review evidence could be saved.
+gone, only its remaining branch tip and review evidence could be saved; if its
+branch was gone too, only review evidence could remain.
 
 **Limits depend on `parked_mode`:** a snapshot reports
 `parked_excludes: ["ignored files", "eol/text=auto normalization"]`. Ignored
@@ -332,14 +343,15 @@ for filter failures and raw recovery details.
 
 Run `/aidlc --doctor` (or `aidlc doctor`) to find saved attempts. Its informational
 **Parked attempts** section lists slug, stamp, age, mode, restored-checkout
-presence, and exact restore/purge commands. Impossible dates or times have
-`age_days: null` in JSON and show `unknown` in human-readable output. Saved
-attempts are not warnings or failures. Once you no longer need one, remove its
-restored checkout first, then:
+presence, and exact recovery commands with `--parked <stamp>` and an explicit
+`--repo <name>` or `--repo .`. Evidence-only entries retain `purge_command` but
+omit `restore_command`. Impossible dates or times have `age_days: null` in JSON
+and show `unknown` in human-readable output. Saved attempts are not warnings or
+failures. Once you no longer need one, remove any restored checkout first, then:
 
 ```bash
-aidlc engine worktree purge --slug <slug> --parked <stamp>
-aidlc engine worktree purge --slug <slug> --older-than 30
+aidlc engine worktree purge --slug <slug> --parked <stamp> --repo <name|.>
+aidlc engine worktree purge --slug <slug> --older-than 30 --repo <name|.>
 ```
 
 Purge without either selector removes every saved stamp for the slug.
@@ -352,6 +364,13 @@ can remove unparseable stamps. `--older-than` cannot be combined with
 `--parked`. Purge refuses while a selected restored checkout exists, even if
 moved; it never removes a live Bolt checkout. Use the same Bun tool prefix for
 copy installs. See the [purge reference](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs).
+
+Restore and purge reject unknown or duplicate flags before selecting or changing
+anything; use only the flags in the command reference. Repository selectors
+accept `.` or a real immediate child Git directory whose canonical path stays
+directly under the canonical workspace root, not arbitrary paths or symlink
+aliases. Doctor also ignores such aliases, including candidates named by audit
+records. These recovery selectors do not change live create/discard commands.
 
 ---
 
