@@ -128,7 +128,10 @@ stage's question flow:
 - `required` means every execution must create a questions file and obtain the
   consolidated **Looks correct** confirmation before artifact generation.
 - `if-present` applies the same enforcement only when a conditional question
-  flow created a questions file.
+  flow created a questions file. Once its summary decision or confirmation is
+  recorded in the current attempt, deleting that file does not remove the
+  obligation. Restore the questions and confirmation, or use an explicit
+  lifecycle reset to start a new attempt.
 
 The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record

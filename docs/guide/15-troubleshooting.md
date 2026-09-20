@@ -118,6 +118,20 @@ Check the **Sensors** row in `/aidlc --status`. The `classic` scope defaults to 
 
 On Claude Code, per-stage token usage and cost tracking is on by default: the fold-usage hook records transcript usage into a gitignored local ledger (`aidlc/.aidlc-sessions/usage-ledger.json`), the statusline appends `↑<in> ↓<out> $<usd>`, and completion audit events carry cost rollups. Nothing is transmitted anywhere (metrics emission is separately opt-in via `AIDLC_METRICS_ENDPOINT`). To turn all local tracking off, set `AIDLC_DISABLE_USAGE_TRACKING=1`: the ledger stops updating, the statusline segment disappears, and completion events add no rollup fields. An existing ledger is left on disk; delete it manually if you also want the history gone. Unsetting the flag resumes tracking.
 
+**The `$<usd>` figure is a local estimate, not a bill.** It is priced from **public list prices** in the shipped rate table (see [Rate table and overrides](../reference/06-hooks-and-tools.md#rate-table-and-overrides)). When Amazon Bedrock is the recorded provider (`CLAUDE_CODE_USE_BEDROCK=1`), what Bedrock actually charges depends on your inference profile, region, service tier, and any negotiated or subscription pricing, so the estimate may not match your invoice. Most of the token volume in a long workflow is cache reads — billed, at the reduced cache-read rate — so the counts and the estimate grow steadily; that is real usage, not inflation. Treat the number as a personal awareness signal.
+
+**To price the estimate at your own rates**, set `AIDLC_MODEL_RATES` to a rates file with the same shape as the shipped `.claude/tools/data/model-rates.json` (USD per million tokens, keyed per model generation). A partial file only changes the models it names; everything else keeps the shipped defaults. Rates are applied as usage is recorded, so a change prices turns from that point on; totals already in the ledger keep the rates they were recorded at.
+
+**If you'd rather not show the estimate — while presenting, screen-sharing, or recording — turn the cost segment off.** Add the kill switch to the gitignored `.claude/settings.local.json` (it only removes the token/cost segment — the workflow is unaffected):
+
+```json
+{
+  "env": {
+    "AIDLC_DISABLE_USAGE_TRACKING": "1"
+  }
+}
+```
+
 ### Hook not configured
 
 Hooks are registered project-wide in the harness's native configuration. On

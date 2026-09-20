@@ -69,8 +69,23 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeStateFile,
+  VERIFICATION_COMMAND_RECOVERY,
 } from "./aidlc-lib.js";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import {
+  askConstructionCheckpoint,
+  approveConstructionCheckpoint,
+  rejectConstructionCheckpoint,
+  resolveConstructionCheckpoint,
+  verifyConstructionCheckpoint,
+  type ConstructionCheckpointKind,
+} from "./aidlc-construction-checkpoints.ts";
+import {
+  askSwarmCheckpoint,
+  approveSwarmCheckpoint,
+  rejectSwarmCheckpoint,
+  resolveSwarmCheckpoint,
+} from "./aidlc-swarm-checkpoints.ts";
 
 function resolveTeamUnitSlug(
   projectDir: string,
@@ -150,9 +165,9 @@ function splitBooleanFlags(args: string[]): { booleans: Set<string>; rest: strin
 
 // Spawn a sibling tool (same project-dir) and return {ok, stdout, stderr}.
 // Used by --worktree / --merge / --discard branches to delegate to
-// state-fork / audit-fork / worktree-discard subcommands. 30s timeout
-// matches the merge-dispatch budget; on timeout, signal === "SIGTERM"
-// distinguishes the timeout case from an exit-code failure.
+// state-fork / audit-fork / worktree-discard subcommands. Default 30s timeout
+// matches the merge-dispatch budget; discard gets 5 minutes to snapshot source.
+// On timeout, signal === "SIGTERM" distinguishes it from an exit-code failure.
 function spawnSibling(
   pd: string,
   toolName:
@@ -187,7 +202,7 @@ function spawnSibling(
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     cwd: pd,
-    timeout: 30_000,
+    timeout: toolName === "aidlc-worktree.ts" && subargs[0] === "discard" ? 300_000 : 30_000,
   });
   return {
     ok: result.status === 0,
@@ -805,9 +820,9 @@ function handleFail(args: string[]): void {
 // emitted by the orchestrator when code-gen returns failure).
 //
 // Default behaviour preserves the worktree directory for inspection. With
-// --discard, calls aidlc-worktree discard --slug <slug> to tear it down
-// (audit-of-intent: WORKTREE_DISCARDED emits before tear-down inside the
-// discard subprocess; on discard failure, halt without state damage).
+// --discard, calls aidlc-worktree discard --slug <slug> to park then remove it.
+// WORKTREE_DISCARDED emits after parking and before removal; a parking failure
+// halts before audit/removal, leaving the live attempt intact.
 function handleAbort(args: string[]): void {
   const { booleans, rest } = splitBooleanFlags(args);
   const flags = parseFlags(rest);
@@ -817,6 +832,7 @@ function handleAbort(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const useDiscard = booleans.has("discard");
+  let parkedRef: string | null = null;
 
   // Discard-FIRST when --discard set, audit-AFTER. If we emitted BOLT_FAILED
   // (Reason: aborted) before discard and discard then timed out / errored,
@@ -841,6 +857,12 @@ function handleAbort(args: string[]): void {
         reason,
         `aidlc-worktree discard --slug ${flags.slug} exited ${result.status}: ${result.stderr || result.stdout || "(no output)"}`
       );
+    }
+    try {
+      const discarded = JSON.parse(result.stdout);
+      if (typeof discarded?.parked_ref === "string") parkedRef = discarded.parked_ref;
+    } catch {
+      // Older sibling versions or no-op output may not carry a parked ref.
     }
   }
 
@@ -868,6 +890,7 @@ function handleAbort(args: string[]): void {
       failed_bolt: flags.name,
       slug: flags.slug,
       discarded: useDiscard,
+      parked_ref: parkedRef,
     })
   );
 }
@@ -1177,6 +1200,75 @@ function handleSetAutonomy(args: string[]): void {
 
 // --- CLI entry point ---
 
+function handleCheckpoint(args: string[]): void {
+  const flags = parseFlags(args);
+  if (flags["check-cmd"] !== undefined) {
+    error("checkpoint no longer accepts --check-cmd. " + VERIFICATION_COMMAND_RECOVERY + " Run checkpoint --action verify without --check-cmd.");
+  }
+  if (!flags.unit) error("checkpoint requires --unit <name>");
+  const kind = flags.kind ?? "unit";
+  if (kind !== "unit" && kind !== "skeleton") {
+    error("checkpoint --kind must be unit or skeleton");
+  }
+  const checkpointKind: ConstructionCheckpointKind = kind;
+  const pd = resolveProjectDir(projectDir);
+  let result: ReturnType<typeof resolveConstructionCheckpoint>;
+  switch (flags.action ?? "status") {
+    case "status":
+      result = resolveConstructionCheckpoint(pd, flags.unit, checkpointKind);
+      break;
+    case "ask":
+      result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, flags.session?.trim() ?? "");
+      break;
+    case "verify":
+      result = verifyConstructionCheckpoint(
+        pd, flags.unit, checkpointKind,
+      );
+      break;
+    case "approve":
+      result = approveConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, flags["user-input"], flags.session?.trim(),
+      );
+      break;
+    case "reject":
+      result = rejectConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", flags.session?.trim(),
+      );
+      break;
+    default:
+      error("checkpoint --action must be status, ask, verify, approve or reject");
+  }
+  console.log(JSON.stringify(result));
+  if (flags.action === "verify" && !result.verified) process.exitCode = 1;
+}
+
+function handleSwarmCheckpoint(args: string[]): void {
+  const flags = parseFlags(args);
+  const batch = Number(flags.batch);
+  if (!Number.isSafeInteger(batch) || batch < 1) error("swarm-checkpoint requires --batch <positive integer>");
+  const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
+  if (units.length === 0) error("swarm-checkpoint requires --units <comma-separated names>");
+  const pd = resolveProjectDir(projectDir);
+  let result: ReturnType<typeof resolveSwarmCheckpoint>;
+  switch (flags.action ?? "status") {
+    case "status":
+      result = resolveSwarmCheckpoint(pd, batch, units);
+      break;
+    case "ask":
+      result = askSwarmCheckpoint(pd, batch, units, flags.session?.trim() ?? "");
+      break;
+    case "approve":
+      result = approveSwarmCheckpoint(pd, batch, units, flags["user-input"], flags.session?.trim());
+      break;
+    case "reject":
+      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", flags.session?.trim());
+      break;
+    default:
+      error("swarm-checkpoint --action must be status, ask, approve or reject");
+  }
+  console.log(JSON.stringify(result));
+}
+
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
@@ -1211,6 +1303,12 @@ export function main(argv: string[]): void {
       case "set-autonomy":
         handleSetAutonomy(filteredArgs.slice(1));
         break;
+      case "checkpoint":
+        handleCheckpoint(filteredArgs.slice(1));
+        break;
+      case "swarm-checkpoint":
+        handleSwarmCheckpoint(filteredArgs.slice(1));
+        break;
       case "dispatch-event":
         handleDispatchEvent(filteredArgs.slice(1));
         break;
@@ -1222,7 +1320,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: start, complete, fail, abort, set-autonomy, dispatch-event, hold-merge, release-merge`
+          `Unknown subcommand: ${subcommand}. Valid: start, complete, fail, abort, set-autonomy, checkpoint, swarm-checkpoint, dispatch-event, hold-merge, release-merge`
         );
     }
   } catch (e) {

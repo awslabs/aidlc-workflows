@@ -93,7 +93,7 @@ skeleton. A term whose definition would not survive being compressed to a clause
 is a term to replace with plain words instead.
 - **Confidence hypothesis** — the observable behaviour that shipping the Bolt validates or falsifies (e.g., "latency stays under 200ms under 1k-rps load," "users complete signup without support tickets," "the event pipeline survives a 10x burst").
 - **WSJF** (Reinertsen / SAFe) — Weighted Shortest Job First. Sequence score = (user-business value + time criticality + risk-reduction value) ÷ job size. Higher score ships first.
-- **Walking skeleton** (Cockburn) — the first Bolt is a minimal end-to-end slice touching every architectural layer that proves the architecture works; features come in later Bolts.
+- **Walking skeleton** (Cockburn) — the first DAG Unit delivers the smallest working end-to-end slice through the relevant integration points. Its applicable design stages and Code Generation finish before later Units; a real integrated check and human checkpoint approval demonstrate the result.
 
 Create `<record>/inception/delivery-planning/delivery-planning-questions.md` with questions. Strategic questions (one answer per project):
 
@@ -112,7 +112,14 @@ Per-Bolt questions (the aidlc-delivery-agent loops these during artifact generat
 - What will shipping this Bolt tell us that we do not know yet?
 - Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, classic — default to aidlc-developer-agent for all Bolts.)
 
-NOTE: Bolt sequencing is economic, not topological. Bolt order may deviate from 2.7's topological order when a risk-first or walking-skeleton-first argument justifies it. The deviation must be captured in `risk-and-sequencing-rationale.md`.
+NOTE: Bolt sequencing records the economic rationale, while the engine consumes
+the actual Unit DAG and iteration choice. When skeleton-on applies, confirm that
+the first resolved DAG Unit is the smallest working integrated slice, name its
+expected demo and the real project check that will prove it end to end, and make
+its prerequisites explicit. If the decomposition cannot support that slice,
+revisit Units Generation before Construction. Reordering only `bolt-plan.md`
+does not change the Unit the engine builds first; never describe the first
+design-stage review as a shipped skeleton.
 
 NOTE: This stage plans the Bolt sequence. It does NOT decide which AIDLC stages to run or at what depth — that is handled by the `/aidlc` skill's scope selection.
 
@@ -161,33 +168,104 @@ Hand completion to `stage-protocol.md` via
 `{{INVOKE}} engine orchestrate report --stage delivery-planning --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-**Construction iteration.** Classify how the approved `bolt-plan.md` wants the
-per-unit construction stages (functional-design, nfr-requirements, nfr-design,
-infrastructure-design, code-generation) to iterate over Units of Work. A
-unit-at-a-time or walking-skeleton-first plan typically calls for designing AND
-building one unit completely before the next unit begins — the first working
-code lands after one unit's design, honoring a skeleton-first sequence; a plan
-that reasons stage-by-stage across all units does not. Only when the plan calls
-for the unit-first order, record it:
-`{{INVOKE}} engine state set-construction-iteration unit-major`.
-The default is `stage-major` (each design stage runs for every unit, then the
-next stage, with code-generation last), needs no write, and is byte-identical
-to prior behaviour. Under `unit-major` the same per-stage gates still fire, but
-late and in a cascade at the end of the block (one human approval per stage),
-and the autonomous Construction swarm never fires (the walk owns
-code-generation serially, in Bolt build order), so opt in when the plan
-justifies per-unit coherence and early working code over parallel batch
-builds.
+**Construction iteration.** Read the recorded choice before recommending a
+change. New workflows start with `Construction Checkpoints: enabled` and
+`Construction Iteration: unit-major` with `Construction Execution: serial`:
+each Unit's applicable design stages and Code Generation run serially, followed
+by its verified completion checkpoint.
+An explicit stage-major choice remains valid. To enable later Code Generation
+batches, obtain the human's execution choice, set iteration to stage-major, then
+run `{{INVOKE}} engine state set-construction-execution swarm`. This works with
+either gated or autonomous completion approval; the autonomy answer never changes
+execution order. Unit-major stays serial and refuses a contradictory swarm
+setting; select serial before returning to unit-major. For checkpoint-enabled work,
+skeleton-on always completes the first DAG Unit's full integrated slice before
+later Units, under either iteration order.
+
+Preserve an existing explicit choice. If the human approves changing iteration,
+record it with `{{INVOKE}} engine state set-construction-iteration <unit-major|stage-major>`.
+Do not silently migrate a legacy workflow: without the checkpoint field it keeps
+its prior first-stage review and late stage-gate cascade. Team-owned work keeps
+its own per-stage or unit-end `unit_gate` policy. Plan Approval, summary
+confirmation, and verification command selection remain human decisions under
+either order and autonomy choice.
+
+**Construction verification command.** For checkpoint-enabled work, preserve an
+existing human-authorized command. Otherwise propose a real project check from
+the project scan (`bun test`, `pytest`, `make check`, or the project's equivalent)
+alongside the iteration/execution settings. This intent-level command is reused
+at every Unit/batch checkpoint; it must check completed Units' working results
+and, with skeleton-on, demonstrate the integrated slice end to end. If no runnable
+check exists yet (greenfield), the human may defer selection; leave the field
+unset and explain that the first checkpoint will ask before verification. Never
+invent a placeholder or treat deferral as approval.
+
+Only one protected question may be open per session. Asking any new question
+(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
+protected questions one at a time and wait for the answer before anything else.
+A withdrawn question must be asked again.
+
+Use one nonblank line of at most 1024 characters after trimming leading/trailing
+whitespace. The tools refuse control characters (including newline, CR, tab, or
+NUL) and display-spoofing characters: Unicode format characters (including
+zero-width and bidi controls), line/paragraph separators, and no-break space
+(U+00A0). The trimmed command is recorded, hashed, and executed unchanged. Put
+multiline checks in a script and record its invocation. Before presenting the command, write it as
+UTF-8 text to `<record>/verification-command.txt` using the harness's
+file-write tool (Write/edit), never a shell `echo` or heredoc. Repo-derived
+command text must never be interpolated into a shell line: shell substitutions
+could execute before the human approves. Pass only the record-relative file path
+below and use the invoking SessionStart session ID:
+
+```bash
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+```
+
+Copy the complete canonical command exactly from the `command` field in the
+`log decision` tool's JSON output into the structured question's code span; never
+abbreviate or substitute a summary, prefix, or digest. Use a code-span delimiter
+long enough to preserve any backticks in the command. The human can also open
+`<record>/verification-command.txt`. Wait for the human:
+
+```question
+prompt: "Use this command to verify each completed Unit? `<full command>`"
+header: Verification
+multiSelect: false
+options:
+  - label: Approve
+    description: Record this command for all Unit and batch checkpoints in this intent.
+  - label: Request Changes
+    description: Propose a different project check before running verification.
+```
+
+The human-turn hook binds the exact **Approve** / **Request Changes** reply in
+that session to the pending command. Only **Approve** authorizes the receipt;
+an unrelated reply, **Request Changes**, or a reply from another session does not.
+Never write `--details "Approve"` unless the human chose it. Only then record
+their answer using the same session ID, and set the command with the matching
+tool-owned receipt:
+
+```bash
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
+{{INVOKE}} engine state set-construction-verification-command --command-file verification-command.txt
+```
+
+For **Request Changes**, record the same `log answer` with
+`--details "Request Changes"`, leave the state unchanged, and propose another
+command. Never auto-approve, write the state field without the receipt, or use
+generic `state set`. A later change requires a new human decision/answer receipt
+and the typed setter; an autonomy grant does not authorize command selection.
 
 **Construction staffing.** After classifying iteration, ask:
 
-> "How do you want to staff Construction? I can build every unit right here,
-> one at a time, with you approving as we go - or, if you have several teams,
-> each team can own a unit and approve its work independently."
+> "How do you want to staff Construction? I can run the work from this session
+> using the execution settings you chose, or each of your teams can own a Unit
+> and approve its work independently."
 
 The several-teams choice requires the unit-first order above. If the plan is not
-already unit-major, explain that prerequisite and confirm switching before
-recording:
+already unit-major, explain that prerequisite and confirm switching. For an
+explicit swarm setting, first record
+`{{INVOKE}} engine state set-construction-execution serial`, then record
 `bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-construction-iteration unit-major`,
 then
 `bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-ownership team`. Team ownership

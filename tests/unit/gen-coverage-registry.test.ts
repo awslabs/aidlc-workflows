@@ -799,6 +799,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   const EXPECTED_NONE_TO_CLI = [
     "unit/t341-orchestrate-wait.test.ts",
     "unit/t343-intent-create-positionals.test.ts",
+    "integration/t-review-verdict-unit-state.test.ts",
+    "unit/t-runner-production-guards.test.ts",
+    "integration/t-guard-native-remedies.test.ts",
+    "integration/t-guard-recovery-production.test.ts",
     "unit/t-kiro-ide-native-recovery.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
@@ -810,6 +814,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t280-contract-design-wiring.test.ts",
     "unit/t282-state-version-doctor.test.ts",
     "unit/t283-copilot-engine-cursor.test.ts",
+    // spawns the repository's own CI validator (.github/scripts/ai-pr-review.ts)
+    "unit/t300-ai-pr-review.test.ts",
     "unit/t304-codekb-cumulative-merge.test.ts",
     "unit/t306-learnings-cid-collision-followup.test.ts",
     "unit/t324-doctor-hooks-disabled.test.ts",
@@ -908,6 +914,12 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // binds" row, which reads a real source walk against a real workspace.
     "unit/t337-source-boundary-reason.test.ts",
     "unit/t339-construction-autonomy-gates.test.ts",
+    "unit/t340-grouped-plan-approval.test.ts",
+    "unit/t340-plan-approval-batch.test.ts",
+    "unit/t341-construction-checkpoints.test.ts",
+    "unit/t342-construction-checkpoint-routing.test.ts",
+    "unit/t343-swarm-checkpoints.test.ts",
+    "unit/t344-swarm-checkpoint-retry.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

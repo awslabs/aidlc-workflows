@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 992,
+    "total": 1046,
     "enumeratedByClass": {
-      "function": 682,
-      "audit": 99,
+      "function": 726,
+      "audit": 102,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 142,
+      "subcommand": 149,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 409,
-      "audit": 59,
+      "function": 440,
+      "audit": 63,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 129,
+      "subcommand": 136,
       "render-surface": 7
     }
   },
@@ -110,6 +110,10 @@
         {
           "file": "tests/unit/t322-fix-round-hardening.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -153,6 +157,30 @@
         },
         {
           "file": "tests/unit/t338-ceremony-verb.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "CHECKPOINT_VERIFICATION_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "CONSTRUCTION_POLICY_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -249,6 +277,14 @@
         {
           "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -264,6 +300,14 @@
         },
         {
           "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -873,6 +917,10 @@
         {
           "file": "tests/integration/t135-invoke-swarm.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -884,6 +932,10 @@
       "coveredBy": [
         {
           "file": "tests/e2e/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1015,6 +1067,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "VERIFICATION_COMMAND_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "WORKFLOW_ARCHIVED",
       "minMechanism": "none",
       "coveredBy": [
@@ -1131,8 +1195,13 @@
       "unitClass": "audit",
       "unitId": "WORKTREE_DISCARDED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -1349,6 +1418,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:aidlcEngineCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:anyIntentRecordExists",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1376,6 +1457,18 @@
         {
           "file": "tests/unit/t71.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:approvedConstructionUnits",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1586,6 +1679,30 @@
       "coveredBy": [
         {
           "file": "tests/unit/t247-claim-sources-sensor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:authorizedConstructionPolicyChange",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:authorizedVerificationCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2281,6 +2398,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:commitPlanApprovalBatch",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:compileStageGraph",
       "minMechanism": "none",
       "coveredBy": [
@@ -2383,6 +2507,46 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:CONSTRUCTION_POLICY_CHECKPOINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CONSTRUCTION_POLICY_RECOVERY",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionCheckpointGaps",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionCheckpointsApply",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionSkeletonOn",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:consumeCopilotConversation",
       "minMechanism": "none",
       "coveredBy": [
@@ -2404,6 +2568,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:consumeProtectedQuestion",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2545,6 +2716,10 @@
         {
           "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2620,6 +2795,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t340-default-scope-resolver.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:delegatedWorktreeIntent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2873,6 +3060,14 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
@@ -3123,6 +3318,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:gitTreeLeafEntries",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:governedChangeControl",
       "minMechanism": "none",
       "coveredBy": [
@@ -3180,9 +3387,49 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardOperationInvocation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardOperationMatchesCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardOperationMatchesRemedy",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardRecoveryAskForRefusal",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
@@ -3551,6 +3798,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:INTENT_SELECTOR_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t114-orchestrate-next.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:INTENT_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3652,6 +3911,10 @@
         {
           "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3689,6 +3952,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isConstructionSwarmEnabled",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isEngineEngagementSegment",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3707,6 +3982,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isGuardRecoveryEngineInvocation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isGuardRecoveryOperation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4044,6 +4343,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:leadingOrchestratorVerb",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4498,6 +4809,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:mintProtectedQuestion",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:modelRatesPath",
       "minMechanism": "none",
       "coveredBy": [
@@ -4585,6 +4908,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ORCHESTRATOR_VERBS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4706,6 +5041,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseGuardRestartContinuationCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t265-plan-approval-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4869,6 +5216,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseTeamBoardArgs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t114-orchestrate-next.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseUnitSourceListing",
       "minMechanism": "none",
       "coveredBy": [
@@ -4959,6 +5322,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:planApprovalBatchCommitted",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5084,6 +5454,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:protectedQuestionRelativePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:protectedTargetDigest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:READ_ONLY_FLAGS",
       "minMechanism": "none",
       "coveredBy": [
@@ -5183,6 +5572,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readCommittedUnitSourceManifest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5315,6 +5716,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readProtectedQuestion",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readProtectedResponse",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5472,6 +5887,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readVerificationCommandFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5751,6 +6178,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:renderGuardOperation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:renderSourcePathKeys",
       "minMechanism": "none",
       "coveredBy": [],
@@ -5818,6 +6257,22 @@
       "coveredBy": [
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:requireProtectedResponse",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6117,6 +6572,10 @@
         {
           "file": "tests/e2e/t134-swarm-referee.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -6126,6 +6585,10 @@
       "unitId": "function:reviewArtifactEntries",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
@@ -6138,6 +6601,10 @@
       "unitId": "function:reviewArtifactFingerprint",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
@@ -6155,6 +6622,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
         }
@@ -6166,6 +6637,10 @@
       "unitId": "function:reviewAttemptAccounting",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
@@ -6224,6 +6699,18 @@
         {
           "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewedArtifactUnit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -6448,6 +6935,18 @@
         {
           "file": "tests/unit/t315-plugin-build.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sameGuardOperation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -7236,6 +7735,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:summaryInputReviewFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-review-summary-input-boundary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:summaryScopeForRecordPath",
       "minMechanism": "none",
       "coveredBy": [
@@ -7260,9 +7771,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:swarmUnitCheckpointRejections",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:teamUnitGateStatus",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t278-per-unit-wave.test.ts",
           "mechanism": "cli"
@@ -7623,8 +8150,13 @@
       "unitClass": "function",
       "unitId": "function:unitSourceFingerprint",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7753,6 +8285,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:validConstructionPolicyChange",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:validReviewFindingStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -7813,6 +8352,32 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:VERIFICATION_COMMAND_CHECKPOINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:VERIFICATION_COMMAND_RECOVERY",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:verificationCommandDetails",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:visibleMarkdownLines",
       "minMechanism": "none",
       "coveredBy": [
@@ -7845,6 +8410,22 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:withdrawProtectedQuestions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8189,6 +8770,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeProtectedResponse",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeRecordFileNoFollow",
       "minMechanism": "none",
       "coveredBy": [
@@ -8446,6 +9034,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-claude-hook-project-root.test.ts",
           "mechanism": "cli"
         },
@@ -8471,6 +9063,10 @@
         },
         {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-grouped-plan-approval.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8510,11 +9106,23 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         },
         {
           "file": "tests/unit/t276-cursor-adapter.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-plan-approval-batch.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8525,6 +9133,10 @@
       "unitId": "aidlc-review-freeze",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
@@ -8737,6 +9349,10 @@
       "unitId": "aidlc-write-audit-log",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t131-hooks-settings-fire.test.ts",
           "mechanism": "cli"
@@ -9499,11 +10115,31 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt checkpoint",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9671,7 +10307,27 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt swarm-checkpoint",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9822,6 +10478,10 @@
         {
           "file": "tests/e2e/t57-workflow-backward-jump.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
+          "mechanism": "cli"
         },
         {
           "file": "tests/integration/t25.test.ts",
@@ -10072,6 +10732,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t31.test.ts",
           "mechanism": "cli"
         },
@@ -10081,6 +10745,10 @@
         },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-plan-approval-batch.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10097,6 +10765,10 @@
         },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-plan-approval-batch.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10119,6 +10791,14 @@
       "unitId": "aidlc-log review",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
           "mechanism": "cli"
@@ -10193,6 +10873,10 @@
         },
         {
           "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
           "mechanism": "cli"
         },
         {
@@ -10338,6 +11022,14 @@
         {
           "file": "tests/unit/t340-default-scope-resolver.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-grouped-plan-approval.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10356,6 +11048,14 @@
       "coveredBy": [
         {
           "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
           "mechanism": "cli"
         },
         {
@@ -10420,6 +11120,10 @@
         },
         {
           "file": "tests/unit/t339-construction-autonomy-gates.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10935,6 +11639,34 @@
         {
           "file": "tests/unit/t17.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-construction-checkpoints",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-construction-execution",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10946,6 +11678,22 @@
       "coveredBy": [
         {
           "file": "tests/unit/t209-unit-major-iteration.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-construction-verification-command",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -11020,6 +11768,10 @@
       "unitId": "aidlc-state unit",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-review-verdict-unit-state.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
           "mechanism": "cli"
@@ -12030,6 +12782,10 @@
         {
           "file": "tests/e2e/t12-bolt-runtime-graph-fork.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -12080,6 +12836,34 @@
         },
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree purge",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree restore",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
           "mechanism": "cli"
         }
       ],

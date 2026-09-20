@@ -10,7 +10,7 @@ This chapter documents the hook system architecture, all seventeen hook scripts,
 
 This implementation uses seventeen TypeScript hook sources in `.claude/hooks/`. A source-generated `dist/` projection invokes them through `bun`; native installs and versioned release runtimes route them through `aidlc engine hook`, `aidlc engine statusline`, or an `aidlc engine adapter` target. All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active when the host permits project hooks. Claude Code managed `allowManagedHooksOnly: true` overrides the project registration and blocks those hooks; `/aidlc --doctor` detects that policy. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
 
-Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the deliver-stage-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a produces[] write that would void a fresh terminal review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
+Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the deliver-stage-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a reviewed-output write that would void a fresh terminal review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
 
 ```
 .claude/hooks/
@@ -37,12 +37,12 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 
 | Hook | Event | Scoping | Matcher | Purpose |
 |------|-------|---------|---------|---------|
-| `record-human-turn.ts` | UserPromptSubmit + PostToolUse | Project-wide (settings.json) | (empty) / `AskUserQuestion` | Record a `HUMAN_TURN` event when a supported prompt-submit or answered-widget seam fires; the approval/interview gate requires one since the last gate resolution. `AIDLC_UNATTENDED=1` suppresses this authority-bearing mint across the shared hook and every direct harness adapter; non-authority forwarding markers remain unchanged. The declaration is opt-in because only the driver knows whether it is unattended. The event proves ordering/presence only: harnesses do not uniformly expose trusted response text, so it does not authenticate later `--user-input`, `--feedback`, or `--details` prose. When the active directive is a guard-recovery ask for the current state, the human's first answer is recorded on that marker as the remedy selection and their next answer as the revision feedback (both hashed whitespace-normalized), so a repeated `next` keeps the selection and `reject` can bind `--feedback` to the human's own words |
+| `record-human-turn.ts` | UserPromptSubmit + PostToolUse | Project-wide (settings.json) | (empty) / `AskUserQuestion` | Record a `HUMAN_TURN` event when a supported prompt-submit or answered-widget seam fires; the approval/interview gate requires one since the last gate resolution. `AIDLC_UNATTENDED=1` suppresses this authority-bearing mint across the shared hook and every direct harness adapter; non-authority forwarding markers remain unchanged. The declaration is opt-in because only the driver knows whether it is unattended. The event proves ordering/presence only: harnesses do not uniformly expose trusted response text, so it does not authenticate later `--user-input`, `--feedback`, or `--details` prose. When the active directive is a guard-recovery ask for the current state, the human's first answer is recorded on that marker as the remedy selection. Command and external-work selections become ready immediately; human-input selections await the separate response (Request Changes requires exact revision feedback). The selection and feedback are hashed whitespace-normalized; a repeated `next` retains them only while the state and ordered remedy operation/interaction contract still match, so `reject` can bind `--feedback` to the human's own words |
 | `deliver-stage-rules.ts` | PreToolUse | Project-wide (settings.json) | `Task\|Agent` | **Flow-altering.** Resolve the dispatched stage's substantive active-space rules and append their exact bytes to every AI-DLC subagent brief. After an accepted background dispatch, add one session-scoped entry to `aidlc/.aidlc-subagent-inflight` so the Stop hook can wait for its result; rejected dispatches add nothing. Rewrites Claude, Codex, opencode, and Copilot inputs; Kiro CLI cannot rewrite tool arguments, so an incomplete brief proceeds with an advisory warning (Kiro CLI agents preload the active memory tree through `resources`; an unloadable required rule still blocks with repair guidance). Kiro IDE uses always-included workspace steering with live memory-file references. Idempotent when the exact bundle is already present |
 | `plan-approval-guard.ts` | PreToolUse | Project-wide (settings.json) | `Task\|Agent\|Edit\|Write\|Bash` (plus harness-native patch aliases) | **Flow-altering.** Enforce code-generation's plan-before-generation ordering (stage Steps 2-4) deterministically. The active directive selects one authority: `construction/<unit>/code-generation/` when `unit` is present, otherwise zero-Unit `construction/code-generation/`. Developer dispatch and workspace mutation are refused until that target has a current Testing Contract, fingerprinted plan/instructions, and explicit "Approve Plan" answer; writes inside the selected record directory remain available to prepare that evidence. Delegation uses exactly one `AIDLC-UNIT: <unit>` or `AIDLC-STAGE: code-generation` marker. Each refusal emits `PLAN_APPROVAL_BLOCKED`; missing, conflicting, or unknown markers block instead of guessing from prompt prose. `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables this PreToolUse hook only, and not silently: while a workflow exists, the first tool call that passes under it appends one `GUARD_DISABLED` audit row (`Guard: plan-approval-guard`, `Tool`), and consecutive disabled calls append nothing until another row lands in the active shard; any failure in that bookkeeping still allows the call. It does **not** disable the autonomous `aidlc-swarm.ts prepare` precondition, and protected Plan Approval authority remains enforced by the owning decision, answer, and generation-start tools. A human break-glass receipt (`answer --checkpoint plan-approval --override`, opened only by the human typing `Override Plan Approval: <reason>` as a prompt) satisfies this hook like any other receipt; the hook never proposes it. |
 | `state-transition-guard.ts` | PreToolUse | Project-wide (settings.json) | `Bash` | **Flow-altering.** Refuse direct `aidlc-state.ts` lifecycle verbs and redirect the conductor to `aidlc-orchestrate.ts report`; when the harness supplies delegated-agent identity, also refuse lifecycle/routing commands from reviewers and support agents; read-only state and ordinary build/validation commands remain available |
 | `reviewer-scope.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` | **Flow-altering.** Enforce the per-unit reviewer read-scope bound (stage-protocol-reviewer.md §12a) deterministically: while the conductor's reviewer dispatch record (`<record>/.aidlc-engine/reviewer-dispatch.json`) is fresh, the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths - file reads/writes and grep/glob/shell patterns spanning siblings - are refused (exit 2 + a redirecting stderr reason) unless the target is on the record's exempt list. Independently, a checkout carrying a Unit-claim scope stamp may not mutate another Unit's `construction/<unit>/` subtree; normalized path resolution closes relative-traversal and case-escape forms before the refusal. Each refusal emits `REVIEWER_SCOPE_BLOCKED`. Fail-open on every ambiguity; `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement |
-| `review-freeze.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` (self-filters to mutation-capable calls) | **Flow-altering.** Enforce the reviewer-module terminal-receipt ordering deterministically: a Write/Edit or shell mutation targeting a reviewer-bearing, not-yet-completed stage's declared `produces[]` artifact is refused (exit 2 + a redirecting stderr reason) while a fresh terminal review receipt covers it. Shell writes are inspected before execution because they do not pass through the Write/Edit audit feed and would otherwise preserve a stale receipt over changed bytes. Shares the engine's exact receipt scan (`freshReviewReceipts` in `aidlc-lib.ts`), so a recorded gate rejection, jump, or workflow restart lifts the freeze automatically. A below-cap adversarial NOT-READY remains nonterminal and editable for repair; terminal NOT-READY under the effective class freezes like READY. Each refusal emits `REVIEW_FREEZE_BLOCKED`. Fail-open on every ambiguity; `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement. The refusal ends with the same guard-recovery ask the router would emit (see [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks)), so the conductor renders the typed remedies instead of retrying the write |
+| `review-freeze.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` (self-filters to mutation-capable calls) | **Flow-altering.** Enforce the reviewer-module terminal-receipt ordering deterministically: a Write/Edit or shell mutation targeting a reviewer-bearing, not-yet-completed stage's reviewed output (declared `produces[]`/`optional_produces[]`, excluding summary-owned questions unless explicitly named by `review_artifact`) is refused (exit 2 + a redirecting stderr reason) while a fresh terminal review receipt covers it. Shell writes are inspected before execution because they do not pass through the Write/Edit audit feed and would otherwise preserve a stale receipt over changed bytes. Shares the engine's exact receipt scan (`freshReviewReceipts` in `aidlc-lib.ts`), so a recorded gate rejection, jump, or workflow restart lifts the freeze automatically. A below-cap adversarial NOT-READY remains nonterminal and editable for repair; terminal NOT-READY under the effective class freezes like READY. Each refusal emits `REVIEW_FREEZE_BLOCKED`. Fail-open on every ambiguity; `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement. The refusal ends with the same guard-recovery ask the router would emit (see [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks)), so the conductor renders the typed remedies instead of retrying the write |
 | `write-audit-log.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
 | `run-sensors.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active directive stage's resolved Sensors on matching writes (advisory; never blocks); a state-bound per-intent marker preserves attribution when unit-major execution runs ahead of `Current Stage` |
 | `sync-workflow-state.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
@@ -54,6 +54,29 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `session-start.ts` | SessionStart | Project-wide (settings.json) | (empty) | Inject workflow context on session resume |
 | `session-end.ts` | SessionEnd | Project-wide (settings.json) | (empty) | Emit `SESSION_ENDED` on graceful exit to the intent recorded for that exact session; fail closed instead of using the shared active cursor when a UUID-backed workflow has no session binding |
 | `aidlc-statusline.ts` | statusLine | Project-wide (settings.json) | -- | Show real-time progress in terminal |
+
+For Plan Approval and the three protected Construction decisions, the human-turn
+hook additionally records the offered response, not just presence. It selects
+`recordPlanApprovalHumanResponse` or the unified `recordProtectedHumanResponse`
+from the session's challenge file, never both. Conflicting challenge files are
+deleted with their responses and no choice is recorded. The protected mailbox
+uses `protected-question-<sessionSegment>.json` and
+`protected-question-response-<sessionSegment>.json` under
+`aidlc/.aidlc-sessions/plan-approval/` (or the delegated worktree runtime directory).
+Questions bind the kind, session, random challenge ID, canonical target digest,
+and offered choices; answers bind the session and challenge ID and are consumed
+only after the owning audit append succeeds.
+
+For a question minted by `log decision`, rendered picker text must match the
+exact `--decision` digest when supplied in `tool_input.questions[].question` or
+`tool_input.question`. Codex preserves its `request_user_input` tool input when
+forwarding a structured selection. A reply without rendered text relies on
+exclusivity: a new `log decision` withdraws the invoking session's protected
+question, or all sessions' questions if neither `--session` nor process ancestry
+resolves the owner. A lifecycle `gate-start` withdraws all protected questions
+before `STAGE_AWAITING_APPROVAL`. Plan Approval keeps its separate runtime format;
+minting either kind removes the other's challenge and response, but ordinary
+decisions and lifecycle gates do not withdraw Plan Approval itself.
 
 ### Shared Characteristics
 
@@ -537,7 +560,7 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 **Decision.** The matcher (`evaluateReviewerScope`, an exported pure function pinned by `t220`) scans path fields and command/pattern text for `construction/<seg>` tokens: the dispatched unit passes, a wildcard or bare sweep root blocks, and a concrete sibling blocks unless the full token exactly matches an exempt entry's `construction/` suffix. A grep of the current unit, the shared inception contracts, and validation-tool runs are never touched. Blocks emit a `REVIEWER_SCOPE_BLOCKED` audit row (Tool, Target, Stage, Unit) and signal via **exit 2 + a redirecting stderr reason** — the harness PreToolUse reject contract — that names the scope and points the reviewer back to the passed contracts.
 
-**Fail-open everywhere.** No record, a stale or malformed record, a non-reviewer agent, an unknown tool, malformed stdin, or any internal error allows the call; a reviewer-agent sighting with no dispatch record records an advisory drop for `--doctor` (the conductor forgot the step-1 write). The deterministic off-switch `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement entirely.
+**Fail-open everywhere.** No record, a stale or malformed record, a non-reviewer agent, an unknown tool, malformed stdin, or any internal error allows the call; a reviewer-agent sighting touching `construction/` paths with no dispatch record records an advisory drop for `--doctor` only while a digest-valid active directive is a per-unit `run-stage` (or a live `invoke-swarm`) - when §12a step 1 owed the record. A single-stage review, or a missing/stale marker, stays silent rather than asserting an omission. The deterministic off-switch `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement entirely.
 
 ### Plan-Approval Guard Hook
 
@@ -546,6 +569,30 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 **Purpose:** Enforce Code Generation's plan-before-generation ordering (stage Steps 2-4) deterministically
 
 **Planning commands.** Before approval, the guard permits `aidlc engine orchestrate next` and `aidlc engine orchestrate continue <token>` so the conductor can resume on a human turn and finish loading the stage rules. It also permits the Testing Contract's `testing-posture resolve|render|fingerprint|verify` commands and `log decision|answer` for the exact `code-generation` / `plan-approval` checkpoint. The same routes are available through `bun <harness-dir>/tools/aidlc.ts engine ...` (including `bun run`) when the entry point is a real installed file under the current harness's tools directory, with no symlink in its path. Invoke Bun directly: wrappers such as `env` or `sudo` are not exempt because they can change the directory or context in which the script executes. These exceptions do not grant approval or exempt source writes, output redirection into source files, commands that change executable resolution, preloaded code, or additional mutation commands in the same shell call. Descriptor redirection such as `2>&1` remains available.
+
+**Recovery commands.** `aidlc-guard-operation.ts` supplies the structured
+`restart-stage` and `abort-bolt` operations and renders their native or source
+commands. The conductor waits for the required human selection, then executes
+the exact returned command. Plan Approval recognizes the native abort only in
+the emitted argument shape: `aidlc engine bolt abort --name <unit> --slug <slug>
+--reason 'stale review recovery exhausted' --discard`, with concrete identifiers
+and no extra arguments. This narrowly admits an attempt to recover; the Bolt
+command follows the same trusted-tool admission as its source-mode equivalent.
+Conductor-prose-obtained abort consent remains the trust boundary: it is required
+by the protocol, not authenticated by this Plan Approval exception. A direct
+review refusal prints its ask without publishing a selection marker; requiring
+that absent marker here would prevent the offered abort. The unchanged
+`--discard` command now parks the working-tree snapshot and reviewed source refs
+before removing the live checkout and branch. A mistaken abort is recoverable
+with `aidlc engine worktree restore --slug <slug>` in a separate restored
+checkout, not by reviving the live Bolt. A mechanical selection receipt remains
+a candidate for later hardening, not a check added by this recovery behavior.
+The native restart continuation has a recorded ask and separately verifies its
+human selection. Other Bolt commands gain no exemption, and abort admission
+never approves generation or a review verdict.
+Directive validation binds each command to its structured operation and target.
+For interaction, exact feedback, and failure handling, see
+[Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks).
 
 This is one of the framework's flow-altering hooks and `PreToolUse` controls. The stage prose says generation never begins before the human answers "Approve Plan" - a field report showed a conductor generating the code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary. The stage-completion artifact guard cannot catch that inversion (it fires at completion, when the backfilled plan already exists), so this hook refuses both delegated and inline generation before it starts. A second field report showed the opposite failure: a valid approval was destroyed between the turn that offered it and the turn that recorded the answer, because the question path republished the directive and the republication deleted the plan-approval runtime state. Approval now binds to content and attempt, so re-asking the engine cannot withdraw it.
 
@@ -563,15 +610,40 @@ This is one of the framework's flow-altering hooks and `PreToolUse` controls. Th
 **Trigger:** Before file-write and shell tool calls (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`; registered in the shared PreToolUse matcher group, self-filtering to mutation-capable calls)
 **Purpose:** Enforce the reviewer-module terminal-receipt ordering deterministically - the write-freeze between a terminal review receipt and the gate
 
-This is one of the framework's six flow-altering hooks and one of its five `PreToolUse` controls. Each `REVIEW_COMPLETED` row records a SHA-256 fingerprint of the declared artifact paths and bytes. The gate/completion precondition accepts the receipt only while that fingerprint still matches, independent of which harness or tool changed the file; the existing audit-event floor remains an early invalidation signal. Autonomous swarm finalization also requires every applicable required artifact to exist as a file in the worktree hosting that Bolt (an absent optional output remains a valid fingerprint entry). Field traces showed prose losing the ordering contest: a conductor applied reviewer suggestions AFTER recording the terminal receipt, voided its own receipt, re-reviewed, re-edited, and oscillated until the live session wedged at the gate. This hook refuses recognizable writes before they happen, while the content fingerprint is the harness-independent correctness floor.
+This is one of the framework's six flow-altering hooks and one of its five `PreToolUse` controls. Each `REVIEW_COMPLETED` row records a SHA-256 fingerprint of the review artifact manifest: produced output paths and bytes plus question content with only the canonical confirmation answer masked, as described below. The gate/completion precondition checks that fingerprint independently of which harness or tool changed the file, subject to the existing Change Control policy below; the audit-event floor remains an early invalidation signal. Autonomous swarm finalization also requires every applicable required artifact to exist as a file in the worktree hosting that Bolt (an absent optional output remains a valid fingerprint entry). Field traces showed prose losing the ordering contest: a conductor applied reviewer suggestions AFTER recording the terminal receipt, voided its own receipt, re-reviewed, re-edited, and oscillated until the live session wedged at the gate. This hook refuses recognizable writes before they happen, while the content fingerprint is the harness-independent correctness floor.
 
-**Decision.** For each write target the hook checks, against every reviewer-bearing stage that is not yet completed or skipped in the state file: does the path match a declared `produces[]`/`optional_produces[]` artifact (the engine's own suffix matcher, `producesArtifactUnit`), and does a fresh terminal receipt currently cover it (`freshReviewReceipts` - the SAME scan the engine's gate/completion precondition reads, shared in `aidlc-lib.ts` so the freeze window and the refusal window cannot diverge)? Freshness requires both the audit chronology and an exact current artifact fingerprint. Per-unit stages freeze only the reviewed unit's artifacts; an ambiguous per-unit path freezes if any unit holds a terminal receipt. A below-cap adversarial NOT-READY remains nonterminal so the repair loop can edit; terminal NOT-READY under the effective class freezes like READY because no later review pass follows it. A recorded gate rejection, jump, workflow restart, audited write, or content mismatch invalidates the receipt. Blocks emit a `REVIEW_FREEZE_BLOCKED` audit row (Tool, Target, Stage, optional Unit) and signal via **exit 2 + a redirecting stderr reason** that names the sanctioned routes: present the gate and quote suggestions there, or reject at the gate to reopen the artifact.
+**Decision.** For each write target the hook checks, against every reviewer-bearing stage that is not yet completed or skipped in the state file: does the path match a reviewed `produces[]`/`optional_produces[]` artifact (`reviewedArtifactUnit`, the engine's suffix matcher with summary inputs excluded), and does a fresh terminal receipt currently cover it (`freshReviewReceipts` - the SAME scan the engine's gate/completion precondition reads, shared in `aidlc-lib.ts` so the freeze window and the refusal window cannot diverge)? Freshness checks both the audit chronology and the current artifact fingerprint under the Change Control policy below. Per-unit stages freeze only the reviewed unit's outputs; an ambiguous per-unit path freezes if any unit holds a terminal receipt. A below-cap adversarial NOT-READY remains nonterminal so the repair loop can edit; terminal NOT-READY under the effective class freezes like READY because no later review pass follows it. A recorded gate rejection, jump, or workflow restart invalidates the receipt; reviewed-output writes and content mismatches follow Change Control. Blocks emit a `REVIEW_FREEZE_BLOCKED` audit row (Tool, Target, Stage, optional Unit) and signal via **exit 2 + a redirecting stderr reason**, ending with the typed guard-recovery ask for the current lifecycle state.
+
+**Summary questions remain editable.** For a stage with `summary_confirmation`,
+declared `*-questions` artifacts carry `summaryInput: true`. Their file manifest
+entry is `summary-input:sha256:<digest>`: `summaryInputReviewFingerprint`
+normalizes line endings and masks only a single visible summary-confirmation
+answer value (blank, `Looks correct`, or `Request changes`). Trailing HTML
+comments are retained, and examples inside code fences are never masked. All other question
+content stays bound; absent or ambiguous confirmation sections/answers use the
+full normalized content. Missing and non-file entries remain distinct.
+Required-file checks and safe capture remain in force, and snapshots retain
+the actual question bytes for swarm merging.
+
+These questions are excluded from the write freeze, so confirmation bookkeeping
+can proceed. Substantive edits still invalidate the review's content binding.
+Produced outputs remain frozen; an explicit `review_artifact` naming questions
+also remains fully byte-bound and frozen, including its answer line. Identical
+reconfirmation can preserve output authorization. Changed confirmed content
+follows normal recovery to reconfirm, regenerate or re-save under the current
+authorization, and review again. The logger rechecks summary/output admission
+before recording a terminal verdict, so masking the answer line grants no
+confirmation or approval. Once an `if-present` flow records a summary-confirmation
+decision or confirmation in the current attempt, deleting its questions file
+does not remove the obligation. Older question fingerprint projections may
+require a fresh review through normal recovery; no receipt format change or
+evidence rewrite is involved.
 
 **Shell writes.** The write-audit-log hook that feeds the engine's invalidation scan is a Write/Edit PostToolUse hook, so a file mutation delivered as a shell command would otherwise be invisible and leave a stale terminal receipt covering changed bytes. The freeze therefore extracts output-redirection targets and operands of common mutation commands before Bash executes. Read-only shell calls produce no targets and pass. The parser lives in `hooks/review-freeze-command.ts`; the Cursor adapter reuses its command and target result within one PreToolUse invocation, and launches the full freeze hook only when a target exists or classification could not complete.
 
-**Identity: none.** Unlike reviewer-scope there is no agent gate - any produces[] write voids a fresh terminal receipt regardless of who makes it (conductor applying suggestions, a re-dispatched lead, a stray subagent).
+**Identity: none.** Unlike reviewer-scope there is no agent gate - the freeze protects reviewed outputs regardless of who writes them (conductor applying suggestions, a re-dispatched lead, a stray subagent).
 
-**Change Control.** The invalidation the shared scan performs when a `produces[]` artifact (or reviewed source a Unit claims) changes after a terminal receipt is a governed Change Control read. Under `strict` it works as described above: the receipt is stale and the one bounded recovery review is owed. Under `relaxed` the receipt stays valid for the gate with the reviewer's verdict exactly as recorded, `aidlc-state.ts` writes one `CHANGE_ACCEPTED` row when the gate opens or the stage completes (the engine's `report` carries the human line on its directive as `change_notices`), and the review brief at the gate says `Reviewed content differs` and lists the changed paths. The freeze itself is never relaxed: this hook keeps refusing the write in its window under both values, because the verdict it protects is still standing.
+**Change Control.** The invalidation the shared scan performs when a reviewed output, bound question content, or reviewed source a Unit claims changes after a terminal receipt is a governed Change Control read. Under `strict` it works as described above: the receipt is stale and the one bounded recovery review is owed. Under `relaxed` the receipt stays valid for the gate with the reviewer's verdict exactly as recorded, `aidlc-state.ts` writes one `CHANGE_ACCEPTED` row when the gate opens or the stage completes (the engine's `report` carries the human line on its directive as `change_notices`), and the review brief at the gate says `Reviewed content differs` and lists the changed paths. The freeze itself is never relaxed: this hook keeps refusing the write in its window under both values, because the verdict it protects is still standing.
 
 **Fail-open everywhere.** No audit ledger (the common non-AIDLC case, decided before any state read), unreadable state or stage graph, an unknown tool, malformed stdin, or any internal error allows the call. The deterministic off-switch `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement entirely.
 
@@ -713,7 +785,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 | `write-audit-log.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
 | `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop while the active workflow has `Status: Running` |
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
-| `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A `produces[]` write refused for voiding a fresh terminal review receipt before the gate (PreToolUse). The refusal ends with the same guard-recovery ask the router would emit (see [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks)), so the conductor renders the typed remedies instead of retrying the write |
+| `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A reviewed-output write refused for voiding a fresh terminal review receipt before the gate (PreToolUse); summary-owned questions are excluded unless explicitly named by `review_artifact`. The refusal ends with the same guard-recovery ask the router would emit (see [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks)), so the conductor renders the typed remedies instead of retrying the write |
 | `plan-approval-guard.ts` | `PLAN_APPROVAL_BLOCKED` | A code-generation developer dispatch refused before the plan is approved (PreToolUse) |
 | `session-start.ts` | `SESSION_STARTED` / `SESSION_RESUMED` | Per Claude Code SessionStart hook input `source` field |
 | `session-end.ts` | `SESSION_ENDED` | Claude Code SessionEnd hook |
@@ -874,9 +946,25 @@ Deterministic handlers avoid LLM overhead for operations that are pure computati
 
 ## Sensor, Learning, and Runtime Tools
 
-Six further `aidlc-*.ts` tools back the data plane. Each is deterministic:
-the hooks/stages invoke them automatically, and they are also human-callable
-for debugging.
+Six `aidlc-*.ts` tools back the data plane. Each is deterministic: the
+hooks/stages invoke them automatically, and they are also human-callable for
+debugging. The shared helpers below support command rendering and invocation.
+
+### Recovery operations and runtime invocation
+
+`aidlc-guard-operation.ts` is the shared operation definition, command renderer,
+and validator for the two concrete recovery operations. It dispatches no work:
+the conductor executes an offered command or follows its `human-input` or
+`external-work` action through the existing tools.
+
+`aidlcEngineCommand` in `aidlc-runtime-paths.ts` builds child-process argv for
+`orchestrate`, `log`, `state`, and `bolt`. It uses the resolved compiled
+executable with `engine <route>` in native mode (honoring
+`AIDLC_COMPILED_EXECUTABLE`), or Bun's executable plus the absolute source-tool
+path in source mode. The orchestrator's state child and legacy Kiro IDE's
+`next`/`continue` recovery and `decision`/`answer` mediation share this helper.
+Their existing arguments, working directory, and environment stay with the
+caller; changing invocation mode grants no authority.
 
 ### `aidlc-review-brief.ts` — Decision-context renderer
 

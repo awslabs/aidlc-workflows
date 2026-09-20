@@ -56,6 +56,7 @@ import {
   isTeamUnitOwnership,
   isoTimestamp,
   recordHookDrop,
+  readActiveDirectiveMarker,
   readStateFile,
   readUnitScopeStamp,
   releaseAuditLock,
@@ -854,6 +855,26 @@ function emitReviewerScopeBlocked(
 // identity during enforcement.
 const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
 
+// Was a §12a step-1 record owed here at all? The advisory asserts the conductor
+// skipped that write, and stage-protocol-reviewer.md says a single-stage review
+// (no `directive.unit`) writes none - so on a scope that skips units-generation
+// the absence is compliance and the advisory would be false for the whole phase.
+// The active-directive marker is the authority: reading it revalidates the state
+// digest, so a marker left from a different state does not answer. `unit` is
+// keyed on the field rather than on `kind` or `version`, because a version-1
+// marker carries `unit` and no `kind` at all. `units` counts only on a live
+// `invoke-swarm` marker: writeActiveDirectiveMarker carries it onto every later
+// marker in the intent (`requestedUnits = marker.units ?? base.units`), so an
+// inherited list on a later no-unit `run-stage` is not evidence a record was owed.
+function perUnitReviewOwed(projectDir: string, stateContent: string | null): boolean {
+  if (stateContent === null) return false;
+  const active = readActiveDirectiveMarker(projectDir, stateContent);
+  return (
+    (active?.unit ?? "").length > 0 ||
+    (active?.kind === "invoke-swarm" && (active.units?.length ?? 0) > 0)
+  );
+}
+
 // --- Main ---------------------------------------------------------------------
 
 /** The dispatchable body (`aidlc hook reviewer-scope` requires an exported
@@ -890,8 +911,12 @@ export async function run(input: string): Promise<number> {
   }
 
   let unitScope = null;
+  // Kept for the missing-record advisory below, which needs the same content to
+  // validate the active-directive marker's digest - one read, not two.
+  let stateContent: string | null = null;
   try {
-    if (isTeamUnitOwnership(readStateFile(projectDir))) {
+    stateContent = readStateFile(projectDir);
+    if (isTeamUnitOwnership(stateContent)) {
       unitScope = readUnitScopeStamp(projectDir);
     }
   } catch {
@@ -951,7 +976,7 @@ export async function run(input: string): Promise<number> {
         const touchesConstruction = candidateStrings(toolName, toolInput).some((c) =>
           toPosix(c.text).includes("construction/"),
         );
-        if (touchesConstruction) {
+        if (touchesConstruction && perUnitReviewOwed(projectDir, stateContent)) {
           const marker = join(hooksHealthDir(projectDir), `${HOOK_NAME}.missing-record.last`);
           const fresh = existsSync(marker) && Date.now() - statSync(marker).mtimeMs < 10 * 60 * 1000;
           if (!fresh) {

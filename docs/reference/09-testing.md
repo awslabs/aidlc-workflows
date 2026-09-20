@@ -361,6 +361,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AIDLC_TEST_TIMEOUT` | `1800` | Per-`claude -p` call timeout in seconds. Set to `0` to disable. |
+| `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
 | `AIDLC_TUI_SETTING_SOURCES` | `project` | Setting sources injected into live `claude` TUI launches. Use `default` or an empty value only for focused calibration that intentionally includes user/local Claude settings. |
 | `AIDLC_TUI_TRACE_POLL_MS` | `10000` | Minimum interval between `answer_gate_poll` snapshots in TUI NDJSON traces while a long journey is waiting for the next menu or disk terminator. |
 | `AIDLC_KIRO_IDE_LIVE` | unset | Set to `1` to run the signed-in Kiro IDE desktop journey on macOS or Windows. |
@@ -387,6 +388,8 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 --all           # Same as --release
 
 # Output modifiers
+--production-guards # Run selected tests with guard bypasses and direct authority
+                    # off; neutralize inherited off-switches. Default: fixture.
 --verbose       # Write per-test logs to tests/logs/
 --no-llm        # Force all live-model gates closed while deterministic
                 # integration/e2e tests still run. Also via AIDLC_NO_LLM=1.
@@ -417,6 +420,94 @@ escape hatch for calibration.
 environment already set it. This makes the "everything with traces" profile run
 the live, token-spending TUI journeys by default; set `AIDLC_TUI_LIVE=0`
 explicitly to keep those files on their in-test SKIP path.
+
+An explicit **`--filter` requires execution in each selected file**. A file
+whose cases are all skipped (or which declares no cases) fails the run even
+when another selected file passes. A partially skipped file still passes if
+at least one case executes successfully; `expect()` counts are not the
+execution signal. An unmatched filter also fails, retaining `Test files: 0`
+and an explanation in `failures.txt` rather than inventing a failed test.
+
+Unfiltered suites preserve optional skips, reporting all-skipped files as
+`SKIP`. `--no-llm` (or `AIDLC_NO_LLM=1`) still deliberately excludes
+Claude-dependent files from mixed selections. If an explicit filter selects
+only those excluded files, the run fails because no cases executed. Without
+`--no-llm`, an explicitly selected Claude file fails when its substrate is
+unavailable. Other explicitly filtered live files that report all cases
+skipped also fail: enable their documented live variable and provide the
+required CLI/authentication. A live opt-in alone is not execution evidence.
+
+The summary and per-file logs report executed and skipped test-case counts
+separately from the historical `Total assertions` field (which counts JUnit
+test cases, including skips). `--verbose` / `--debug` retains Bun's
+`<test-name>.junit.xml` next to the per-file log when Bun emits it.
+Coverage failures name the file and remedy in `summary.txt` and
+`failures.txt`; no assertion failure is invented for a skipped case.
+
+## Guard Profiles
+
+The default **fixture** profile keeps synthetic test setup convenient: it sets
+`AIDLC_SKIP_ARTIFACT_GUARD`, `AIDLC_SKIP_HUMAN_PRESENCE_GUARD`,
+`AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD`, `AIDLC_SKIP_REVISION_BACKSTOP`, and
+`AIDLC_ALLOW_DIRECT_AUDIT_EVENTS` to `1` in test children. Other inherited
+variables retain their existing behavior.
+
+Use **`--production-guards` with `--filter`** for tests that provide real guard
+evidence and exercise the owning commands or hooks. It applies to every test
+selected by the invocation and does not change tier selection or live-model
+gates. For example, exercise the runner's own profile contract:
+
+```bash
+bash tests/run-tests.sh --debug -P 8 --unit --production-guards \
+  --filter '^t-runner-production-guards'
+```
+
+Production children receive `0` for the known guard skips, direct audit/state
+authority switches, and recordable bypasses, including ensemble evidence,
+plan approval, reviewer scope, review freeze, and usage tracking. Any inherited
+`AIDLC_SKIP_*`, `AIDLC_DISABLE_*`, or `AIDLC_ALLOW_DIRECT_*` variable is also
+forced to `0`. This happens after the runner loads `.claude/settings.json`
+environment values, so a shell or project-settings off-switch cannot silently
+change the child's initial guard profile. Explicit zeroes on recordable bypasses
+also take precedence over `aidlc.settings.json` / `aidlc.settings.local.json`
+bypass lists; simply deleting the variables would allow that fallback.
+
+The runner prints `Guard profile: fixture (...)` or
+`Guard profile: production (...)` at startup and in the stdout summary, and
+writes the same label into `summary.txt` and per-file logs under `--verbose`
+or `--debug`. Tests can assert
+`process.env.AIDLC_TEST_GUARD_PROFILE === "production"` before exercising a
+guard; an inherited marker never selects the profile.
+
+This is a child-launch environment contract. Test code and harness helpers can
+still override their own environment, write settings, or construct synthetic
+fixtures. In particular, `resetAidlcEnv()` only deletes
+`AWS_AIDLC_DEFAULT_SCOPE` and `AIDLC_SKIP_SOURCE_FRESHNESS`; it preserves the
+profile marker and other guard settings, and does not restore production
+zeroes after a test changes them. A production-profile label alone is not proof
+that an individual test used production guard evidence. Review the selected
+test's environment overrides and setup as part of that claim.
+
+The PR workflow's `test_guards` job (`Tests (production guards)`) runs the
+deterministic runner and recovery contracts with production guards enabled:
+
+```bash
+bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration \
+  --no-llm --filter '^(t-runner-production-guards|t-guard-recovery-production)' \
+  > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
+```
+
+The job creates that log directory and always uploads its logs and `tests/logs/`
+as `production-guard-evidence`. The existing `test` aggregate (`Tests (smoke +
+unit)`) requires `test_guards` to succeed alongside smoke and every unit shard,
+so this production-guard slice is part of the required CI gate.
+
+Dropping `--production-guards` from this filtered command fails because
+`t-guard-recovery-production.test.ts` executes no journeys under the fixture
+profile. Passing runner unit tests cannot mask that missing coverage.
+The unfiltered deterministic deep job keeps its deliberate fixture profile
+and reports the production journey file as `SKIP`; the separate required
+production job exercises those journeys.
 
 ## Parallel Execution
 

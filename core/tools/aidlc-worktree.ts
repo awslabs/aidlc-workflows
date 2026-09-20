@@ -1,8 +1,9 @@
 // aidlc-worktree.ts — Construction-phase worktree primitive.
 //
-// Five subcommands: create, merge, discard, list, verify. Audit-first
-// (audit-of-intent semantics — see docs/reference/12-state-machine.md
-// § Audit-first atomicity). The orchestrator dispatches aidlc-pipeline-deploy-agent
+// Subcommands: create, merge, discard, restore, purge, list, verify, info.
+// Discard parks source before audit-first removal (audit-of-intent — see
+// docs/reference/12-state-machine.md § Audit-first atomicity).
+// The orchestrator dispatches aidlc-pipeline-deploy-agent
 // to read team practices, the agent invokes this tool with resolved flags,
 // then the orchestrator calls `verify` as a deterministic post-dispatch
 // backstop confirming the audit event landed.
@@ -11,11 +12,11 @@
 // to avoid the dev-worktree-vs-bolt-worktree clash. Run from the main repo
 // checkout.
 
-import { spawnSync } from "node:child_process";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
@@ -24,7 +25,9 @@ import {
   currentSwarmSourceMergeChain,
   discoverSiblingRepos,
   emitError,
+  type EmitErrorMessage,
   errorMessage,
+  filteredRawIndexEntries,
   findAllEvents,
   getField,
   gitCommitSourceListing,
@@ -33,6 +36,7 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   listIntentDirs,
   listSpaces,
+  maximalAttemptEvents,
   parseSourceListing,
   readAllAuditShards,
   readAuditShardEvents,
@@ -47,6 +51,7 @@ import {
   serializeSourceListing,
   sourceListingEntriesEqual,
   sourceListingSha256,
+  swarmUnitCheckpointRejections,
   type WorkspaceSourceState,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
@@ -59,6 +64,7 @@ import {
   worktreeStateFilePath,
   writeFileAtomic,
 } from "./aidlc-lib.js";
+import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
 // hyphens. Mirrors stage-schema.ts:95+:101 — the codebase already duplicates
@@ -117,11 +123,11 @@ interface GitResult {
   code: number;
 }
 
-function runGit(args: string[], cwd?: string): GitResult {
+function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResult {
   const r = spawnSync("git", args, {
     cwd,
     encoding: "utf-8",
-    env: { ...process.env, EDITOR: process.env.EDITOR ?? "false" },
+    env: { ...process.env, EDITOR: process.env.EDITOR ?? "false", ...env },
   });
   return {
     ok: r.status === 0,
@@ -215,19 +221,41 @@ function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): s
   return null;
 }
 
-// --- Sibling-worktree detection ---
+// --- Nested-worktree detection ---
 //
-// `aidlc-worktree` must run from the main repo checkout, not from a sibling
-// worktree (e.g. `.claude/worktrees/<dev>/`). The main checkout is the
-// directory whose `.git` is the same as `git rev-parse --git-common-dir`'s
-// parent. macOS symlinks `/var → /private/var`, so canonicalise both sides
-// via `realpathSync` before comparing.
+// `aidlc-worktree` must not run from a checkout NESTED INSIDE the main repo
+// checkout's working tree — the `.aidlc/worktrees/<bolt>` (or legacy
+// `.claude/worktrees/<dev>`) shape the error names. A nested checkout is refused
+// because a Bolt worktree created from there would sit inside another worktree's
+// tracked tree.
+// The main checkout is the directory whose `.git` is `git rev-parse
+// --git-common-dir`'s parent. macOS symlinks `/var → /private/var`, so
+// canonicalise both sides via `realpathSync` before comparing.
+//
+// A linked worktree that lives OUTSIDE the main checkout is ALLOWED (#567). The
+// one-worktree-per-branch layout is ordinary, and nothing about it breaks the
+// invariant above: git registers such a worktree under the same common dir (so
+// `gitCommonDirHash` and the creating-repo binding are unchanged), the Bolt
+// worktrees it creates hang off ITS root rather than inside anyone else's tree,
+// and `--base` / the merge target stay bound to the invoking checkout — which is
+// the property that keeps a unit forking from the branch holding approved work
+// rather than from whatever the main checkout happens to have checked out.
 //
 // P7 (multi-repo): the guard is RE-ANCHORED to the TARGET repo's checkout. When
 // `--repo <name>` selects a sibling repo, `repoCwd` is that repo dir and every
-// git probe runs there — so "must run from the main checkout" is evaluated against
-// the sibling repo, not the (non-git) workspace root. Absent `--repo` (legacy
-// single-repo), `repoCwd` is the projectDir and the behaviour is unchanged.
+// git probe runs there — so the nesting test is evaluated against the sibling
+// repo, not the (non-git) workspace root. Absent `--repo` (legacy single-repo),
+// `repoCwd` is the projectDir and the behaviour is unchanged.
+
+// True when `child` is strictly inside `parent` (never for equal paths). A leading
+// `..` segment on a separator boundary means outside, not a `..foo` directory name.
+function isNestedInside(parent: string, child: string): boolean {
+  if (child === parent) return false;
+  const rel = relative(parent, child);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+  return true;
+}
+
 function assertNotSiblingWorktree(repoCwd?: string): void {
   const top = runGit(["rev-parse", "--show-toplevel"], repoCwd);
   if (!top.ok) {
@@ -243,9 +271,9 @@ function assertNotSiblingWorktree(repoCwd?: string): void {
   const commonAbs = resolve(cwdTop, commonRaw);
   const mainCheckout = canonicalise(dirname(commonAbs));
 
-  if (cwdTop !== mainCheckout) {
+  if (cwdTop !== mainCheckout && isNestedInside(mainCheckout, cwdTop)) {
     error(
-      `aidlc-worktree must run from the main repo checkout, not from a sibling worktree at ${cwdTop}. Bolt worktrees are siblings of the main checkout, not nested.`
+      `aidlc-worktree must run from the main repo checkout or a worktree outside it, not from a worktree nested inside it at ${cwdTop}. Bolt worktrees live under the invoking checkout's .aidlc/worktrees/, so creating one from a nested checkout would put a worktree inside another worktree's tracked tree.`
     );
   }
 }
@@ -453,7 +481,20 @@ function handleCreate(args: string[]): void {
   const branchName = `bolt-${slug}`;
   const branchExists = runGit(["rev-parse", "--verify", `refs/heads/${branchName}`], repoCwd);
   if (branchExists.ok) {
-    errorWithSlug(slug, `Branch already exists: ${branchName}`);
+    const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
+    const owner = listed.ok
+      ? worktreeCheckedOutAt(listed.stdout, `refs/heads/${branchName}`)
+      : null;
+    const prefix = `Branch already exists: ${branchName}`;
+    const guidance = ". Bolt branches are shared by every worktree of this repository; finish or discard the Bolt that owns it, or rename the Unit.";
+    // The owner lives outside this project dir, so the audit row must not carry its absolute path.
+    errorWithSlug(
+      slug,
+      owner === null ? `${prefix}${guidance}` : {
+        message: `${prefix} (checked out at ${owner})${guidance}`,
+        auditMessage: `${prefix} (checked out in another worktree of this repository)${guidance}`,
+      },
+    );
   }
 
   // Audit-first: emit BEFORE git so a kill-9 between emit and git surfaces
@@ -704,6 +745,17 @@ interface RepositoryBoltEvidence {
   retained: boolean;
 }
 
+// Path of the registered worktree that has `branchRef` checked out, or null.
+function worktreeCheckedOutAt(porcelain: string, branchRef: string): string | null {
+  for (const block of porcelain.split(/\r?\n\r?\n/)) {
+    const lines = block.split(/\r?\n/);
+    if (lines.includes(`branch ${branchRef}`)) {
+      return lines.find((line) => line.startsWith("worktree "))?.slice(9) ?? null;
+    }
+  }
+  return null;
+}
+
 function repositoryRegistersBoltWorktree(
   pd: string,
   repoCwd: string,
@@ -755,6 +807,26 @@ function repositoryBoltEvidence(
   };
 }
 
+function worktreeRepoCandidates(
+  pd: string,
+  creationRows: readonly WorktreeAuditRow[],
+): Map<string, string | null> {
+  const selectors = new Map<string, string | null>();
+  selectors.set(repoSelectorKey(null), null);
+  for (const repo of discoverSiblingRepos(pd)) {
+    selectors.set(repoSelectorKey(repo), repo);
+  }
+  for (const row of creationRows) {
+    const field = auditBlockField(row.block, "Repo");
+    if (field === "-") {
+      selectors.set(repoSelectorKey(null), null);
+    } else if (field !== null && isValidRepoName(field)) {
+      selectors.set(repoSelectorKey(field), field);
+    }
+  }
+  return selectors;
+}
+
 interface DiscardCreationAuthority {
   evidenceExists: boolean;
   intent?: string;
@@ -774,19 +846,7 @@ function discardCreationAuthority(
       row.event === "WORKTREE_CREATED" &&
       auditBlockField(row.block, "Bolt slug") === slug,
   );
-  const selectors = new Map<string, string | null>();
-  selectors.set(repoSelectorKey(null), null);
-  for (const repo of discoverSiblingRepos(pd)) {
-    selectors.set(repoSelectorKey(repo), repo);
-  }
-  for (const row of creationRows) {
-    const field = auditBlockField(row.block, "Repo");
-    if (field === "-") {
-      selectors.set(repoSelectorKey(null), null);
-    } else if (field !== null && isValidRepoName(field)) {
-      selectors.set(repoSelectorKey(field), field);
-    }
-  }
+  const selectors = worktreeRepoCandidates(pd, creationRows);
   if (recorded?.repoSelector !== undefined) {
     selectors.set(
       repoSelectorKey(recorded.repoSelector),
@@ -1512,6 +1572,13 @@ function convergedSourceRecord(
       "refusing to merge: the current swarm worktree has no correlated convergence authority; rerun finalize",
     );
   }
+  if (swarmUnitCheckpointRejections(rows, stage, floor, unitName, batch)
+    .some((rejection) => !rowAfter(latest, rejection))) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: this Unit convergence predates its checkpoint rejection; prepare and finalize a fresh retry",
+    );
+  }
 
   const bypass =
     auditBlockField(latest.block, "Source Freshness Bypass") ?? undefined;
@@ -1810,6 +1877,8 @@ interface SwarmWorktreeIdentity {
   batch: string;
   stage: string;
   floor: string;
+  baseCommit: string;
+  baseSourceListing: string;
 }
 
 function currentSwarmWorktreeIdentity(
@@ -1827,7 +1896,11 @@ function currentSwarmWorktreeIdentity(
     const batch = parsed.swarmBatch;
     const stage = parsed.swarmStage;
     const floor = parsed.swarmFloor;
+    const baseCommit = parsed.baseCommit;
+    const baseSourceListing = parsed.baseSourceListing;
     return (
+        parsed.version === 1 &&
+        parsed.boltSlug === slug &&
         typeof unit === "string" &&
         boltSlugForUnit(unit) === slug &&
         typeof batch === "string" &&
@@ -1835,9 +1908,13 @@ function currentSwarmWorktreeIdentity(
         typeof stage === "string" &&
         stage.length > 0 &&
         typeof floor === "string" &&
-        floor.length > 0
+        floor.length > 0 &&
+        typeof baseCommit === "string" &&
+        /^[0-9a-f]{40,64}$/.test(baseCommit) &&
+        typeof baseSourceListing === "string" &&
+        /^sha256:[0-9a-f]{64}$/.test(baseSourceListing)
       )
-      ? { unit, batch, stage, floor }
+      ? { unit, batch, stage, floor, baseCommit, baseSourceListing }
       : null;
   } catch {
     return null;
@@ -1901,20 +1978,51 @@ function mergedSwarmCleanupAuthority(
         stage !== identity.stage ||
         floor !== identity.floor)
     ) continue;
-    matchedSlugAuthority = true;
-    const convergence = audit.rows.find(
+    // A slug and stage floor survive a Unit checkpoint rejection. Cleanup of
+    // an old landing must never reset or remove the next child bearing them.
+    const creations = maximalAttemptEvents(audit.rows.filter((candidate) =>
+      candidate.event === "WORKTREE_CREATED" &&
+      candidate.authoritySpace === row.authoritySpace &&
+      candidate.authorityIntent === row.authorityIntent &&
+      auditBlockField(candidate.block, "Bolt slug") === slug &&
+      auditBlockField(candidate.block, "Repo") === repoField &&
+      (() => {
+        const path = auditBlockField(candidate.block, "Worktree path");
+        return path !== null &&
+          pathKey(resolveAuditWorktreePath(pd, path)) === pathKey(worktreePath(pd, slug));
+      })()));
+    if (creations.length > 1) continue;
+    const creation = creations[0];
+    if (creation && !rowAfter(row, creation)) continue;
+    if (identity !== undefined && (!creation ||
+      creation.authoritySpace !== row.authoritySpace ||
+      creation.authorityIntent !== row.authorityIntent ||
+      auditBlockField(creation.block, "Base commit") !== identity.baseCommit ||
+      auditBlockField(creation.block, "Base Source Listing") !== identity.baseSourceListing ||
+      auditBlockField(creation.block, "Swarm Unit") !== unit ||
+      auditBlockField(creation.block, "Swarm Batch") !== batch ||
+      auditBlockField(creation.block, "Swarm Stage") !== stage ||
+      auditBlockField(creation.block, "Swarm Run floor") !== floor)) continue;
+    const scopeRows = audit.rows.filter((candidate) =>
+      candidate.authoritySpace === row.authoritySpace &&
+      candidate.authorityIntent === row.authorityIntent);
+    if (swarmUnitCheckpointRejections(scopeRows, stage, floor, unit, batch)
+      .some((rejection) => !rowAfter(row, rejection))) continue;
+    const convergences = maximalAttemptEvents(scopeRows.filter(
       (candidate) =>
-        candidate.authoritySpace === row.authoritySpace &&
-        candidate.authorityIntent === row.authorityIntent &&
         candidate.event === "SWARM_UNIT_CONVERGED" &&
-        auditBlockField(candidate.block, "Batch number") === batch &&
         auditBlockField(candidate.block, "Unit name") === unit &&
-        auditBlockField(candidate.block, "Stage") === stage &&
-        auditBlockField(candidate.block, "Run floor") === floor &&
-        auditBlockField(candidate.block, "Source Commit") === sourceCommit &&
-        rowAfter(row, candidate),
-    );
-    if (!convergence) continue;
+        (!creation || rowAfter(candidate, creation)),
+    ));
+    const convergence = convergences.length === 1 ? convergences[0] : null;
+    if (!convergence ||
+      auditBlockField(convergence.block, "Batch number") !== batch ||
+      auditBlockField(convergence.block, "Stage") !== stage ||
+      auditBlockField(convergence.block, "Run floor") !== floor ||
+      auditBlockField(convergence.block, "Source Commit") !== sourceCommit ||
+      auditBlockField(convergence.block, "Source Freshness Bypass") !== null ||
+      !rowAfter(row, convergence)) continue;
+    matchedSlugAuthority = true;
     const repoCwd = repo === null ? pd : repoDir(pd, repo);
     if (
       !runGit(["cat-file", "-e", `${sourceCommit}^{commit}`], repoCwd).ok ||
@@ -2763,14 +2871,200 @@ function listConflictFiles(cwd?: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+const PARKED_STAMP_RE = /^\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?$/;
+
+function parkedSourceRefs(repoCwd: string, slug: string): RetainedSourceRef[] {
+  const prefix = `refs/aidlc/parked/${slug}/`;
+  const listed = runGit(["for-each-ref", "--format=%(refname)%09%(objectname)", prefix], repoCwd);
+  if (!listed.ok) throw new Error(listed.stderr.trim() || "parked ref enumeration failed");
+  return listed.stdout.split(/\r?\n/).filter(Boolean).map((line) => {
+    const [ref, oid] = line.split("\t");
+    if (!ref?.startsWith(prefix) || !/^[0-9a-f]{40,64}$/.test(oid ?? "")) {
+      throw new Error("invalid parked ref enumeration");
+    }
+    return { ref, oid };
+  });
+}
+
+function parkedStamp(ref: string): string {
+  return ref.split("/")[4];
+}
+
+function validateParkedStamp(stamp: string | undefined): void {
+  if (stamp !== undefined && !PARKED_STAMP_RE.test(stamp)) {
+    error(`Invalid --parked: "${stamp}". Expected YYYYMMDDTHHMMSSZ or its numbered suffix.`);
+  }
+}
+
+function parkAttempt(
+  repoCwd: string,
+  slug: string,
+  wtPath: string,
+  dirExists: boolean,
+  registered: boolean,
+  branchExists: boolean,
+  retained: RetainedSourceRef[],
+): { ref: string; commit: string } {
+  const baseStamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const occupied = new Set(parkedSourceRefs(repoCwd, slug).map(({ ref }) => parkedStamp(ref)));
+  let stamp = baseStamp;
+  for (let suffix = 2; occupied.has(stamp); suffix++) stamp = `${baseStamp}-${suffix}`;
+  const ref = `refs/aidlc/parked/${slug}/${stamp}`;
+  const objectEnv = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const requireGit = (args: string[], cwd = repoCwd, env: NodeJS.ProcessEnv = objectEnv): string => {
+    const result = runGit(args, cwd, env);
+    if (!result.ok) throw new Error(result.stderr.trim() || `git ${args[0]} exited ${result.code}`);
+    return result.stdout.trim();
+  };
+  let commit = "-";
+  if (dirExists) {
+    if (!registered) throw new Error("worktree directory is not registered with the creating repository");
+    const idx = join(tmpdir(), `aidlc-park-${process.pid}-${randomUUID()}`);
+    // An internal snapshot must not depend on the user's identity or mutate the
+    // live index/branch. Seed tracked paths before add so ignored tracked files survive.
+    const env = {
+      ...objectEnv,
+      GIT_INDEX_FILE: idx,
+      GIT_AUTHOR_NAME: "AI-DLC",
+      GIT_AUTHOR_EMAIL: "aidlc@localhost",
+      GIT_COMMITTER_NAME: "AI-DLC",
+      GIT_COMMITTER_EMAIL: "aidlc@localhost",
+    };
+    try {
+      const head = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
+      requireGit(["read-tree", head], wtPath, env);
+      requireGit(["add", "-A"], wtPath, env);
+      // Clean filters may transform dirty bytes; the park must hold the exact
+      // bytes that `worktree remove --force` is about to destroy.
+      // Symlinks and gitlinks stay exactly as `git add -A` staged them.
+      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+        cwd: wtPath,
+        env: { ...process.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
+      const includedRegularPaths = new Set<string>();
+      const regularPathBytes: Buffer[] = [];
+      const nonUtf8Paths: Buffer[] = [];
+      for (let start = 0; start < listed.stdout.length;) {
+        const end = listed.stdout.indexOf(0, start);
+        if (end === -1) throw new Error("invalid parked index entry");
+        const record = listed.stdout.subarray(start, end + 1);
+        start = end + 1;
+        if (!/^100(?:644|755) /.test(record.subarray(0, 7).toString("ascii"))) continue;
+        const tab = record.indexOf(0x09);
+        if (tab === -1) throw new Error("cannot parse a parked regular-file index entry");
+        regularPathBytes.push(record.subarray(tab + 1));
+        const pathBytes = record.subarray(tab + 1, -1);
+        const path = pathBytes.toString();
+        if (Buffer.from(path).equals(pathBytes)) includedRegularPaths.add(path);
+        else nonUtf8Paths.push(record.subarray(tab + 1));
+      }
+      if (nonUtf8Paths.length > 0) {
+        // String-based attribute/hash helpers cannot address these filenames.
+        // Ask Git with the original NUL-terminated bytes before trusting add's blobs.
+        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "filter", "text", "eol", "ident", "working-tree-encoding"], {
+          cwd: wtPath,
+          env: { ...process.env, ...env },
+          stdin: Buffer.concat(nonUtf8Paths),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        if (attrs.exitCode !== 0) throw new Error(`git check-attr failed: ${attrs.stderr.toString().trim() || `exit ${attrs.exitCode}`}`);
+        for (let start = 0; start < attrs.stdout.length;) {
+          const pathEnd = attrs.stdout.indexOf(0, start);
+          const attrEnd = pathEnd === -1 ? -1 : attrs.stdout.indexOf(0, pathEnd + 1);
+          const valueEnd = attrEnd === -1 ? -1 : attrs.stdout.indexOf(0, attrEnd + 1);
+          if (valueEnd === -1) throw new Error("invalid parked path attributes");
+          const value = attrs.stdout.subarray(attrEnd + 1, valueEnd).toString();
+          if (value !== "unspecified" && value !== "unset") {
+            const path = attrs.stdout.subarray(start, pathEnd);
+            throw new Error(`cannot park filtered file with a non-UTF-8 name: ${JSON.stringify(path.toString("latin1"))}; rename it or remove its filter`);
+          }
+          start = valueEnd + 1;
+        }
+      }
+      // working-tree-encoding re-encodes on add like a clean filter but is not a
+      // filter, so the shared filteredRawIndexEntries helper does not see it.
+      if (regularPathBytes.length > 0) {
+        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "working-tree-encoding"], {
+          cwd: wtPath,
+          env: { ...process.env, ...env },
+          stdin: Buffer.concat(regularPathBytes),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        if (attrs.exitCode !== 0) throw new Error(`git check-attr failed: ${attrs.stderr.toString().trim() || `exit ${attrs.exitCode}`}`);
+        const unspecified = Buffer.from("unspecified");
+        const unset = Buffer.from("unset");
+        for (let start = 0; start < attrs.stdout.length;) {
+          const pathEnd = attrs.stdout.indexOf(0, start);
+          const attrEnd = pathEnd === -1 ? -1 : attrs.stdout.indexOf(0, pathEnd + 1);
+          const valueEnd = attrEnd === -1 ? -1 : attrs.stdout.indexOf(0, attrEnd + 1);
+          if (valueEnd === -1) throw new Error("invalid parked path attributes");
+          const pathBytes = attrs.stdout.subarray(start, pathEnd);
+          const value = attrs.stdout.subarray(attrEnd + 1, valueEnd);
+          start = valueEnd + 1;
+          if (value.equals(unspecified) || value.equals(unset)) continue;
+          const path = pathBytes.toString();
+          if (!Buffer.from(path).equals(pathBytes)) {
+            throw new Error(`cannot park encoded file with a non-UTF-8 name: ${JSON.stringify(pathBytes.toString("latin1"))}; rename it or remove its working-tree-encoding attribute`);
+          }
+          const indexed = requireGit(["ls-files", "-s", "-z", "--", path], wtPath, env);
+          const mode = indexed.slice(0, indexed.indexOf(" "));
+          if (!/^100(?:644|755)$/.test(mode)) {
+            throw new Error(`cannot resolve the index mode for encoded path ${path}`);
+          }
+          const raw = requireGit(["hash-object", "-w", "--no-filters", "--", path], wtPath, env);
+          requireGit(["update-index", "--cacheinfo", mode, raw, path], wtPath, env);
+        }
+      }
+      const rawEntries = filteredRawIndexEntries(wtPath, idx, includedRegularPaths);
+      if (rawEntries === null) throw new Error("cannot compare raw bytes for filtered paths");
+      for (const entry of rawEntries) {
+        const indexed = requireGit(["ls-files", "-s", "-z", "--", entry.path], wtPath, env);
+        const mode = indexed.slice(0, indexed.indexOf(" "));
+        if (!/^100(?:644|755)$/.test(mode)) {
+          throw new Error(`cannot resolve the index mode for filtered path ${entry.path}`);
+        }
+        const raw = requireGit(["hash-object", "-w", "--no-filters", "--", entry.path], wtPath, env);
+        if (raw !== entry.sha) {
+          throw new Error(`cannot materialize raw parked bytes for filtered path ${entry.path}`);
+        }
+        requireGit(["update-index", "--cacheinfo", mode, entry.sha, entry.path], wtPath, env);
+      }
+      const tree = requireGit(["write-tree"], wtPath, env);
+      commit = requireGit([
+        "commit-tree", tree, "-p", head, "-m",
+        `aidlc: parked bolt-${slug} at ${stamp} (agent-discard)`,
+      ], wtPath, env);
+    } finally {
+      rmSync(idx, { force: true });
+    }
+  } else if (branchExists) {
+    commit = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
+  }
+  if (commit !== "-") requireGit(["update-ref", `${ref}/head`, commit, ""]);
+  if (dirExists) requireGit(["update-ref", `${ref}/snapshot`, commit, ""]);
+  if (!dirExists && branchExists) requireGit(["update-ref", `${ref}/branch-tip`, commit, ""]);
+  // Copy every source ref before audit/removal. Originals remain intact if any
+  // copy fails; their compare-and-delete runs only after successful teardown.
+  for (const source of retained) {
+    const sourceCommit = source.ref.slice(source.ref.lastIndexOf("/") + 1);
+    requireGit(["update-ref", `${ref}/reviewed-source/${sourceCommit}`, source.oid, ""]);
+  }
+  return { ref, commit };
+}
+
 // --- Subcommand: discard ---
 //
 // Usage: aidlc-worktree discard --slug <slug> [--repo <name>]
 //                               [--intent <dir>] [--space <name>]
 //
 // --repo (P7): the sibling repo the worktree was forked in — same resolution as
-// `create`. Idempotent: if neither directory nor branch exists, succeeds silently
-// without re-emitting audit.
+// `create`. Park the attempt in Git before auditing/removing the live checkout.
+// With no directory, branch, or retained sources, succeed without another audit.
 function handleDiscard(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -2871,12 +3165,29 @@ function handleDiscard(args: string[]): void {
     return;
   }
 
+  const discardedApproval = dirExists &&
+    relativeRecordDir(pd, flags.intent, flags.space) === relativeRecordDir(pd)
+    ? (() => {
+        const identity = currentSwarmWorktreeIdentity(pd, slug);
+        return identity?.stage === "code-generation"
+          ? captureCodeGenerationDiscardApproval(pd, wtPath, identity.unit) : null;
+      })()
+    : null;
+  let parked: { ref: string; commit: string };
+  try {
+    parked = parkAttempt(repoCwd, slug, wtPath, dirExists, registered, branchExists, retained);
+  } catch (e) {
+    errorWithSlug(slug, `refusing to discard: parking the attempt failed: ${errorMessage(e)}`);
+  }
   let auditTs: string;
   try {
     auditTs = emitAudit(pd, "WORKTREE_DISCARDED", {
       "Bolt slug": slug,
       "Worktree path": auditWorktreePath(pd, wtPath),
       Reason: "agent-discard",
+      ...discardedApproval,
+      "Parked ref": parked.ref,
+      "Parked commit": parked.commit,
     }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
@@ -2912,8 +3223,257 @@ function handleDiscard(args: string[]): void {
       worktree_path: wtPath,
       reason: "agent-discard",
       audit_timestamp: auditTs,
+      parked_ref: parked.ref,
+      parked_commit: parked.commit,
     })
   );
+}
+
+// --- Subcommands: restore / purge ---
+// Local recovery uses a separate path and branch namespace, never a live Bolt.
+function parkedRepoCwd(
+  pd: string,
+  flags: Record<string, string>,
+  slug: string,
+): string {
+  if (flags.repo !== undefined) return resolveRepoCwd(pd, flags, slug);
+  const creationRows = allWorktreeAuditRows(pd).rows.filter(
+    (row) =>
+      row.event === "WORKTREE_CREATED" &&
+      auditBlockField(row.block, "Bolt slug") === slug,
+  );
+  const candidates = worktreeRepoCandidates(pd, creationRows);
+  const parkedRepos: { cwd: string; repo: string | null }[] = [];
+  for (const repo of candidates.values()) {
+    const cwd = repo === null ? pd : repoDir(pd, repo);
+    const listed = runGit(
+      ["for-each-ref", "--format=%(refname)", `refs/aidlc/parked/${slug}/`],
+      cwd,
+    );
+    if (listed.ok && listed.stdout.trim()) parkedRepos.push({ cwd, repo });
+  }
+  if (parkedRepos.length === 0) {
+    errorWithSlug(slug, `no parked attempt for slug ${slug}`);
+  }
+  if (parkedRepos.length > 1) {
+    const labels = parkedRepos
+      .map(({ repo }) => repoSelectorLabel(repo))
+      .sort()
+      .map((value) => JSON.stringify(value))
+      .join(", ");
+    errorWithSlug(
+      slug,
+      `parked attempts for slug ${slug} exist in several repositories (${labels}); pass --repo <name>`,
+    );
+  }
+  return parkedRepos[0].cwd;
+}
+
+/** Validate Git's relative path without decoding the bytes used for filesystem IO. */
+export function restoreDestination(
+  rootRealpath: Buffer,
+  pathBytes: Buffer,
+): { destination: Buffer; parent: Buffer } {
+  // Decode only for lexical checks: filenames may contain arbitrary non-UTF-8 bytes.
+  const path = pathBytes.toString();
+  const root = rootRealpath.toString();
+  if (!path || pathBytes.includes(0) || isAbsolute(path) ||
+      path.split("/").includes("..") ||
+      !resolve(root, path).startsWith(`${root}${sep}`)) {
+    throw new Error(`refusing parked path outside the restore checkout: ${JSON.stringify(path)}`);
+  }
+  const destination = Buffer.concat([rootRealpath, Buffer.from(sep), pathBytes]);
+  const slash = pathBytes.lastIndexOf(0x2f);
+  const parent = slash === -1 ? rootRealpath : destination.subarray(0, rootRealpath.length + 1 + slash);
+  return { destination, parent };
+}
+
+/** Check existing prefixes before recursive mkdir can follow a symlink outside the checkout. */
+export function assertNoSymlinkedAncestor(rootRealpath: Buffer, parent: Buffer): void {
+  for (let end = rootRealpath.length + 1; end <= parent.length; end++) {
+    if (end !== parent.length && parent[end] !== 0x2f && parent[end] !== sep.charCodeAt(0)) continue;
+    const ancestor = parent.subarray(0, end);
+    const stat = lstatSync(ancestor, { throwIfNoEntry: false });
+    if (!stat) return;
+    if (stat.isSymbolicLink()) {
+      throw new Error(`refusing symlinked parked parent: ${JSON.stringify(ancestor.toString())}`);
+    }
+  }
+}
+
+/** Reject symlinked parents, including aliases whose targets remain inside the checkout. */
+export function assertParentInsideCheckout(rootRealpath: Buffer, parent: Buffer): void {
+  const isSeparator = (byte: number): boolean => byte === 0x2f || byte === sep.charCodeAt(0);
+  const inside = (path: Buffer): boolean => path.equals(rootRealpath) ||
+    (path.subarray(0, rootRealpath.length).equals(rootRealpath) && isSeparator(path[rootRealpath.length]));
+  if (!inside(parent) || !inside(realpathSync(parent, { encoding: "buffer" }))) {
+    throw new Error(`refusing parked parent outside the restore checkout: ${JSON.stringify(parent.toString())}`);
+  }
+  assertNoSymlinkedAncestor(rootRealpath, parent);
+}
+
+function handleRestore(args: string[]): void {
+  // --raw is a bare boolean; parseFlags handles only value-bearing flags.
+  const flags = parseFlags(args.filter((arg) => arg !== "--raw"));
+  const slug = validateSlug(flags.slug);
+  validateParkedStamp(flags.parked);
+  const pd = resolveProjectDir(projectDir);
+  const repoCwd = parkedRepoCwd(pd, flags, slug);
+  assertNotSiblingWorktree(repoCwd);
+  const refs = parkedSourceRefs(repoCwd, slug);
+  const heads = refs.filter(({ ref }) =>
+    ref === `refs/aidlc/parked/${slug}/${parkedStamp(ref)}/head` &&
+    PARKED_STAMP_RE.test(parkedStamp(ref)) &&
+    (flags.parked === undefined || parkedStamp(ref) === flags.parked));
+  heads.sort((a, b) => parkedStamp(a.ref).localeCompare(parkedStamp(b.ref), "en", { numeric: true }));
+  const head = heads.at(-1);
+  if (!head) {
+    errorWithSlug(slug, `no parked attempt for slug ${slug}${flags.parked ? ` at ${flags.parked}` : ""}`);
+  }
+  const stamp = parkedStamp(head.ref);
+  const parkedRef = head.ref.slice(0, -"/head".length);
+  const wtPath = resolve(pd, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
+  const branch = `restore/bolt-${slug}-${stamp}`;
+  if (existsSync(wtPath) || runGit(["rev-parse", "--verify", `refs/heads/${branch}`], repoCwd).ok) {
+    errorWithSlug(slug, `already restored at ${wtPath}`);
+  }
+  let restoreMode: "snapshot" | "branch-tip" | "legacy-snapshot" | "legacy-branch-tip" | "raw-requested";
+  if (args.includes("--raw")) {
+    restoreMode = "raw-requested";
+  } else if (refs.some(({ ref }) => ref === `${parkedRef}/snapshot`)) {
+    restoreMode = "snapshot";
+  } else if (refs.some(({ ref }) => ref === `${parkedRef}/branch-tip`)) {
+    restoreMode = "branch-tip";
+  } else {
+    // Legacy parks have only /head for both shapes. Only tool-authored snapshot
+    // commits contain working-tree bytes; ordinary branch tips need checkout conversions.
+    const identity = runGit(["log", "-1", "--format=%an%x00%ae%x00%s", head.oid], repoCwd, { GIT_NO_REPLACE_OBJECTS: "1" });
+    if (!identity.ok) errorWithSlug(slug, `cannot classify parked head: ${identity.stderr.trim() || `exit ${identity.code}`}`);
+    const [author, email, subject] = identity.stdout.split("\0");
+    restoreMode = author === "AI-DLC" && email === "aidlc@localhost" && subject?.startsWith(`aidlc: parked bolt-${slug} at `)
+      ? "legacy-snapshot" : "legacy-branch-tip";
+  }
+  const raw = restoreMode !== "branch-tip" && restoreMode !== "legacy-branch-tip";
+  const added = runGit(["worktree", "add", ...(raw ? ["--no-checkout"] : []), "-b", branch, wtPath, head.oid], repoCwd);
+  if (!added.ok) {
+    errorWithSlug(slug, `git worktree add failed: ${added.stderr.trim() || `exit ${added.code}`}${raw ? "" : "; --raw bypasses checkout filters"}`);
+  }
+  let materialized = 0;
+  if (raw) {
+    const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
+    try {
+      const indexed = runGit(["read-tree", head.oid], wtPath, env);
+      if (!indexed.ok) throw new Error(`git read-tree failed: ${indexed.stderr.trim() || `exit ${indexed.code}`}`);
+      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+        cwd: wtPath,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (listed.exitCode !== 0) throw new Error(`git ls-files failed: ${listed.stderr.toString().trim() || `exit ${listed.exitCode}`}`);
+      const symlinkConfig = runGit(["config", "--bool", "core.symlinks"], wtPath, env);
+      if (!symlinkConfig.ok && symlinkConfig.code !== 1) {
+        throw new Error(`git config core.symlinks failed: ${symlinkConfig.stderr.trim() || `exit ${symlinkConfig.code}`}`);
+      }
+      const symlinks = symlinkConfig.stdout.trim() !== "false";
+      const rootRealpath = realpathSync(Buffer.from(wtPath), { encoding: "buffer" });
+      const umask = process.umask();
+      for (let start = 0; start < listed.stdout.length;) {
+        const end = listed.stdout.indexOf(0, start);
+        if (end === -1) throw new Error("invalid parked index entry");
+        const entry = listed.stdout.subarray(start, end);
+        start = end + 1;
+        const tab = entry.indexOf(0x09);
+        const match = /^([0-7]{6}) ([0-9a-f]{40,64}) 0$/.exec(entry.subarray(0, tab).toString("ascii"));
+        if (tab === -1 || !match) throw new Error("invalid parked index entry");
+        const [, mode, sha] = match;
+        const pathBytes = entry.subarray(tab + 1);
+        const { destination, parent } = restoreDestination(rootRealpath, pathBytes);
+        if (mode !== "100644" && mode !== "100755" && mode !== "120000" && mode !== "160000") {
+          throw new Error(`unsupported parked index mode ${mode} for ${JSON.stringify(pathBytes.toString())}`);
+        }
+        assertNoSymlinkedAncestor(rootRealpath, parent);
+        mkdirSync(parent, { recursive: true });
+        assertParentInsideCheckout(rootRealpath, parent);
+        if (mode === "160000") {
+          mkdirSync(destination);
+          continue;
+        }
+        if (mode === "120000") {
+          // Only symlink targets are small enough to buffer in memory.
+          const blob = Bun.spawnSync(["git", "cat-file", "blob", sha], {
+            cwd: wtPath,
+            env,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          if (blob.exitCode !== 0) {
+            throw new Error(`git cat-file failed for ${JSON.stringify(pathBytes.toString())}: ${blob.stderr.toString().trim() || `exit ${blob.exitCode}`}`);
+          }
+          if (symlinks) symlinkSync(blob.stdout, destination);
+          else writeFileSync(destination, blob.stdout, { flag: "wx" });
+        } else {
+          const fd = openSync(destination, "wx");
+          let blob: SpawnSyncReturns<Buffer>;
+          try {
+            blob = spawnSync("git", ["cat-file", "blob", sha], {
+              cwd: wtPath,
+              env,
+              stdio: ["ignore", fd, "pipe"],
+            });
+          } finally {
+            closeSync(fd);
+          }
+          if (blob.status !== 0) {
+            rmSync(destination, { force: true });
+            throw new Error(`git cat-file failed for ${JSON.stringify(pathBytes.toString())}: ${blob.stderr?.toString().trim() || blob.error?.message || `exit ${blob.status}`}`);
+          }
+          if (mode === "100755") chmodSync(destination, 0o777 & ~umask);
+        }
+        materialized++;
+      }
+    } catch (e) {
+      errorWithSlug(slug, `raw restore failed: ${errorMessage(e)}; partial checkout left in place at ${wtPath}`);
+    }
+  }
+  console.log(JSON.stringify({
+    restored: true,
+    slug,
+    parked_ref: parkedRef,
+    worktree_path: wtPath,
+    branch,
+    reviewed_source_refs: refs.filter(({ ref }) => ref.startsWith(`${parkedRef}/reviewed-source/`)).length,
+    ...(raw ? { materialized } : {}),
+    raw_bytes: raw,
+    restore_mode: restoreMode,
+  }));
+}
+
+function handlePurge(args: string[]): void {
+  const flags = parseFlags(args);
+  const slug = validateSlug(flags.slug);
+  validateParkedStamp(flags.parked);
+  const pd = resolveProjectDir(projectDir);
+  const repoCwd = parkedRepoCwd(pd, flags, slug);
+  assertNotSiblingWorktree(repoCwd);
+  const refs = parkedSourceRefs(repoCwd, slug).filter(({ ref }) =>
+    flags.parked === undefined || parkedStamp(ref) === flags.parked);
+  const stamps = [...new Set(refs.map(({ ref }) => parkedStamp(ref)))].sort((a, b) =>
+    a.localeCompare(b, "en", { numeric: true }));
+  const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
+  if (!listed.ok) errorWithSlug(slug, `git worktree list failed: ${listed.stderr.trim()}`);
+  for (const stamp of stamps) {
+    const wtPath = resolve(pd, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
+    const branch = `refs/heads/restore/bolt-${slug}-${stamp}`;
+    // Match registrations too: a restored checkout may have been moved.
+    const registeredPath = worktreeCheckedOutAt(listed.stdout, branch);
+    if (existsSync(wtPath) || registeredPath) {
+      errorWithSlug(slug, `restore checkout still present at ${registeredPath ?? wtPath}; remove it first`);
+    }
+  }
+  const cleanupError = deleteRetainedSourceRefs(repoCwd, refs);
+  if (cleanupError) errorWithSlug(slug, `parked ref cleanup failed: ${cleanupError}`);
+  console.log(JSON.stringify({ purged: refs.length, slug, stamps }));
 }
 
 // --- Subcommand: list ---
@@ -3176,6 +3736,12 @@ export function main(argv: string[]): void {
       case "discard":
         handleDiscard(filteredArgs.slice(1));
         break;
+      case "restore":
+        handleRestore(filteredArgs.slice(1));
+        break;
+      case "purge":
+        handlePurge(filteredArgs.slice(1));
+        break;
       case "list":
         handleList(filteredArgs.slice(1));
         break;
@@ -3187,7 +3753,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: create, merge, discard, list, verify, info`
+          `Unknown subcommand: ${subcommand}. Valid: create, merge, discard, restore, purge, list, verify, info`
         );
     }
   } catch (e) {
@@ -3199,11 +3765,14 @@ export function main(argv: string[]): void {
 // prepended to the message so doctor's regex `\[slug=([a-z0-9-]+)\]` can
 // correlate the error with the affected Bolt without re-engineering
 // emitError's field set.
-function errorWithSlug(slug: string, msg: string): never {
-  error(`[slug=${slug}] ${msg}`);
+function errorWithSlug(slug: string, msg: EmitErrorMessage): never {
+  error(typeof msg === "string" ? `[slug=${slug}] ${msg}` : {
+    message: `[slug=${slug}] ${msg.message}`,
+    auditMessage: `[slug=${slug}] ${msg.auditMessage}`,
+  });
 }
 
-function error(msg: string): never {
+function error(msg: EmitErrorMessage): never {
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-worktree ${process.argv.slice(2).join(" ")}`.trim();
   emitError(pd, "aidlc-worktree", command, msg);

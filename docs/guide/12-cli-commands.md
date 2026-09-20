@@ -32,6 +32,8 @@ diagnostic and lifecycle routes.
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
 | `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
 | `/aidlc` | Resume an existing workflow (if an intent exists) or creation the first intent and start new |
+| `/aidlc park` | Park the active workflow at the current stage boundary for a later session or another person |
+| `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight intent without deleting its record; `unarchive <name>` brings it back |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
@@ -273,6 +275,38 @@ repo. An intent with no recorded repos is the single-repo default (git runs in t
 workspace/project dir). Team-owned Units currently require that single-repo
 default: `set-unit-ownership team` rejects an intent with recorded sibling repos
 before changing state. See [Artifacts Reference](14-artifacts-reference.md).
+
+---
+
+### `/aidlc park` - Park the workflow
+
+Stop cleanly at the current inter-stage boundary so the workflow can be picked up in a later session, or by someone else after the `aidlc/` tree is committed and pulled.
+
+**Syntax:**
+
+```
+/aidlc park
+```
+
+**Behavior:** The engine routes the verb to `aidlc park`, which emits `WORKFLOW_PARKED`, records the park marker in the state file, and reports the stage it parked at. No stage is advanced and nothing is marked complete. Parking is refused when no workflow is active or the workflow is already Completed. In a Unit-scoped team checkout (a Construction worktree carrying a Unit scope stamp) the same command parks that Unit locally instead: it writes a checkout-local Unit park marker, leaves the shared workflow state untouched, and emits a `parked` directive through the routed command; the next `/aidlc` in that checkout reports the Unit as parked there. Resume with `/aidlc --resume`, which clears whichever marker applies and continues. The verb is sole-token: `park` inside a longer sentence is treated as a description of work, so ask the conductor to park in prose or type the bare verb.
+
+The per-user cursor `aidlc/spaces/<space>/intents/active-intent` is gitignored, so a teammate who pulls a parked workflow selects it with `/aidlc intent <name>` before `/aidlc --resume`.
+
+---
+
+### `/aidlc team-board` - Team Construction board
+
+Read-only view of a team-owned Construction: Unit progress, observed claims, pinned merge readiness, claimable Units, and blockers. The same board `/aidlc --status` appends under `Unit Ownership: team`.
+
+**Syntax:**
+
+```
+/aidlc team-board
+/aidlc team-board --snapshot
+/aidlc team-board --space <name> --intent <name>
+```
+
+**Behavior:** The engine routes the verb to `aidlc team-board` and prints its output verbatim without touching state, cache, or audit. Only `--snapshot`, `--space <name>`, and `--intent <name>` are accepted; any other token is a usage error. Requires `Unit Ownership: team`.
 
 ---
 
@@ -681,7 +715,7 @@ AI-DLC doctor
 
 Machine
   warn  Runtime hook PATH: bun is interactive-only at /home/user/.bun/bin/bun
-        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. Install Bun, then add ~/.bun/bin to the login-independent environment used by the harness, not only .zshrc or .bash_profile.
+        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. Install Bun, then add ~/.bun/bin to the login-independent PATH the harness inherits (the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf), not only .zshrc or .bash_profile.
   warn  Update: update check unavailable while offline
         fix: run `bun .claude/tools/aidlc.ts update --check`
   ok    4 checks passed
@@ -1192,28 +1226,399 @@ public route. Prefer `aidlc` whenever a route is documented below.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 
-During Construction, ask in a typed message to "run the rest autonomously" or
-"gate every stage from here". Both requests work with skeleton-on or
-`skeleton: off`; skeleton-off has no automatic ladder prompt. The conductor
-records the explicit choice through:
+During Construction, explicitly ask to continue automatically or review each
+checkpoint. The conductor records **Continue automatically** as `autonomous`
+and **Review each checkpoint** as `gated`:
 
 ```bash
 aidlc engine bolt set-autonomy --mode autonomous
 aidlc engine bolt set-autonomy --mode gated
 ```
 
-Both commands update `Construction Autonomy Mode` in `aidlc-state.md` and emit
-`AUTONOMY_MODE_SET`. Granting `autonomous` requires a fresh human turn; switching
-back to `gated` restores subsequent human approvals without requiring a fresh
-turn.
+Both update `Construction Autonomy Mode` and emit `AUTONOMY_MODE_SET`. Granting
+autonomy requires a fresh human turn; revocation does not. New checkpoint
+workflows offer the choice at Construction entry with skeleton-off, or after
+the first working integrated Unit has passed its skeleton checkpoint with
+skeleton-on. A known choice is not asked again; on-demand changes remain valid.
 
-On the default stage-major walk, autonomy skips later eligible Construction
-completion approvals. The first in-scope Construction stage still requires its
-own human approval, even if autonomy was granted earlier, and each Unit's Code
-Generation Plan Approval remains mandatory. Existing unit-major execution stays
-serial, suppresses swarm, and retains human stage gates for per-unit stages.
-See [Construction Execution](../reference/03-orchestrator.md#construction-execution)
-for the ladder and failure-handling rules.
+Autonomy controls ordinary completion approvals. Every Unit still needs Plan
+Approval, and verification command selection and skeleton checkpoint approval
+always need the human. Pre-generation summary confirmation needs the human only when
+`directive.ceremony.summary_confirmation === "on"`. Failures halt. Existing
+workflows without `Construction Checkpoints` retain their legacy first-stage
+and late stage approvals; team-owned Unit gates retain their own policy.
+
+### Construction order and execution
+
+New source-producing solo Unit workflows with Unit decomposition in scope record
+`Construction Checkpoints: enabled`, `Construction
+Iteration: unit-major`, and `Construction Execution: serial`. One Unit runs
+through its applicable design stages and Code Generation before the next.
+Design-only and no-Unit workflows keep their existing stage flow; team-owned
+Units keep their own gate rhythm. Existing workflows and explicit iteration
+choices are preserved. To choose swarm execution explicitly, select stage-major
+first. During Construction, obtain the field/value consent described below
+before each setter; during Inception these setters need no policy receipt:
+
+```bash
+aidlc engine state set-construction-iteration stage-major
+aidlc engine state set-construction-execution swarm
+```
+
+To opt an existing workflow into verified checkpoints, preferably before Unit
+work begins, use `aidlc engine state set-construction-checkpoints enabled`.
+`disabled` retains the legacy checkpoint flow. These typed setters update
+runtime preferences. Generic `state set` refuses `Construction Checkpoints`,
+`Construction Execution`, `Construction Iteration`, and `Construction Verification
+Command`; use `set-construction-checkpoints`, `set-construction-execution`,
+`set-construction-iteration`, or the receipt-bound
+`set-construction-verification-command`, respectively.
+During Construction, changing `Construction Checkpoints`, `Construction
+Execution`, or `Construction Iteration` requires an exact, session-bound human
+choice for that field and value, not merely a fresh human turn. An unattended
+run cannot disable checkpoints to get past a refusal. For example:
+
+```bash
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --decision "Change Construction Checkpoints to disabled?" --options "Approve,Request Changes"
+```
+
+Present **Approve** and **Request Changes**, then wait for the human to choose
+in the invoking SessionStart session. Only after **Approve**, run:
+
+```bash
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --details "Approve"
+{{INVOKE}} engine state set-construction-checkpoints disabled
+```
+
+For **Request Changes**, record the same answer with `--details "Request Changes"`
+and keep the current policy. Use this flow separately for each field/value change,
+including execution and iteration. `CONSTRUCTION_POLICY_RECORDED` authorizes
+only the requested value on that field in the current workflow; a later proposal
+for the field supersedes it and applying it spends it. Another gate's answer,
+an unrelated prompt, or a response from another session cannot authorize the
+change. Reusing an answer is refused. If audit append fails, retry the same
+answer after repairing the failure; the one-shot response is retained until
+the append succeeds.
+
+Execution is separate from approval: swarm works with guided (`gated`) or
+automatic (`autonomous`) completion. Unit-major stays serial and refuses a
+contradictory swarm setting; run `aidlc engine state set-construction-execution serial` before
+returning to unit-major. Preserve existing explicit choices. Workflows without
+the execution field retain legacy autonomy-based swarm routing.
+
+For checkpoint-enabled solo work with a real non-empty Unit DAG and an included
+source-producing stage, skeleton-on
+always builds the first DAG Unit as the smallest working integrated slice
+before later Units, even with stage-major selected. A first design-stage
+review alone does not prove a working skeleton. Already approved inline Units
+are excluded from later swarm batches.
+
+### `aidlc engine swarm prepare` - prepare a reproducible batch
+
+Before initial protected Code Generation prepare, commit the already-approved
+parent application source so the selected base can reproduce it. This includes
+approved inline skeleton source before switching to a parallel batch. The rule
+applies to legacy autonomy and new checkpoint workflows alike; an autonomy grant
+never authorizes an automatic commit.
+
+```bash
+aidlc engine swarm prepare --batch <N> --units "<exact emitted Units>"
+```
+
+The tool performs a read-only source/approval preflight for all Units before
+creating any child worktree. If the source is uncommitted, it returns a
+commit-and-retry instruction with no child left behind by that refusal. Commit
+only with explicit authorization, then retry with current approval evidence.
+If the application source or plan changed, re-present any required Plan Approval.
+The requirement concerns application source, not a blanket commit of unrelated
+framework records or other files.
+
+### Construction verification command — record human authorization
+
+For checkpoint-enabled work, Delivery Planning proposes a real project check from
+the project scan, such as `bun test`, `pytest`, or `make check`. The structured
+**Approve** / **Request Changes** question asks **Use this command to verify each
+completed Unit?** Before presenting the command, write it as UTF-8 text to
+`<record>/verification-command.txt` with the harness's
+file-write tool (Write/edit), never a shell `echo` or heredoc. Repo-derived command
+text must never be interpolated into a shell line: shell substitutions could
+execute before approval. Pass only the record-relative path and use the invoking
+SessionStart session ID:
+
+```bash
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+```
+Copy the complete canonical command exactly from the `command` field in the
+`decision` tool's JSON output into the question's code span; never abbreviate or
+substitute a summary, prefix, or digest. Use a code-span delimiter long enough to
+preserve any backticks in the command. The human can also open
+`<record>/verification-command.txt`.
+
+
+Wait for the human's exact **Approve** / **Request Changes** reply in that
+session. Only **Approve** authorizes the receipt; an unrelated reply,
+**Request Changes**, or a reply from another session does not. Never write
+`--details "Approve"` unless the human chose it. Only then run:
+
+```bash
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
+{{INVOKE}} engine state set-construction-verification-command --command-file verification-command.txt
+```
+
+These are the `aidlc-log` decision/answer checkpoint forms. Both require the same
+`--stage`, `--checkpoint verification-command`, canonical command, and
+`--session "<session ID>"`. Each accepts exactly one of `--command-file <path>`
+or `--command`; both or neither are refused. Use the file form for conductor
+shell calls; the direct argument is only safe when passed without shell
+interpolation. Files must be record-relative regular files, with no absolute
+path, `..`, or symlink in the chain, and no larger than 16 KiB. The file is decoded
+as UTF-8 and canonicalized exactly like the direct argument.
+Leading/trailing whitespace is trimmed before recording, hashing, and execution.
+The resulting command must be nonblank, at most 1024 characters, and a single
+line. The tools refuse control characters (including newline, CR, tab, or NUL)
+and display-spoofing characters: Unicode format characters (including zero-width
+and bidi controls), line/paragraph separators, and no-break space (U+00A0). Put
+multiline checks in a script and record its invocation.
+`decision` records `DECISION_RECORDED` with `Checkpoint: Construction Verification
+Command` and `Command SHA-256`. Its JSON output includes the full canonical
+`command` and `command_sha256` alongside `challengeId` and `challengeFile`;
+`answer` also prints `command_sha256`. `answer` requires a matching pending
+decision and the human-turn hook's response bound to that command and session's current
+challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the exact choice matching
+`--details`; a later `HUMAN_TURN` alone is insufficient. Recording a new decision
+replaces the session's prior challenge and response; a successful answer appends
+the audit event before consuming both. An append failure leaves the same response
+retryable; stale, mismatched, and successfully consumed responses are refused.
+`--details "Approve"` emits the tool-owned `VERIFICATION_COMMAND_RECORDED` receipt;
+`--details "Request Changes"` records only `QUESTION_ANSWERED` and means propose
+another command without setting state. Other answers are refused. The receipt
+carries the stage, checkpoint, session, SHA-256 of that canonical command, the
+complete canonical command as `Command Label` (never truncated), and the human's
+exact choice.
+`aidlc-audit append` cannot mint this reserved receipt.
+
+The typed setter accepts `--command-file <record-relative path>` or one positional
+command argument, never both. It writes `- **Construction Verification Command**: <cmd>`
+under `## Runtime State` in `aidlc-state.md` only when the latest current-workflow
+approval receipt matches its digest. Its JSON output includes the full canonical
+`command` and `command_sha256`. It does not ask for another human turn:
+the receipt, not the state field, authorizes execution. Verification checks the
+same binding; older-workflow and isolated-stage receipts do not authorize it,
+and a later receipt for a different command supersedes the earlier one. A field
+without its matching receipt, or a receipt without the matching field, is not
+authorization. Do not write this field directly or through generic `state set`.
+
+The recorded command is reused at every Unit/batch checkpoint in this intent.
+Selection and later changes always require this decision/answer/setter flow,
+even under autonomous completion. If no runnable check exists yet (greenfield),
+the human may defer during Delivery Planning; leave the field unset and the first
+checkpoint will ask. Never invent or auto-approve a placeholder command.
+
+### `aidlc engine bolt checkpoint` - verify and approve a completed Unit
+
+The engine names the Unit and checkpoint kind (`unit` or `skeleton`). The body,
+reviews, and receipts already exist; follow the checkpoint instead of rebuilding:
+
+```bash
+aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
+aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
+```
+
+Verification runs the recorded, human-authorized `Construction Verification
+Command` and stores proof bound to current artifacts, source, and attempt. It
+does not accept a command argument. If `construction_checkpoint.command_authorized`
+is false, do not run `verify`: complete the
+[recorded-command flow](#construction-verification-command-record-human-authorization),
+then re-run `next`. A skeleton's command must prove the integrated slice end to
+end and check ordinary Units' working results. Approval requires a current
+verified proof. Show "Verified with `<full command>` (exit 0)" in the human
+approval question, copying the complete `verification_command` from the current
+tool output into a code span without abbreviation. This display label is the full
+canonical command, not a prefix. Only after `verify` reports `verified: true` and
+the current checkpoint has `ready: true`, run `ask`; it refuses an unready or
+unverified checkpoint. Before presenting **Approve** / **Request Changes**, open
+the one-shot question for the current Unit, kind, fingerprint, verification proof
+ID, and authorized command digest in the invoking SessionStart session:
+
+```bash
+aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
+```
+
+Wait for the human's exact **Approve** / **Request Changes** reply in that
+session, to this checkpoint question. It authorizes only the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Never pass `--user-input` the human did not choose. Run only the action
+they chose, with the same session:
+
+```bash
+# Only after the human chose Approve:
+aidlc engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Approve'
+# Only after the human chose Request Changes and supplied feedback:
+aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
+```
+
+The action consumes the response. Re-running `verify` withdraws every open
+checkpoint question and captured checkpoint response for this intent, in any
+session; ask again only after the new verification reports `verified: true`.
+A response to an older proof cannot approve a newer one, even if its fingerprint
+and command are unchanged. A verified ordinary Unit with `human_required: false`
+is approved without `--user-input` and needs no `ask`; human rejection always
+needs the verified question-and-answer flow above. A skeleton always requires
+the human. Missing or stale evidence is explained in `errors`: repair the named
+review/receipt, consulting the human as needed, without inventing verification
+or opening a checkpoint approval question early. Re-run `next` after verification, approval, or rejection, never report
+one Unit's checkpoint as approval of the whole Code Generation stage.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
+
+Only one protected question may be open per session. Asking any new question
+(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
+protected questions one at a time and wait for the answer before anything else.
+A withdrawn question must be asked again.
+
+The version-4 proof and CLI JSON retain `command_sha256` and the full canonical
+command in `command_label`, plus exit status, full captured stdout/stderr byte
+counts and SHA-256 digests, and the last 2 KiB of each stream in `stdout_tail` and
+`stderr_tail`. Tails are decoded as UTF-8 after dropping a leading partial
+multibyte sequence; control characters other than newline and tab are replaced
+with U+FFFD. Full output is not retained. Project check commands must not print
+secrets: these diagnostic tails are not secret-redacted. Approval binds
+`Verification Command SHA-256` on `GATE_APPROVED` to the proof's `command_sha256`.
+Use the tails to explain a failure; if more diagnostics are needed, use the same
+authorized project check, not a newly chosen command. Version-1 through version-3
+proofs are unverified after upgrading; authorize the recorded command and run
+`checkpoint --action verify` again before approval.
+
+### `aidlc engine swarm check` / `finalize` - verify native worktrees
+
+With Construction Checkpoints enabled, both commands run the intent's recorded,
+human-authorized Construction Verification Command in each prepared Unit worktree:
+
+```bash
+aidlc engine swarm check <Unit> [--test-file <protected spec>]
+aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<converged Units>"
+```
+
+`--check-cmd` is optional under checkpoints; if supplied, its canonical digest
+must match the authorized command. A missing authorization refuses execution:
+complete the [recorded-command flow](#construction-verification-command-record-human-authorization)
+and `set-construction-verification-command`, rather than substituting a passing
+command. Legacy autonomy without checkpoints still requires `--check-cmd` on
+both commands. `check` is advisory; `finalize` reruns the command and validates
+review evidence before merging each claimed Unit. Re-running `finalize` withdraws
+every open checkpoint question and captured checkpoint response for this intent,
+in any session; ask again only after fresh verification, source landing, and a
+batch status of `ready: true`. Only verified native passes
+receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` under
+checkpoints. Land their source through the native worktree merge before `next`.
+
+### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
+
+After a swarm batch settles, the engine may return `swarm_checkpoint` before
+another batch starts. Use exactly its batch number and Unit list:
+
+```bash
+aidlc engine bolt swarm-checkpoint --action status --batch <N> --units "<comma-separated Units>"
+```
+
+Only after status reports `ready: true`, run `swarm-checkpoint --action ask`;
+it refuses an unready batch. Before presenting **Approve** / **Request Changes**,
+open the one-shot question for the current batch, exact Unit set, fingerprint,
+and per-Unit `Command SHA-256` set in the invoking SessionStart session:
+
+```bash
+aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"
+```
+Show "Verified with `<full command>` (exit 0)" in the approval question. Copy the
+complete canonical `command` from the verification-command tool output into a
+code span without abbreviation, preserving any backticks with a longer delimiter.
+
+
+Wait for the human's exact **Approve** / **Request Changes** reply in that
+session, to this checkpoint question. It authorizes only the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Never pass `--user-input` the human did not choose. Run only the action
+they chose, with the same session:
+
+```bash
+# Only after the human chose Approve:
+aidlc engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Approve'
+# Only after the human chose Request Changes and supplied feedback:
+aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
+```
+
+The action consumes the response; a changed checkpoint needs a new question and
+answer. Re-running `finalize` withdraws every open checkpoint question and captured
+response for this intent, in any session; after fresh verification and source
+landing, confirm `ready: true` and ask again. A response captured before `finalize`
+cannot approve the new evidence. Automatic completion omits `--user-input` and
+needs no `ask` when `human_required: false`; human rejection always needs this
+ready question-and-answer flow. Readiness
+comes from the completed batch's current evidence, including each Unit's native
+`Command SHA-256` matching the current
+authorized Construction Verification Command. Batch approval binds that digest
+too: changing the authorized command invalidates prior approval, and older
+native receipts without the digest require fresh verification. Resolve `errors`
+rather than rebuilding the whole batch or inventing a pass. Re-run `next` after
+approval or rejection; a batch approval is not whole-stage
+approval. Later completion-only stage directives settle bookkeeping without
+another body, reviewer, or human learnings/approval question.
+
+After Request Changes, an `invoke-swarm` directive with `resume_existing: true`
+uses the same batch and exact Unit set, after fresh Plan Approval for that
+rejection revision:
+
+```bash
+aidlc engine swarm prepare --resume-existing --batch <N> --units "<exact emitted Units>"
+```
+
+If a worktree survives, the tool preserves its source and archives old metadata.
+If native source landing removed it, the tool can create a fresh child from the
+already-landed parent source after validating that landing evidence. Both paths
+retain the rejection revision and require fresh Plan Approval. A missing child
+without that evidence is refused. Do not assume every merged child survives, or
+replace a refused resume with ordinary prepare. Source that differs from the
+approved starting point must be reconciled and approved before work resumes.
+
+### Grouped Code Generation Plan Approval
+
+For the exact live swarm Unit set, a single **Approve Plans** answer can record
+separate Plan Approval receipts for every named Unit. Prepare every plan and
+questions file, then create the batch manifest in the active record. `--batch-file`
+takes its record-relative path, with no absolute paths, `..` components, or
+symlinked components. The manifest must be a regular file of at most 64 KiB:
+
+```json
+{"batch":"<review name>","units":[{"unit":"<Unit>","questionsFile":"<project-relative questions path>"}]}
+```
+
+```bash
+aidlc engine log decision --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --decision "Approve these named plans?" --options "Approve Plans,Request Changes"
+aidlc engine log answer --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --details "Approve Plans"
+```
+
+The decision precedes the prompt. Only after the actual **Approve Plans** answer,
+write `[Answer]: Approve Plan` into each named questions file and call `answer`.
+For **Request Changes**, record that choice in the files and use
+`--details "Request Changes"`, then revise and re-present. The batch binds the
+exact live Units, plan/questions fingerprints, and unchanged planned source.
+When some approved Units have landed, the remaining prepared workers retain
+their original approval as `next` narrows the pending set. Continue their
+existing worktrees after verifying the current approvals; a partial batch does
+not require another approval answer or a fresh `prepare`. This also applies
+after a checkpoint revision has been prepared. An interrupted revision setup
+can retry with its existing current approval; successful preparation removes
+the revision-preparation signal from subsequent `next` directives. Substantive
+plan or attempt changes still require the reported approval repair.
+When a human Retry explicitly discards a worker, its native discard can retain
+the committed approved baseline for recreation. The replacement can keep the
+same approval while other batch members continue or have already landed.
+Missing directories and unrelated old discard records do not authorize this
+recovery.
+Legacy protected-choice mediation, overrides, and unsupported harnesses use the
+single-Unit flow; per-Unit approval remains mandatory in either presentation.
+See [Construction Execution](../reference/03-orchestrator.md#construction-execution).
 
 ### `aidlc engine workspace codekb` - resolve the code knowledge directory
 
@@ -1402,7 +1807,7 @@ directory. Build also defaults its plugin root to the current directory; pass
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
-`{{INVOKE}} engine recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the walking-skeleton anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+`{{INVOKE}} engine recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
 
 ### `aidlc-graph ars` - deterministic ARS scoring
 
@@ -1455,6 +1860,13 @@ gate instead of calling these steps automatically.
 | `persist --slug <stage-slug> --selections-json <path>` | Write the confirmed learnings (a confirmed learning is a practice) to `aidlc/spaces/<active-space>/memory/project.md` / `team.md` (and, for a Sensor-binding learning, scaffold and bind a project-tier Sensor), emitting `RULE_LEARNED` / `SENSOR_PROPOSED` |
 
 Confirmed learnings apply on the next workflow, not the current one.
+
+`surface` locates the diary from `runtime-graph.json` when that machine-local
+file has been compiled, and works out the same path itself when it has not —
+which is the normal state on a workflow's first gate, and also what a fresh
+clone looks like. In that case it prints a note on stderr naming the
+`aidlc engine runtime compile` that rebuilds the graph; the candidates on stdout
+are unaffected.
 
 ### `aidlc-runtime` — read the runtime graph
 

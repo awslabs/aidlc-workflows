@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
@@ -9,8 +9,18 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
+  aidlcToolInvocation,
   resolveHarnessPath,
+  runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
+import {
+  guardOperationInvocation,
+  guardOperationMatchesRemedy,
+  type GuardRecoveryInteraction,
+  type GuardRecoveryOperation,
+  isGuardRecoveryOperation,
+  renderGuardOperation,
+} from "./aidlc-guard-operation.ts";
 import {
   artifactFilename,
   KNOWN_CODEKB_STAGES,
@@ -37,6 +47,8 @@ export {
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
+import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
+import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
 export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
@@ -735,6 +747,30 @@ export const WORKSPACE_VERBS: ReadonlySet<string> = new Set([
   "space-create",
   "intent",
 ]);
+// The orchestrator's own public verbs (`aidlc park`, `aidlc team-board`). A
+// sole `park` or leading `team-board` is routed as a print naming that command
+// (routeNext Branch 1c); it is NOT a terminal utility for a harness seam to run
+// off-band, because park mutates workflow state and team-board lives on the
+// orchestrator, not aidlc-utility. classifyTerminalCommand returns null for
+// them so they stay on the engine + conductor path, like `compose`.
+export const ORCHESTRATOR_VERBS: ReadonlySet<string> = new Set([
+  "park",
+  "team-board",
+]);
+
+export type OrchestratorVerb = "park" | "team-board";
+// The ONE rule for whether a `next` argv is an orchestrator-verb route: a SOLE
+// `park` (park mutates, so `park` inside a longer description stays freeform,
+// like the sole-token `help` rule) or a LEADING `team-board`, which owns its
+// whole argv (a refused trailing token is still a board attempt, never workflow
+// work). parseNextFlags, classifyTerminalCommand, the Kiro roll-forward guard
+// and the Stop hook's engagement classifier all consult this so they cannot
+// disagree about the same command.
+export function leadingOrchestratorVerb(args: readonly string[]): OrchestratorVerb | null {
+  if (args[0] === "team-board") return "team-board";
+  if (args.length === 1 && args[0] === "park") return "park";
+  return null;
+}
 
 export type WorkspaceNoun = "intent" | "space";
 
@@ -1319,6 +1355,9 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the
   // public grammar promises leading-token semantics.
+  // A SOLE park / LEADING team-board stays on the engine path; a later flag
+  // belongs to team-board's argv (see leadingOrchestratorVerb).
+  if (leadingOrchestratorVerb(args) !== null) return null;
   const workspaceCommand = parseWorkspaceCommand(args);
   if (workspaceCommand.kind !== "not-workspace") {
     // Intent creation mutates workflow state and must remain on the normal
@@ -1664,6 +1703,10 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
     return false;
   }
   if (args.shift() !== "next" || args.some((arg) => arg.includes("$"))) return false;
+  // team-board is a read-only board: routeNext Branch 1c answers with a terminal print
+  // before state inspection, without touching the engine marker, accepted or refused alike.
+  // park stays engagement because the park it names mutates.
+  if (leadingOrchestratorVerb(args) === "team-board") return true;
   // Legacy entry points do not extract the dispatcher's bare global flags.
   // Keep mixed positional/global forms conservative; trailing list flags remain valid.
   if (
@@ -1951,6 +1994,58 @@ export function knowledgeDir(projectDir: string, space?: string): string {
 // stage/artifact slugs, and space names are distinct domains that must be free
 // to tighten independently.
 export const SPACE_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+// A record dir (`<YYMMDD>-<slug>`), slug, or uuid: one path-safe segment, so a
+// selector can never escape `aidlc/spaces/<space>/intents/` through a join.
+export const INTENT_SELECTOR_REGEX = /^[a-z0-9][a-z0-9-]*$/i;
+
+export type TeamBoardArgs =
+  | { kind: "ok"; snapshot: boolean; space?: string; intent?: string; argv: string[] }
+  | { kind: "error"; message: string };
+
+const TEAM_BOARD_USAGE = "Usage: team-board [--snapshot] [--space <name>] [--intent <name>].";
+
+// The trailing argv of `team-board`, parsed once for every entrypoint: the
+// engine's print route and the direct orchestrator handler must accept exactly
+// the same tokens, or the allowlist holds on one path and not the other. Both
+// selectors become path segments downstream, so they must match the name
+// grammars, and every token is either a known flag or a refusal. `argv` is the
+// canonical re-rendering the engine forwards.
+export function parseTeamBoardArgs(args: string[]): TeamBoardArgs {
+  let snapshot = false;
+  let space: string | undefined;
+  let intent: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token === "--snapshot") {
+      if (snapshot) return { kind: "error", message: `team-board --snapshot may be given once. ${TEAM_BOARD_USAGE}` };
+      snapshot = true;
+      continue;
+    }
+    if (token === "--space" || token === "--intent") {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("-")) {
+        return { kind: "error", message: `team-board ${token} requires a value. ${TEAM_BOARD_USAGE}` };
+      }
+      const grammar = token === "--space" ? SPACE_NAME_REGEX : INTENT_SELECTOR_REGEX;
+      if (!grammar.test(value)) {
+        return { kind: "error", message: `team-board ${token} "${value}" is not a valid name.` };
+      }
+      if ((token === "--space" ? space : intent) !== undefined) {
+        return { kind: "error", message: `team-board ${token} may be given once. ${TEAM_BOARD_USAGE}` };
+      }
+      if (token === "--space") space = value;
+      else intent = value;
+      i++;
+      continue;
+    }
+    return { kind: "error", message: `team-board does not accept "${token}". ${TEAM_BOARD_USAGE}` };
+  }
+  const argv: string[] = [];
+  if (snapshot) argv.push("--snapshot");
+  if (space !== undefined) argv.push("--space", space);
+  if (intent !== undefined) argv.push("--intent", intent);
+  return { kind: "ok", snapshot, space, intent, argv };
+}
 
 export function validSpaceFlag(raw: string): string | null {
   return SPACE_NAME_REGEX.test(raw) ? raw : null;
@@ -2083,9 +2178,69 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
+// The repository NAME for a checkout whose project root is a LINKED GIT
+// WORKTREE, else null so the caller keeps `basename(projectDir)`.
+//
+// `git worktree add` names its directory after a branch, so in a linked worktree
+// basename(projectDir) is a branch name rather than a repository name. The shared
+// git dir lives inside the MAIN checkout, so its parent's basename is the
+// repository name.
+//
+// TWO things make this safe, and both are load-bearing:
+//
+//  1. `--git-dir` and `--git-common-dir` are measured with `cwd: projectDir`, so a
+//     relative answer is relative to PROJECTDIR — never to `--show-toplevel`. The
+//     two coincide only when the project root IS the toplevel; resolving against
+//     the toplevel otherwise climbs too high, and if a git dir happens to sit
+//     there (a repository vendored in another, or a home directory that is itself
+//     a repository) it would silently return a DIFFERENT repository's name.
+//  2. A linked worktree is the only topology where those two paths differ
+//     (`--git-dir` is `<common>/worktrees/<name>`). Equal for a main checkout, for
+//     a subdirectory of one, and for a repository nested inside another — all of
+//     which return null here and keep today's answer byte-for-byte. That is what
+//     makes this change worktree-only rather than a re-definition of identity for
+//     every project root below its repository root.
+//
+// Deliberately NOT the `origin` remote: that would also cover a clone whose
+// directory name differs from the repository, but remote names are mutable (a
+// rename or a re-point would move a workspace's store) and it would change
+// resolution for every checkout whose remote and directory names differ. A
+// location is stable; widening identity to the remote is a separate decision.
+function gitRevParseSingle(projectDir: string, flag: string): string | null {
+  const r = spawnSync("git", ["rev-parse", flag], {
+    cwd: projectDir,
+    encoding: "utf-8",
+  });
+  if (r.status !== 0) return null;
+  const out = r.stdout?.trim();
+  return out ? out : null;
+}
+
+function mainCheckoutRepoName(projectDir: string): string | null {
+  const gitDirRaw = gitRevParseSingle(projectDir, "--git-dir");
+  if (gitDirRaw === null) return null; // not a git repository
+  const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
+  if (commonRaw === null) return null;
+  let gitDirAbs: string;
+  let commonAbs: string;
+  try {
+    // Resolved against projectDir — the directory both were measured in.
+    gitDirAbs = realpathSync(resolvePath(projectDir, gitDirRaw));
+    commonAbs = realpathSync(resolvePath(projectDir, commonRaw));
+  } catch {
+    return null;
+  }
+  if (gitDirAbs === commonAbs) return null; // not a linked worktree
+  const name = basename(dirname(commonAbs));
+  return name.length > 0 ? name : null;
+}
+
 // The deterministic repo NAME for codekb keying (NOT the intent slug):
 //   1 recorded repo  -> that name
-//   0 recorded repos (workspace root IS the repo) -> basename(projectDir)
+//   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's basename
+//                       (mainCheckoutRepoName), falling back to basename(projectDir)
+//                       when git cannot answer. Identical to basename(projectDir)
+//                       for every root that is not a linked worktree.
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
@@ -2100,7 +2255,12 @@ export function codekbRepoName(
     selection.intent ?? undefined,
     selection.space,
   );
-  return repos.length === 1 ? repos[0] : basename(projectDir);
+  if (repos.length === 1) return repos[0];
+  // Multi-repo (2+) keeps the basename namespace unchanged; only the
+  // NOTHING-RECORDED case consults git, where the project root is the repo and a
+  // worktree basename is otherwise mistaken for the repository name.
+  if (repos.length > 1) return basename(projectDir);
+  return mainCheckoutRepoName(projectDir) ?? basename(projectDir);
 }
 
 // --- Codekb scope of analysis -------------------------------------------------
@@ -3045,6 +3205,18 @@ export interface PlanApprovalRuntimeProvenance {
   plannedSourceSha256: string;
 }
 
+export interface PlanApprovalBatchMember extends PlanApprovalRuntimeIdentity {
+  unit: string;
+  planSha256: string;
+  instructionsSha256: string;
+}
+
+export interface PlanApprovalRuntimeBatch {
+  name: string;
+  members: PlanApprovalBatchMember[];
+  bindingSha256: string;
+}
+
 export interface PlanApprovalRuntimeChallenge
   extends PlanApprovalRuntimeIdentity, PlanApprovalRuntimeProvenance {
   version: 1;
@@ -3053,6 +3225,7 @@ export interface PlanApprovalRuntimeChallenge
   options: [string, string];
   requireExactOptionLabels: boolean;
   hashedOptionLabels: boolean;
+  batch?: PlanApprovalRuntimeBatch;
 }
 
 export interface PlanApprovalRuntimeResponse {
@@ -3060,6 +3233,25 @@ export interface PlanApprovalRuntimeResponse {
   session: string;
   challengeId: string;
   choice: "Approve Plan" | "Request Changes";
+  responseSha256: string;
+}
+
+export interface ProtectedQuestion {
+  version: 1;
+  kind: "verification-command" | "construction-policy" | "checkpoint-approval";
+  session: string;
+  challengeId: string;
+  target: Record<string, unknown>;
+  targetDigest: string;
+  options: [string, string];
+  promptDigest?: string;
+}
+
+export interface ProtectedResponse {
+  version: 1;
+  session: string;
+  challengeId: string;
+  choice: "Approve" | "Request Changes";
   responseSha256: string;
 }
 
@@ -3078,6 +3270,9 @@ export interface PlanApprovalRuntimeReceipt
   questionsSha256: string;
   certifiedSourceSha256: string;
   status: "approved" | "generation";
+  batch?: PlanApprovalRuntimeBatch;
+  /** Execution in a verified Unit worktree retains its protected parent authority. */
+  delegation?: PlanApprovalWorktreeDelegation;
   /**
    * Present only on a break-glass receipt: the human typed the override phrase
    * and the conductor ran `answer --override` with that reason. Such a receipt
@@ -3086,6 +3281,18 @@ export interface PlanApprovalRuntimeReceipt
    * refused are kept beside the reason so the record says what was overridden.
    */
   override?: PlanApprovalReceiptOverride;
+}
+
+export interface PlanApprovalWorktreeDelegation {
+  version: 1;
+  parentProjectDir: string;
+  worktreeDir: string;
+  unit: string;
+  provenanceSha256: string;
+  parentReceiptSha256: string;
+  baselineSha256: string;
+  /** Present only when this immutable commit reproduces the delegated baseline. */
+  baselineCommit?: string;
 }
 
 export interface PlanApprovalReceiptOverride {
@@ -3162,6 +3369,8 @@ export interface KiroIdeLegacyPlanApprovalHost {
 }
 
 function planApprovalRuntimeDir(projectDir: string): string {
+  const delegated = delegatedWorktreeIntent(projectDir);
+  if (delegated) return join(projectDir, delegated.intentRecord, ".aidlc-plan-approval");
   return join(sessionsDir(projectDir), PLAN_APPROVAL_RUNTIME_DIR);
 }
 
@@ -3184,6 +3393,23 @@ function planApprovalResponsePath(projectDir: string, session: string): string {
   return segment
     ? join(planApprovalRuntimeDir(projectDir), `response-${segment}.json`)
     : "";
+}
+
+function protectedQuestionPath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment ? join(planApprovalRuntimeDir(projectDir), `protected-question-${segment}.json`) : "";
+}
+
+function protectedResponsePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment ? join(planApprovalRuntimeDir(projectDir), `protected-question-response-${segment}.json`) : "";
+}
+
+function removeRuntimeFile(path: string): void {
+  if (!path) return;
+  try { unlinkSync(path); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 // The receipt's file name is its identity: same target, same attempt, same
@@ -3276,21 +3502,27 @@ export function writePlanApprovalChallenge(
   projectDir: string,
   challenge: PlanApprovalRuntimeChallenge,
 ): void {
-  ensurePlanApprovalRuntimeDir(projectDir);
-  const path = planApprovalChallengePath(projectDir, challenge.session);
-  if (!path) throw new Error("Plan Approval challenge requires a nonblank session");
-  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
-  try {
-    unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
-  } catch {
-    // A prior response is optional and one-shot.
-  }
+  withAuditLock(projectDir, () => {
+    if (!challenge.session.trim() || challenge.session !== challenge.session.trim() || !runtimeSessionSegment(challenge.session)) {
+      throw new Error("Plan Approval challenge requires a nonblank session ID.");
+    }
+    ensurePlanApprovalRuntimeDir(projectDir);
+    withdrawProtectedQuestions(projectDir, challenge.session);
+    const path = planApprovalChallengePath(projectDir, challenge.session);
+    writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+    try {
+      unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  });
 }
 
 export function readPlanApprovalChallenge(
   projectDir: string,
   session: string,
 ): PlanApprovalRuntimeChallenge | null {
+  if (existsSync(protectedQuestionPath(projectDir, session))) return null;
   const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeChallenge>(
     planApprovalChallengePath(projectDir, session),
     "Plan Approval challenge",
@@ -3336,6 +3568,120 @@ export function clearPlanApprovalChallenge(
   }
 }
 
+/** Stable JSON object-key order; array order remains part of the target identity. */
+export function protectedTargetDigest(target: Record<string, unknown>): string {
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalize(record[key])]));
+    }
+    return value;
+  };
+  return createHash("sha256").update(JSON.stringify(canonicalize(target)), "utf-8").digest("hex");
+}
+
+/** One session mailbox, exclusive with Plan Approval, replaced under the audit lock. */
+export function mintProtectedQuestion(
+  projectDir: string,
+  question: Pick<ProtectedQuestion, "kind" | "session" | "target" | "promptDigest">,
+): ProtectedQuestion {
+  if (!question.session.trim() || question.session !== question.session.trim() || !runtimeSessionSegment(question.session)) {
+    throw new Error("Protected question requires a nonblank session ID.");
+  }
+  return withAuditLock(projectDir, () => {
+    ensurePlanApprovalRuntimeDir(projectDir);
+    removeRuntimeFile(planApprovalChallengePath(projectDir, question.session));
+    removeRuntimeFile(planApprovalResponsePath(projectDir, question.session));
+    consumeProtectedQuestion(projectDir, question.session);
+    const challenge: ProtectedQuestion = {
+      ...question,
+      version: 1,
+      challengeId: randomBytes(16).toString("hex"),
+      targetDigest: protectedTargetDigest(question.target),
+      options: ["approve", "request changes"].map((option) =>
+        createHash("sha256").update(option, "utf-8").digest("hex"),
+      ) as [string, string],
+    };
+    writeFileAtomic(protectedQuestionPath(projectDir, question.session), `${JSON.stringify(challenge, null, 2)}\n`);
+    return challenge;
+  });
+}
+
+export function readProtectedQuestion(projectDir: string, session: string): ProtectedQuestion | null {
+  if (existsSync(planApprovalChallengePath(projectDir, session))) return null;
+  const value = readPlanApprovalRuntimeJson<ProtectedQuestion>(protectedQuestionPath(projectDir, session), "Protected question");
+  return value?.version === 1 && value.session === session &&
+    ["verification-command", "construction-policy", "checkpoint-approval"].includes(value.kind) &&
+    typeof value.challengeId === "string" && /^[a-f0-9]{32}$/.test(value.challengeId) &&
+    value.target !== null && typeof value.target === "object" && !Array.isArray(value.target) &&
+    typeof value.targetDigest === "string" && value.targetDigest === protectedTargetDigest(value.target) &&
+    (value.promptDigest === undefined || (typeof value.promptDigest === "string" && /^[a-f0-9]{64}$/.test(value.promptDigest))) &&
+    Array.isArray(value.options) && value.options.length === 2 &&
+    value.options.every((option, i) => option === createHash("sha256").update(i === 0 ? "approve" : "request changes").digest("hex"))
+    ? value : null;
+}
+
+export function writeProtectedResponse(projectDir: string, response: ProtectedResponse): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = protectedResponsePath(projectDir, response.session);
+  if (!path) throw new Error("Protected response requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
+}
+
+export function readProtectedResponse(projectDir: string, session: string): ProtectedResponse | null {
+  const value = readPlanApprovalRuntimeJson<ProtectedResponse>(protectedResponsePath(projectDir, session), "Protected response");
+  return value?.version === 1 && value.session === session &&
+    typeof value.challengeId === "string" && /^[a-f0-9]{32}$/.test(value.challengeId) &&
+    (value.choice === "Approve" || value.choice === "Request Changes") &&
+    typeof value.responseSha256 === "string" && /^[a-f0-9]{64}$/.test(value.responseSha256)
+    ? value : null;
+}
+
+export function requireProtectedResponse(
+  projectDir: string, session: string,
+  expected: { kind: ProtectedQuestion["kind"]; targetDigest: string; choice: string },
+): void {
+  const question = readProtectedQuestion(projectDir, session);
+  const response = readProtectedResponse(projectDir, session);
+  const recovery = expected.kind === "verification-command" ? VERIFICATION_COMMAND_RECOVERY
+    : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
+    : 'Re-ask with aidlc bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" or aidlc bolt swarm-checkpoint --action ask --batch <number> --units "<units>" --session "<session ID>", then wait for Approve or Request Changes.';
+  if (!question || question.kind !== expected.kind || question.targetDigest !== expected.targetDigest ||
+    existsSync(planApprovalChallengePath(projectDir, session)) || !response ||
+    response.challengeId !== question.challengeId || response.choice !== expected.choice) {
+    throw new Error(`${expected.kind} requires the actual offered choice: a matching protected question, current target digest, and hook-recorded response for this session. ${recovery}`);
+  }
+  if (expected.kind === "checkpoint-approval" && !humanPresenceGuardDisabled() && !humanActedSinceGate(projectDir)) {
+    throw new Error(`checkpoint-approval requires a fresh human turn. ${recovery}`);
+  }
+}
+
+export function consumeProtectedQuestion(projectDir: string, session: string): void {
+  withdrawProtectedQuestions(projectDir, session);
+}
+
+/** A new question or lifecycle gate retires consent, even when its session is unknown. */
+export function withdrawProtectedQuestions(projectDir: string, session: string): void {
+  withAuditLock(projectDir, () => {
+    const dir = planApprovalRuntimeDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    if (session !== "*") {
+      removeRuntimeFile(protectedQuestionPath(projectDir, session));
+      removeRuntimeFile(protectedResponsePath(projectDir, session));
+      return;
+    }
+    let names: string[];
+    try { names = readdirSync(dir); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const name of names) {
+      if (name.startsWith("protected-question-") && name.endsWith(".json")) removeRuntimeFile(join(dir, name));
+    }
+  });
+}
+
 export function writePlanApprovalReceipt(
   projectDir: string,
   receipt: PlanApprovalRuntimeReceipt,
@@ -3369,6 +3715,107 @@ export function clearPlanApprovalReceipt(
   }
 }
 
+function planApprovalBatchCommitPath(
+  projectDir: string,
+  batch: PlanApprovalRuntimeBatch,
+  session: string,
+): string {
+  const key = createHash("sha256").update(`${session}\n${batch.bindingSha256}`, "utf-8").digest("hex");
+  return join(planApprovalRuntimeDir(projectDir), `batch-commit-${key}.json`);
+}
+
+export function planApprovalBatchCommitted(
+  projectDir: string,
+  receipt: PlanApprovalRuntimeReceipt,
+): boolean {
+  if (!receipt.batch) return false;
+  const commit = readPlanApprovalRuntimeJson<{ challengeId: string; bindingSha256: string }>(
+    planApprovalBatchCommitPath(projectDir, receipt.batch, receipt.session), "Plan Approval batch commit",
+  );
+  return commit?.challengeId === receipt.challengeId &&
+    commit.bindingSha256 === receipt.batch.bindingSha256;
+}
+
+// Caller holds the directive lock. Snapshot every destination before writing,
+// including the one-shot human response, so a failed member/audit write leaves
+// the previous authority intact and the human's response available for retry.
+// Publish the shared commit marker LAST: even a complete intermediate receipt
+// set cannot authorize generation before all writes succeed.
+export function commitPlanApprovalBatch(
+  projectDir: string,
+  challenge: PlanApprovalRuntimeChallenge,
+  receipts: PlanApprovalRuntimeReceipt[],
+  record: () => void,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const { session, batch } = challenge;
+  if (!batch) throw new Error("Plan Approval batch transaction requires a batch challenge");
+  const { members } = batch;
+  const commitPath = planApprovalBatchCommitPath(projectDir, batch, session);
+  const paths = [
+    commitPath,
+    ...members.map((member) => planApprovalReceiptPath(projectDir, member)),
+    planApprovalChallengePath(projectDir, session),
+    planApprovalResponsePath(projectDir, session),
+    planApprovalOverridePath(projectDir, session),
+  ];
+  const previous = new Map<string, string | null>();
+  for (const path of paths) {
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, path));
+    try {
+      previous.set(path, readAtomicReplacedFileNoFollowOrThrow(path, "Plan Approval batch record").toString("utf-8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      previous.set(path, null);
+    }
+  }
+  const touched = new Set<string>();
+  const remove = (path: string): void => {
+    touched.add(path);
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  };
+  try {
+    // Withdraw old publication while replacing receipts. On rollback this is
+    // restored last, after every member and the hook response are restored.
+    remove(commitPath);
+    if (receipts.length > 0) {
+      for (const receipt of receipts) {
+        touched.add(planApprovalReceiptPath(projectDir, receipt));
+        writePlanApprovalReceipt(projectDir, receipt);
+      }
+    } else {
+      for (const member of members) remove(planApprovalReceiptPath(projectDir, member));
+    }
+    record();
+    for (const path of paths.slice(members.length + 1)) remove(path);
+    if (receipts.length > 0) {
+      writeFileAtomic(commitPath, `${JSON.stringify({
+        challengeId: challenge.challengeId,
+        bindingSha256: batch.bindingSha256,
+      })}\n`);
+    }
+  } catch (error) {
+    const failures: unknown[] = [error];
+    for (const path of [...touched].reverse()) {
+      try {
+        const content = previous.get(path);
+        if (content === null) remove(path);
+        else if (content !== undefined) writeFileAtomic(path, content);
+      } catch (restoreError) {
+        failures.push(restoreError);
+      }
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Plan Approval batch write and rollback failed; re-present every unit plan.");
+    }
+    throw error;
+  }
+}
+
 function planApprovalOverridePath(projectDir: string, session: string): string {
   const segment = runtimeSessionSegment(session);
   return segment
@@ -3383,6 +3830,11 @@ export function planApprovalChallengeRelativePath(
   session: string,
 ): string {
   const path = planApprovalChallengePath(projectDir, session);
+  return path ? relative(projectDir, path).split(sep).join("/") : "";
+}
+
+export function protectedQuestionRelativePath(projectDir: string, session: string): string {
+  const path = protectedQuestionPath(projectDir, session);
   return path ? relative(projectDir, path).split(sep).join("/") : "";
 }
 
@@ -4258,6 +4710,14 @@ export function resolveWorkflowSelection(
   projectDir: string,
   options: WorkflowSelectionOptions = {},
 ): WorkflowSelection {
+  const delegated = delegatedWorktreeIntent(projectDir);
+  if (delegated) {
+    if ((options.space !== undefined && options.space !== delegated.space) ||
+      (options.intent !== undefined && options.intent !== delegated.intent)) {
+      throw new Error("Workflow selection does not match the delegated worktree intent");
+    }
+    return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
+  }
   const explicitSession = validSessionId(options.sessionId);
   let sessionId: string | null;
   if (explicitSession) {
@@ -4494,6 +4954,49 @@ export function activeIntentUuid(projectDir: string, space?: string): string | n
   if (activeDir === null) return null;
   const match = listIntents(projectDir, sp).find((i) => i.dirName === activeDir);
   return match?.uuid ? match.uuid : null;
+}
+
+/** A sibling-only swarm worker inherits identity from its attested parent record, not a local registry. */
+export function delegatedWorktreeIntent(projectDir: string): {
+  parent: string; space: string; intent: string; intentRecord: string; intentUuid: string;
+} | null {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) return null;
+  if (activeIntentUuid(projectDir) !== null) return null;
+  assertNoSymlinkInChainOrThrow(projectDir, ".aidlc/worktree-meta.json");
+  const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "worktree intent provenance").toString("utf-8"));
+  // Workspace-shell worktrees and non-swarm work retain their existing resolution.
+  if (meta?.repoSelector === null || meta?.swarmUnit === undefined) return null;
+  const record = typeof meta?.intentRecord === "string"
+    ? /^aidlc\/spaces\/([a-z][a-z0-9-]*)\/intents\/([^/]+)$/.exec(meta.intentRecord) : null;
+  if (meta?.version !== 1 || !record || record[2] === "." || record[2] === ".." ||
+    typeof meta.repoSelector !== "string" || !meta.repoSelector ||
+    typeof meta.swarmUnit !== "string" || meta.boltSlug !== boltSlugForUnit(meta.swarmUnit)) {
+    throw new Error("Invalid delegated worktree intent provenance");
+  }
+  const child = canonicalPathKey(projectDir);
+  const parent = dirname(dirname(dirname(child)));
+  if (canonicalPathKey(worktreePath(parent, meta.boltSlug)) !== child ||
+    relativeRecordDir(parent) !== meta.intentRecord) {
+    throw new Error("Delegated worktree does not match the active parent intent record");
+  }
+  assertNoSymlinkInChainOrThrow(parent, relative(parent, projectDir));
+  const [, space, intent] = record;
+  const intentUuid = listIntents(parent, space).find((entry) => entry.dirName === intent)?.uuid;
+  const unreadable: string[] = [];
+  const creations = maximalAttemptEvents(readAuditShardEvents(parent, intent, space, unreadable).filter(
+    (row) => row.event === "WORKTREE_CREATED" && auditBlockField(row.block, "Bolt slug") === meta.boltSlug,
+  ));
+  const creation = creations.length === 1 ? creations[0] : null;
+  const path = creation && auditBlockField(creation.block, "Worktree path");
+  if (!intentUuid || unreadable.length || !creation || !path ||
+    canonicalPathKey(resolveAuditWorktreePath(parent, path)) !== child ||
+    auditBlockField(creation.block, "Intent record") !== meta.intentRecord ||
+    auditBlockField(creation.block, "Repo") !== meta.repoSelector ||
+    auditBlockField(creation.block, "Swarm Unit") !== meta.swarmUnit) {
+    throw new Error("Delegated worktree intent has no matching immutable creation authority");
+  }
+  return { parent, space, intent, intentRecord: meta.intentRecord, intentUuid };
 }
 
 // Resolve an intent UUID to its record across EVERY space (a conversation may
@@ -4802,6 +5305,9 @@ interface ActiveDirectiveAttempt {
   cursor_input_sha256?: string; result_sha256?: string; result_revision?: number;
   resume_request?: boolean; resume_action?: ResumeAction;
   resume_gate_revision?: number;
+  // Present only when this claim started from a delivered, consumed restart
+  // choice. It is not a result receipt and grants no Plan Approval.
+  guard_recovery_selection_sha256?: string;
 }
 
 interface ActiveDirectiveResume {
@@ -4812,6 +5318,8 @@ interface ActiveDirectiveResume {
 export interface ActiveDirectiveGuardRemedy {
   op: GuardRemedyOp;
   action: string;
+  operation?: GuardRecoveryOperation;
+  interaction?: GuardRecoveryInteraction;
 }
 
 // The human's answer to a guard-recovery ask, kept on the ask marker so the
@@ -5315,7 +5823,8 @@ function resolveActiveDirectiveTarget(
   }
   const intentUuid = recordDirName === null
     ? null
-    : listIntents(canonicalProjectDir, resolvedSpace).find((entry) => entry.dirName === recordDirName)?.uuid ?? null;
+    : delegatedWorktreeIntent(canonicalProjectDir)?.intentUuid ??
+      listIntents(canonicalProjectDir, resolvedSpace).find((entry) => entry.dirName === recordDirName)?.uuid ?? null;
   const currentMarkerPath = join(engineDirFor(root), ACTIVE_DIRECTIVE_MARKER);
   const currentLockDir = join(engineDirFor(root), ACTIVE_DIRECTIVE_LOCK);
   const legacyMarkerPath = join(root, LEGACY_ACTIVE_DIRECTIVE_MARKER);
@@ -5501,12 +6010,16 @@ function validActiveDirectiveGuardRemedies(
 ): value is ActiveDirectiveGuardRemedy[] {
   return Array.isArray(value) && value.every((remedy) => {
     if (!isPlainObject(remedy)) return false;
-    const keys = Object.keys(remedy).sort();
-    return keys.length === 2 &&
-      keys[0] === "action" &&
-      keys[1] === "op" &&
+    return Object.keys(remedy).every((key) =>
+      ["op", "action", "operation", "interaction"].includes(key)
+    ) &&
       isGuardRemedyOp(remedy.op) &&
-      typeof remedy.action === "string";
+      typeof remedy.action === "string" &&
+      (!("operation" in remedy) || isGuardRecoveryOperation(remedy.operation)) &&
+      (!("interaction" in remedy) ||
+        ["command", "human-input", "external-work"].includes(String(remedy.interaction))) &&
+      (!("operation" in remedy) || remedy.interaction === "command") &&
+      (remedy.interaction !== "command" || isGuardRecoveryOperation(remedy.operation));
   });
 }
 
@@ -5523,6 +6036,11 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   const guardRecovery = isPlainObject(parsed.guard_recovery_response)
     ? parsed.guard_recovery_response
     : null;
+  const selectedRecovery = guardRecovery && validActiveDirectiveGuardRemedies(parsed.remedies)
+    ? parsed.remedies.find((remedy) => remedy.op === guardRecovery.selected_op)
+    : undefined;
+  const recoveryNeedsFeedback =
+    selectedRecovery?.interaction !== "command" && selectedRecovery?.interaction !== "external-work";
   const kinds: ActiveDirectiveKind[] = ["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"];
   if (
     parsed.version !== 2 || !/^[0-9a-f]{64}$/.test(String(parsed.project_sha256 ?? "")) ||
@@ -5579,7 +6097,9 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
         !/^[0-9a-f]{64}$/.test(String(guardRecovery.selection_sha256 ?? "")) ||
         (
           guardRecovery.status === "ready"
-            ? !/^[0-9a-f]{64}$/.test(String(guardRecovery.feedback_sha256 ?? ""))
+            ? recoveryNeedsFeedback
+              ? !/^[0-9a-f]{64}$/.test(String(guardRecovery.feedback_sha256 ?? ""))
+              : "feedback_sha256" in guardRecovery
             : "feedback_sha256" in guardRecovery
         )
       )) ||
@@ -5600,6 +6120,8 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
     ("result_sha256" in attempt && !/^[0-9a-f]{64}$/.test(String(attempt.result_sha256 ?? ""))) ||
     ("result_revision" in attempt && !integer(attempt.result_revision)) ||
     ("resume_gate_revision" in attempt && !integer(attempt.resume_gate_revision)) ||
+    ("guard_recovery_selection_sha256" in attempt &&
+      !/^[0-9a-f]{64}$/.test(String(attempt.guard_recovery_selection_sha256 ?? ""))) ||
     (resume !== null &&
       (!["waiting", "selected", "superseded"].includes(String(resume.status)) ||
         typeof resume.issuing_stage !== "string" || !/^[0-9a-f]{64}$/.test(String(resume.issuing_state_sha256 ?? "")) ||
@@ -6336,7 +6858,8 @@ export function consumeSharedDirectiveAsk(
     }
     if (
       marker.delivery === "consumed" &&
-      marker.guard_recovery_response?.status === "awaiting-feedback"
+      marker.guard_recovery_response?.status === "awaiting-feedback" &&
+      marker.guard_recovery_response.selected_op !== null
     ) {
       return {
         marker: {
@@ -6351,21 +6874,35 @@ export function consumeSharedDirectiveAsk(
         result: true,
       };
     }
-    if (marker.delivery !== "issued" && marker.delivery !== "delivered") {
+    // A command or external-work selection authorizes only the turn that made it.
+    // A later human response before the command runs replaces it; recording the
+    // same response is idempotent.
+    const supersedesReadySelection =
+      marker.delivery === "consumed" &&
+      (marker.guard_recovery_response?.status === "ready" ||
+        marker.guard_recovery_response?.selected_op === null) &&
+      marker.guard_recovery_response.feedback_sha256 === undefined &&
+      marker.guard_recovery_response.selection_sha256 !== responseSha256;
+    if (
+      marker.delivery !== "issued" &&
+      marker.delivery !== "delivered" &&
+      !supersedesReadySelection
+    ) {
       return { marker, result: false, preserve: true };
     }
+    const selectedOp = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+    const selected = marker.remedies?.find((remedy) => remedy.op === selectedOp);
     return {
       marker: {
         ...marker,
         revision: (marker.revision ?? 0) + 1,
         delivery: "consumed",
         guard_recovery_response: {
-          status: "awaiting-feedback",
+          status: selected?.interaction === "command" || selected?.interaction === "external-work"
+            ? "ready"
+            : "awaiting-feedback",
           selection_sha256: responseSha256,
-          selected_op: resolveGuardRecoverySelection(
-            marker.remedies,
-            humanResponseText,
-          ),
+          selected_op: selectedOp,
         },
       },
       result: true,
@@ -6898,6 +7435,71 @@ export function recordCopilotHumanSequence(
   });
 }
 
+// The adapter and orchestrator hash JSON.stringify([verb, ...args]) after
+// removing the dispatcher prefix, --project-dir and --aidlc-attempt-id. Compare
+// that identity to the operation's argv, not to shell spelling or jumpRequest.
+// emitJumpDirective emits this exact {kind,message} print before stage-validity
+// decoration. The adapter retains only its byte-exact resultSha256, so enumerate
+// aidlcToolInvocation("jump")'s source/native representations here. Both command
+// representations share one claim identity; either may run through this adapter.
+function copilotGuardRestartPrintHashes(
+  marker: ActiveDirectiveMarker,
+  stateContent: string | null,
+  input: CopilotCommandClaim,
+): string[] {
+  if (
+    stateContent === null ||
+    marker.version !== 2 ||
+    marker.state_present !== true ||
+    marker.state_sha256 !== stateDigest(stateContent) ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.delivery !== "consumed" ||
+    marker.guard_recovery_response?.status !== "ready" ||
+    marker.guard_recovery_response.feedback_sha256 !== undefined ||
+    input.commandKind !== "next"
+  ) return [];
+  const selected = marker.remedies?.filter(
+    (remedy) => remedy.op === marker.guard_recovery_response?.selected_op,
+  ) ?? [];
+  if (selected.length !== 1 || selected[0].interaction !== "command") return [];
+  const operation = selected[0].operation;
+  if (
+    operation?.kind !== "restart-stage" ||
+    !guardOperationMatchesRemedy(operation, selected[0].op, marker.stage, marker.unit) ||
+    input.commandSha256 !== contentSha256(JSON.stringify(guardOperationInvocation(operation).args))
+  ) return [];
+  try {
+    const scope = getField(stateContent, "Scope");
+    const mapping = scope ? loadScopeMapping()[scope] : undefined;
+    if (!scope || !mapping) return [];
+    const graph = loadStageGraph();
+    const targetIndex = graph.findIndex((stage) => stage.slug === operation.stage);
+    const current = getField(stateContent, "Current Stage");
+    const currentIndex = graph.findIndex((stage) => stage.slug === current);
+    if (
+      targetIndex < 0 || currentIndex < 0 || targetIndex > currentIndex ||
+      graph[targetIndex].phase === "initialization"
+    ) return [];
+    const checkboxes = parseCheckboxes(stateContent);
+    if (
+      checkboxes.filter((entry) => entry.slug === operation.stage).length !== 1 ||
+      checkboxes.filter((entry) => entry.slug === current).length !== 1 ||
+      (parseStateStageSuffixes(stateContent).get(operation.stage) ?? mapping.stages[operation.stage]) !== "EXECUTE"
+    ) return [];
+    const direction = targetIndex === currentIndex ? "redo" : "backward";
+    return ["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`].map(
+      (invocation) => contentSha256(JSON.stringify({
+        kind: "print",
+        message: `Run \`${invocation} execute --target ${operation.stage} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
+      })),
+    );
+  } catch {
+    // Unresolvable plan evidence cannot authorize retaining a recovery choice.
+    return [];
+  }
+}
+
 export function claimCopilotCommand(
   projectDir: string,
   stateContent: string | null,
@@ -6981,22 +7583,29 @@ export function claimCopilotCommand(
     const sequence = (marker.event_sequence ?? 0) + 1;
     const nextRevision = (marker.revision ?? 0) + 1;
     const attemptId = input.attemptId ?? randomUUID();
-      const attempt: ActiveDirectiveAttempt = {
+    const recoverySelection =
+      installedHarnessNameForTarget(target) === "copilot" &&
+      marker.needs_rehydrate === false &&
+      copilotGuardRestartPrintHashes(marker, stateContent, input).length > 0
+        ? marker.guard_recovery_response?.selection_sha256
+        : undefined;
+    const attempt: ActiveDirectiveAttempt = {
       id: attemptId,
       command_kind: input.commandKind,
       command_sha256: input.commandSha256,
       issued_state_sha256: context.stateSha256,
       session_id: input.sessionId,
       owner_epoch: ownerEpoch,
-        context_epoch: marker.context_epoch ?? 0,
-        claim_revision: nextRevision,
-        status: "pending",
+      context_epoch: marker.context_epoch ?? 0,
+      claim_revision: nextRevision,
+      status: "pending",
       ...(input.commandKind === "continue" && input.continueToken
         ? { cursor_input_sha256: contentSha256(input.continueToken) }
         : {}),
       ...(input.resumeRequest ? { resume_request: true } : {}),
       ...(input.resumeAction ? { resume_action: input.resumeAction } : {}),
       ...(waitingExact ? { resume_gate_revision: nextRevision } : {}),
+      ...(recoverySelection ? { guard_recovery_selection_sha256: recoverySelection } : {}),
     };
     return {
       marker: {
@@ -7064,6 +7673,40 @@ export function settleCopilotCommand(
         active_attempt: { ...attempt, status: "failed" },
       }, result: "settled" as const };
     }
+    // A selected restart's next --stage transports a print rather than issuing
+    // a new directive. Preserve its consumed ask only for the same pending
+    // claim, unchanged context/revision and the exact expected successful
+    // result. Claiming still requires rehydration, and until this settlement
+    // the Plan Approval hook continues to reject the returned jump.
+    if (
+      directive.kind === "print" &&
+      !stateChanged &&
+      exactCopilotMarker(marker, target, context) &&
+      marker.owner_session === input.sessionId &&
+      marker.needs_rehydrate === true &&
+      attempt.claim_revision === marker.revision &&
+      attempt.result_sha256 === undefined &&
+      attempt.result_revision === undefined &&
+      attempt.guard_recovery_selection_sha256 !== undefined &&
+      attempt.guard_recovery_selection_sha256 === marker.guard_recovery_response?.selection_sha256 &&
+      typeof directive.resultSha256 === "string" &&
+      copilotGuardRestartPrintHashes(marker, stateContent, input).includes(directive.resultSha256)
+    ) {
+      const revision = (marker.revision ?? 0) + 1;
+      return {
+        marker: {
+          ...marker,
+          revision,
+          delivery: "consumed",
+          needs_rehydrate: false,
+          active_attempt: {
+            ...attempt, status: "settled",
+            result_sha256: directive.resultSha256, result_revision: revision,
+          },
+        },
+        result: "settled" as const,
+      };
+    }
     const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked", "notice"].includes(directive.kind);
     const enginePublished = (input.commandKind === "next" || input.commandKind === "continue") &&
       (directive.kind === "load-steering" || directive.kind === "run-stage");
@@ -7126,6 +7769,11 @@ export function settleCopilotCommand(
       state_present: context.statePresent,
       state_sha256: context.stateSha256,
       kind: directive.kind,
+      // An ordinary print (or another non-ask result) supersedes the ask. Its
+      // old remedies/selection must not survive on a different directive kind.
+      ...(directive.kind !== "ask"
+        ? { ask_type: undefined, remedies: undefined, guard_recovery_response: undefined }
+        : {}),
       stage: directive.stage ?? marker.stage,
       ...(unit ? { unit } : { unit: undefined }),
       ...(directive.part ? { part: directive.part } : { part: undefined }),
@@ -7409,6 +8057,8 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
   "PLAN_APPROVAL_RECORDED",
 ]);
 const DOCUMENT_AUDIT_EVENTS = new Set([
@@ -7517,26 +8167,28 @@ export function isNonAnswer(text: string | undefined | null): boolean {
 
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
-// trailing punctuation are all the same choice. The words themselves must be
-// present; a paraphrase ("please change it") is not a choice. Plan Approval
-// keeps its exact-label rule because those labels are the anti-forgery binding.
+// trailing punctuation are all the same choice, as is the "(Recommended)" label
+// decorator the question-rendering guide asks the conductor to add. The words
+// themselves must be present; a paraphrase ("please change it") is not a
+// choice. Plan Approval keeps its exact-label rule because those labels are the
+// anti-forgery binding.
+// Shape of an accepted reply: optional option prefix, then the words
+// "request changes", then wrapper noise (whitespace, quotes, . or !), then at
+// most ONE "(recommended)" decorator, then wrapper noise again. Because the
+// noise is allowed on both sides of the decorator, the decorator composes with
+// quotes and punctuation whether it sits inside or outside them, and there is
+// no pass ordering that can silently drop one direction (PR #1133 review).
+const REQUEST_CHANGES_CHOICE_RE =
+  /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`]*request\s+changes[\s"'`.!]*(?:\(recommended\)[\s"'`.!]*)?$/i;
 export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  const normalized = (text ?? "")
-    .trim()
-    .replace(/^(?:[A-Za-z]|\d+)[.)]\s*/, "")
-    .replace(/^["'`]+|["'`]+$/g, "")
-    .replace(/[.!]+$/, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-  return normalized === "request changes";
+  return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
 }
 
-// The Codex question-rendering guide tells the conductor to append
-// "(Recommended)" to the recommended option's label, and request_user_input
-// returns the decorated label. Plan Approval matches offered labels exactly, so
-// the one trailing decorator is removed before that match (case-insensitive,
-// surrounding whitespace tolerated) and nothing else about the text changes.
+// Every harness question-rendering guide tells the conductor to append
+// "(Recommended)" to the recommended option's label, and the picker returns the
+// decorated label. Stage gates and Plan Approval remove the one trailing
+// decorator before matching offered labels (case-insensitive, surrounding
+// whitespace tolerated). Nothing else about the text changes.
 const RECOMMENDED_DECORATOR_RE = /\s*\(recommended\)\s*$/i;
 export function stripRecommendedDecorator(text: string): string {
   return text.replace(RECOMMENDED_DECORATOR_RE, "").trim();
@@ -7703,7 +8355,30 @@ function firstConstructionApprovalStage(
 export function isAutonomousConstructionGate(
   stateContent: string | null,
   stage: { slug: string; phase: string; for_each?: string },
+  projectDir?: string,
+  evidence?: ConstructionEvidence,
 ): boolean {
+  const checkpoints = stateContent !== null && constructionCheckpointsApply(stateContent);
+  if (checkpoints && stage.phase === "construction" && projectDir) {
+    if (
+      (stage.slug === "code-generation" &&
+        isConstructionSwarmEnabled(stateContent) &&
+        getField(stateContent!, "Construction Iteration") !== "unit-major") ||
+      (stage.for_each === "unit-of-work" &&
+        getField(stateContent!, "Construction Iteration") === "unit-major")
+    ) {
+      const gaps = constructionCheckpointGaps(projectDir, stateContent!, stage, evidence);
+      return gaps !== null && gaps.length === 0;
+    }
+    if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
+    if (constructionSkeletonOn(stateContent!)) {
+      const gaps = constructionCheckpointGaps(projectDir, stateContent!, stage, evidence);
+      return gaps !== null && gaps.length === 0;
+    }
+    // The grant governs ordinary completion gates; Plan Approval retains its
+    // own authority and is never inferred from this setting.
+    return getField(stateContent!, "Skeleton Stance") !== null;
+  }
   if (!isAutonomousConstructionDecision(stateContent, stage.phase)) return false;
   const scope = stateContent ? getField(stateContent, "Scope")?.trim() : null;
   if (!scope) return false;
@@ -7713,6 +8388,122 @@ export function isAutonomousConstructionGate(
     getField(stateContent!, "Construction Iteration")?.trim() === "unit-major" &&
     stage.for_each === "unit-of-work"
   );
+}
+
+export function constructionSkeletonOn(stateContent: string): boolean {
+  const stance = getField(stateContent, "Skeleton Stance");
+  if (stance === "on") return true;
+  if (stance !== "scope-dependent") return false;
+  return loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton === true;
+}
+
+export function constructionCheckpointsApply(stateContent: string): boolean {
+  if (
+    getField(stateContent, "Construction Checkpoints") !== "enabled" ||
+    isTeamUnitOwnership(stateContent)
+  ) return false;
+  const scope = getField(stateContent, "Scope") ?? "";
+  return unitMajorConstructionStageSlugs(scope, stateContent, true)
+    .some((slug) => findStageBySlug(slug)?.workspace_requires === true);
+}
+
+// Completion authority is shared by routing, report, and direct state mutation.
+// Ordinary artifacts and lifecycle receipts do not replace checkpoint approval.
+export function constructionCheckpointGaps(
+  projectDir: string,
+  stateContent: string,
+  stage: { slug: string; phase: string; for_each?: string },
+  evidence?: ConstructionEvidence,
+): string[] | null {
+  const scope = getField(stateContent, "Scope") ?? "";
+  if (
+    stage.phase !== "construction" ||
+    !constructionCheckpointsApply(stateContent) ||
+    usesStageLevelPerUnitArtifacts(scope, stateContent)
+  ) return null;
+  // A routing snapshot's DAG is reused only when it was loaded for this exact
+  // state and record; anything else resolves fresh.
+  const shared = evidence?.state === stateContent && evidence.root === recordDir(projectDir)
+    ? evidence
+    : undefined;
+  const dag = shared?.dag ?? resolveBoltDag(projectDir);
+  if (dag.state !== "ok" || dag.units.length === 0) return null;
+  const approved = approvedConstructionUnits(projectDir, stateContent, shared);
+  const iteration = getField(stateContent, "Construction Iteration");
+  if (
+    stage.slug === "code-generation" &&
+    isConstructionSwarmEnabled(stateContent) &&
+    iteration !== "unit-major"
+  ) {
+    const { resolveSwarmCheckpoint } = require("./aidlc-swarm-checkpoints.ts") as
+      typeof SwarmCheckpoints;
+    const gaps: string[] = [];
+    for (const [index, batch] of dag.batches.entries()) {
+      const units = batch.filter((unit) => !approved.has(unit));
+      if (units.length === 0) continue;
+      try {
+        if (resolveSwarmCheckpoint(projectDir, index + 1, units, stateContent, shared).approved) continue;
+      } catch {
+        // Missing, stale or malformed evidence cannot approve a batch.
+      }
+      gaps.push(`batch ${index + 1} (${units.join(", ")})`);
+    }
+    return gaps;
+  }
+  if (stage.for_each === "unit-of-work" && iteration === "unit-major") {
+    return dag.units.filter((unit) => !approved.has(unit)).map((unit) => `Unit "${unit}"`);
+  }
+  if (constructionSkeletonOn(stateContent)) {
+    const first = dag.batches.flat()[0];
+    return approved.has(first) ? [] : [`skeleton Unit "${first}"`];
+  }
+  return [];
+}
+
+export function isConstructionSwarmEnabled(stateContent: string | null): boolean {
+  if (!stateContent) return false;
+  if (constructionCheckpointsApply(stateContent)) {
+    return getField(stateContent, "Construction Execution") === "swarm";
+  }
+  return isAutonomousMode(stateContent);
+}
+
+// An approved skeleton Unit was deliberately built before a stage-major swarm.
+// Its per-Unit source binding survives unrelated Units changing the workspace.
+export function approvedConstructionUnits(
+  projectDir: string,
+  stateContent: string,
+  evidence?: ConstructionEvidence,
+): Set<string> {
+  const approved = new Set<string>();
+  if (!constructionCheckpointsApply(stateContent)) return approved;
+  const { loadConstructionEvidence, resolveConstructionCheckpoint } = require("./aidlc-construction-checkpoints.ts") as
+    typeof import("./aidlc-construction-checkpoints.ts");
+  try {
+    if (evidence?.state !== stateContent || evidence.root !== recordDir(projectDir)) {
+      evidence = loadConstructionEvidence(projectDir, stateContent);
+    }
+  } catch {
+    return approved;
+  }
+  if (evidence.approvedUnits) return evidence.approvedUnits;
+  const dag = evidence.dag;
+  if (dag.state !== "ok") return approved;
+  const skeleton = constructionSkeletonOn(stateContent) ? dag.batches.flat()[0] : null;
+  for (const unit of dag.units) {
+    const kind = unit === skeleton
+      ? "skeleton"
+      : "unit";
+    try {
+      if (resolveConstructionCheckpoint(projectDir, unit, kind, stateContent, evidence).approved) {
+        approved.add(unit);
+      }
+    } catch {
+      // Missing, stale or malformed evidence is unfinished work.
+    }
+  }
+  evidence.approvedUnits = approved;
+  return approved;
 }
 
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
@@ -7732,6 +8523,129 @@ export function hasOpenGate(stateContent: string | null): boolean {
 export function humanActedSinceLastAnswer(projectDir: string): boolean {
   return humanActedSinceGate(projectDir);
 }
+
+// The state stores a human-readable command, but only the latest tool-owned
+// receipt in this workflow authorizes its execution. Never trust the field alone.
+export const VERIFICATION_COMMAND_CHECKPOINT = "Construction Verification Command";
+
+export interface VerificationCommand {
+  command: string;
+  sha256: string;
+  label: string;
+}
+
+export function verificationCommandDetails(command: string): VerificationCommand {
+  if (/[\p{Cf}\p{Zl}\p{Zp}\u00a0]/u.test(command)) {
+    throw new Error("Construction verification command must contain no display-spoofing characters. Put complex checks in a script and record its invocation.");
+  }
+  const canonical = command.trim();
+  if (!canonical || canonical.length > 1024 || hasUnsafeSingleLineCharacter(canonical) || /[\x80-\x9f]/.test(canonical)) {
+    throw new Error("Construction verification command must be nonblank, at most 1024 characters, and contain no control characters. Put multiline checks in a script and record its invocation.");
+  }
+  return {
+    command: canonical,
+    sha256: createHash("sha256").update(canonical, "utf8").digest("hex"),
+    label: canonical,
+  };
+}
+
+export function readVerificationCommandFile(projectDir: string, file: string): VerificationCommand {
+  const root = recordDir(projectDir);
+  if (!root) throw new Error("Verification command file requires an active intent record.");
+  const path = recordFileTargetOrThrow(root, file);
+  return verificationCommandDetails(
+    readRegularFileNoFollowOrThrow(path, "verification command file", 16 * 1024).toString("utf-8"),
+  );
+}
+
+export function authorizedVerificationCommand(
+  projectDir: string,
+  stateContent: string,
+  rows?: AuditShardEvent[],
+): VerificationCommand | null {
+  const field = getField(stateContent, VERIFICATION_COMMAND_CHECKPOINT);
+  if (!field || !activeIntentUuid(projectDir)) return null;
+  let command: VerificationCommand;
+  try {
+    command = verificationCommandDetails(field);
+  } catch {
+    return null;
+  }
+  const unreadable: string[] = [];
+  const events = (rows ?? readAuditShardEvents(projectDir, undefined, undefined, unreadable)).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  if (unreadable.length) return null;
+  const workflows = maximalAttemptEvents(events.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return null;
+  const receipts = maximalAttemptEvents(events.filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED"));
+  if (receipts.length !== 1) return null;
+  const receipt = receipts[0];
+  return attemptEventDefinitelyBefore(workflows[0], receipt) &&
+    auditBlockField(receipt.block, "Checkpoint") === VERIFICATION_COMMAND_CHECKPOINT &&
+    auditBlockField(receipt.block, "Command SHA-256") === command.sha256 &&
+    auditBlockField(receipt.block, "User Input") === "Approve"
+    ? command : null;
+}
+
+export const VERIFICATION_COMMAND_RECOVERY =
+  'Write the proposed command to <record>/verification-command.txt with the harness file-write tool (never shell echo or a heredoc); never interpolate repo-derived command text into a shell line. ' +
+  'Record the human choice with aidlc-log.ts decision --stage "<stage>" --checkpoint verification-command ' +
+  '--command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
+  'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve". ' +
+  'Use the invoking SessionStart session ID. ' +
+  'Apply the receipt with aidlc-state.ts set-construction-verification-command --command-file verification-command.txt.';
+
+export const CONSTRUCTION_POLICY_CHECKPOINT = "Construction Policy";
+
+export function validConstructionPolicyChange(field: string, value: string): boolean {
+  switch (field) {
+    case "Construction Checkpoints": return value === "enabled" || value === "disabled";
+    case "Construction Execution": return value === "serial" || value === "swarm";
+    case "Construction Iteration": return value === "unit-major" || value === "stage-major";
+    default: return false;
+  }
+}
+
+export function authorizedConstructionPolicyChange(
+  projectDir: string,
+  stateContent: string,
+  field: string,
+  value: string,
+  rows?: AuditShardEvent[],
+): boolean {
+  // Applying a receipt sets its value. Returning to another value requires a
+  // newer receipt for this field, so a consumed receipt can never become live again.
+  if (!validConstructionPolicyChange(field, value) || getField(stateContent, field) === value ||
+    !activeIntentUuid(projectDir)) return false;
+  const unreadable: string[] = [];
+  const events = (rows ?? readAuditShardEvents(projectDir, undefined, undefined, unreadable)).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  if (unreadable.length) return false;
+  const workflows = maximalAttemptEvents(events.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return false;
+  const actions = maximalAttemptEvents(events.filter((row) =>
+    ["DECISION_RECORDED", "QUESTION_ANSWERED", "CONSTRUCTION_POLICY_RECORDED"].includes(row.event) &&
+    auditBlockField(row.block, "Checkpoint") === CONSTRUCTION_POLICY_CHECKPOINT &&
+    auditBlockField(row.block, "Field") === field,
+  ));
+  if (actions.length !== 1) return false;
+  const receipt = actions[0];
+  return receipt.event === "CONSTRUCTION_POLICY_RECORDED" &&
+    attemptEventDefinitelyBefore(workflows[0], receipt) &&
+    auditBlockField(receipt.block, "Value") === value &&
+    !!auditBlockField(receipt.block, "Session")?.trim() &&
+    auditBlockField(receipt.block, "User Input") === "Approve";
+}
+
+export const CONSTRUCTION_POLICY_RECOVERY =
+  'Record the requested field and value with aidlc-log.ts decision --stage "<stage>" --checkpoint construction-policy ' +
+  '--field "<Construction Checkpoints|Construction Execution|Construction Iteration>" --value "<value>" --session "<session ID>" ' +
+  '--decision "Change this Construction policy?" --options "Approve,Request Changes", then wait for the human\'s offered choice in that session. ' +
+  'Run aidlc-log.ts answer with the same --stage, --checkpoint construction-policy, --field, --value, and --session plus --details "Approve", ' +
+  'then apply that value with aidlc-state.ts set-construction-checkpoints, set-construction-execution, or set-construction-iteration. ' +
+  'Use the invoking SessionStart session ID.';
 
 // --- Consolidated-summary confirmation evidence ---
 //
@@ -8301,6 +9215,31 @@ function summaryQuestionFiles(
   return files;
 }
 
+function summaryFlowStartedInAttempt(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: { workflow?: string; unit?: string; stateContent?: string | null },
+): boolean {
+  const events = readAuditShardEvents(projectDir);
+  const unitMajor = isPerUnitStage(stage) &&
+    getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major";
+  const floors = summaryAttemptFloors(events, stage.slug, options.workflow, unitMajor);
+  return events.some((entry) => {
+    if (entry.event !== "DECISION_RECORDED" && entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
+    if (auditBlockField(entry.block, "Stage") !== stage.slug ||
+      auditBlockField(entry.block, "Checkpoint") !== SUMMARY_CONFIRMATION_CHECKPOINT) return false;
+    const workflow = auditBlockField(entry.block, "Workflow");
+    if (options.workflow !== undefined ? workflow !== options.workflow : workflow?.startsWith("single-stage:")) return false;
+    const unit = auditBlockField(entry.block, "Unit");
+    if (options.unit !== undefined && unit !== options.unit) return false;
+    if (unit && !eventMatchesClaimAttempt(projectDir, entry.block, unit)) return false;
+    // A cross-shard tie cannot prove that this obligation predates the reset.
+    return floors.every((floor) => entry.shard === floor.shard
+      ? entry.pos > floor.pos
+      : entry.timestamp >= floor.timestamp);
+  });
+}
+
 function summaryAnswerFromFile(path: string): string | null {
   try {
     return summaryConfirmationAnswer(readFileSync(path, "utf-8"));
@@ -8798,7 +9737,9 @@ export function checkSummaryConfirmationEvidence(
     }
   }
   if (questions.length === 0) {
-    if (!declared) return { ok: true, required: false };
+    if (!declared && !summaryFlowStartedInAttempt(projectDir, stage, options)) {
+      return { ok: true, required: false };
+    }
     const unitText = options.unit ? ` for unit "${options.unit}"` : "";
     return failure(
       "SUMMARY_QUESTIONS_MISSING",
@@ -8873,8 +9814,10 @@ export function checkSummaryConfirmationEvidence(
   const workflow = options.workflow;
   const unitMajor =
     isPerUnitStage(stage) &&
-    getField(options.stateContent ?? "", "Construction Iteration")?.trim() ===
-      "unit-major";
+    (
+      getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major" ||
+      getField(options.stateContent ?? "", "Construction Checkpoints") === "enabled"
+    );
   const floors = summaryAttemptFloors(events, stage.slug, workflow, unitMajor);
   const afterFloor = (entry: AuditShardEvent): true | false | null => {
     if (floors.length === 0) return true;
@@ -9864,6 +10807,31 @@ export interface ReviewFingerprintStage {
   produces?: string[];
   optional_produces?: string[];
   produces_kinds?: Record<string, string[]>;
+  summary_confirmation?: "required" | "if-present";
+}
+
+// Summary questions are mutable human inputs. Re-presenting their confirmation
+// answer does not change the reviewed input, but all substantive content does.
+// A plugin explicitly reviewing questions retains ordinary byte binding.
+function summaryOwnedReviewInput(
+  stage: Pick<ReviewFingerprintStage, "summary_confirmation" | "review_artifact">,
+  artifact: string,
+): boolean {
+  return stage.summary_confirmation !== undefined &&
+    artifact.endsWith("-questions") &&
+    artifact !== stage.review_artifact;
+}
+
+export function reviewedArtifactUnit(
+  stage: Pick<ReviewFingerprintStage, "slug" | "for_each" | "produces" | "optional_produces" | "review_artifact" | "summary_confirmation">,
+  file: string,
+  recordedRepos: ReadonlySet<string>,
+): string | null | undefined {
+  return producesArtifactUnit({
+    ...stage,
+    produces: stage.produces?.filter((name) => !summaryOwnedReviewInput(stage, name)),
+    optional_produces: stage.optional_produces?.filter((name) => !summaryOwnedReviewInput(stage, name)),
+  }, file, recordedRepos);
 }
 
 export interface ReviewArtifactEntry {
@@ -9872,6 +10840,47 @@ export interface ReviewArtifactEntry {
   boundary: string;
   required: boolean;
   reviewAppendixTarget: boolean;
+  summaryInput?: true;
+}
+
+export function summaryInputReviewFingerprint(content: string | Uint8Array): string {
+  let decoded: string;
+  try {
+    decoded = typeof content === "string" ? content : new TextDecoder("utf-8", { fatal: true }).decode(content);
+  } catch {
+    // Invalid UTF-8 never collapses distinct bytes through replacement chars.
+    return createHash("sha256").update(content).digest("hex");
+  }
+  const normalized = decoded.replace(/\r\n?/g, "\n");
+  const source = normalized.split("\n");
+  const visible = visibleMarkdownLines(normalized, { preserveCommentBoundaries: true });
+  let inSummary = false;
+  let summaries = 0;
+  let answers = 0;
+  const answerLine = /^\[Answer\]:[ \t]*(?:Looks correct|Request changes)?[ \t]*$/;
+  for (let index = 0; index < visible.length; index++) {
+    const heading = visibleH2Title(visible[index]);
+    if (heading !== null) {
+      inSummary = heading === SUMMARY_CONFIRMATION_CHECKPOINT;
+      if (inSummary) summaries++;
+    }
+    // Match the visible answer, never an example hidden by a code fence or
+    // comment. Preserve trailing comment bytes: only the confirmation value
+    // and its surrounding presentation whitespace may be normalized.
+    if (!inSummary || !answerLine.test(restoreVisibleMarkdownMarkers(visible[index]))) continue;
+    const commentStart = source[index].indexOf("<!--");
+    const prefix = commentStart < 0 ? source[index] : source[index].slice(0, commentStart);
+    const comments = commentStart < 0 ? "" : source[index].slice(commentStart);
+    if (
+      !answerLine.test(prefix) ||
+      comments.replace(/<!--(?:.*?-->|.*$)/g, "").trim().length > 0
+    ) continue;
+    source[index] = `[Answer]: [summary confirmation]${comments ? ` ${comments}` : ""}`;
+    answers++;
+  }
+  return createHash("sha256")
+    .update(summaries === 1 && answers === 1 ? source.join("\n") : normalized, "utf-8")
+    .digest("hex");
 }
 
 export interface ReviewArtifactBytesEntry extends ReviewArtifactEntry {
@@ -9905,6 +10914,7 @@ export function reviewArtifactEntries(
         name,
         required: true,
         reviewAppendixTarget: name === stage.review_artifact,
+        summaryInput: summaryOwnedReviewInput(stage, name),
       })),
       ...filterProducesByKind(
         stage.produces_kinds,
@@ -9914,6 +10924,7 @@ export function reviewArtifactEntries(
         name,
         required: false,
         reviewAppendixTarget: false,
+        summaryInput: summaryOwnedReviewInput(stage, name),
       })),
     ];
   };
@@ -9938,6 +10949,7 @@ export function reviewArtifactEntries(
         boundary: root,
         required: artifact.required,
         reviewAppendixTarget: artifact.reviewAppendixTarget,
+        ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
       }));
     }
     return repos.flatMap((repo) =>
@@ -9947,6 +10959,7 @@ export function reviewArtifactEntries(
         boundary: root,
         required: artifact.required,
         reviewAppendixTarget: artifact.reviewAppendixTarget,
+        ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
       })),
     );
   }
@@ -9960,6 +10973,7 @@ export function reviewArtifactEntries(
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
+      ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
     }));
   }
 
@@ -9970,6 +10984,7 @@ export function reviewArtifactEntries(
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
+      ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
     }));
   const stageLevelPresent = allArtifacts.some((artifact) =>
     existsSync(
@@ -10039,6 +11054,7 @@ export function reviewArtifactEntries(
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
+      ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
     }));
   }
   return units.flatMap((name) =>
@@ -10048,6 +11064,7 @@ export function reviewArtifactEntries(
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
+      ...(artifact.summaryInput ? { summaryInput: true as const } : {}),
     })),
   );
 }
@@ -10256,6 +11273,16 @@ function reviewArtifactContentsFingerprint(
   const manifest: Array<[string, string]> = [];
   let matchedAppendix = options.appendixArtifact === undefined;
   for (const entry of contents) {
+    if (entry.summaryInput) {
+      if (entry.state !== "file" && entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([
+        entry.logicalPath,
+        entry.state === "file"
+          ? `summary-input:sha256:${summaryInputReviewFingerprint(entry.body)}`
+          : entry.state,
+      ]);
+      continue;
+    }
     if (entry.state === "missing") {
       if (entry.required && options.requireRequiredArtifacts === true) return null;
       manifest.push([entry.logicalPath, "missing"]);
@@ -11775,7 +12802,12 @@ export function reviewArtifactBytesSnapshot(
         `review artifact ${entry.logicalPath}`,
       );
       const digest = createHash("sha256").update(bytes).digest("hex");
-      manifest.push([entry.logicalPath, `sha256:${digest}`]);
+      manifest.push([
+        entry.logicalPath,
+        entry.summaryInput
+          ? `summary-input:sha256:${summaryInputReviewFingerprint(bytes)}`
+          : `sha256:${digest}`,
+      ]);
       snapshot.push({
         ...entry,
         state: "file",
@@ -12131,8 +13163,9 @@ export function reviewAttemptWindow(
   projectDir: string,
   stateContent: string,
   stage: { slug: string; for_each?: string },
+  auditRows?: AuditShardEvent[],
 ): AttemptView {
-  const allEvents = readAuditShardEvents(projectDir);
+  const allEvents = auditRows ?? readAuditShardEvents(projectDir);
   const events = sortAttemptEvents(
     allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event)),
   );
@@ -12145,8 +13178,10 @@ export function reviewAttemptWindow(
     );
   const unitMajor =
     artifactPerUnit &&
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-  const teamOwnership = artifactPerUnit && isTeamUnitOwnership(stateContent);
+    (getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
+  const teamOwnership = artifactPerUnit && (isTeamUnitOwnership(stateContent) ||
+    getField(stateContent, "Construction Checkpoints") === "enabled");
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
@@ -12447,10 +13482,12 @@ export function reviewAttemptAccounting(
 
   const unitMajor =
     stage.for_each === "unit-of-work" &&
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    (getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
   const teamOwnership =
     stage.for_each === "unit-of-work" &&
-    isTeamUnitOwnership(stateContent);
+    (isTeamUnitOwnership(stateContent) ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
   let floor = -1;
   let boltStarted = false;
   let boltBatch: string | null = null;
@@ -13123,12 +14160,14 @@ export function freshReviewReceipts(
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
+    summary_confirmation?: "required" | "if-present";
   },
   options: {
     boltDag?: BoltDagResolution;
     reviewClass?: ReviewClass;
     attemptWindow?: ReviewAttemptWindow;
     selection?: WorkflowSelectionOptions;
+    sourceState?: WorkspaceSourceState | null;
   } = {},
 ): FreshReviewReceipts {
   const empty: FreshReviewReceipts = {
@@ -13169,8 +14208,10 @@ export function freshReviewReceipts(
       stateContent,
     );
   const unitMajor =
-    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-  const teamOwnership = perUnit && isTeamUnitOwnership(stateContent);
+    perUnit && (getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled");
+  const teamOwnership = perUnit && (isTeamUnitOwnership(stateContent) ||
+    getField(stateContent, "Construction Checkpoints") === "enabled");
   const attemptWindow =
     options.attemptWindow ??
     reviewAttemptWindow(projectDir, stateContent, stage);
@@ -13407,7 +14448,7 @@ export function freshReviewReceipts(
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
       const file = auditBlockField(e.block, "File");
       if (!file) continue;
-      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+      const targetUnit = reviewedArtifactUnit(stage, file, recordedRepos);
       if (targetUnit === undefined) continue;
       // The governed input change: a produces[] write after a terminal receipt
       // for its scope. A write with no receipt in play reads nothing and takes
@@ -13697,7 +14738,7 @@ export function freshReviewReceipts(
   // One shared temp-index pass supplies BOTH global reconciliation and every
   // per-unit comparison. Never recompute inside the unit loop.
   const currentSourceState = needsCurrentSource
-    ? workspaceSourceState(projectDir)
+    ? options.sourceState !== undefined ? options.sourceState : workspaceSourceState(projectDir)
     : null;
   const currentSourceFingerprint = currentSourceState?.fingerprint ?? null;
   const currentSourceListing = currentSourceState?.listing ?? null;
@@ -14511,7 +15552,7 @@ function readSyncBufferedBytes(
   return bytes;
 }
 
-function gitTreeLeafEntries(
+export function gitTreeLeafEntries(
   repoDir: string,
   commit: string,
 ): GitTreeLeafEntry[] | null {
@@ -14561,15 +15602,17 @@ function gitTreeLeafEntries(
     }
     const pathBytes = record.subarray(tab + 1);
     const path = pathBytes.toString("utf-8");
+    // Git paths may originate on POSIX but be materialized on Windows. Reject
+    // Windows separators, streams, devices, and aliases on every platform.
     if (
       path.length === 0 ||
       !Buffer.from(path, "utf-8").equals(pathBytes) ||
       isAbsolute(path) ||
-      /^[A-Za-z]:\//.test(path) ||
-      path.startsWith("//") ||
+      /[\\\0:]/.test(path) ||
       path
         .split("/")
-        .some((part) => part.length === 0 || part === "." || part === "..") ||
+        .some((part) => part.length === 0 || part === "." || part === ".." ||
+          /[. ]$/.test(part) || /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(part)) ||
       seen.has(path)
     ) {
       return null;
@@ -14588,8 +15631,11 @@ function materializeRawGitTree(
   root: string,
   entries: readonly GitTreeLeafEntry[],
 ): boolean {
+  const checkoutRoot = resolvePath(root);
+  const privateRoot = dirname(checkoutRoot);
   const blobs = entries.filter((entry) => entry.mode !== "160000");
-  const batchPath = join(dirname(root), "cat-file.batch");
+  const batchPath = resolvePath(privateRoot, "cat-file.batch");
+  if (batchPath === privateRoot || !pathIsWithinRoot(privateRoot, batchPath)) return false;
   let batchFd: number | undefined;
   try {
     batchFd = openSync(batchPath, "w+");
@@ -14633,7 +15679,8 @@ function materializeRawGitTree(
       ) {
         return false;
       }
-      const target = join(root, entry.path);
+      const target = resolvePath(checkoutRoot, entry.path);
+      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return false;
       mkdirSync(dirname(target), { recursive: true });
       if (entry.mode === "120000") {
         const linkBytes = readSyncBufferedBytes(reader, size, 64 * 1024);
@@ -14658,7 +15705,9 @@ function materializeRawGitTree(
     }
     for (const entry of entries) {
       if (entry.mode !== "160000") continue;
-      mkdirSync(join(root, entry.path), { recursive: true });
+      const target = resolvePath(checkoutRoot, entry.path);
+      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return false;
+      mkdirSync(target, { recursive: true });
     }
     return true;
   } catch {
@@ -17776,12 +18825,23 @@ export function readUnitSourceManifest(
   const manifestPath = join(record, "construction", unit, stageSlug, "source-manifest.json");
 
   let rawBytes: Buffer;
-  let value: unknown;
   try {
     rawBytes = readFileSync(manifestPath);
   } catch (error) {
     return { ok: false, reason: `cannot read source-manifest.json (${errorMessage(error)})` };
   }
+  return validateUnitSourceManifestBytes(projectDir, stageSlug, unit, rawBytes, options);
+}
+
+function validateUnitSourceManifestBytes(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  rawBytes: Buffer,
+  options: ReadUnitSourceManifestOptions,
+  immutableContext?: { carriesWorkspaceShell: boolean },
+): ReadUnitSourceManifestResult {
+  let value: unknown;
   try {
     value = JSON.parse(rawBytes.toString("utf-8")) as unknown;
   } catch (error) {
@@ -17799,11 +18859,11 @@ export function readUnitSourceManifest(
   if (value.version !== 1) return { ok: false, reason: "version must equal 1" };
   if (!Array.isArray(value.writes)) return { ok: false, reason: "writes must be an array" };
 
-  const worktreeContext =
+  const worktreeContext = immutableContext ?? (
     options.worktreeRelative ||
       existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))
       ? worktreeSourceExclusionContext(projectDir)
-      : null;
+      : null);
   if (
     (
       options.worktreeRelative ||
@@ -17949,6 +19009,64 @@ export function readUnitSourceManifest(
     for (const index of pathModeIndexes.values()) {
       if (index !== null) rmSync(index.indexFile, { force: true });
     }
+  }
+}
+
+/** Validate transported child bytes against the immutable selected repository.
+ * Repo names remain absent, exactly as reviewed in the child; callers project
+ * the returned claims only after validating the native merge's Repo authority.
+ */
+export function readCommittedUnitSourceManifest(
+  sourceRepoDir: string,
+  commit: string,
+  carriesWorkspaceShell: boolean,
+  stageSlug: string,
+  unit: string,
+  rawBytes: Buffer,
+): { ok: false; reason: string } |
+  (Extract<ReadUnitSourceManifestResult, { ok: true }> & { listing: WorkspaceSourceListing }) {
+  if (!GIT_OBJECT_ID_RE.test(commit) || !/^[a-z][a-z0-9-]*$/.test(stageSlug) ||
+    validateUnitName(unit) !== null) {
+    return { ok: false, reason: "invalid immutable Unit source context" };
+  }
+  const root = join(tmpdir(), `aidlc-commit-manifest-${process.pid}-${randomUUID().slice(0, 8)}`);
+  const checkoutDir = join(root, "checkout");
+  try {
+    // Raw materialization places its batch stream beside the checkout. Keep
+    // both under this invocation's private root, including on failure.
+    mkdirSync(checkoutDir, { recursive: true });
+    const gitDir = gitMetadataDirectory(sourceRepoDir);
+    const common = gitDir && gitCommonDirectory(gitDir);
+    const entries = gitTreeLeafEntries(sourceRepoDir, commit);
+    if (!common || !entries || !materializeRawGitTree(sourceRepoDir, checkoutDir, entries)) {
+      return {
+        ok: false,
+        reason: "immutable reviewed Source Commit is unavailable or has unsafe paths; " +
+          "restore the reviewed commit, or rename unsafe paths with `git mv` and commit them, " +
+          `then rerun \`aidlc-swarm check ${unit}\` before native convergence`,
+      };
+    }
+    // A private index/HEAD gives ignore, path-mode and symlink validation the
+    // reviewed tree, without registering a worktree or consulting mutable HEAD.
+    const initialized = spawnSync("git", [
+      "--git-dir", join(checkoutDir, ".git"), "--work-tree", checkoutDir,
+      "init", "-q", "--template=", `--object-format=${commit.length === 64 ? "sha256" : "sha1"}`, checkoutDir,
+    ], { encoding: "utf-8" });
+    if (initialized.status !== 0) return { ok: false, reason: "cannot initialize immutable source context" };
+    writeFileSync(join(checkoutDir, ".git", "objects", "info", "alternates"), `${join(common, "objects")}\n`);
+    writeFileSync(join(checkoutDir, ".git", "HEAD"), `${commit}\n`);
+    const manifest = validateUnitSourceManifestBytes(checkoutDir, stageSlug, unit, rawBytes, {}, { carriesWorkspaceShell });
+    if (!manifest.ok) return manifest;
+    const source = filesystemSourceIdentity(checkoutDir, carriesWorkspaceShell, new Set(), "tree-only", false);
+    if (!source) return { ok: false, reason: "immutable reviewed source cannot be fingerprinted" };
+    return {
+      ...manifest,
+      listing: prefixedSourceListing(source.listing),
+    };
+  } catch (error) {
+    return { ok: false, reason: `cannot validate immutable source manifest (${errorMessage(error)})` };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -18300,8 +19418,9 @@ export function currentStageSourceBaseline(
   unitMajor: boolean,
   intent?: string,
   space?: string,
+  auditRows?: readonly AuditShardEvent[],
 ): SourceBaselineResult {
-  const allEvents = readAuditShardEvents(projectDir, intent, space);
+  const allEvents = auditRows ?? readAuditShardEvents(projectDir, intent, space);
   const modernSourceBindingEvidence =
     hasModernSourceBindingEvidence(projectDir, allEvents, intent, space);
   const events = allEvents
@@ -18528,6 +19647,20 @@ export interface RepoResolution {
 //   - multiple recorded repos: --repo is REQUIRED to disambiguate; it must name one
 //     of the set.
 // Throws (string message) on any disambiguation failure so the tool can surface it.
+//
+// A repo NAME becomes a working DIRECTORY through repoDir (an immediate child of
+// the workspace root). That is right for a multi-repo workspace and wrong whenever
+// the workspace root IS the repository, where no such child exists — so the
+// resolved cwd is verified rather than returned unchecked, and the caller gets a
+// message naming the path instead of a downstream git failure in a missing dir.
+function repoCwdOrThrow(projectDir: string, repoName: string): string {
+  const cwd = repoDir(projectDir, repoName);
+  if (existsSync(cwd)) return cwd;
+  throw new Error(
+    `Repo "${repoName}" resolves to ${cwd}, which does not exist. A recorded repo (or --repo) names a checkout that must be an immediate child of the workspace root. If the workspace root IS the repository, record no repos and pass no --repo.`,
+  );
+}
+
 export function resolveConstructionRepo(
   projectDir: string,
   requestedRepo: string | undefined,
@@ -18549,14 +19682,14 @@ export function resolveConstructionRepo(
     // repos.length === 0 (legacy) AND an explicit --repo: honour it as a sibling
     // anchor (the caller may be operating multi-repo on an unrecorded intent),
     // resolving cwd to the named sibling dir.
-    return { repo: requestedRepo, cwd: repoDir(projectDir, requestedRepo) };
+    return { repo: requestedRepo, cwd: repoCwdOrThrow(projectDir, requestedRepo) };
   }
   if (repos.length === 0) {
     // Legacy single-repo / projectDir-is-the-repo: run git in projectDir's cwd.
     return { repo: null, cwd: projectDir };
   }
   if (repos.length === 1) {
-    return { repo: repos[0], cwd: repoDir(projectDir, repos[0]) };
+    return { repo: repos[0], cwd: repoCwdOrThrow(projectDir, repos[0]) };
   }
   throw new Error(
     `This intent spans ${repos.length} repos (${repos.join(", ")}); pass --repo <name> to disambiguate which to operate on.`,
@@ -20862,15 +21995,24 @@ export function isAutonomousSwarmStage(
     for_each?: string;
     mode?: string;
   },
+  evidence?: ConstructionEvidence,
 ): boolean {
   if (stage.phase !== "construction") return false;
   if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
-  if (!isAutonomousMode(stateContent)) return false;
+  if (!isConstructionSwarmEnabled(stateContent)) return false;
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
-  if (first !== null && first.slug === stage.slug) return false;
+  const checkpoints = getField(stateContent!, "Construction Checkpoints") === "enabled";
+  if (first !== null && first.slug === stage.slug && !checkpoints) return false;
+  if (checkpoints && constructionSkeletonOn(stateContent!)) {
+    const dag = resolveBoltDag(projectDir);
+    if (
+      dag.state !== "ok" || dag.units.length === 0 ||
+      !approvedConstructionUnits(projectDir, stateContent!, evidence).has(dag.batches.flat()[0])
+    ) return false;
+  }
   const resolution = resolveBoltDag(projectDir);
   return resolution.state === "ok" && resolution.units.length > 0;
 }
@@ -21121,6 +22263,8 @@ export type GuardRemedyOp = (typeof GUARD_REMEDY_OPS)[number];
 export interface GuardRemedy {
   op: GuardRemedyOp;
   action: string;
+  operation?: GuardRecoveryOperation;
+  interaction?: GuardRecoveryInteraction;
   command?: string;
   requiresHuman: boolean;
   executableNow: boolean;
@@ -21218,16 +22362,11 @@ function guardLifecycleState(
   );
 }
 
-function guardToolCommand(tool: string, args: string[]): string {
-  return [
-    "bun",
-    `${harnessDir()}/tools/${tool}`,
-    ...args.map((value) =>
-      /^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
-        ? value
-        : `'${value.replaceAll("'", "'\"'\"'")}'`
-    ),
-  ].join(" ");
+function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "operation" | "command"> {
+  return {
+    operation,
+    command: renderGuardOperation(operation, { harnessDir: harnessDir() }),
+  };
 }
 
 function restartStageRemedy(stage: string): GuardRemedy {
@@ -21236,11 +22375,7 @@ function restartStageRemedy(stage: string): GuardRemedy {
     action:
       `Restart this stage with /aidlc --stage ${stage}; the recorded answers ` +
       "survive, and the stage will ask for confirmation again.",
-    command: guardToolCommand("aidlc-orchestrate.ts", [
-      "next",
-      "--stage",
-      stage,
-    ]),
+    ...guardOperation({ kind: "restart-stage", stage }),
     requiresHuman: true,
     executableNow: true,
   };
@@ -21329,11 +22464,7 @@ function lifecycleResetRemedies(
           "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
           `/aidlc --stage ${input.stage} (your recorded answers survive; you will ` +
           "re-confirm the summary once).",
-        command: guardToolCommand("aidlc-orchestrate.ts", [
-          "next",
-          "--stage",
-          input.stage,
-        ]),
+        ...guardOperation({ kind: "restart-stage", stage: input.stage }),
         requiresHuman: true,
         executableNow: true,
       },
@@ -21349,11 +22480,7 @@ function lifecycleResetRemedies(
             `/aidlc --stage ${input.stage} to redo it.`
           : "This stage is already approved; restore the reviewed source state, or " +
             `jump back with /aidlc --stage ${input.stage} to redo it.`,
-      command: guardToolCommand("aidlc-orchestrate.ts", [
-        "next",
-        "--stage",
-        input.stage,
-      ]),
+      ...guardOperation({ kind: "restart-stage", stage: input.stage }),
       requiresHuman: true,
       executableNow: true,
     },
@@ -21382,25 +22509,20 @@ export function evaluateGuardRefusal(
       op: "abort-bolt",
       action:
         `Halt and ask the human whether to restart autonomous Unit ` +
-        `"${input.autonomousBolt.unit}". On approval, abort and discard the old ` +
-        `attempt, then rerun the current prepare step in${batch} so a fresh ` +
+        `"${input.autonomousBolt.unit}". On approval, abort and park (discard) the old ` +
+        `attempt, restorable with \`${aidlcToolInvocation("worktree")} restore --slug ${slug}\`, ` +
+        `then rerun the current prepare step in${batch} so a fresh ` +
         "BOLT_STARTED boundary creates a new review allowance.",
-      command: guardToolCommand("aidlc-bolt.ts", [
-        "abort",
-        "--name",
-        input.autonomousBolt.unit,
-        "--slug",
-        slug,
-        "--reason",
-        "stale review recovery exhausted",
-        "--discard",
-      ]),
+      ...guardOperation({ kind: "abort-bolt", unit: input.autonomousBolt.unit, slug }),
       requiresHuman: true,
       executableNow: true,
     });
   } else {
     if (input.attempt.pendingReview) {
-      if (input.attempt.pendingReview.verdictRecordable !== false) {
+      if (
+        input.attempt.pendingReview.verdictRecordable !== false &&
+        input.attempt.summaryCoverage === "current"
+      ) {
         remedies.push({
           op: "record-verdict",
           action:
@@ -21510,7 +22632,9 @@ export function evaluateGuardRefusal(
           "Present the current consolidated summary, record the human's " +
           "confirmation, then regenerate or re-save the produced artifacts.",
         requiresHuman: true,
-        executableNow: openForWork,
+        // The summary owner accepts a fresh confirmation during revision too.
+        // Withdrawing a pending review's summary need not discard the attempt.
+        executableNow: openForWork || state === "revising",
       });
     }
     remedies.push(...lifecycleResetRemedies(input, state));
@@ -21524,7 +22648,12 @@ export function evaluateGuardRefusal(
     state,
     invariant: input.invariant,
     userMessage: input.userMessage,
-    remedies,
+    remedies: remedies.map((remedy) => ({
+      ...remedy,
+      interaction: remedy.operation
+        ? "command"
+        : remedy.requiresHuman ? "human-input" : "external-work",
+    })),
   };
 }
 
@@ -21554,18 +22683,12 @@ export interface GuardAttemptSnapshot {
 export function guardAttemptState(
   projectDir: string,
   stateContent: string,
-  stage: {
-    slug: string;
+  // Share the fingerprint input contract so partial stage views cannot
+  // accidentally drop newly supported inputs such as summary_confirmation.
+  stage: Omit<ReviewFingerprintStage, "phase"> & {
     phase?: string;
-    for_each?: string;
-    reviewer?: string;
-    review_artifact?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
-    workspace_requires?: boolean;
-    produces?: string[];
-    optional_produces?: string[];
-    produces_kinds?: Record<string, string[]>;
   },
   options: {
     unit?: string;
@@ -25139,9 +26262,13 @@ function latestMainWorkflowStageRunFloorFromRows(
 export function swarmConvergedUnits(
   projectDir: string,
   slug: string,
+  evidence?: ConstructionEvidence,
 ): Set<string> {
+  if (evidence && (evidence.state !== readStateFile(projectDir) || evidence.root !== recordDir(projectDir))) {
+    evidence = undefined;
+  }
   const unreadableShards: string[] = [];
-  const auditRows = readAuditShardEvents(
+  const auditRows = evidence?.allRows ?? readAuditShardEvents(
     projectDir,
     undefined,
     undefined,
@@ -25162,7 +26289,7 @@ export function swarmConvergedUnits(
     });
   const startedAt = stageStarts.at(-1)?.timestamp ?? null;
   const floor = latestMainWorkflowStageRunFloorFromRows(auditRows, slug);
-  const sourceChain = currentSwarmSourceMergeChain(projectDir, slug);
+  const sourceChain = currentSwarmSourceMergeChain(projectDir, slug, undefined, undefined, evidence?.allRows);
   const rowsByUnit = new Map<string, AuditShardEvent[]>();
   for (const row of auditRows) {
     if (row.event !== "SWARM_UNIT_CONVERGED") continue;
@@ -25185,6 +26312,15 @@ export function swarmConvergedUnits(
     const latestTimestamp = rows.at(-1)?.timestamp;
     if (!latestTimestamp) continue;
     const latest = rows.filter((row) => row.timestamp === latestTimestamp);
+    // A Unit-level batch revision reopens only that Unit. A later native
+    // convergence receipt may settle it again; an older or unordered receipt
+    // cannot erase the human's Request Changes.
+    const reopened = auditRows.some((row) =>
+      row.event === "GATE_REJECTED" &&
+      gateRejectionMatchesAttempt(row.block, slug, unit) &&
+      latest.some((convergence) => !attemptEventDefinitelyBefore(row, convergence))
+    );
+    if (reopened) continue;
     const identities = new Set(
       latest.map((row) =>
         [
@@ -25208,6 +26344,16 @@ export function swarmConvergedUnits(
       (sourceChain.state !== "ready" || !sourceChain.units.has(unit))
     ) continue;
     converged.add(unit);
+  }
+  if (slug === "code-generation") {
+    try {
+      const state = evidence?.state ?? readStateFile(projectDir);
+      for (const unit of approvedConstructionUnits(projectDir, state, evidence)) {
+        converged.add(unit);
+      }
+    } catch {
+      // Unreadable checkpoint evidence cannot stand in for convergence.
+    }
   }
   return converged;
 }
@@ -25323,6 +26469,35 @@ export type SwarmSourceOpeningFingerprint =
       listing?: WorkspaceSourceListing;
     };
 
+/** Only an exact, current Unit checkpoint rejection opens another source merge.
+ * Preserve aggregate history: rejection retires Unit authority, not landed bytes.
+ */
+export function swarmUnitCheckpointRejections(
+  rows: readonly AuditShardEvent[],
+  slug: string,
+  floor: string,
+  unit: string,
+  batch: string,
+): AuditShardEvent[] {
+  return rows.filter((row) => {
+    if (row.event !== "GATE_REJECTED" ||
+      auditBlockField(row.block, "Checkpoint") !== "swarm-batch" ||
+      auditBlockField(row.block, "Run floor") !== floor ||
+      auditBlockField(row.block, "Batch number") !== batch ||
+      auditBlockField(row.block, "Unit") !== unit ||
+      auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") ||
+      !gateRejectionMatchesAttempt(row.block, slug, unit) ||
+      !(auditBlockField(row.block, "Units") ?? "").split(",").map((name) => name.trim()).includes(unit)) return false;
+    try {
+      const floors = JSON.parse(auditBlockField(row.block, "Run floors") ?? "");
+      const before = rows.filter((candidate) => attemptEventDefinitelyBefore(candidate, row));
+      return floors[unit] === latestMainWorkflowStageRunFloorFromRows(before, slug, false, unit);
+    } catch {
+      return false;
+    }
+  });
+}
+
 /**
  * Resolve the trusted predecessor for the current attempt's first aggregate
  * source merge. A rejection may carry only the final validated aggregate from
@@ -25333,13 +26508,14 @@ export function currentSwarmSourceOpeningFingerprint(
   slug: string,
   intent?: string,
   space?: string,
+  auditRows?: readonly AuditShardEvent[],
 ): SwarmSourceOpeningFingerprint {
   const floor = latestMainWorkflowStageRunFloorForProject(
     projectDir,
     slug,
     false,
     undefined,
-    undefined,
+    auditRows,
     intent,
     space,
   );
@@ -25352,11 +26528,11 @@ export function currentSwarmSourceOpeningFingerprint(
   const rejected = /^GATE_REJECTED:(.+)#([1-9][0-9]*)$/.exec(floor);
   if (rejected !== null) {
     const ordinal = Number(rejected[2]);
-    const rows = readAuditShardEvents(projectDir, intent, space)
+    const rows = (auditRows ?? readAuditShardEvents(projectDir, intent, space))
       .filter(
         (row) =>
           row.event === "GATE_REJECTED" &&
-          auditBlockField(row.block, "Stage") === slug,
+          gateRejectionMatchesAttempt(row.block, slug, undefined),
       )
       .sort((a, b) => {
         if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -25401,9 +26577,11 @@ export function currentSwarmSourceOpeningFingerprint(
   const baseline = currentStageSourceBaseline(
     projectDir,
     slug,
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major",
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled",
     intent,
     space,
+    auditRows,
   );
   if (baseline.state !== "ready") {
     return {
@@ -25430,17 +26608,22 @@ export function currentSwarmSourceMergeChain(
   slug: string,
   intent?: string,
   space?: string,
+  auditRows?: readonly AuditShardEvent[],
 ): SwarmSourceMergeChain {
   const floor = latestMainWorkflowStageRunFloorForProject(
     projectDir,
     slug,
     false,
     undefined,
-    undefined,
+    auditRows,
     intent,
     space,
   );
-  const allRows = readAuditShardEvents(projectDir, intent, space);
+  const unreadable: string[] = [];
+  const allRows = auditRows ?? readAuditShardEvents(projectDir, intent, space, unreadable);
+  if (unreadable.length || floor.startsWith("AMBIGUOUS:")) {
+    return { state: "invalid", reason: "source-merge attempt evidence is unreadable or ambiguous" };
+  }
   const rows = allRows
     .filter(
       (row) =>
@@ -25456,6 +26639,7 @@ export function currentSwarmSourceMergeChain(
   if (rows.length === 0) return { state: "none" };
 
   const units = new Set<string>();
+  const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
   let openingPrevious: string | null = null;
   for (let start = 0; start < rows.length;) {
@@ -25493,7 +26677,14 @@ export function currentSwarmSourceMergeChain(
           reason: `malformed SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit ?? "")}`,
         };
       }
-      if (units.has(unit)) {
+      const rejections = swarmUnitCheckpointRejections(allRows, slug, floor, unit, batch);
+      if (rejections.some((rejection) =>
+        !attemptEventDefinitelyBefore(rejection, row) && !attemptEventDefinitelyBefore(row, rejection))) {
+        return { state: "invalid", reason: `source merge and Unit rejection are causally ambiguous for ${JSON.stringify(unit)}` };
+      }
+      const previousMerge = lastMerge.get(unit);
+      if (previousMerge && !rejections.some((rejection) =>
+        attemptEventDefinitelyBefore(previousMerge, rejection) && attemptEventDefinitelyBefore(rejection, row))) {
         return {
           state: "invalid",
           reason: `duplicate SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)}`,
@@ -25512,7 +26703,12 @@ export function currentSwarmSourceMergeChain(
             candidate.event === "SWARM_UNIT_CONVERGED" &&
             auditBlockField(candidate.block, "Unit name") === unit &&
             auditBlockField(candidate.block, "Stage") === slug &&
-            auditBlockField(candidate.block, "Run floor") === floor,
+            auditBlockField(candidate.block, "Run floor") === floor &&
+            // A later retry must not replace the immutable authority used by
+            // an earlier link. Both rows must occupy the same rejection interval.
+            rejections.every((rejection) =>
+              (attemptEventDefinitelyBefore(rejection, row) && attemptEventDefinitelyBefore(rejection, candidate)) ||
+              (attemptEventDefinitelyBefore(row, rejection) && attemptEventDefinitelyBefore(candidate, rejection))),
         )
         .sort((a, b) => {
           if (a.timestamp !== b.timestamp) {
@@ -25532,6 +26728,7 @@ export function currentSwarmSourceMergeChain(
             );
       if (
         latestConvergences.length === 0 ||
+        !convergenceRows.some((candidate) => attemptEventDefinitelyBefore(candidate, row)) ||
         (new Set(latestConvergences.map((candidate) => candidate.shard)).size >
           1 &&
           new Set(
@@ -25553,14 +26750,17 @@ export function currentSwarmSourceMergeChain(
       if (
         auditBlockField(latestConvergence.block, "Batch number") !== batch ||
         auditBlockField(latestConvergence.block, "Source Commit") !==
-          sourceCommit
+          sourceCommit ||
+        auditBlockField(latestConvergence.block, "Source Freshness Bypass") !== null
       ) {
         return {
           state: "invalid",
           reason: `SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)} does not match its latest convergence`,
         };
       }
-      units.add(unit);
+      lastMerge.set(unit, row);
+      if (rejections.some((rejection) => attemptEventDefinitelyBefore(row, rejection))) units.delete(unit);
+      else units.add(unit);
       priorFingerprint = fingerprint;
     }
     start = end;
@@ -25570,6 +26770,7 @@ export function currentSwarmSourceMergeChain(
     slug,
     intent,
     space,
+    allRows,
   );
   if (opening.state === "invalid") {
     return opening;
@@ -25635,24 +26836,24 @@ function currentUnitLifecycleRows(
         })
         .at(-1)?.timestamp ?? ""
     : latestMainWorkflowStageStarted(audit, slug);
-  let teamOwnership = false;
+  let unitScoped = false;
   try {
-    teamOwnership = isTeamUnitOwnership(
-      stateContent ?? readStateFile(projectDir),
-    );
+    const state = stateContent ?? readStateFile(projectDir);
+    unitScoped = isTeamUnitOwnership(state) ||
+      getField(state, "Construction Checkpoints") === "enabled";
   } catch {
     // No readable state means legacy stage-scoped flooring.
   }
   const floorByUnit = new Map<string, string>();
   const floorFor = (unit: string): string => {
-    const key = teamOwnership ? unit : "";
+    const key = unitScoped ? unit : "";
     const existing = floorByUnit.get(key);
     if (existing) return existing;
     const floor = latestMainWorkflowStageRunFloorForProject(
       projectDir,
       slug,
       unitMajor,
-      teamOwnership ? unit : undefined,
+      unitScoped ? unit : undefined,
       sourceRows,
     );
     floorByUnit.set(key, floor);
@@ -25737,9 +26938,10 @@ function currentUnitLifecycleRows(
 
 function unitMajorLifecycleMode(projectDir: string): boolean {
   try {
+    const state = readStateFile(projectDir);
     return (
-      getField(readStateFile(projectDir), "Construction Iteration")?.trim() ===
-      "unit-major"
+      getField(state, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(state, "Construction Checkpoints") === "enabled"
     );
   } catch {
     return false;
@@ -25771,7 +26973,8 @@ export function unitLifecycleSnapshot(
   } = {},
 ): UnitLifecycleSnapshot {
   const unitMajor =
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+    getField(stateContent, "Construction Checkpoints") === "enabled";
   const rows = currentUnitLifecycleRows(
     projectDir,
     "",
@@ -27677,16 +28880,22 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
 // refusal naming an intent that does not exist records nothing (an append
 // there would create a phantom audit directory). The bare space record root
 // never holds a state file, so an unresolved selection also records nothing.
+// Refusals may need to name something outside the current project dir, such as
+// another checkout's path, on stderr while keeping the committed audit portable.
+export type EmitErrorMessage = string | { message: string; auditMessage: string };
+
 export function emitError(
   projectDir: string,
   tool: string,
   command: string,
-  msg: string,
+  msg: EmitErrorMessage,
   intent?: string,
-  space?: string
+  space?: string,
+  changeNotices: readonly string[] = [],
 ): never {
+  const message = typeof msg === "string" ? msg : msg.message;
   const auditCommand = redactProjectDirPrefix(command, projectDir);
-  const auditMessage = redactProjectDirPrefix(msg, projectDir);
+  const auditMessage = redactProjectDirPrefix(typeof msg === "string" ? msg : msg.auditMessage, projectDir);
   if (!_errorEmitInProgress) {
     _errorEmitInProgress = true;
     try {
@@ -27737,7 +28946,14 @@ export function emitError(
       // Audit write failed — we're already in an error path, swallow.
     }
   }
-  console.error(JSON.stringify({ error: msg }));
+  // A caller may have persisted a Change Control acceptance before a later
+  // validation failed. Carry its notice on the failure too: a retry will
+  // correctly deduplicate that already-recorded acceptance. Keep the text in
+  // `error` for existing consumers and expose it structurally for newer ones.
+  console.error(JSON.stringify({
+    error: changeNotices.length > 0 ? `${changeNotices.join("\n")}\n${message}` : message,
+    ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+  }));
   process.exit(1);
 }
 
@@ -27802,18 +29018,52 @@ export interface ChangeControlResolution {
   memoryStrict: ChangeControlMemoryDeclaration | null;
 }
 
+// The fields the two memory sections read through this grammar: Change Control
+// declares `Mode`; Testing Posture declares `Methodology` and `Ordering`
+// (practices-discovery keeps every other note as an additional bullet). A
+// wrapped value ends where the next of these begins, at any indentation; any
+// other `word:` inside wrapped prose (a Windows path, `issue:ABC-123`, a URL
+// scheme) is part of the value.
+const STRUCTURED_FIELD_NAMES = ["Mode", "Methodology", "Ordering"] as const;
+const STRUCTURED_FIELD_HEAD = new RegExp(
+  `^[ \\t]*(?:\\*\\*)?(?:${STRUCTURED_FIELD_NAMES.join("|")})(?:\\*\\*)?[ \\t]*:`,
+  "i",
+);
+
 // A `Field: value` line inside a memory section, with an optional list marker
 // and optional bolding around the field name. Shared with Testing Posture so
 // both memory sections read the same grammar.
 export function structuredField(section: string, field: string): string | null {
   const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = section.match(
-    new RegExp(
-      `^[ \\t]*(?:[-*][ \\t]*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?[ \\t]*:[ \\t]*(.+?)[ \\t]*$`,
-      "im",
-    ),
+  const lines = section.split(/\r?\n/);
+  const head = new RegExp(
+    `^([ \\t]*)(?:[-*][ \\t]*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?[ \\t]*:[ \\t]*(.*?)[ \\t]*$`,
+    "i",
   );
-  return match?.[1].trim() || null;
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(head);
+    if (!match) continue;
+    const headIndent = match[1].length;
+    const parts = [match[2].trim()];
+    // A wrapped value continues on lines indented deeper than its head until
+    // a blank line, a line at the head's indentation or shallower (the next
+    // paragraph), one of the structured fields (`Mode`, `Methodology`,
+    // `Ordering`) starting at any indentation, with or without a space after
+    // its colon, or a line opening another block: a list item of any marker,
+    // a heading, a blockquote, a table row, or a fence. Markdown authors and
+    // formatters wrap long bullets this way; the value is the joined prose.
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      const indent = (line.match(/^[ \t]*/)?.[0] ?? "").length;
+      if (indent <= headIndent || !/\S/.test(line)) break;
+      if (/^[ \t]*(?:[-*+][ \t]|\d+[.)][ \t]|[>#|]|```|~~~)/.test(line)) break;
+      if (STRUCTURED_FIELD_HEAD.test(line)) break;
+      parts.push(line.trim());
+    }
+    const value = parts.filter(Boolean).join(" ");
+    return value || null;
+  }
+  return null;
 }
 
 // The visible body of one `## Heading` memory section: headings hidden in HTML

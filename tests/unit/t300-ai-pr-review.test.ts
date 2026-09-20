@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -15,6 +16,7 @@ import {
   type ChangedFileManifest,
   type ReviewMetadata,
   type StructuredReview,
+  rejectedReviewDiagnostics,
   renderReview,
   validateStructuredReview,
 } from "../../.github/scripts/ai-pr-review.ts";
@@ -109,7 +111,7 @@ describe("t300 adversarial AI PR review", () => {
     );
   });
 
-  test("validator fails closed when repository inspection is missing, failed, or partial", () => {
+  test("validator binds inspection reporting to the immutable manifest", () => {
     const missing = review() as unknown as Record<string, unknown>;
     delete missing.inspection;
     expect(() => validate(JSON.stringify(missing))).toThrow("inspection must be an object");
@@ -127,13 +129,218 @@ describe("t300 adversarial AI PR review", () => {
 
     const partial = review();
     partial.inspection.changedFiles = [];
-    expect(() => validate(JSON.stringify(partial))).toThrow(
-      "must exactly match the changed-file manifest",
-    );
+    expect(validate(JSON.stringify(partial)).inspection.changedFiles).toEqual(["core/example.ts"]);
 
     const duplicate = review();
     duplicate.inspection.changedFiles = ["core/example.ts", "core/example.ts"];
-    expect(() => validate(JSON.stringify(duplicate))).toThrow("must not contain duplicates");
+    expect(validate(JSON.stringify(duplicate)).inspection.changedFiles).toEqual([
+      "core/example.ts",
+    ]);
+  });
+
+  test("rejected review diagnostics include only allowlisted explanations", () => {
+    const rejected = {
+      ...review("P1"),
+      inspection: { status: "failed" },
+      validation: ["The diff was readable.", "A required base-tree contract was inaccessible."],
+      residualRisk: "Review coverage is incomplete.",
+      evidence: "Never log this evidence.",
+      extra: "Never log this field.",
+    };
+    expect(rejectedReviewDiagnostics(JSON.stringify(rejected))).toEqual([
+      "::error::ai-pr-review inspection.status: failed",
+      "::error::ai-pr-review validation[0]: The diff was readable.",
+      "::error::ai-pr-review validation[1]: A required base-tree contract was inaccessible.",
+      "::error::ai-pr-review residualRisk: Review coverage is incomplete.",
+    ]);
+  });
+
+  test("rejected review diagnostics escape workflow commands and remove control characters", () => {
+    const value = "100%\r\n::warning::injected\u0007\u0000\t\u001f\u007f";
+    expect(rejectedReviewDiagnostics(JSON.stringify({
+      inspection: { status: value },
+      validation: [value],
+      residualRisk: value,
+    }))).toEqual([
+      "::error::ai-pr-review inspection.status: 100%25%0D%0A::warning::injected",
+      "::error::ai-pr-review validation[0]: 100%25%0D%0A::warning::injected",
+      "::error::ai-pr-review residualRisk: 100%25%0D%0A::warning::injected",
+    ]);
+  });
+
+  test("rejected review diagnostics truncate values at the field limits", () => {
+    expect(rejectedReviewDiagnostics(JSON.stringify({
+      inspection: { status: "s".repeat(33) },
+      validation: ["v".repeat(300), "v".repeat(301)],
+      residualRisk: "r".repeat(301),
+    }))).toEqual([
+      `::error::ai-pr-review inspection.status: ${"s".repeat(31)}…`,
+      `::error::ai-pr-review validation[0]: ${"v".repeat(300)}`,
+      `::error::ai-pr-review validation[1]: ${"v".repeat(299)}…`,
+      `::error::ai-pr-review residualRisk: ${"r".repeat(299)}…`,
+    ]);
+  });
+
+  test("rejected review diagnostics truncate before escaping workflow command data", () => {
+    expect(rejectedReviewDiagnostics(JSON.stringify({
+      validation: ["%".repeat(301)],
+    }))).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      `::error::ai-pr-review validation[0]: ${"%25".repeat(299)}…`,
+    ]);
+  });
+
+  test("rejected review diagnostics truncate at code point boundaries", () => {
+    const lines = rejectedReviewDiagnostics(JSON.stringify({
+      validation: [`${"a".repeat(299)}\u{1F600}bb`],
+    }));
+    expect(lines).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      `::error::ai-pr-review validation[0]: ${"a".repeat(299)}…`,
+    ]);
+    expect(lines[1]).toMatch(/^[^\uD800-\uDFFF]*$/);
+  });
+
+  test("rejected review diagnostics preserve astral characters at the code point limit", () => {
+    const value = `${"a".repeat(299)}\u{1F600}`;
+    expect(rejectedReviewDiagnostics(JSON.stringify({ validation: [value] }))).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      `::error::ai-pr-review validation[0]: ${value}`,
+    ]);
+  });
+
+  test("rejected review diagnostics cap validation entries and total output", () => {
+    const lines = rejectedReviewDiagnostics(JSON.stringify({
+      inspection: { status: "failed" },
+      validation: Array.from({ length: 12 }, (_, index) => `Check ${index}`),
+      residualRisk: "Incomplete inspection.",
+    }));
+    expect(lines.filter(line => line.startsWith("::error::ai-pr-review validation["))).toEqual(
+      Array.from({ length: 8 }, (_, index) => `::error::ai-pr-review validation[${index}]: Check ${index}`),
+    );
+    expect(lines).toHaveLength(10);
+  });
+
+  test("rejected review diagnostics do not coerce non-string fields into log text", () => {
+    expect(rejectedReviewDiagnostics(JSON.stringify({
+      inspection: { status: { secret: "Never log this status." } },
+      validation: [null, { secret: "Never log this check." }, "Readable explanation.", 42],
+      residualRisk: ["Never log this risk."],
+    }))).toEqual([
+      "::error::ai-pr-review inspection.status: <non-string>",
+      "::error::ai-pr-review validation[2]: Readable explanation.",
+    ]);
+  });
+
+  test("rejected review diagnostics reject malformed JSON and non-object responses", () => {
+    for (const raw of ["not-json", "null", "[]", '"response"', "42"]) {
+      expect(rejectedReviewDiagnostics(raw)).toEqual([
+        "::error::ai-pr-review final response is not a JSON object",
+      ]);
+    }
+  });
+
+  test("validate CLI reports bounded diagnostics after an inspection failure", () => {
+    const directory = mkdtempSync(join(tmpdir(), "aidlc-ai-review-rejected-"));
+    try {
+      const input = join(directory, "review.json");
+      const manifest = join(directory, "manifest.json");
+      const metadata = join(directory, "metadata.json");
+      const output = join(directory, "payload.json");
+      writeFileSync(input, JSON.stringify({
+        ...review(),
+        inspection: { status: "failed" },
+        validation: ["Required evidence remained inaccessible."],
+      }));
+      writeFileSync(manifest, JSON.stringify(MANIFEST));
+      writeFileSync(metadata, JSON.stringify(METADATA));
+      let failure: unknown;
+      try {
+        execFileSync(process.execPath, [
+          ".github/scripts/ai-pr-review.ts", "validate",
+          "--base", BASE,
+          "--head", HEAD,
+          "--context-id", CONTEXT_ID,
+          "--input", input,
+          "--manifest", manifest,
+          "--metadata", metadata,
+          "--output", output,
+        ], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ status: 1, stdout: "" });
+      const { stderr } = failure as { stderr: string };
+      expect(stderr).toStartWith("::error::ai-pr-review inspection did not complete\n");
+      expect(stderr).toContain(
+        "::error::ai-pr-review validation[0]: Required evidence remained inaccessible.\n",
+      );
+      expect(stderr.indexOf("inspection did not complete")).toBeLessThan(
+        stderr.indexOf("::error::ai-pr-review validation[0]:"),
+      );
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejected evidence paths cannot smuggle runner commands through the leading error line", () => {
+    const directory = mkdtempSync(join(tmpdir(), "aidlc-ai-review-rejected-"));
+    try {
+      const input = join(directory, "review.json");
+      const manifest = join(directory, "manifest.json");
+      const metadata = join(directory, "metadata.json");
+      const output = join(directory, "payload.json");
+      const path = "core/x.ts ##[warning]spoofed ##[add-mask]visible\n"
+        + `::notice::AI review controls from ${"0".repeat(40)}\n::error::spoofed`;
+      writeFileSync(input, JSON.stringify({
+        ...review(),
+        inspection: { status: "complete" },
+        findings: [{
+          ...review("P1").findings[0],
+          evidence: [{ source: "DIFF_FILE", path }],
+        }],
+      }));
+      writeFileSync(manifest, JSON.stringify(MANIFEST));
+      writeFileSync(metadata, JSON.stringify(METADATA));
+      let failure: unknown;
+      try {
+        execFileSync(process.execPath, [
+          ".github/scripts/ai-pr-review.ts", "validate",
+          "--base", BASE,
+          "--head", HEAD,
+          "--context-id", CONTEXT_ID,
+          "--input", input,
+          "--manifest", manifest,
+          "--metadata", metadata,
+          "--output", output,
+        ], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ status: 1, stdout: "" });
+      expect(existsSync(output)).toBe(false);
+      const { stderr } = failure as { stderr: string };
+      const lines = stderr.split("\n");
+      expect(lines.pop()).toBe("");
+      for (const line of lines) {
+        expect(line).toMatch(/^::error::ai-pr-review /);
+        expect(line).not.toContain("\r");
+        expect(line).not.toMatch(/^::(?:notice|warning|add-mask|stop-commands)::/);
+      }
+      const injectedLines = lines.filter(line => line.includes("##[warning]spoofed"));
+      expect(injectedLines.length).toBeGreaterThan(0);
+      for (const line of injectedLines) {
+        expect(line).toStartWith("::error::ai-pr-review ");
+      }
+      expect(lines[0]).toContain("file evidence core/x.ts");
+      expect(lines[0]).toContain("is not a changed file without line hunks");
+      expect(lines[0]).toContain("%0A");
+      expect(stderr).not.toContain("\n::notice::AI review controls from");
+      expect(lines.length).toBeLessThanOrEqual(11);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("validator rejects fabricated evidence and reserved output syntax", () => {
@@ -378,7 +585,6 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).toContain("AI review is disabled for forks");
     expect(WORKFLOW).not.toContain("github.event.workflow_run");
     expect(WORKFLOW).toContain("permissions: {}");
-    expect(WORKFLOW).toContain("checks: read");
     expect(WORKFLOW).toContain("persist-credentials: false");
     expect(WORKFLOW).toContain("id-token: write");
     expect(WORKFLOW).toContain("AWS_AI_PR_REVIEW_ROLE_ARN");
@@ -397,7 +603,7 @@ describe("t300 adversarial AI PR review", () => {
     expect(WORKFLOW).not.toContain("egress-policy:");
     expect(WORKFLOW).toContain('"$codex_bin" exec');
     expect(WORKFLOW).toContain("--sandbox read-only");
-    expect(WORKFLOW).toContain("bash .github/scripts/prepare-ai-review-runtime.sh");
+    expect(WORKFLOW).toContain("bash .ai-review-controls/scripts/prepare-ai-review-runtime.sh");
     expect(WORKFLOW).toContain("sudo -u ai-pr-review");
     expect(RUNTIME_SETUP).toContain("kernel.unprivileged_userns_clone=1");
     expect(RUNTIME_SETUP).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
@@ -406,44 +612,83 @@ describe("t300 adversarial AI PR review", () => {
     expect(RUNTIME_SETUP).toContain("Defaults:runner env_keep");
     expect(RUNTIME_SETUP).toContain("AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN");
     expect(WORKFLOW).not.toMatch(/ref:\s+\$\{\{\s*needs\.context\.outputs\.head/);
-    expect(WORKFLOW).toContain("current_head");
+    expect(WORKFLOW).toContain(`ref: \${{ github.event.repository.default_branch }}`);
+    expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts build-context");
+    expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts validate");
+    expect(WORKFLOW).toContain(".ai-review-controls/prompts/ai-pr-review-aidlc.md");
+    const detach = WORKFLOW.indexOf('git checkout --detach "$base"');
+    expect(detach).toBeGreaterThan(-1);
+    const controlsSha = WORKFLOW.indexOf('controls_sha="$(git rev-parse HEAD)"');
+    const snapshot = WORKFLOW.indexOf("mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts");
+    const promptSnapshot = WORKFLOW.indexOf(
+      "cp .github/prompts/ai-pr-review-*.md .ai-review-controls/prompts/",
+    );
+    const scriptSnapshot = WORKFLOW.indexOf(
+      "cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh",
+    );
+    expect(controlsSha).toBeGreaterThan(-1);
+    expect(controlsSha).toBeLessThan(snapshot);
+    expect(snapshot).toBeLessThan(promptSnapshot);
+    expect(promptSnapshot).toBeLessThan(scriptSnapshot);
+    expect(scriptSnapshot).toBeLessThan(detach);
+    expect(WORKFLOW).toContain('echo "::notice::AI review controls from $controls_sha"');
+    const afterDetach = WORKFLOW.slice(detach);
+    expect(afterDetach).not.toContain("bun .github/scripts/");
+    expect(afterDetach).not.toContain("cat .github/prompts");
+    expect(afterDetach).not.toContain(".github/prompts/ai-pr-review-");
+    expect(afterDetach).not.toMatch(/\.github\/(?:prompts|scripts)/);
+    expect(WORKFLOW).not.toContain("REVIEW_CONTROL");
+    expect(WORKFLOW).toContain("This PR changes AI reviewer controls; self-review is skipped");
+    expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.md");
+    expect(WORKFLOW).toContain('git diff --name-only "$base...$head"');
+    expect(WORKFLOW).not.toContain('git diff --name-only "$base" "$head"');
+    expect(WORKFLOW).toContain("Finalize existing SHA-bound review");
+    expect(WORKFLOW).toContain('if [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]');
+    expect(WORKFLOW).toContain("Superseded by AI review of $HEAD_SHA");
+    expect(WORKFLOW).toContain("timeout-minutes: 60");
+    expect(WORKFLOW).toContain("              15m \\");
+    expect(WORKFLOW).not.toContain("              35m \\");
     expect(WORKFLOW).toContain("      - edited");
     expect(WORKFLOW).toContain("      - main");
     expect(WORKFLOW).toContain("already_reviewed");
-    expect(WORKFLOW).toContain("existing_check");
-    expect(WORKFLOW).toContain('.conclusion == \\"success\\" or .conclusion == \\"failure\\"');
     expect(WORKFLOW).not.toContain("[0:20000]");
     expect(WORKFLOW).toContain('body: (.body // "")');
-    expect(WORKFLOW).toContain('status: "in_progress"');
     expect(WORKFLOW).toContain("existing_state");
     expect(WORKFLOW).toContain("is a draft; AI review waits for ready_for_review");
-    expect(WORKFLOW).not.toContain("  invalidate:");
-    expect(WORKFLOW.indexOf("  start:")).toBeLessThan(WORKFLOW.indexOf("  lenses:"));
-    expect(WORKFLOW).toContain("check_run_id");
-    expect(WORKFLOW).toContain('--method PATCH "repos/$REPO/check-runs/$CHECK_RUN_ID"');
-    expect(WORKFLOW).toContain("  finalize:");
-    expect(WORKFLOW).toContain('conclusion: "neutral"');
     expect(WORKFLOW).toContain("cmp -s .ai-review-context/pr.json");
-    expect(WORKFLOW).toContain("check-runs");
     expect(WORKFLOW).toContain("dismissals");
     expect(WORKFLOW).not.toContain("gh pr merge");
     expect(WORKFLOW).not.toContain("gh pr review --approve");
+    expect(WORKFLOW).not.toContain("actions/upload-artifact");
+    expect(WORKFLOW).not.toContain("actions/download-artifact");
+    expect(WORKFLOW).not.toContain("matrix:");
+    const jobs = WORKFLOW.slice(WORKFLOW.indexOf("\njobs:\n"));
+    expect(jobs.match(/^ {2}[a-z_]+:$/gm)).toEqual(["  review:"]);
+    expect(WORKFLOW).toContain("> /dev/null 2>&1");
+    expect(WORKFLOW).toContain("model transcript was suppressed");
 
-    const lensJobs = WORKFLOW.slice(WORKFLOW.indexOf("  lenses:"), WORKFLOW.indexOf("  publish:"));
-    expect(lensJobs).not.toContain("GH_TOKEN:");
-    const publishJob = WORKFLOW.slice(WORKFLOW.indexOf("  publish:"));
-    expect(publishJob).not.toContain("id-token: write");
-    expect(publishJob).not.toContain("configure-aws-credentials");
-    expect(publishJob.indexOf("published=\"$(gh api --method POST")).toBeLessThan(
-      publishJob.indexOf("mapfile -t stale_reviews"),
+    const modelStep = WORKFLOW.slice(
+      WORKFLOW.indexOf("      - name: Run review passes sequentially"),
+      WORKFLOW.indexOf("      - name: Publish SHA-bound review"),
     );
-
-    const aidlcReviewJob = WORKFLOW.slice(
-      WORKFLOW.indexOf("  aidlc_review:"),
-      WORKFLOW.indexOf("  publish:"),
+    expect(modelStep).not.toContain("GH_TOKEN:");
+    expect(modelStep.indexOf('"Prompt-injection review"')).toBeLessThan(
+      modelStep.indexOf('"Security review"'),
     );
-    expect(aidlcReviewJob.indexOf("Prepare and verify unprivileged Codex sandbox")).toBeLessThan(
-      aidlcReviewJob.indexOf("configure-aws-credentials"),
+    expect(modelStep.indexOf('"Security review"')).toBeLessThan(
+      modelStep.indexOf('"AIDLC review"'),
+    );
+    expect(modelStep).toContain("sudo -u ai-pr-review -- perl -i -pe");
+    expect(modelStep).toContain('sudo -u ai-pr-review test -r "$destination"');
+    expect(modelStep.indexOf("sudo -u ai-pr-review -- perl -i -pe")).toBeLessThan(
+      modelStep.indexOf("sudo install -m 640"),
+    );
+    expect(WORKFLOW.indexOf("Prepare and verify unprivileged Codex sandbox")).toBeLessThan(
+      WORKFLOW.indexOf("configure-aws-credentials"),
+    );
+    const publishStep = WORKFLOW.slice(WORKFLOW.indexOf("      - name: Publish SHA-bound review"));
+    expect(publishStep.indexOf("published=\"$(gh api --method POST")).toBeLessThan(
+      publishStep.indexOf("mapfile -t stale_reviews"),
     );
   });
 
@@ -453,10 +698,10 @@ describe("t300 adversarial AI PR review", () => {
         join(REPO_ROOT, ".github", "prompts", `ai-pr-review-${lens}.md`),
         "utf8",
       );
-      expect(WORKFLOW).toContain(`          - ${lens}`);
+      expect(WORKFLOW).toContain(`.ai-review-controls/prompts/ai-pr-review-${lens}.md`);
       expect(prompt.length).toBeGreaterThan(400);
     }
-    expect(WORKFLOW).not.toContain("          - correctness");
+    expect(WORKFLOW).not.toContain("ai-pr-review-correctness.md");
     expect(
       existsSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-correctness.md")),
     ).toBe(false);
@@ -478,6 +723,9 @@ describe("t300 adversarial AI PR review", () => {
     expect(common).toContain("changed-files.json");
     expect(common).toContain("supersedes, duplicates, or invalidates");
     expect(candidates).toContain("inspection or the command sandbox fails");
+    expect(aidlc).toContain(".ai-review-lenses/prompt-injection.md");
+    expect(aidlc).toContain(".ai-review-lenses/security.md");
+    expect(aidlc).not.toContain("prompt-attack and security outputs");
     expect(aidlc).toContain("First try to kill every candidate");
     expect(aidlc).toContain("Review the code that exists, not the PR description");
     expect(aidlc).toContain("Reconstruct every affected caller, writer, reader");
@@ -492,13 +740,17 @@ describe("t300 adversarial AI PR review", () => {
     expect(aidlc).toContain("explicit release-preparation or");
     expect(aidlc).toContain("version-bump PR");
     expect(aidlc).toContain("Every PR must preserve existing changelog entries");
-    expect(aidlc).toContain('"status": "failed"');
-    expect(aidlc).toContain('"changedFiles"');
+    expect(aidlc).toContain("The runner verifies");
+    expect(aidlc).toContain("publisher records the immutable");
+    expect(aidlc).toContain('Return `inspection.status` as `"complete"` only');
+    expect(aidlc).toContain('return `"failed"`');
+    expect(aidlc).toContain('"inspection": {"status": "complete"}');
+    expect(aidlc).not.toContain('"changedFiles"');
     expect(aidlc).toContain('"requiredCorrection"');
     expect(aidlc).toContain('"source": "DIFF"');
     expect(aidlc).toContain('"source":"DIFF_FILE"');
     expect(aidlc).toContain('"source":"PR_BODY"');
-    expect(WORKFLOW).toContain("  aidlc_review:");
-    expect(WORKFLOW).toContain("Review current head and produce publishable result");
+    expect(WORKFLOW).toContain('"AIDLC review"');
+    expect(WORKFLOW).toContain("Run review passes sequentially");
   });
 });
