@@ -314,4 +314,26 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(existsSync(worktreePath(p, idB, "demo"))).toBe(true);
     expect(branchExists(p, boltName(idB, "demo"))).toBe(true);
   }, 30000);
+
+  test("foreign unchecked-out legacy branch and retained ref survive intent B discard and purge", () => {
+    const p = freshFixture();
+    const intentB = createIntent(p, "other-intent", DEFAULT_SPACE);
+    const branch = "bolt-demo";
+    const head = git(p, "rev-parse", "HEAD");
+    const retainedRef = `refs/aidlc/reviewed-source/demo/${head}`;
+    // No worktree and no demo lifecycle rows belong to B: a global legacy ref
+    // is not provenance, even when git would allow deleting its idle branch.
+    git(p, "branch", branch, "main");
+    git(p, "update-ref", retainedRef, head);
+    const branchHead = git(p, "rev-parse", "--verify", `refs/heads/${branch}`);
+    const retainedHead = git(p, "rev-parse", "--verify", retainedRef);
+    expect(existsSync(join(p, ".aidlc", "worktrees", branch))).toBe(false);
+
+    for (const command of ["discard", "purge"]) {
+      const result = wt(p, [command, "--slug", "demo", "--intent", intentB.dirName, "--space", DEFAULT_SPACE]);
+      // Nothing-to-clean refusals are allowed; deleting either foreign ref is not.
+      expect(git(p, "rev-parse", "--verify", `refs/heads/${branch}`), result.out).toBe(branchHead);
+      expect(git(p, "rev-parse", "--verify", retainedRef), result.out).toBe(retainedHead);
+    }
+  }, 30000);
 });

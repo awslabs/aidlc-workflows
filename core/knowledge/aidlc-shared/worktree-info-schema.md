@@ -45,10 +45,11 @@ Creation without an intent registry UUID fails closed:
 Intent record <relative record dir> has no registry identity (uuid); adopt or re-create the intent before Construction. Bolt worktrees are named by intent so parallel intents cannot collide.
 ```
 
-Identity-resolving commands, including `info`, also require a registry UUID
-before legacy lookup. Adopt or re-create an orphan intent before using those
-commands; do not infer its UUID from a directory name. `list` remains an
-inventory independent of the active intent; `verify` remains an audit lookup.
+Identity-resolving commands (`create`, `merge`, `discard`, `restore`, `purge`)
+also require a registry UUID before legacy lookup. Adopt or re-create an orphan
+intent before using those commands; do not infer its UUID from a directory name.
+`list` remains an inventory independent of the active intent; `verify` and
+`info` remain audit lookups that need no registry identity.
 
 Before cleanup deletes a Bolt branch or its retained/parked refs, that branch
 must be checked out at its own Bolt directory or nowhere. If another worktree
@@ -69,7 +70,7 @@ The slug is the kebab-case Bolt identifier threaded through every worktree comma
 | Exit | Meaning | stdout | stderr |
 |------|---------|--------|--------|
 | 0 | Hit — JSON emitted | JSON object (see below) | (empty) |
-| 1 | Missing intent/registry UUID, no `WORKTREE_CREATED` for slug, or malformed block | (empty) | one-line error message |
+| 1 | No `WORKTREE_CREATED` for slug (or audit absent), or malformed block | (empty) | one-line error message |
 
 The exit-code contract mirrors `verify`'s semantics: non-zero is the halt signal. The orchestrator's prose treats any non-zero exit as "no worktree to render" and falls back to the carve-out failure shape (verify-failed or dev-rejection). Surface an identity refusal rather than inventing a branch or path from the slug.
 
