@@ -872,6 +872,196 @@ describe("t243 project initialization", () => {
     expect(opencodeStamp.distribution).toBe("opencode");
   }, 60_000);
 
+  test("coexisting harnesses refresh idempotently and the shared .gitignore block keeps one owner", () => {
+    const project = temp("aidlc-t243-coexist-refresh-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+
+    const addClaude = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+    ], project);
+    expect(addClaude.status, addClaude.stdout + addClaude.stderr).toBe(0);
+    const gitignore = readFileSync(join(project, ".gitignore"), "utf-8");
+
+    const dry = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+      "--dry-run",
+      "--json",
+    ], project);
+    expect(dry.status, dry.stdout + dry.stderr).toBe(0);
+    const plan = JSON.parse(dry.stdout) as {
+      data: { actions: Array<{ path: string; action: string; detail?: string }> };
+    };
+    expect(plan.data.actions.find((action) => action.path === ".gitignore")).toEqual({
+      path: ".gitignore",
+      action: "preserve",
+      detail: "owned by kiro",
+    });
+
+    const refreshClaude = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+    ], project);
+    expect(refreshClaude.status, refreshClaude.stdout + refreshClaude.stderr).toBe(0);
+    expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe(gitignore);
+
+    const refreshKiro = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(refreshKiro.status, refreshKiro.stdout + refreshKiro.stderr).toBe(0);
+    expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe(gitignore);
+
+    const claudeBaseline = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
+    ) as { rootContributions: Record<string, unknown> };
+    const kiroBaseline = JSON.parse(
+      readFileSync(join(project, ".kiro", "tools", "data", "aidlc-manifest.json"), "utf-8"),
+    ) as { rootContributions: Record<string, unknown> };
+    expect(claudeBaseline.rootContributions[".gitignore"]).toBeUndefined();
+    expect(kiroBaseline.rootContributions[".gitignore"]).toBeDefined();
+  }, 60_000);
+
+  test("an unowned managed block with no sibling harness stays a conflict", () => {
+    const project = temp("aidlc-t243-unowned-block-");
+    mkdirSync(join(project, ".git"));
+    writeFileSync(
+      join(project, ".gitignore"),
+      "# BEGIN AI-DLC:gitignore\nstale-entry/\n# END AI-DLC:gitignore\n",
+    );
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status).toBe(4);
+    expect(initialized.stdout).toContain("managed block has no ownership baseline");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+  }, 60_000);
+
+  test("a harness that shares AGENTS.md with an installed harness cannot coexist", () => {
+    const project = temp("aidlc-t243-shared-agents-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const agents = readFileSync(join(project, "AGENTS.md"), "utf-8");
+
+    const addCodex = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CODEX_RELEASE,
+      "--harness",
+      "codex",
+      "--mcp",
+      "none",
+    ], project);
+    expect(addCodex.status).toBe(4);
+    expect(addCodex.stdout).toContain("harness codex shares AGENTS.md with installed kiro");
+    expect(existsSync(join(project, ".codex"))).toBe(false);
+    expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
+  }, 60_000);
+
+  test("config without --harness on a multi-harness project demands --harness", () => {
+    const project = temp("aidlc-t243-multiple-harnesses-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+
+    const addClaude = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+    ], project);
+    expect(addClaude.status, addClaude.stdout + addClaude.stderr).toBe(0);
+
+    const ambiguous = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--mcp",
+      "none",
+    ], project);
+    expect(ambiguous.status).toBe(2);
+    expect(ambiguous.stdout).toContain("multiple project harnesses are present; pass one --harness <name>");
+  }, 60_000);
+
   test("--force cannot overwrite an unowned whole-file root integration", () => {
     const project = temp("aidlc-t240-whole-file-");
     mkdirSync(join(project, ".git"));

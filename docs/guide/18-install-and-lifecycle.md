@@ -228,6 +228,11 @@ aidlc doctor
 tree, the `aidlc/` workspace shell, root integrations, a projection stamp, and
 an ownership baseline. It does not create a workflow intent.
 
+When more than one harness is present, every `aidlc config` invocation must
+include `--harness <name>`, including previews and refreshes. See
+[Root Integrations and Ownership](#root-integrations-and-ownership) for which
+harnesses can coexist and how their shared `.gitignore` block is handled.
+
 After a successful scaffold or refresh, config runs a cheap installed-result
 sweep. It checks only the non-interactive hook PATH, host trust files, and
 recorded provider actions; it does not spawn the harness CLI or contact a
@@ -719,6 +724,16 @@ project content.
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, OpenCode | Own one marked onboarding block; preserve project instructions |
 | `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
 | `opencode.json` | OpenCode | Whole-file ownership; an unknown existing file is a conflict |
+
+**More than one harness in a project.** Harnesses may coexist when their engine
+directories differ and they do not share an `AGENTS.md` block—effectively
+Claude Code plus one other harness today. Only `.gitignore` can be shared:
+the harness that wrote the marked block first owns it, and later harnesses
+preserve it (`preserve (owned by <harness>)`). Their harness-specific ignore
+entries are not added automatically; add any needed entries by hand outside
+the block, as listed in [Troubleshooting](15-troubleshooting.md#native-install-channel).
+Once more than one harness is present, every `aidlc config` invocation needs
+`--harness <name>`.
 
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Modified

@@ -91,6 +91,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  type ProjectHarness,
 } from "./aidlc-runtime-paths.ts";
 import {
   activeModelGroups,
@@ -3160,6 +3161,14 @@ function readBaseline(path: string): Baseline | null {
   }
 }
 
+function siblingBaseline(sibling: ProjectHarness): Baseline | null {
+  try {
+    return readBaseline(join(sibling.root, "tools", "data", "aidlc-manifest.json"));
+  } catch {
+    return null;
+  }
+}
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {
@@ -5184,6 +5193,9 @@ function existingProject(projectDir: string, requested?: string): {
   baseline?: Baseline;
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
+  if (!requested && harnesses.length > 1) {
+    throw new Error("multiple project harnesses are present; pass one --harness <name>");
+  }
   const harness = requested
     ? harnesses.find((candidate) => candidate.distribution === requested)
     : harnesses[0];
@@ -5343,6 +5355,7 @@ function planRootIntegrations(
   actions: PlannedAction[],
   contributions: Record<string, RootContribution>,
 ): void {
+  let siblings: ProjectHarness[] | undefined;
   for (const integration of descriptor.rootIntegrations) {
     const sourcePath = join(sourceRoot, integration.path);
     const targetPath = join(projectDir, integration.path);
@@ -5375,35 +5388,26 @@ function planRootIntegrations(
         ? priorContribution.hash
         : undefined;
 
-      const foreignSharedBlock = Boolean(
-        merged.currentHash &&
-          merged.currentHash !== merged.nextHash &&
-          priorHash === undefined,
-      );
       if (
         merged.currentHash &&
         merged.currentHash !== merged.nextHash &&
         merged.currentHash !== priorHash &&
-        !foreignSharedBlock &&
         !force
       ) {
+        siblings ??= discoverProjectHarnesses(projectDir);
+        const owner = siblings.find((sibling) => {
+          if (sibling.harnessDir === descriptor.harnessDir) return false;
+          const contribution = siblingBaseline(sibling)?.rootContributions?.[integration.path];
+          return contribution?.policy === "managed-block" && contribution.hash === merged.currentHash;
+        });
+        if (owner) {
+          actions.push({ path: integration.path, action: "preserve", detail: `owned by ${owner.distribution}` });
+          continue;
+        }
         actions.push({
           path: integration.path,
           action: "conflict",
           detail: priorHash ? "managed block was locally modified" : "managed block has no ownership baseline",
-        });
-        continue;
-      }
-      if (foreignSharedBlock && !force) {
-        contributions[integration.path] = {
-          policy: "managed-block",
-          hash: merged.currentHash as string,
-          marker: integration.marker,
-        };
-        actions.push({
-          path: integration.path,
-          action: "preserve",
-          detail: "shared with another harness",
         });
         continue;
       }
@@ -6394,13 +6398,25 @@ export async function main(
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
     if (!existing.distribution) {
-      const collision = discoverProjectHarnesses(projectDir).find(
+      const installed = discoverProjectHarnesses(projectDir);
+      const collision = installed.find(
         (candidate) => candidate.harnessDir === descriptor.harnessDir,
       );
       if (collision) {
         throw new Error(
           `harness ${stamp.distribution} shares directory ${descriptor.harnessDir} with installed ${collision.distribution}; they cannot coexist in one project`,
         );
+      }
+      for (const integration of descriptor.rootIntegrations) {
+        if (integration.policy !== "managed-block" || integration.path === ".gitignore") continue;
+        const sibling = installed.find((candidate) =>
+          siblingBaseline(candidate)?.rootContributions?.[integration.path]?.policy === "managed-block"
+        );
+        if (sibling) {
+          throw new Error(
+            `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}; they cannot coexist in one project`,
+          );
+        }
       }
     }
     if (existing.distribution) assertRefreshSafe(projectDir);
