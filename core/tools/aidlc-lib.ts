@@ -20003,8 +20003,9 @@ export function turnMarkersShowConversational(
 }
 
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
-// record. The conductor writes it at stage-protocol-reviewer.md §12a step 1 (per-unit
-// stages only) before invoking the reviewer sub-agent, and deletes it at step
+// record. The conductor writes it at stage-protocol-reviewer.md §12a step 1
+// (per-unit stages, and each unit reviewed under an `invoke-swarm`) before invoking
+// the reviewer sub-agent, and deletes it at step
 // 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
 // it back to learn WHICH unit is under review and which contract paths are
 // exempt — the two facts no harness payload carries. Lives under the intent's
