@@ -55,6 +55,29 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `session-end.ts` | SessionEnd | Project-wide (settings.json) | (empty) | Emit `SESSION_ENDED` on graceful exit to the intent recorded for that exact session; fail closed instead of using the shared active cursor when a UUID-backed workflow has no session binding |
 | `aidlc-statusline.ts` | statusLine | Project-wide (settings.json) | -- | Show real-time progress in terminal |
 
+For Plan Approval and the three protected Construction decisions, the human-turn
+hook additionally records the offered response, not just presence. It selects
+`recordPlanApprovalHumanResponse` or the unified `recordProtectedHumanResponse`
+from the session's challenge file, never both. Conflicting challenge files are
+deleted with their responses and no choice is recorded. The protected mailbox
+uses `protected-question-<sessionSegment>.json` and
+`protected-question-response-<sessionSegment>.json` under
+`aidlc/.aidlc-sessions/plan-approval/` (or the delegated worktree runtime directory).
+Questions bind the kind, session, random challenge ID, canonical target digest,
+and offered choices; answers bind the session and challenge ID and are consumed
+only after the owning audit append succeeds.
+
+For a question minted by `log decision`, rendered picker text must match the
+exact `--decision` digest when supplied in `tool_input.questions[].question` or
+`tool_input.question`. Codex preserves its `request_user_input` tool input when
+forwarding a structured selection. A reply without rendered text relies on
+exclusivity: a new `log decision` withdraws the invoking session's protected
+question, or all sessions' questions if neither `--session` nor process ancestry
+resolves the owner. A lifecycle `gate-start` withdraws all protected questions
+before `STAGE_AWAITING_APPROVAL`. Plan Approval keeps its separate runtime format;
+minting either kind removes the other's challenge and response, but ordinary
+decisions and lifecycle gates do not withdraw Plan Approval itself.
+
 ### Shared Characteristics
 
 All seventeen TypeScript hook sources:
@@ -535,7 +558,7 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 **Decision.** The matcher (`evaluateReviewerScope`, an exported pure function pinned by `t220`) scans path fields and command/pattern text for `construction/<seg>` tokens: the dispatched unit passes, a wildcard or bare sweep root blocks, and a concrete sibling blocks unless the full token exactly matches an exempt entry's `construction/` suffix. A grep of the current unit, the shared inception contracts, and validation-tool runs are never touched. Blocks emit a `REVIEWER_SCOPE_BLOCKED` audit row (Tool, Target, Stage, Unit) and signal via **exit 2 + a redirecting stderr reason** — the harness PreToolUse reject contract — that names the scope and points the reviewer back to the passed contracts.
 
-**Fail-open everywhere.** No record, a stale or malformed record, a non-reviewer agent, an unknown tool, malformed stdin, or any internal error allows the call; a reviewer-agent sighting with no dispatch record records an advisory drop for `--doctor` (the conductor forgot the step-1 write). The deterministic off-switch `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement entirely.
+**Fail-open everywhere.** No record, a stale or malformed record, a non-reviewer agent, an unknown tool, malformed stdin, or any internal error allows the call; a reviewer-agent sighting touching `construction/` paths with no dispatch record records an advisory drop for `--doctor` only while a digest-valid active directive is a per-unit `run-stage` (or a live `invoke-swarm`) - when §12a step 1 owed the record. A single-stage review, or a missing/stale marker, stays silent rather than asserting an omission. The deterministic off-switch `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement entirely.
 
 ### Plan-Approval Guard Hook
 

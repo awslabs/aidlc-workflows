@@ -25,6 +25,7 @@ import {
   currentSwarmSourceMergeChain,
   discoverSiblingRepos,
   emitError,
+  type EmitErrorMessage,
   errorMessage,
   filteredRawIndexEntries,
   findAllEvents,
@@ -35,6 +36,7 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   listIntentDirs,
   listSpaces,
+  maximalAttemptEvents,
   parseSourceListing,
   readAllAuditShards,
   readAuditShardEvents,
@@ -49,6 +51,7 @@ import {
   serializeSourceListing,
   sourceListingEntriesEqual,
   sourceListingSha256,
+  swarmUnitCheckpointRejections,
   type WorkspaceSourceState,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
@@ -61,6 +64,7 @@ import {
   worktreeStateFilePath,
   writeFileAtomic,
 } from "./aidlc-lib.js";
+import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
 // hyphens. Mirrors stage-schema.ts:95+:101 — the codebase already duplicates
@@ -217,19 +221,41 @@ function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): s
   return null;
 }
 
-// --- Sibling-worktree detection ---
+// --- Nested-worktree detection ---
 //
-// `aidlc-worktree` must run from the main repo checkout, not from a sibling
-// worktree (e.g. `.claude/worktrees/<dev>/`). The main checkout is the
-// directory whose `.git` is the same as `git rev-parse --git-common-dir`'s
-// parent. macOS symlinks `/var → /private/var`, so canonicalise both sides
-// via `realpathSync` before comparing.
+// `aidlc-worktree` must not run from a checkout NESTED INSIDE the main repo
+// checkout's working tree — the `.aidlc/worktrees/<bolt>` (or legacy
+// `.claude/worktrees/<dev>`) shape the error names. A nested checkout is refused
+// because a Bolt worktree created from there would sit inside another worktree's
+// tracked tree.
+// The main checkout is the directory whose `.git` is `git rev-parse
+// --git-common-dir`'s parent. macOS symlinks `/var → /private/var`, so
+// canonicalise both sides via `realpathSync` before comparing.
+//
+// A linked worktree that lives OUTSIDE the main checkout is ALLOWED (#567). The
+// one-worktree-per-branch layout is ordinary, and nothing about it breaks the
+// invariant above: git registers such a worktree under the same common dir (so
+// `gitCommonDirHash` and the creating-repo binding are unchanged), the Bolt
+// worktrees it creates hang off ITS root rather than inside anyone else's tree,
+// and `--base` / the merge target stay bound to the invoking checkout — which is
+// the property that keeps a unit forking from the branch holding approved work
+// rather than from whatever the main checkout happens to have checked out.
 //
 // P7 (multi-repo): the guard is RE-ANCHORED to the TARGET repo's checkout. When
 // `--repo <name>` selects a sibling repo, `repoCwd` is that repo dir and every
-// git probe runs there — so "must run from the main checkout" is evaluated against
-// the sibling repo, not the (non-git) workspace root. Absent `--repo` (legacy
-// single-repo), `repoCwd` is the projectDir and the behaviour is unchanged.
+// git probe runs there — so the nesting test is evaluated against the sibling
+// repo, not the (non-git) workspace root. Absent `--repo` (legacy single-repo),
+// `repoCwd` is the projectDir and the behaviour is unchanged.
+
+// True when `child` is strictly inside `parent` (never for equal paths). A leading
+// `..` segment on a separator boundary means outside, not a `..foo` directory name.
+function isNestedInside(parent: string, child: string): boolean {
+  if (child === parent) return false;
+  const rel = relative(parent, child);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+  return true;
+}
+
 function assertNotSiblingWorktree(repoCwd?: string): void {
   const top = runGit(["rev-parse", "--show-toplevel"], repoCwd);
   if (!top.ok) {
@@ -245,9 +271,9 @@ function assertNotSiblingWorktree(repoCwd?: string): void {
   const commonAbs = resolve(cwdTop, commonRaw);
   const mainCheckout = canonicalise(dirname(commonAbs));
 
-  if (cwdTop !== mainCheckout) {
+  if (cwdTop !== mainCheckout && isNestedInside(mainCheckout, cwdTop)) {
     error(
-      `aidlc-worktree must run from the main repo checkout, not from a sibling worktree at ${cwdTop}. Bolt worktrees are siblings of the main checkout, not nested.`
+      `aidlc-worktree must run from the main repo checkout or a worktree outside it, not from a worktree nested inside it at ${cwdTop}. Bolt worktrees live under the invoking checkout's .aidlc/worktrees/, so creating one from a nested checkout would put a worktree inside another worktree's tracked tree.`
     );
   }
 }
@@ -455,7 +481,20 @@ function handleCreate(args: string[]): void {
   const branchName = `bolt-${slug}`;
   const branchExists = runGit(["rev-parse", "--verify", `refs/heads/${branchName}`], repoCwd);
   if (branchExists.ok) {
-    errorWithSlug(slug, `Branch already exists: ${branchName}`);
+    const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
+    const owner = listed.ok
+      ? worktreeCheckedOutAt(listed.stdout, `refs/heads/${branchName}`)
+      : null;
+    const prefix = `Branch already exists: ${branchName}`;
+    const guidance = ". Bolt branches are shared by every worktree of this repository; finish or discard the Bolt that owns it, or rename the Unit.";
+    // The owner lives outside this project dir, so the audit row must not carry its absolute path.
+    errorWithSlug(
+      slug,
+      owner === null ? `${prefix}${guidance}` : {
+        message: `${prefix} (checked out at ${owner})${guidance}`,
+        auditMessage: `${prefix} (checked out in another worktree of this repository)${guidance}`,
+      },
+    );
   }
 
   // Audit-first: emit BEFORE git so a kill-9 between emit and git surfaces
@@ -704,6 +743,17 @@ interface RepositoryBoltEvidence {
   durable: boolean;
   registered: boolean;
   retained: boolean;
+}
+
+// Path of the registered worktree that has `branchRef` checked out, or null.
+function worktreeCheckedOutAt(porcelain: string, branchRef: string): string | null {
+  for (const block of porcelain.split(/\r?\n\r?\n/)) {
+    const lines = block.split(/\r?\n/);
+    if (lines.includes(`branch ${branchRef}`)) {
+      return lines.find((line) => line.startsWith("worktree "))?.slice(9) ?? null;
+    }
+  }
+  return null;
 }
 
 function repositoryRegistersBoltWorktree(
@@ -1522,6 +1572,13 @@ function convergedSourceRecord(
       "refusing to merge: the current swarm worktree has no correlated convergence authority; rerun finalize",
     );
   }
+  if (swarmUnitCheckpointRejections(rows, stage, floor, unitName, batch)
+    .some((rejection) => !rowAfter(latest, rejection))) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: this Unit convergence predates its checkpoint rejection; prepare and finalize a fresh retry",
+    );
+  }
 
   const bypass =
     auditBlockField(latest.block, "Source Freshness Bypass") ?? undefined;
@@ -1820,6 +1877,8 @@ interface SwarmWorktreeIdentity {
   batch: string;
   stage: string;
   floor: string;
+  baseCommit: string;
+  baseSourceListing: string;
 }
 
 function currentSwarmWorktreeIdentity(
@@ -1837,7 +1896,11 @@ function currentSwarmWorktreeIdentity(
     const batch = parsed.swarmBatch;
     const stage = parsed.swarmStage;
     const floor = parsed.swarmFloor;
+    const baseCommit = parsed.baseCommit;
+    const baseSourceListing = parsed.baseSourceListing;
     return (
+        parsed.version === 1 &&
+        parsed.boltSlug === slug &&
         typeof unit === "string" &&
         boltSlugForUnit(unit) === slug &&
         typeof batch === "string" &&
@@ -1845,9 +1908,13 @@ function currentSwarmWorktreeIdentity(
         typeof stage === "string" &&
         stage.length > 0 &&
         typeof floor === "string" &&
-        floor.length > 0
+        floor.length > 0 &&
+        typeof baseCommit === "string" &&
+        /^[0-9a-f]{40,64}$/.test(baseCommit) &&
+        typeof baseSourceListing === "string" &&
+        /^sha256:[0-9a-f]{64}$/.test(baseSourceListing)
       )
-      ? { unit, batch, stage, floor }
+      ? { unit, batch, stage, floor, baseCommit, baseSourceListing }
       : null;
   } catch {
     return null;
@@ -1911,20 +1978,51 @@ function mergedSwarmCleanupAuthority(
         stage !== identity.stage ||
         floor !== identity.floor)
     ) continue;
-    matchedSlugAuthority = true;
-    const convergence = audit.rows.find(
+    // A slug and stage floor survive a Unit checkpoint rejection. Cleanup of
+    // an old landing must never reset or remove the next child bearing them.
+    const creations = maximalAttemptEvents(audit.rows.filter((candidate) =>
+      candidate.event === "WORKTREE_CREATED" &&
+      candidate.authoritySpace === row.authoritySpace &&
+      candidate.authorityIntent === row.authorityIntent &&
+      auditBlockField(candidate.block, "Bolt slug") === slug &&
+      auditBlockField(candidate.block, "Repo") === repoField &&
+      (() => {
+        const path = auditBlockField(candidate.block, "Worktree path");
+        return path !== null &&
+          pathKey(resolveAuditWorktreePath(pd, path)) === pathKey(worktreePath(pd, slug));
+      })()));
+    if (creations.length > 1) continue;
+    const creation = creations[0];
+    if (creation && !rowAfter(row, creation)) continue;
+    if (identity !== undefined && (!creation ||
+      creation.authoritySpace !== row.authoritySpace ||
+      creation.authorityIntent !== row.authorityIntent ||
+      auditBlockField(creation.block, "Base commit") !== identity.baseCommit ||
+      auditBlockField(creation.block, "Base Source Listing") !== identity.baseSourceListing ||
+      auditBlockField(creation.block, "Swarm Unit") !== unit ||
+      auditBlockField(creation.block, "Swarm Batch") !== batch ||
+      auditBlockField(creation.block, "Swarm Stage") !== stage ||
+      auditBlockField(creation.block, "Swarm Run floor") !== floor)) continue;
+    const scopeRows = audit.rows.filter((candidate) =>
+      candidate.authoritySpace === row.authoritySpace &&
+      candidate.authorityIntent === row.authorityIntent);
+    if (swarmUnitCheckpointRejections(scopeRows, stage, floor, unit, batch)
+      .some((rejection) => !rowAfter(row, rejection))) continue;
+    const convergences = maximalAttemptEvents(scopeRows.filter(
       (candidate) =>
-        candidate.authoritySpace === row.authoritySpace &&
-        candidate.authorityIntent === row.authorityIntent &&
         candidate.event === "SWARM_UNIT_CONVERGED" &&
-        auditBlockField(candidate.block, "Batch number") === batch &&
         auditBlockField(candidate.block, "Unit name") === unit &&
-        auditBlockField(candidate.block, "Stage") === stage &&
-        auditBlockField(candidate.block, "Run floor") === floor &&
-        auditBlockField(candidate.block, "Source Commit") === sourceCommit &&
-        rowAfter(row, candidate),
-    );
-    if (!convergence) continue;
+        (!creation || rowAfter(candidate, creation)),
+    ));
+    const convergence = convergences.length === 1 ? convergences[0] : null;
+    if (!convergence ||
+      auditBlockField(convergence.block, "Batch number") !== batch ||
+      auditBlockField(convergence.block, "Stage") !== stage ||
+      auditBlockField(convergence.block, "Run floor") !== floor ||
+      auditBlockField(convergence.block, "Source Commit") !== sourceCommit ||
+      auditBlockField(convergence.block, "Source Freshness Bypass") !== null ||
+      !rowAfter(row, convergence)) continue;
+    matchedSlugAuthority = true;
     const repoCwd = repo === null ? pd : repoDir(pd, repo);
     if (
       !runGit(["cat-file", "-e", `${sourceCommit}^{commit}`], repoCwd).ok ||
@@ -3067,19 +3165,27 @@ function handleDiscard(args: string[]): void {
     return;
   }
 
+  const discardedApproval = dirExists &&
+    relativeRecordDir(pd, flags.intent, flags.space) === relativeRecordDir(pd)
+    ? (() => {
+        const identity = currentSwarmWorktreeIdentity(pd, slug);
+        return identity?.stage === "code-generation"
+          ? captureCodeGenerationDiscardApproval(pd, wtPath, identity.unit) : null;
+      })()
+    : null;
   let parked: { ref: string; commit: string };
   try {
     parked = parkAttempt(repoCwd, slug, wtPath, dirExists, registered, branchExists, retained);
   } catch (e) {
     errorWithSlug(slug, `refusing to discard: parking the attempt failed: ${errorMessage(e)}`);
   }
-
   let auditTs: string;
   try {
     auditTs = emitAudit(pd, "WORKTREE_DISCARDED", {
       "Bolt slug": slug,
       "Worktree path": auditWorktreePath(pd, wtPath),
       Reason: "agent-discard",
+      ...discardedApproval,
       "Parked ref": parked.ref,
       "Parked commit": parked.commit,
     }, flags.intent, flags.space);
@@ -3356,13 +3462,11 @@ function handlePurge(args: string[]): void {
     a.localeCompare(b, "en", { numeric: true }));
   const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
   if (!listed.ok) errorWithSlug(slug, `git worktree list failed: ${listed.stderr.trim()}`);
-  const registrations = listed.stdout.split(/\r?\n\r?\n/).map((block) => block.split(/\r?\n/));
   for (const stamp of stamps) {
     const wtPath = resolve(pd, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
     const branch = `refs/heads/restore/bolt-${slug}-${stamp}`;
     // Match registrations too: a restored checkout may have been moved.
-    const registration = registrations.find((lines) => lines.includes(`branch ${branch}`));
-    const registeredPath = registration?.find((line) => line.startsWith("worktree "))?.slice(9);
+    const registeredPath = worktreeCheckedOutAt(listed.stdout, branch);
     if (existsSync(wtPath) || registeredPath) {
       errorWithSlug(slug, `restore checkout still present at ${registeredPath ?? wtPath}; remove it first`);
     }
@@ -3661,11 +3765,14 @@ export function main(argv: string[]): void {
 // prepended to the message so doctor's regex `\[slug=([a-z0-9-]+)\]` can
 // correlate the error with the affected Bolt without re-engineering
 // emitError's field set.
-function errorWithSlug(slug: string, msg: string): never {
-  error(`[slug=${slug}] ${msg}`);
+function errorWithSlug(slug: string, msg: EmitErrorMessage): never {
+  error(typeof msg === "string" ? `[slug=${slug}] ${msg}` : {
+    message: `[slug=${slug}] ${msg.message}`,
+    auditMessage: `[slug=${slug}] ${msg.auditMessage}`,
+  });
 }
 
-function error(msg: string): never {
+function error(msg: EmitErrorMessage): never {
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-worktree ${process.argv.slice(2).join(" ")}`.trim();
   emitError(pd, "aidlc-worktree", command, msg);

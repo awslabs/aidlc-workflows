@@ -15,6 +15,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   applyConfigDiagnosticRecords,
   codexTrustIssues,
+  deriveNonInteractivePath,
   detectAwsCredentials,
   harnessOwnsModelAccess,
   instructionFileDoctorCheck,
@@ -277,6 +278,243 @@ describe("t294 runtime diagnostics", () => {
     expect(absent.binaries.find((item) => item.name === "bun")?.status).toBe(
       "missing",
     );
+  });
+
+  // getconf PATH is glibc's compile-time _CS_PATH (/bin:/usr/bin on the Debian
+  // family), so a Linux baseline built from it alone can never contain the
+  // directories the remediation tells the user to add. The login-independent
+  // sources are pam_env's /etc/environment, login.defs ENV_PATH, and
+  // environment.d; the probe reads them under the injected systemRoot.
+  test("Linux baseline PATH includes /etc/environment, login.defs, and environment.d entries", () => {
+    const root = temp("aidlc-t294-system-root-");
+    const home = temp("aidlc-t294-system-home-");
+    mkdirSync(join(root, "etc", "environment.d"), { recursive: true });
+    mkdirSync(join(home, ".config", "environment.d"), { recursive: true });
+    writeFileSync(
+      join(root, "etc", "environment"),
+      'PATH="/usr/local/bin:/opt/from-environment/bin" # site\nLANG=C.UTF-8\n',
+    );
+    writeFileSync(
+      join(root, "etc", "login.defs"),
+      "# comment\nENV_SUPATH\tPATH=/usr/local/sbin:/sbin\nENV_PATH\tPATH=/usr/bin:/opt/from-login-defs/bin\nENV_PATH /opt/bare/bin:/usr/bin\n",
+    );
+    writeFileSync(
+      join(root, "etc", "environment.d", "50-site.conf"),
+      [
+        "PATH=$PATH:/opt/from-environment-d/bin\nPATH=/opt/foo/bin$",
+        "{PATH:+:$PATH}\nTOOLCHAIN=gcc\nPATH=/opt/$TOOLCHAIN/bin:$PATH\nPATH=/opt/x$",
+        "{PATH}\nPATH=$",
+        "{PATH:+$PATH:}/opt/lead/bin\n",
+      ].join(""),
+    );
+    writeFileSync(
+      join(home, ".config", "environment.d", "10-user.conf"),
+      [
+        "PATH=$",
+        "{PATH}:/opt/from-user-environment-d/bin\nPATH=$HOME/.local/bin:$PATH\nPATH=$",
+        "{HOME}/bin\nEDITOR=vi\n",
+      ].join(""),
+    );
+    const baseline = deriveNonInteractivePath({
+      platform: "linux",
+      systemRoot: root,
+      home,
+      env: {},
+      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+    });
+    const entries = baseline.split(":");
+    expect(entries.slice(0, 2)).toEqual(["/bin", "/usr/bin"]);
+    expect(entries).toEqual(expect.arrayContaining([
+      "/usr/local/bin",
+      "/opt/from-environment/bin",
+      "/opt/from-login-defs/bin",
+      "/opt/bare/bin",
+      "/opt/from-environment-d/bin",
+      "/opt/from-user-environment-d/bin",
+      "/opt/foo/bin",
+      "/opt/lead/bin",
+      join(home, ".local", "bin"),
+      join(home, "bin"),
+    ]));
+    // ENV_SUPATH is root's path, not a login-independent user PATH; $PATH
+    // references, expression fragments, quotes, and comments never survive as entries.
+    expect(entries).not.toContain("/sbin");
+    expect(entries.filter((entry) =>
+      /["#${}]/.test(entry)
+      || entry === "+"
+      || entry === "/opt//bin"
+      || entry === "/opt/bin"
+      || entry === "/opt/x"
+    )).toEqual([]);
+    expect(new Set(entries).size).toBe(entries.length);
+
+    // Without those sources the same layout is invisible to the baseline.
+    const bare = deriveNonInteractivePath({
+      platform: "linux",
+      systemRoot: temp("aidlc-t294-system-root-empty-"),
+      home: temp("aidlc-t294-system-home-empty-"),
+      env: {},
+      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+    });
+    expect(bare).toBe("/bin:/usr/bin");
+  });
+
+  test("Linux runtime probe resolves aidlc from /etc/environment and user environment.d", () => {
+    const project = temp("aidlc-t294-system-root-project-");
+    mkdirSync(join(project, ".claude"));
+    writeFileSync(
+      join(project, ".claude", "settings.json"),
+      JSON.stringify({
+        hooks: {
+          Stop: [{ hooks: [{ command: "aidlc engine hook continue-workflow" }] }],
+        },
+      }),
+    );
+    const interactiveBin = join(project, "interactive-bin");
+    mkdirSync(interactiveBin);
+    writeExecutable(join(interactiveBin, "aidlc"));
+    const siteBin = join(project, "site-bin");
+    mkdirSync(siteBin);
+    writeExecutable(join(siteBin, "aidlc"));
+    const systemRoot = temp("aidlc-t294-system-root-site-");
+    const home = temp("aidlc-t294-system-home-probe-");
+    mkdirSync(join(systemRoot, "etc"), { recursive: true });
+    writeFileSync(join(systemRoot, "etc", "environment"), `PATH="${siteBin}" # site\n`);
+    const options = {
+      platform: "linux" as const,
+      systemRoot,
+      home,
+      env: { PATH: interactiveBin },
+      includeHarnessCli: false,
+      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+    };
+    const site = probeRuntime(project, ".claude", "claude", options);
+
+    const emptyRoot = temp("aidlc-t294-system-root-bare-");
+    mkdirSync(join(home, ".config", "environment.d"), { recursive: true });
+    mkdirSync(join(home, ".local", "bin"), { recursive: true });
+    writeFileSync(
+      join(home, ".config", "environment.d", "10-user.conf"),
+      "PATH=$HOME/.local/bin:$PATH\n",
+    );
+    writeExecutable(join(home, ".local", "bin", "aidlc"));
+    const user = probeRuntime(project, ".claude", "claude", {
+      ...options,
+      systemRoot: emptyRoot,
+    });
+    expect({
+      site: site.binaries.find((item) => item.name === "aidlc"),
+      user: user.binaries.find((item) => item.name === "aidlc"),
+      siteIssues: runtimeIssues(site),
+      userIssues: runtimeIssues(user),
+    }).toEqual({
+      site: expect.objectContaining({
+        status: "found",
+        baselinePath: join(siteBin, "aidlc"),
+      }),
+      user: expect.objectContaining({
+        status: "found",
+        baselinePath: join(home, ".local", "bin", "aidlc"),
+      }),
+      siteIssues: [],
+      userIssues: [],
+    });
+
+    // The executable alone does not make a directory login-independent.
+    rmSync(join(home, ".config"), { recursive: true });
+    const bare = probeRuntime(project, ".claude", "claude", {
+      ...options,
+      systemRoot: emptyRoot,
+      env: { PATH: join(home, ".local", "bin") },
+    });
+    expect(bare.baselinePath).toBe("/bin:/usr/bin");
+    expect(bare.binaries.find((item) => item.name === "aidlc")?.status).toBe(
+      "interactive-only",
+    );
+
+    // Blanking an unresolved variable must not expose an unrelated executable.
+    const unresolvedHome = temp("aidlc-t294-system-home-unresolved-");
+    const toolchainRoot = temp("aidlc-t294-toolchain-");
+    mkdirSync(join(toolchainRoot, "bin"));
+    writeExecutable(join(toolchainRoot, "bin", "aidlc"));
+    mkdirSync(join(unresolvedHome, ".config", "environment.d"), { recursive: true });
+    writeFileSync(
+      join(unresolvedHome, ".config", "environment.d", "10-user.conf"),
+      `TOOLCHAIN=gcc\nPATH=${toolchainRoot}/$TOOLCHAIN/bin:$PATH\n`,
+    );
+    const unresolved = probeRuntime(project, ".claude", "claude", {
+      ...options,
+      systemRoot: temp("aidlc-t294-system-root-unresolved-"),
+      home: unresolvedHome,
+    });
+    expect({
+      status: unresolved.binaries.find((item) => item.name === "aidlc")?.status,
+      toolchainEntries: unresolved.baselinePath.split(":").filter((entry) =>
+        entry.startsWith(toolchainRoot)
+      ),
+    }).toEqual({
+      status: "interactive-only",
+      toolchainEntries: [],
+    });
+  });
+
+  test("runtime remediation names only the PATH surfaces the platform probe reads", () => {
+    const project = temp("aidlc-t294-runtime-remediation-");
+    mkdirSync(join(project, ".claude"));
+    const settings = join(project, ".claude", "settings.json");
+    writeFileSync(
+      settings,
+      JSON.stringify({
+        hooks: {
+          Stop: [{ hooks: [{ command: "aidlc engine hook continue-workflow" }] }],
+        },
+      }),
+    );
+    const baselineBin = join(project, "baseline-bin");
+    const interactiveBin = join(project, "interactive-bin");
+    mkdirSync(baselineBin);
+    mkdirSync(interactiveBin);
+    writeExecutable(join(interactiveBin, "aidlc"));
+    const options = {
+      baselinePath: baselineBin,
+      interactivePath: interactiveBin,
+      includeHarnessCli: false,
+      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+    };
+    const darwin = probeRuntime(project, ".claude", "claude", {
+      ...options,
+      platform: "darwin",
+    });
+    const linux = probeRuntime(project, ".claude", "claude", {
+      ...options,
+      platform: "linux",
+    });
+    writeFileSync(
+      settings,
+      JSON.stringify({
+        hooks: {
+          Stop: [{
+            hooks: [{ command: "bun .claude/tools/aidlc.ts engine hook continue-workflow" }],
+          }],
+        },
+      }),
+    );
+    writeExecutable(join(interactiveBin, "bun"));
+    const bun = probeRuntime(project, ".claude", "claude", {
+      ...options,
+      platform: "linux",
+    });
+    expect({
+      darwin: runtimeIssues(darwin)[0].remediation,
+      linux: runtimeIssues(linux)[0].remediation,
+      bun: runtimeIssues(bun)[0].remediation,
+    }).toEqual({
+      darwin: expect.stringMatching(/^(?!.*\/etc\/environment).*\/etc\/paths\.d/),
+      linux: expect.stringMatching(/\/etc\/environment.*\/etc\/login\.defs.*environment\.d/),
+      bun: expect.stringMatching(
+        /^This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead\. .*\/etc\/environment/,
+      ),
+    });
   });
 
   test("harness CLI probes guard missing commands and enforce version floors", () => {

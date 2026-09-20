@@ -413,11 +413,13 @@ it never advances or resumes workflow work.
 ### Runtime Diagnostics
 
 `aidlc config runtime` checks the environment that project hooks actually use.
-On macOS and Linux it derives a non-interactive baseline from `getconf PATH`
-and the macOS system path files. On Windows it reads the User and Machine PATH
-without loading a shell profile. It then resolves the command required by the
-installed hook bytes (`bun` for copy projections or `aidlc` for native
-projections) and checks the selected harness CLI.
+On Linux it derives a non-interactive baseline from `getconf PATH` plus the
+`PATH` lines of `/etc/environment`, `ENV_PATH` in `/etc/login.defs`, and
+`environment.d`. On macOS it uses `getconf PATH` plus `/etc/paths` and
+`/etc/paths.d`. On Windows it reads the User and Machine PATH without loading a
+shell profile. It then resolves the command required by the installed hook
+bytes (`bun` for copy projections or `aidlc` for native projections) and checks
+the selected harness CLI.
 
 ```bash
 aidlc config runtime --show

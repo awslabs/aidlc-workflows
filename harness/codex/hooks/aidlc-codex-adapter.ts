@@ -787,6 +787,7 @@ switch (target) {
             hook_event_name: "PostToolUse",
             ...(codex.session_id ? { session_id: codex.session_id } : {}),
             tool_name: "request_user_input",
+            tool_input: codex.tool_input,
             tool_response: { answer: selectionText },
           }
         : {
