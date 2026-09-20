@@ -324,18 +324,20 @@ if selection is still ambiguous, use doctor's exact operation with `--repo <name
 or `--repo .` for the project root.
 
 If a saved namespace is known but its discard descriptor is unavailable, the
-fallback retains `parked_ref`, reports `parked_stamp`, `parked_mode`, and
-`parked_repo` as `null`, and returns `restore_operation` with route `worktree`
-and args `["restore", "--slug", slug, "--repo", "."]`, without `--parked`, with
-snapshot-style exclusions. Its optional hint follows the same safe rendering
-and error contract. This fallback can select a later attempt; unknown mode does
-not establish that a snapshot was saved, and the assistant must not make that
-claim. If no namespace was saved, `parked_ref` is `null`; `parked_stamp`,
-`parked_mode`, `parked_repo`, `restore_operation`, `restore_hint`,
-`restore_hint_error`, and `parked_excludes` are absent.
+fallback retains `parked_ref` and derives `parked_stamp` from its namespace
+only when the stamp parses strictly; otherwise `parked_stamp` is `null`.
+It reports `parked_mode: null` and `parked_repo: null` and omits
+`restore_operation`, `restore_hint`, `restore_hint_error`, and `parked_excludes`,
+rather than guessing a repository, saved mode, or latest-attempt selection.
+Instead, `recovery_hint` asks you to run doctor to list set-aside attempts and
+their exact restore commands. The hint is plain guidance, not an executable
+operation. The assistant must not claim what files were saved or offer restoration
+from the fallback alone. If no namespace was saved, `parked_ref` is `null`;
+`parked_stamp`, `parked_mode`, `parked_repo`, `restore_operation`, `restore_hint`,
+`restore_hint_error`, `parked_excludes`, and `recovery_hint` are absent.
 
 If only review evidence remained, discard reports `parked_mode: "evidence-only"`
-and `parked_commit: null`. Abort keeps the ref, stamp, mode, and repository but
+and `parked_commit: "-"`. Abort keeps the ref, stamp, mode, and repository but
 omits `restore_operation`, `restore_hint`, `restore_hint_error`, and
 `parked_excludes`. The assistant says: "Nothing of its
 working files remained to save; only its review evidence was kept." It does

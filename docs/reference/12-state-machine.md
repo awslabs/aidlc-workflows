@@ -779,7 +779,7 @@ Discard JSON retains `parked_ref` and `parked_commit` and adds `parked_stamp`
 (the exact stamp), `parked_mode` (`snapshot`, `branch-tip`, or `evidence-only`),
 and `parked_repo` (`null` for the project root, otherwise the sibling repository
 name). When only reviewed source refs remain, the descriptor reports
-`parked_mode: "evidence-only"`, `parked_commit: null`, and the retained ref,
+`parked_mode: "evidence-only"`, `parked_commit: "-"`, and the retained ref,
 stamp, and repository; there is no `/head` to restore.
 `aidlc engine worktree restore --slug <slug> --parked <stamp> --repo <name|.>`
 recovers a saved head in an isolated restored checkout; omit `--parked` to select
@@ -862,15 +862,19 @@ Evidence-only mode keeps all four descriptor fields but omits
 because no working files could be saved.
 
 If a saved namespace is known but its discard descriptor is missing, the
-fallback retains `parked_ref`, sets `parked_stamp`, `parked_mode`, and
-`parked_repo` to `null`, and returns `restore_operation` with route `worktree`
-and args `["restore", "--slug", slug, "--repo", "."]`, without an exact stamp,
-with snapshot-style exclusions. Its optional hint follows the same safe
-rendering/error contract. The fallback can select a later attempt; unknown
-mode does not establish that a snapshot was saved, so the conductor must not
-make that claim. If no namespace was saved, `parked_ref` is `null`;
-`parked_stamp`, `parked_mode`, `parked_repo`, `restore_operation`, `restore_hint`,
-`restore_hint_error`, and `parked_excludes` are absent.
+fallback retains `parked_ref` and derives `parked_stamp` from its namespace
+only when the stamp parses strictly; otherwise `parked_stamp` is `null`.
+It sets `parked_mode` and `parked_repo` to `null`: legacy output does not
+establish either. It omits `restore_operation`, `restore_hint`,
+`restore_hint_error`, and `parked_excludes`, rather than guessing a repository,
+selecting a later attempt, or offering to restore evidence-only refs.
+Instead, `recovery_hint` asks the human to run doctor to list set-aside attempts
+and their exact restore commands. The hint is plain guidance, not an executable
+operation. Unknown mode does not establish what files were saved, so the conductor
+must not make that claim or offer restoration. If no namespace was saved,
+`parked_ref` is `null`; `parked_stamp`, `parked_mode`, `parked_repo`,
+`restore_operation`, `restore_hint`, `restore_hint_error`, `parked_excludes`,
+and `recovery_hint` are absent.
 Offer restoration only when `restore_operation` is present. When the human
 asks for the attempt back, invoke its `worktree` route through
 `{{INVOKE}} engine worktree <args...>`, passing each listed arg exactly as a
@@ -992,8 +996,8 @@ hook's exact abort exception preserves source/native trusted-tool parity but
 does not authenticate consent. Direct refusal asks do not publish the selection
 marker used by the separately checked native restart continuation. A mistaken
 abort with the unchanged `--discard` argv now parks available files and review
-evidence rather than irretrievably deleting them. When files were saved, the
-returned `restore_operation` selects the saved stamp when known and repository
+evidence rather than irretrievably deleting them. With a restorable descriptor, the
+returned `restore_operation` selects the exact saved stamp and repository
 for recovery in a separate checkout, not the aborted lifecycle or its review
 authority. On a human restore request, invoke its `worktree` route through
 `{{INVOKE}} engine worktree <args...>` with each listed arg exactly as argv,

@@ -254,7 +254,7 @@ parks tracked and non-ignored untracked files and reviewed source refs, then
 removes the live checkout and branch. After obtaining the human's selection,
 execute the returned abort command unchanged. When present, the abort result's
 `restore_operation` has route `worktree` and exact args selecting the saved
-stamp when known and repository (`--repo <name>` or `--repo .`). On a human
+stamp and repository (`--repo <name>` or `--repo .`). On a human
 restore request, invoke `{{INVOKE}} engine worktree <args...>` with each listed
 arg passed exactly as a separate argv argument, never joined into a shell
 command. Restoration recovers files in `.aidlc/restored/bolt-<slug>-<stamp>` on

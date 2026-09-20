@@ -294,7 +294,7 @@ checkout is already gone but its branch remains, `/head` holds that branch tip
 instead, with a matching `/branch-tip` marker rather than `/snapshot`.
 Only then does it remove the live checkout and
 branch and compare-delete the original reviewed source refs. If only reviewed
-refs remain, `parked_mode` is `evidence-only` and `parked_commit` is `null`;
+refs remain, `parked_mode` is `evidence-only` and `parked_commit` is the string `"-"`;
 `parked_ref`, `parked_stamp`, and `parked_repo` still identify the saved evidence,
 but there is no `/head` to restore.
 
@@ -321,14 +321,17 @@ Evidence-only mode keeps the four descriptor fields but omits
 because no restorable files were saved.
 
 If a saved namespace is known but its discard descriptor is missing, the
-fallback has a non-null `parked_ref`, `parked_stamp: null`, `parked_mode: null`,
-and `parked_repo: null`, with `restore_operation` route `worktree` and args
-`["restore", "--slug", slug, "--repo", "."]` (no exact stamp) and the
-snapshot-style exclusions. Its optional hint follows the same safe rendering
-and error contract. This fallback can select a later attempt and does not
-justify claiming a snapshot was saved. If no namespace was saved, `parked_ref`
-is `null`, with no `parked_stamp`, `parked_mode`, `parked_repo`,
-`restore_operation`, `restore_hint`, `restore_hint_error`, or `parked_excludes`. The audit row
+fallback retains `parked_ref` and derives `parked_stamp` from its namespace
+only when the stamp parses strictly; otherwise `parked_stamp` is `null`.
+It reports `parked_mode: null` and `parked_repo: null`, since neither can be
+inferred from legacy output, and omits `restore_operation`, `restore_hint`,
+`restore_hint_error`, and `parked_excludes`. Instead, `recovery_hint` asks the
+human to run doctor to list set-aside attempts and their exact restore commands.
+The hint is plain guidance, not an executable operation. Unknown mode does not
+justify a saved-files claim or restoration offer. If no namespace was saved,
+`parked_ref` is `null`, with no `parked_stamp`, `parked_mode`, `parked_repo`,
+`restore_operation`, `restore_hint`, `restore_hint_error`, `parked_excludes`, or
+`recovery_hint`. The audit row
 still uses `Reason: aborted`; the success JSON preserves the caller's text in
 `abort_reason`.
 Do not change the abort command or its human-consent requirement. Tell the human

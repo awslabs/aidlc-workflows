@@ -80,7 +80,7 @@ not its `/head` ref) and `parked_commit` (the snapshot commit or branch tip), an
 adds `parked_stamp` (the exact stamp), `parked_mode` (`snapshot`, `branch-tip`, or
 `evidence-only`), and `parked_repo` (`null` for the project root, otherwise the
 sibling repository name). If only reviewed source refs remain to park,
-`parked_mode` is `evidence-only`, `parked_commit` is `null`, and no `/head` exists
+`parked_mode` is `evidence-only`, `parked_commit` is the string `"-"`, and no `/head` exists
 to restore; `parked_ref`, `parked_stamp`, and `parked_repo` still identify the
 saved evidence.
 The already-discarded response is unchanged and has no `parked_*` fields.
@@ -93,8 +93,8 @@ Successful `bolt abort` JSON retains `reason: "aborted"` and echoes the supplied
 For a restorable attempt, `restore_operation` is an `EngineInvocation` from
 `aidlc-guard-operation.ts`: `{ route: string; args: readonly string[] }`. Its
 route is `worktree`, and its args are
-`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? "."]` when the
-stamp is known. The repository selector is always present: the sibling name or
+`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? "."]`.
+The repository selector is always present: the sibling name or
 `.` when `parked_repo` is `null`. This selects the exact saved attempt and
 repository, not a later attempt with the same slug.
 
@@ -114,16 +114,18 @@ all four descriptor fields but omits `restore_operation`, `restore_hint`,
 | `evidence-only` | Absent; only review evidence was kept, with no restorable files |
 
 If a saved namespace is known but its discard descriptor is missing, the
-fallback reports `parked_stamp`, `parked_mode`, and `parked_repo` as `null` and
-returns `restore_operation` with route `worktree` and args
-`["restore", "--slug", slug, "--repo", "."]`, without an exact stamp, plus the
-snapshot-style exclusions. Its optional display hint follows the same safe
-rendering/error contract. This fallback selects the latest saved head and can
-therefore select a later attempt. Unknown mode does not establish that a
-snapshot was saved; do not make a saved-files claim from this fallback. When no
-namespace was saved, `parked_ref` is `null`; `parked_stamp`, `parked_mode`,
-`parked_repo`, `restore_operation`, `restore_hint`, `restore_hint_error`, and
-`parked_excludes` are absent. A result with a snapshot descriptor
+fallback retains `parked_ref` and derives `parked_stamp` from its namespace
+only when the stamp parses strictly; otherwise `parked_stamp` is `null`.
+It reports `parked_mode: null` and `parked_repo: null`, since neither can be
+inferred from the legacy output, and omits `restore_operation`, `restore_hint`,
+`restore_hint_error`, and `parked_excludes`. Instead, `recovery_hint` asks the
+human to run doctor to list set-aside attempts and their exact restore commands.
+The hint is plain guidance, not an executable operation. Unknown mode does not
+establish what files were saved, so do not make a saved-files claim or offer
+restoration from this fallback. When no namespace was saved, `parked_ref` is
+`null`; `parked_stamp`, `parked_mode`, `parked_repo`, `restore_operation`,
+`restore_hint`, `restore_hint_error`, `parked_excludes`, and `recovery_hint` are absent.
+A result with a snapshot descriptor
 looks like:
 
 ```json

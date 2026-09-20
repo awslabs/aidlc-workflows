@@ -1968,7 +1968,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(parked).not.toHaveProperty("parked_excludes");
       expect(parked).toMatchObject({ parked_mode: "evidence-only", parked_repo: null,
         parked_stamp: parked.parked_ref.split("/").at(-1) });
-      if (operation === "discard") expect(parked.parked_commit).toBeNull();
+      if (operation === "discard") expect(parked.parked_commit).toBe("-");
       expect(eventBlock(proj, "WORKTREE_DISCARDED")).toContain(`**Parked ref**: ${parked.parked_ref}`);
       expect(eventBlock(proj, "WORKTREE_DISCARDED")).toContain("**Parked commit**: -");
       expect(git(proj, "rev-parse", "--verify", `${parked.parked_ref}/reviewed-source/${head}`).stdout.trim()).toBe(head);

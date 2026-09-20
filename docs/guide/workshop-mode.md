@@ -90,7 +90,7 @@ arg exactly as argv, never joined into a shell command. Optional
 `restore_command` and `purge_command` are safe human display text; rendering
 failures omit the corresponding command and supply `restore_command_error` or
 `purge_command_error` while keeping the operation. If only reviewed source refs
-remained to save, the attempt is `evidence-only` with `parked_commit: null`: no
+remained to save, the attempt is `evidence-only` with `parked_commit: "-"`: no
 files can be restored, abort omits `restore_operation`, `restore_hint`,
 `restore_hint_error`, and `parked_excludes`, and doctor offers only the purge
 operation and its command-or-error fields. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)

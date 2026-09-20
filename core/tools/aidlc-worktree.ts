@@ -2907,7 +2907,7 @@ function validateParkedStamp(stamp: string | undefined): void {
 
 interface ParkedAttempt {
   ref: string;
-  commit: string | null;
+  commit: string;
   mode: "snapshot" | "branch-tip" | "evidence-only";
 }
 
@@ -3069,7 +3069,7 @@ function parkAttempt(
     const sourceCommit = source.ref.slice(source.ref.lastIndexOf("/") + 1);
     requireGit(["update-ref", `${ref}/reviewed-source/${sourceCommit}`, source.oid, ""]);
   }
-  return { ref, commit, mode };
+  return { ref, commit: commit ?? "-", mode };
 }
 
 // --- Subcommand: discard ---
@@ -3207,7 +3207,7 @@ function handleDiscard(args: string[]): void {
       Reason: "agent-discard",
       ...discardedApproval,
       "Parked ref": parked.ref,
-      "Parked commit": parked.commit ?? "-",
+      "Parked commit": parked.commit,
     }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);

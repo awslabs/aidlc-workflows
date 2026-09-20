@@ -55,6 +55,7 @@ import {
   auditBlockField,
   isTeamUnitOwnership,
   isWalkingSkeletonUnitOnMain,
+  parseParkedStampInstant,
   relativeRecordDir,
   readStateFile,
   resolveAuditWorktreePath,
@@ -871,6 +872,10 @@ function handleAbort(args: string[]): void {
         parkedStamp = discarded.parked_stamp;
         parkedMode = discarded.parked_mode;
         parkedRepo = discarded.parked_repo;
+      } else if (parkedRef !== null) {
+        const prefix = `refs/aidlc/parked/${flags.slug}/`;
+        const stamp = parkedRef.startsWith(prefix) ? parkedRef.slice(prefix.length) : "";
+        if (parseParkedStampInstant(stamp) !== null) parkedStamp = stamp;
       }
     } catch {
       // Older sibling versions or no-op output may not carry a recovery descriptor.
@@ -897,7 +902,8 @@ function handleAbort(args: string[]): void {
   let restoreOperation: EngineInvocation | undefined;
   let restoreHint: string | undefined;
   let restoreHintError: string | undefined;
-  if (parkedRef !== null && parkedMode !== "evidence-only") {
+  let recoveryHint: string | undefined;
+  if (parkedRef !== null && (parkedMode === "snapshot" || parkedMode === "branch-tip")) {
     restoreOperation = {
       route: "worktree",
       args: [
@@ -911,6 +917,10 @@ function handleAbort(args: string[]): void {
     } catch (e) {
       restoreHintError = errorMessage(e);
     }
+  } else if (parkedRef !== null && parkedMode === null) {
+    // Legacy output identifies a namespace, not its repository or saved mode.
+    // Doctor can inspect the parked refs without guessing a restore target.
+    recoveryHint = "run doctor to list set-aside attempts and their exact restore commands";
   }
 
   console.log(
@@ -927,7 +937,8 @@ function handleAbort(args: string[]): void {
         parked_mode: parkedMode,
         parked_repo: parkedRepo,
       } : {}),
-      ...(parkedRef === null || parkedMode === "evidence-only" ? {} : {
+      ...(recoveryHint === undefined ? {} : { recovery_hint: recoveryHint }),
+      ...(restoreOperation === undefined ? {} : {
         restore_operation: restoreOperation,
         restore_hint: restoreHint,
         restore_hint_error: restoreHintError,

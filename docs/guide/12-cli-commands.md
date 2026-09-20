@@ -1681,7 +1681,7 @@ human-consent requirement.
 in the additive `abort_reason` field. It always includes `parked_ref`, which is
 `null` when nothing was parked. Only a non-null `parked_ref` adds `parked_stamp`,
 `parked_mode`, and `parked_repo`. When only review evidence remained, discard reports
-`parked_mode: "evidence-only"` and `parked_commit: null`; abort keeps its four
+`parked_mode: "evidence-only"` and `parked_commit: "-"`; abort keeps its four
 descriptor fields but omits `restore_operation`, `restore_hint`,
 `restore_hint_error`, and `parked_excludes`.
 
@@ -1689,15 +1689,17 @@ For `snapshot`, abort reports
 `parked_excludes: ["ignored files", "eol/text=auto normalization"]`. For
 `branch-tip`, it reports `["uncommitted files (no working tree existed)"]`:
 only committed work could be kept. If a saved namespace is known but its
-discard descriptor is unavailable, the fallback sets `parked_stamp`,
-`parked_mode`, and `parked_repo` to `null` and returns `restore_operation` with
-route `worktree` and args `["restore", "--slug", slug, "--repo", "."]`, without
-`--parked`, retaining the snapshot-style exclusions. Its optional hint follows
-the same safe rendering/error contract. That fallback can select a later
-attempt and does not establish that a snapshot was saved. If no namespace was
-saved, including without `--discard`, `parked_ref` is `null`; `parked_stamp`,
-`parked_mode`, `parked_repo`, `restore_operation`, `restore_hint`,
-`restore_hint_error`, and `parked_excludes` are absent.
+discard descriptor is unavailable, the fallback derives `parked_stamp` from
+`parked_ref` only when its stamp parses strictly, otherwise reporting `null`.
+It sets `parked_mode` and `parked_repo` to `null` and omits `restore_operation`,
+`restore_hint`, `restore_hint_error`, and `parked_excludes`: neither the saved
+mode nor repository is known. Instead, `recovery_hint` asks the human to run
+doctor to list set-aside attempts and their exact restore commands. The hint is
+plain guidance, not an executable operation.
+This fallback does not establish what files were saved or justify a restoration
+offer. If no namespace was saved, including without `--discard`, `parked_ref`
+is `null`; `parked_stamp`, `parked_mode`, `parked_repo`, `restore_operation`,
+`restore_hint`, `restore_hint_error`, `parked_excludes`, and `recovery_hint` are absent.
 
 Restore creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
 `restore/bolt-<slug>-<stamp>`. It never touches a live
