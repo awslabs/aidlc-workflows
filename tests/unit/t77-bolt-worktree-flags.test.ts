@@ -479,19 +479,41 @@ describe("t77 — abort", () => {
     expect(audit.includes("**Reason**: aborted")).toBe(true);
   });
 
-  test("abort default reports discarded:false without parked fields [.sh T22]", () => {
+  test("abort default reports discarded:false with null parked_ref [.sh T22]", () => {
     const proj = track(setupV7Project("preserved"));
     const r = runBolt([
       "abort", "--name", "Preserved", "--slug", "preserved",
       "--reason", "preserve test", "--project-dir", proj,
     ]);
     expect(r.status, r.out).toBe(0);
-    expect(r.out).toContain('"discarded":false');
     const parsed = JSON.parse(r.out.trim());
-    expect(parsed.discarded).toBe(false);
-    expect(parsed.reason).toBe("preserve test");
-    expect(parsed).not.toHaveProperty("restore_hint");
-    expect(Object.keys(parsed).filter((key) => key.startsWith("parked_"))).toEqual([]);
+    expect(parsed).toEqual({
+      emitted: "BOLT_FAILED",
+      reason: "aborted",
+      abort_reason: "preserve test",
+      failed_bolt: "Preserved",
+      slug: "preserved",
+      discarded: false,
+      parked_ref: null,
+    });
+  });
+
+  test("abort --discard with nothing to park omits recovery metadata", () => {
+    const proj = track(setupV7Project());
+    const r = runBolt([
+      "abort", "--name", "Already Discarded", "--slug", "already-discarded",
+      "--reason", "nothing left to park", "--discard", "--project-dir", proj,
+    ]);
+    expect(r.status, r.out).toBe(0);
+    expect(JSON.parse(r.out)).toEqual({
+      emitted: "BOLT_FAILED",
+      reason: "aborted",
+      abort_reason: "nothing left to park",
+      failed_bolt: "Already Discarded",
+      slug: "already-discarded",
+      discarded: true,
+      parked_ref: null,
+    });
   });
 
   test("default abort (no --discard) preserves the worktree directory [.sh T28]", () => {
@@ -505,7 +527,8 @@ describe("t77 — abort", () => {
     ]);
     expect(aborted.status, aborted.out).toBe(0);
     const parsed = JSON.parse(aborted.out);
-    expect(parsed.reason).toBe("default-pres test");
+    expect(parsed.reason).toBe("aborted");
+    expect(parsed.abort_reason).toBe("default-pres test");
     expect(parsed).not.toHaveProperty("restore_hint");
     // Worktree directory survives a default abort (no --discard).
     expect(existsSync(wtDir)).toBe(true);

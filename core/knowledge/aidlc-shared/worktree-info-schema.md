@@ -85,10 +85,11 @@ to restore; `parked_ref`, `parked_stamp`, and `parked_repo` still identify the
 saved evidence.
 The already-discarded response is unchanged and has no `parked_*` fields.
 
-Successful `bolt abort` JSON echoes the supplied `--reason` text in `reason`.
-Without `--discard`, it has no `parked_*` fields or `restore_hint`. With
-`--discard` and a saved namespace, it echoes the discard descriptor's
-`parked_ref`, `parked_stamp`, `parked_mode`, and `parked_repo`.
+Successful `bolt abort` JSON retains `reason: "aborted"` and echoes the supplied
+`--reason` text in the additive `abort_reason` field. It always includes
+`parked_ref`, which is `null` when nothing was parked, including without
+`--discard`. Only a non-null `parked_ref` adds the discard descriptor's
+`parked_stamp`, `parked_mode`, and `parked_repo`.
 For a restorable attempt, `restore_hint` is the install's rendered worktree
 invocation plus ` restore --slug <slug> --parked <stamp> --repo <name|.>`.
 It always includes `--repo <name>` for a sibling or `--repo .` when `parked_repo`
@@ -107,15 +108,16 @@ If a saved namespace is known but its discard descriptor is missing, the
 fallback reports `parked_stamp`, `parked_mode`, and `parked_repo` as `null`, a
 `restore_hint` ending in ` restore --slug <slug> --repo .` without an exact
 stamp, and the snapshot-style exclusions. Unknown mode does not establish that a snapshot was
-saved; do not make a saved-files claim from this fallback. With `--discard` but
-no saved namespace, `parked_ref`, `parked_stamp`, `parked_mode`, and `parked_repo`
-are all `null`, and `restore_hint` and `parked_excludes` are absent. A result with
+saved; do not make a saved-files claim from this fallback. When no namespace was
+saved, `parked_ref` is `null`; `parked_stamp`, `parked_mode`, `parked_repo`,
+`restore_hint`, and `parked_excludes` are absent. A result with
 a snapshot descriptor looks like:
 
 ```json
 {
   "emitted": "BOLT_FAILED",
-  "reason": "stale review recovery exhausted",
+  "reason": "aborted",
+  "abort_reason": "stale review recovery exhausted",
   "failed_bolt": "Onboarding Wizard",
   "slug": "onboarding-wizard",
   "discarded": true,
@@ -128,8 +130,8 @@ a snapshot descriptor looks like:
 }
 ```
 
-The audit `BOLT_FAILED` field remains `Reason: aborted`; only the success JSON
-reason echoes the caller's text. Abort arguments and the human-consent
+The audit `BOLT_FAILED` field remains `Reason: aborted`; the success JSON's
+`abort_reason` carries the caller's text. Abort arguments and the human-consent
 requirement are unchanged. In spoken text, call this attempt **set aside**, not
 deleted or completed. For `snapshot`, describe the saved tracked and non-ignored
 untracked files and the exclusions above. For `branch-tip`, say: "I kept its

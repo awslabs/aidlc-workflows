@@ -282,10 +282,13 @@ its one allowed re-review was already used. The recovery abort's `--discard`
 saves tracked files and non-ignored untracked files (or the remaining branch
 tip when the checkout is already gone) plus reviewed source refs in local Git
 before removing the old checkout and branch, so a fresh attempt can start.
-An ordinary Abort without `--discard` leaves the checkout in place and has no
-`parked_*` fields or `restore_hint`. After a discard, the assistant tells you why
+An ordinary Abort without `--discard` leaves the checkout in place and returns
+`parked_ref: null`, with no `parked_stamp`, `parked_mode`, `parked_repo`,
+`restore_hint`, or `parked_excludes`. After a discard, the assistant tells you why
 it set the attempt aside and offers restoration only when a hint is present.
-The discard abort result includes the original `reason` and the saved descriptor:
+Every successful abort retains `reason: "aborted"` and echoes the supplied
+`--reason` text in the additive `abort_reason` field. When an attempt was parked,
+the result includes the saved descriptor:
 `parked_ref`, `parked_stamp`, `parked_mode` (`snapshot`, `branch-tip`, or
 `evidence-only`), and `parked_repo` (`null` for the project root, otherwise the
 sibling repository name).
@@ -313,7 +316,8 @@ fallback retains `parked_ref`, reports `parked_stamp`, `parked_mode`, and
 ` restore --slug <slug> --repo .` without `--parked`, with snapshot-style
 exclusions. Unknown mode does not establish that a snapshot was saved; the
 assistant must not make a saved-files claim from it. If no namespace was saved,
-all four descriptor fields are `null`, and the hint and exclusions are absent.
+`parked_ref` is `null`; `parked_stamp`, `parked_mode`, `parked_repo`, `restore_hint`,
+and `parked_excludes` are absent.
 
 If only review evidence remained, discard reports `parked_mode: "evidence-only"`
 and `parked_commit: null`. Abort keeps the ref, stamp, mode, and repository but

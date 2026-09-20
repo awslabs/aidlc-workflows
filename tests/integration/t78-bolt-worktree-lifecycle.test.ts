@@ -619,7 +619,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       );
       expect(aborted.status).toBe(0);
       const result = JSON.parse(aborted.out);
-      expect(result.reason).toBe("restart after review");
+      expect(result.reason).toBe("aborted");
+      expect(result.abort_reason).toBe("restart after review");
       expect(result.parked_excludes).toEqual(["ignored files", "eol/text=auto normalization"]);
       const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
       expect(parkedRef).toMatch(/^refs\/aidlc\/parked\/recoverable\/\d{8}T\d{6}Z(?:-[1-9]\d*)?$/);

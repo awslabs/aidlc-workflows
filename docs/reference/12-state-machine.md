@@ -834,10 +834,11 @@ and duplicate flags before selection or mutation; `--raw` is a bare restore-only
 flag. This does not change live create/discard selectors. Neither command adds
 an audit event or repurposes the live Bolt path or branch.
 
-Successful `bolt abort` JSON echoes the supplied `--reason` in `reason`; its
-audit row still records `Reason: aborted`. Without `--discard`, the result has
-no `parked_*` fields or `restore_hint`. With `--discard`, it echoes the saved
-descriptor's `parked_ref`, `parked_stamp`, `parked_mode`, and `parked_repo`.
+Successful `bolt abort` JSON retains `reason: "aborted"` and echoes the supplied
+`--reason` in the additive `abort_reason` field; its audit row still records
+`Reason: aborted`. The result always includes `parked_ref`, which is `null` when
+nothing was parked, including without `--discard`. Only a non-null `parked_ref`
+adds the saved descriptor's `parked_stamp`, `parked_mode`, and `parked_repo`.
 For a restorable attempt, the exact `restore_hint` is the installed channel's
 native or source worktree invocation plus
 ` restore --slug <slug> --parked <stamp> --repo <name|.>`. The selector is always
@@ -853,8 +854,9 @@ fallback retains `parked_ref`, sets `parked_stamp`, `parked_mode`, and
 `parked_repo` to `null`, and returns a hint ending in
 ` restore --slug <slug> --repo .` without an exact stamp, with snapshot-style
 exclusions. Unknown mode does not establish that a snapshot was saved, so the
-conductor must not make that claim. If no namespace was saved, all four
-descriptor fields are `null`, and `restore_hint` and `parked_excludes` are absent.
+conductor must not make that claim. If no namespace was saved, `parked_ref` is
+`null`; `parked_stamp`, `parked_mode`, `parked_repo`, `restore_hint`, and
+`parked_excludes` are absent.
 Offer restoration only when `restore_hint` is present; when the human asks for
 the attempt back, execute that saved hint verbatim instead of reconstructing a
 latest-attempt command.

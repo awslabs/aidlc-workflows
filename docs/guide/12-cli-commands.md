@@ -1659,8 +1659,10 @@ present: `--repo <name>` for a sibling, `--repo .` for the root.
 `worktree discard` retains `parked_ref` and `parked_commit` and adds
 `parked_stamp`, `parked_mode` (`snapshot`, `branch-tip`, or `evidence-only`), and
 `parked_repo` (`null` for the project root, otherwise the sibling name).
-`bolt abort --discard` echoes `parked_ref`, `parked_stamp`, `parked_mode`, and
-`parked_repo`. When only review evidence remained, discard reports
+`bolt abort` retains `reason: "aborted"` and echoes the supplied `--reason` text
+in the additive `abort_reason` field. It always includes `parked_ref`, which is
+`null` when nothing was parked. Only a non-null `parked_ref` adds `parked_stamp`,
+`parked_mode`, and `parked_repo`. When only review evidence remained, discard reports
 `parked_mode: "evidence-only"` and `parked_commit: null`; abort keeps its four
 descriptor fields but omits both `restore_hint` and `parked_excludes`.
 
@@ -1672,9 +1674,9 @@ discard descriptor is unavailable, the fallback sets `parked_stamp`,
 `parked_mode`, and `parked_repo` to `null`, returns a hint ending in
 ` restore --slug <slug> --repo .` without `--parked`, and keeps the
 snapshot-style exclusions. That fallback can select a later attempt and
-does not establish that a snapshot was saved. If no namespace was saved, all
-four descriptor fields are `null`, with no hint or exclusions. Abort without
-`--discard` has no `parked_*` fields or `restore_hint`.
+does not establish that a snapshot was saved. If no namespace was saved,
+including without `--discard`, `parked_ref` is `null`; `parked_stamp`,
+`parked_mode`, `parked_repo`, `restore_hint`, and `parked_excludes` are absent.
 
 Restore creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
 `restore/bolt-<slug>-<stamp>`. It never touches a live

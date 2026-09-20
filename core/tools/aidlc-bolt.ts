@@ -896,12 +896,13 @@ function handleAbort(args: string[]): void {
   console.log(
     JSON.stringify({
       emitted: "BOLT_FAILED",
-      reason: flags.reason,
+      reason: "aborted",
+      abort_reason: flags.reason,
       failed_bolt: flags.name,
       slug: flags.slug,
       discarded: useDiscard,
-      ...(useDiscard ? {
-        parked_ref: parkedRef,
+      parked_ref: parkedRef,
+      ...(parkedRef !== null ? {
         parked_stamp: parkedStamp,
         parked_mode: parkedMode,
         parked_repo: parkedRepo,

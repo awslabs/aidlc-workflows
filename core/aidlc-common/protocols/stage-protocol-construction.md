@@ -340,7 +340,7 @@ there are no saved working files to restore and no `restore_hint` is returned.
 
 **After a successful discard.** Only after the `--discard` abort succeeds and
 confirms the attempt was parked, and before starting the replacement attempt,
-use the following SAY line. Fill `[reason]` from the returned `reason` in plain
+use the following SAY line. Fill `[reason]` from the returned `abort_reason` in plain
 project terms. Use `On your go-ahead I` only when the human selected the remedy;
 use `I` when no human remedy choice was involved (including an automatic
 loop-back). Do not announce a saved snapshot if the abort failed or did not

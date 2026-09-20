@@ -300,10 +300,11 @@ but there is no `/head` to restore.
 
 ### Abort response (success)
 
-`bolt abort` success JSON includes `emitted: "BOLT_FAILED"`, the supplied
-`--reason` text in `reason`, `failed_bolt`, `slug`, and `discarded`. Without
-`--discard`, it has no `parked_*` fields or `restore_hint`. With `--discard`, it
-echoes the returned `parked_ref`, `parked_stamp`, `parked_mode`, and `parked_repo`.
+`bolt abort` success JSON includes `emitted: "BOLT_FAILED"`, `reason: "aborted"`,
+the supplied `--reason` text in the additive `abort_reason` field, `failed_bolt`,
+`slug`, `discarded`, and `parked_ref`. When nothing was parked, including without
+`--discard`, `parked_ref` is `null`. Only a non-null `parked_ref` adds the returned
+`parked_stamp`, `parked_mode`, and `parked_repo`.
 For restorable attempts, the exact `restore_hint` is the rendered
 `aidlcToolInvocation("worktree")` prefix plus
 ` restore --slug <slug> --parked <stamp> --repo <name|.>`. The repository selector
@@ -319,9 +320,10 @@ fallback has a non-null `parked_ref`, `parked_stamp: null`, `parked_mode: null`,
 and `parked_repo: null`, with a `restore_hint` ending in
 ` restore --slug <slug> --repo .` (no exact stamp) and the snapshot-style
 exclusions. This unknown mode does not justify claiming a snapshot was saved.
-If no namespace was saved, all four descriptor fields are `null`, with no
-`restore_hint` or `parked_excludes`. The audit row still uses `Reason: aborted`;
-the success JSON preserves the caller's reason instead.
+If no namespace was saved, `parked_ref` is `null`, with no `parked_stamp`,
+`parked_mode`, `parked_repo`, `restore_hint`, or `parked_excludes`. The audit row
+still uses `Reason: aborted`; the success JSON preserves the caller's text in
+`abort_reason`.
 Do not change the abort command or its human-consent requirement. Tell the human
 the attempt was **set aside**. For branch-tip mode, say: "I kept its committed
 work; there were no uncommitted files to save." For evidence-only mode, say:
@@ -393,9 +395,13 @@ exists or remains registered with Git, including moved checkouts. Its JSON is
 retains unparseable stamps; exact-stamp and all-stamp purges can remove them.
 For restore and purge, `--repo <name>` selects an existing sibling Git repository
 and `--repo .` selects the project root, independently of the current intent's
-repo list. Sibling repositories must be real immediate child directories, not
-symlinks, with canonical paths directly under the canonical workspace root;
-arbitrary paths and symlink aliases are refused. These selectors do not change
+repo list. Recovery trusts valid Git repositories named in the slug's
+`WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields or recorded repo
+sets of historical intents identified by the audit shards, even when they are
+symlinked immediate children. Only unrecorded discovered siblings must be real
+immediate child directories whose canonical paths remain directly under the
+canonical workspace root; arbitrary paths and unrecorded symlink aliases are
+refused. These selectors do not change
 live create/discard behavior. Restore and purge reject unknown and duplicate
 flags before selection or mutation; `--raw` is a bare restore-only flag.
 
@@ -405,9 +411,10 @@ age in days, mode (`snapshot`, `branch-tip`, `legacy`, or `evidence-only`),
 existence of the canonical restored checkout, and rendered recovery commands
 for the exact stamp with an explicit repository selector. Evidence-only entries
 retain `purge_command` but omit `restore_command`. Doctor applies the same
-real-immediate-child boundary to both discovered and audit-derived sibling
-repositories. A moved checkout may not show as restored there, but purge still
-checks its Git registration. Doctor and
+real-immediate-child boundary only to unrecorded discovered siblings; valid Git
+repositories recorded by an intent or audit `Repo` rows remain eligible even
+when reached through a symlink. A moved checkout may not show as restored there,
+but purge still checks its Git registration. Doctor and
 purge share the strict stamp parser: impossible dates or times have
 `age_days: null` in doctor's JSON and `unknown` in human-readable output. Restore and
 purge add no audit events. See `aidlc-shared/worktree-info-schema.md` for the JSON
