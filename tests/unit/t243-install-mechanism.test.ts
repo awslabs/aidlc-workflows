@@ -1084,6 +1084,126 @@ describe("t243 project initialization", () => {
     expect(claudeBaseline.rootContributions[".gitignore"]).toBeUndefined();
   }, 60_000);
 
+  test("a converged install refuses to shrink the shared block when a sibling's shipped copy is missing", () => {
+    const project = temp("aidlc-t243-shared-block-missing-copy-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+
+    const addClaude = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+    ], project);
+    expect(addClaude.status, addClaude.stdout + addClaude.stderr).toBe(0);
+    const gitignore = readFileSync(join(project, ".gitignore"), "utf-8");
+    expect(gitignore).toContain("aidlc/.aidlc-turn-counter");
+    rmSync(join(project, ".kiro", "tools", "data", "root-blocks", "gitignore"));
+
+    const dry = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+      "--dry-run",
+      "--json",
+    ], project);
+    expect(dry.status, dry.stdout + dry.stderr).toBe(4);
+    const plan = JSON.parse(dry.stdout) as {
+      data: { actions: Array<{ path: string; action: string; detail?: string }> };
+    };
+    const gitignoreAction = plan.data.actions.find((action) => action.path === ".gitignore");
+    expect(gitignoreAction?.action).toBe("conflict");
+    expect(gitignoreAction?.detail).toContain("kiro is missing its shipped block copy");
+
+    const refreshClaude = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+    ], project);
+    expect(refreshClaude.status, refreshClaude.stdout + refreshClaude.stderr).toBe(4);
+    expect(refreshClaude.stdout).toContain("kiro is missing its shipped block copy");
+    expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe(gitignore);
+
+    const refreshKiro = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      KIRO_RELEASES[0],
+      "--harness",
+      "kiro",
+      "--mcp",
+      "none",
+    ], project);
+    expect(refreshKiro.status, refreshKiro.stdout + refreshKiro.stderr).toBe(0);
+    expect(existsSync(join(project, ".kiro", "tools", "data", "root-blocks", "gitignore"))).toBe(true);
+
+    const repairedDry = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+      "--dry-run",
+      "--json",
+    ], project);
+    expect(repairedDry.status, repairedDry.stdout + repairedDry.stderr).toBe(0);
+    const repairedPlan = JSON.parse(repairedDry.stdout) as {
+      data: { actions: Array<{ path: string; action: string; detail?: string }> };
+    };
+    expect(repairedPlan.data.actions.find((action) => action.path === ".gitignore")).toEqual({
+      path: ".gitignore",
+      action: "preserve",
+    });
+    expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe(gitignore);
+
+    const repairedRefresh = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+    ], project);
+    expect(repairedRefresh.status, repairedRefresh.stdout + repairedRefresh.stderr).toBe(0);
+    expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe(gitignore);
+  }, 60_000);
+
   test("a second harness adopts a sibling's legacy unmarked .gitignore", () => {
     const project = temp("aidlc-t243-sibling-legacy-gitignore-");
     mkdirSync(join(project, ".git"));

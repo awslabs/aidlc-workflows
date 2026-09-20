@@ -5416,6 +5416,7 @@ function planRootIntegrations(
       let shipped = readFileSync(sourcePath, "utf-8");
       let legacyWholeFileHashes = integration.legacySignatures?.wholeFileHashes;
       let contributingSiblings: Set<ProjectHarness> | undefined;
+      let missingCopy: ProjectHarness | undefined;
       if (integration.shared === "union") {
         siblings ??= discoverProjectHarnesses(projectDir);
         siblingProjections ??= siblings
@@ -5433,11 +5434,15 @@ function planRootIntegrations(
           }
           try {
             const path = join(sibling.root, "tools", "data", "root-blocks", marker);
-            if (!regularFile(path)) continue;
+            if (!regularFile(path)) {
+              if (siblingIntegration?.shared === "union") missingCopy ??= sibling;
+              continue;
+            }
             contributors.push({ distribution: sibling.distribution, text: readFileSync(path, "utf-8") });
             contributingSiblings.add(sibling);
           } catch {
             // Older or unreadable installations do not contribute shipped blocks.
+            if (siblingIntegration?.shared === "union") missingCopy ??= sibling;
           }
         }
         shipped = unionBlocks(contributors);
@@ -5452,6 +5457,14 @@ function planRootIntegrations(
       );
       if (merged.error) {
         actions.push({ path: integration.path, action: "conflict", detail: merged.error });
+        continue;
+      }
+      if (missingCopy && !force && merged.value !== current) {
+        actions.push({
+          path: integration.path,
+          action: "conflict",
+          detail: `${missingCopy.distribution} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run aidlc config --harness ${missingCopy.distribution} first`,
+        });
         continue;
       }
       const value = merged.value as string;
