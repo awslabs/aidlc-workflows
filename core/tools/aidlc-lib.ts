@@ -22846,23 +22846,6 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
   };
 }
 
-// A literal tool command for the remedies GuardRecoveryOperation does not model.
-// It covers exactly one kind today: the lower-fence switch, which is a
-// config-change rather than one of the two typed recovery operations
-// (restart-stage, abort-bolt). Argument values are shell-quoted unless they are
-// already safe bare words.
-function guardToolCommand(tool: string, args: string[]): string {
-  return [
-    "bun",
-    `${harnessDir()}/tools/${tool}`,
-    ...args.map((value) =>
-      /^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
-        ? value
-        : `'${value.replaceAll("'", "'\"'\"'")}'`
-    ),
-  ].join(" ");
-}
-
 /**
  * "Turn this fence off for this piece of work": the in-band offer that makes the
  * key reachable at the moment it is needed. It requires a human (it is their
@@ -22874,11 +22857,7 @@ export function lowerFenceRemedy(fence: GuardFence): GuardRemedy {
     action:
       `Turn the ${fence} check off for this piece of work and continue. It is ` +
       "recorded in the audit trail and comes back on for the next piece of work.",
-    command: guardToolCommand("aidlc-utility.ts", [
-      "config-change",
-      `--${guardFenceConfigKey(fence)}`,
-      "off",
-    ]),
+    ...guardOperation({ kind: "lower-fence", fence }),
     requiresHuman: true,
     executableNow: true,
   };
@@ -22906,36 +22885,37 @@ export function lowerFenceSentence(fence: GuardFence): string {
 
 const PLAN_SOURCE_DRIFT_STAGE = "code-generation";
 
-function codeGenerationTargetArgs(unit: string | null): string[] {
-  return unit ? ["--unit", unit] : ["--stage-level"];
-}
-
 export function reapprovePlanRemedy(unit: string | null): GuardRemedy {
   return {
     op: "reapprove-plan",
     action:
-      "Approve the plan again: reset the Plan Approval [Answer]: to blank, run " +
-      "the fingerprint command, record both tags in the plan, and re-present " +
-      "Plan Approval to the human.",
-    command: guardToolCommand("aidlc-testing-posture.ts", [
-      "fingerprint",
-      ...codeGenerationTargetArgs(unit),
-    ]),
+      "Approve the plan again: run the command (it resets the Plan Approval [Answer]: " +
+      "to blank and prints both tags), record both tags in the Plan Approval section, " +
+      "and re-present Plan Approval to the human.",
+    ...guardOperation({ kind: "reapprove-plan", unit }),
     requiresHuman: true,
     executableNow: true,
   };
 }
 
+/**
+ * verify only reads: it evaluates approval and prints the files that moved
+ * (aidlc-testing-posture.ts, case "verify"). Under the directive contract every
+ * remedy with a command carries a structured operation, and every remedy with
+ * an operation is human-selected. Keeping the command beside the refusal is
+ * worth more than the flag: a guard-recovery ask waits for human selection
+ * regardless of the flag, and no consumer executes a requiresHuman: false
+ * remedy on its own. requiresHuman: true only selects the conductor's interaction
+ * after selection (execute this exact command) and grants nothing. Approval
+ * itself still happens only through Plan Approval.
+ */
 export function showPlanDriftRemedy(unit: string | null): GuardRemedy {
   return {
     op: "show-plan-drift",
     action:
       "Show what changed: list the source files that moved since this plan was approved.",
-    command: guardToolCommand("aidlc-testing-posture.ts", [
-      "verify",
-      ...codeGenerationTargetArgs(unit),
-    ]),
-    requiresHuman: false,
+    ...guardOperation({ kind: "show-plan-drift", unit }),
+    requiresHuman: true,
     executableNow: true,
   };
 }
@@ -22976,7 +22956,7 @@ export function planSourceDriftRefusal(input: {
       showPlanDriftRemedy(input.unit),
       stopHereRemedy(),
       lowerFenceRemedy("plan-approval"),
-    ],
+    ].map((remedy) => ({ ...remedy, interaction: remedyInteraction(remedy) })),
   };
 }
 
@@ -23096,6 +23076,13 @@ function lifecycleResetRemedies(
       executableNow: true,
     },
   ];
+}
+
+// The interaction a remedy's shape implies: an operation is executed as its
+// exact command, a human-only remedy needs the human's follow-up, and anything
+// else is work the conductor performs through the existing protocol.
+function remedyInteraction(remedy: GuardRemedy): GuardRecoveryInteraction {
+  return remedy.operation ? "command" : remedy.requiresHuman ? "human-input" : "external-work";
 }
 
 // Pure: reads nothing from disk. The same input always yields the same refusal,
@@ -23265,12 +23252,7 @@ export function evaluateGuardRefusal(
     state,
     invariant: input.invariant,
     userMessage: input.userMessage,
-    remedies: remedies.map((remedy) => ({
-      ...remedy,
-      interaction: remedy.operation
-        ? "command"
-        : remedy.requiresHuman ? "human-input" : "external-work",
-    })),
+    remedies: remedies.map((remedy) => ({ ...remedy, interaction: remedyInteraction(remedy) })),
   };
 }
 

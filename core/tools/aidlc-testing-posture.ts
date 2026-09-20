@@ -376,6 +376,21 @@ function upsertPlannedSourceTag(questions: string, fingerprint: string): string 
   throw new Error("Plan Approval questions file has no [Planned Source]: tag to re-baseline");
 }
 
+// Withdraw the standing approval: blank the latest Plan Approval [Answer]: so
+// the fingerprint may be regenerated. Only fingerprint --reapprove calls this;
+// it never grants anything, it only removes an approval the source no longer
+// covers, and the conductor must re-present the question afterwards.
+function withdrawPlanApproval(questions: string): string {
+  const eol = questions.includes("\r\n") ? "\r\n" : "\n";
+  const raw = questions.split(/\r?\n/);
+  const latest = latestPlanApproval(questions);
+  if (latest.answerLine === null) {
+    throw new Error("Plan Approval questions file has no [Answer]: tag to reset");
+  }
+  raw[latest.answerLine] = "[Answer]:";
+  return raw.join(eol);
+}
+
 interface ClassifiedPosture {
   methodology: TestingMethodology;
   ordering: string;
@@ -1300,6 +1315,7 @@ function isPlanApprovalLabel(value: string): boolean {
 function latestPlanApproval(body: string): {
   found: boolean;
   answer: string | null;
+  answerLine: number | null;
   fingerprint: string | null;
   plannedSource: string | null;
 } {
@@ -1307,10 +1323,13 @@ function latestPlanApproval(body: string): {
   let awaitingNumberedQuestionText = false;
   let foundPlanApproval = false;
   let latestAnswer: string | null = null;
+  let latestAnswerLine: number | null = null;
   let latestFingerprint: string | null = null;
   let latestPlannedSource: string | null = null;
 
-  for (const line of visibleMarkdownLines(body)) {
+  const visible = visibleMarkdownLines(body);
+  for (let index = 0; index < visible.length; index++) {
+    const line = visible[index];
     const heading = line.match(MARKDOWN_HEADING_RE);
     if (heading) {
       const headingText = heading[2].trim();
@@ -1322,6 +1341,7 @@ function latestPlanApproval(body: string): {
       if (inPlanApproval) {
         foundPlanApproval = true;
         latestAnswer = null;
+        latestAnswerLine = null;
         latestFingerprint = null;
         latestPlannedSource = null;
       }
@@ -1333,13 +1353,17 @@ function latestPlanApproval(body: string): {
       if (inPlanApproval) {
         foundPlanApproval = true;
         latestAnswer = null;
+        latestAnswerLine = null;
         latestFingerprint = null;
         latestPlannedSource = null;
       }
     }
     if (!inPlanApproval) continue;
     const answer = line.match(ANSWER_TAG_RE);
-    if (answer) latestAnswer = answer[1].trim();
+    if (answer) {
+      latestAnswer = answer[1].trim();
+      latestAnswerLine = index;
+    }
     const fingerprint = line.match(FINGERPRINT_TAG_RE);
     if (fingerprint) latestFingerprint = fingerprint[1] ?? null;
     const plannedSource = line.match(PLANNED_SOURCE_TAG_RE);
@@ -1348,6 +1372,7 @@ function latestPlanApproval(body: string): {
   return {
     found: foundPlanApproval,
     answer: latestAnswer,
+    answerLine: latestAnswerLine,
     fingerprint: latestFingerprint,
     plannedSource: latestPlannedSource,
   };
@@ -3556,6 +3581,7 @@ export function main(argv: string[]): void {
         return;
       case "fingerprint": {
         const target = targetFromArgs(argv, "fingerprint");
+        const reapprove = argv.includes("--reapprove");
         const authority = resolveCodeGenerationAuthority(projectDir, target);
         const approval = evaluateCodeGenerationApproval(projectDir, target);
         const stageDir = authority.stageDir;
@@ -3565,12 +3591,17 @@ export function main(argv: string[]): void {
           "utf-8",
         );
         const questionsPath = join(stageDir, "code-generation-questions.md");
-        if (
-          existsSync(questionsPath) &&
-          questionsFileApproved(readFileSync(questionsPath, "utf-8"))
-        ) {
+        const questions = existsSync(questionsPath)
+          ? readFileSync(questionsPath, "utf-8")
+          : null;
+        // The approved questions file, or null when nothing stands approved.
+        const standing = questions !== null && questionsFileApproved(questions)
+          ? questions
+          : null;
+        if (standing !== null && !reapprove) {
           throw new Error(
-            "reset the Plan Approval [Answer]: to blank before regenerating its fingerprint",
+            "reset the Plan Approval [Answer]: to blank before regenerating its " +
+              "fingerprint, or pass --reapprove to withdraw the standing approval first",
           );
         }
         const embedded = parseTestingContract(plan);
@@ -3583,6 +3614,21 @@ export function main(argv: string[]): void {
             approval.reason ||
               "plan Testing Contract does not match the current effective posture",
           );
+        }
+        if (standing !== null) {
+          // Only --reapprove reaches here with a standing approval. The strict
+          // drift ask's approve-again remedy is one move: the human selects it,
+          // the conductor runs this exact command. Withdrawing the approval here
+          // (instead of asking the conductor to edit the file first) is what
+          // makes the first attempt succeed. Not audited as its own row: the
+          // re-approval that follows records the fresh decision.
+          writeFileSync(questionsPath, withdrawPlanApproval(standing));
+          console.error(JSON.stringify({
+            note:
+              "Plan Approval [Answer]: reset to blank; the earlier approval is " +
+              "withdrawn. Record both tags below in the Plan Approval section and " +
+              "re-present Plan Approval.",
+          }));
         }
         // Print the two tag lines the Plan Approval section must carry, ready to
         // copy: the content fingerprint, and the workspace source this plan was

@@ -1061,8 +1061,10 @@ the selected interaction:
 | `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; a Scope remedy needs the human's concrete Scope. |
 | `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
 
-`aidlc-guard-operation.ts` defines two operations:
-`{kind: "restart-stage", stage}` and `{kind: "abort-bolt", unit, slug}`.
+`aidlc-guard-operation.ts` defines five operations:
+`{kind: "restart-stage", stage}`, `{kind: "abort-bolt", unit, slug}`,
+`{kind: "lower-fence", fence}`, `{kind: "reapprove-plan", unit}` and
+`{kind: "show-plan-drift", unit}` (`unit` is `null` for a stage-level plan).
 
 A stage restart first resolves its destination and returns the exact
 `jump execute` continuation. During unapproved native Code Generation, that
@@ -1084,11 +1086,21 @@ install; abort renders `aidlc engine bolt abort --name <unit> --slug <slug>
 templates for documentation: emitted commands contain concrete targets and no
 unresolved placeholders.
 
+The fence switch renders `aidlc engine config set guard.<fence> off` in a native
+install and `bun <harness-dir>/tools/aidlc-utility.ts config-change
+--guard.<fence> off` in a source install, because the native `config` route is a
+dispatcher translation onto `aidlc-utility.ts`. Approve-again renders
+`testing-posture fingerprint --reapprove` (withdrawing the approval the drift
+invalidated so the first attempt succeeds) and show renders `testing-posture
+verify`, both with `--unit <unit>` or `--stage-level`, identically in both install
+modes apart from the prefix.
+
 The conductor must obtain human consent before aborting a Bolt. This
 conductor-prose-obtained consent remains the trust boundary: the Plan Approval
-hook's exact abort exception preserves source/native trusted-tool parity but
-does not authenticate consent. Direct refusal asks do not publish the selection
-marker used by the separately checked native restart continuation. A mistaken
+hook's exact abort and fence-switch exceptions preserve source/native
+trusted-tool parity but do not authenticate consent. Direct refusal asks do not
+publish the selection marker used by the separately checked native restart
+continuation. A mistaken
 abort with the unchanged `--discard` argv now parks available files and review
 evidence rather than irretrievably deleting them. With a restorable descriptor, the
 returned `restore_operation` selects the exact saved slug, stamp, and repository,

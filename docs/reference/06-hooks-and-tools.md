@@ -1189,7 +1189,11 @@ evidence. The fingerprint covers a stable projection of the plan (a terminal
 `## Review` appendix erased, task markers reset, whitespace normalized), the
 unit-test instructions byte for byte (line endings aside), the Testing Contract
 hash, the target, the intent, and the run floor; its tag is `sha256:v3:<hex>`,
-and a `v2` or bare tag reads as "approve again". `brief --unit <unit>` prints the
+and a `v2` or bare tag reads as "approve again". `fingerprint --reapprove` first
+withdraws a standing approval by blanking the latest Plan Approval `[Answer]:`
+and says so on stderr; it is what the strict drift ask's approve-again remedy
+runs, since without it the tool refuses to regenerate over an approved Answer.
+`brief --unit <unit>` prints the
 developer handoff verbatim: the two marker lines, the plan exactly as the
 fingerprint projected it, and the instructions exactly as they were hashed; it
 refuses until approval is current, proves the bytes it read are the approved

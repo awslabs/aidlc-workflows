@@ -589,8 +589,10 @@ function isNativePlanApprovalPrerequisite(name: string, args: string[]): boolean
 
 function isPlanApprovalPrerequisite(args: string[]): boolean {
   if (args[0] !== "engine") return false;
-  // Direct log refusals can offer this abort without publishing a selection
-  // marker. Preserve the trusted source-tool recovery route in native installs:
+  // Direct refusals can offer the abort or the fence switch without publishing
+  // a selection marker. The strict drift ask in this hook prints
+  // config set guard.plan-approval off. Preserve the trusted source-tool
+  // recovery route in native installs:
   // conductor-prose-obtained consent remains the trust boundary for abort.
   // A mistaken abort --discard parks work for aidlc engine worktree restore
   // --slug <slug>; a mechanical selection receipt remains a future candidate.

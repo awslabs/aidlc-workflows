@@ -1615,7 +1615,7 @@ describe("AttemptView projections and refusal streaks", () => {
       }
       // The two commands name the target the same way the stage prose does.
       const target = unit ? `--unit ${unit}` : "--stage-level";
-      expect(refusal.remedies[0].command).toContain(`fingerprint ${target}`);
+      expect(refusal.remedies[0].command).toContain(`fingerprint ${target} --reapprove`);
       expect(refusal.remedies[1].command).toContain(`verify ${target}`);
       expect(refusal.remedies[2].command).toBeUndefined();
       expect(refusal.remedies[3].command).toContain("--guard.plan-approval off");

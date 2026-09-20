@@ -6,7 +6,8 @@
 // subcommand:aidlc-log:decision, subcommand:aidlc-log:answer,
 // subcommand:aidlc-testing-posture:fingerprint, subcommand:aidlc-testing-posture:begin,
 // hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED, function:planSourceDriftRefusal,
-// function:reapprovePlanRemedy, function:showPlanDriftRemedy, function:stopHereRemedy
+// function:reapprovePlanRemedy, function:showPlanDriftRemedy, function:stopHereRemedy,
+// function:isGuardRecoveryEngineInvocation
 //
 // t334 - Guard Policy at the Plan Approval checkpoint. The plan binds to the
 // workspace source it was written against; when that source moves after the
@@ -21,6 +22,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
+import { isGuardRecoveryEngineInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import {
   auditBlockField,
   getField,
@@ -568,17 +570,70 @@ describe("t334 (5) strict drift at the dispatch guard is a typed ask, not a wall
       "stop-here",
       "lower-fence",
     ]);
-    // Approve-again carries the fingerprint command for the stage-level target
-    // and needs the human; show carries verify and does not; stop is action-only.
-    expect(ask.remedies[0].command).toContain("aidlc-testing-posture.ts fingerprint --stage-level");
+    // Both command remedies carry the stage-level target and are human-selected:
+    // every remedy with a command carries a structured operation and needs the
+    // human's selection; stop is action-only.
+    expect(ask.remedies[0].command).toContain("aidlc-testing-posture.ts fingerprint --stage-level --reapprove");
     expect(ask.remedies[0].requiresHuman).toBe(true);
     expect(ask.remedies[1].command).toContain("aidlc-testing-posture.ts verify --stage-level");
-    expect(ask.remedies[1].requiresHuman).toBe(false);
+    expect(ask.remedies[1].requiresHuman).toBe(true);
     expect(ask.remedies[2].command).toBeUndefined();
     expect(validateDirective(ask).valid, JSON.stringify(validateDirective(ask))).toBe(true);
+    // The printed commands run on the fixture that printed them, verbatim (argv
+    // split, no shell, cwd = project): show lists the drift, and approve-again
+    // withdraws the approval the drift invalidated and prints fresh tags on its
+    // first attempt.
+    const show = spawn(ask.remedies[1].command!.split(" "), project);
+    expect(show.code, show.stderr).toBe(2);
+    expect(JSON.parse(show.stdout).reason).toContain("src/after.ts");
+    const reapprove = spawn(ask.remedies[0].command!.split(" "), project);
+    expect(reapprove.code, reapprove.stderr).toBe(0);
+    expect(reapprove.stdout.trim().split("\n")).toHaveLength(2);
+    expect(reapprove.stdout).toContain("[Approval Fingerprint]: sha256:v3:");
+    expect(reapprove.stdout).toContain("[Planned Source]: ");
+    expect(reapprove.stderr).toContain("withdrawn");
+    expect(readFileSync(questions, "utf-8")).toMatch(/\[Answer\]:[ \t]*$/m);
+    expect(readFileSync(questions, "utf-8")).not.toContain("[Answer]: Approve Plan");
     // Nothing was accepted and generation did not begin: strict asked, it did not decide.
     expect(acceptedRows(project)).toHaveLength(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
+  }, 60000);
+
+  test("the native fence switch the ask prints is admitted by the hook it lowers, and nothing near it is", () => {
+    const project = createProject("strict");
+    const questions = presentPlan(project);
+    startSession(project, "strict-native");
+    expect(decide(project, questions, "strict-native").code).toBe(0);
+    humanTurn(project, "strict-native");
+    expect(answer(project, questions, "strict-native").code).toBe(0);
+    writeFileSync(join(project, "src", "after.ts"), "export const after = 1;\n");
+    const bash = (command: string) => spawn([BUN, GUARD], project, JSON.stringify({
+      hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: project,
+    }));
+    const admitted = bash("aidlc engine config set guard.plan-approval off");
+    expect(admitted.code, admitted.stderr).toBe(0);
+    // Admitted as a prerequisite, not stood aside: the fence is still up.
+    expect(admitted.stdout).not.toContain("Continuing past");
+    for (const command of [
+      "aidlc engine config set guard.plan-approval on",
+      "aidlc engine config set guard.plan-approval off --force",
+      "aidlc engine config set guard-policy off",
+      "aidlc engine config set guard.plan-approval off; touch src/x.ts",
+    ]) {
+      expect(bash(command).code, command).toBe(2);
+    }
+    // The argv check behind the admission is exact.
+    const argv = ["engine", "config", "set", "guard.plan-approval", "off"];
+    expect(isGuardRecoveryEngineInvocation(argv)).toBe(true);
+    for (const changed of [
+      [...argv, "--force"],
+      argv.slice(0, -1),
+      argv.map((v) => v === "off" ? "on" : v),
+      argv.map((v) => v === "guard.plan-approval" ? "guard.../x" : v),
+      ["engine", "config", "list"],
+    ]) {
+      expect(isGuardRecoveryEngineInvocation(changed), changed.join(" ")).toBe(false);
+    }
   }, 60000);
 
   test("relaxed never reaches the ask: the same drift is accepted and no ask is printed", () => {

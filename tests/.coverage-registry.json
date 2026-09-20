@@ -4274,6 +4274,10 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5828,6 +5832,10 @@
       "unitId": "function:planSourceDriftRefusal",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-native-remedies.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
