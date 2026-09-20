@@ -252,10 +252,23 @@ The ordinary failure-prompt Abort pauses Construction with the worktree
 preserved. A stale-review recovery abort explicitly carrying `--discard` instead
 parks tracked and non-ignored untracked files and reviewed source refs, then
 removes the live checkout and branch. After obtaining the human's selection,
-execute the returned command unchanged. `aidlc engine worktree restore --slug
-<slug>` recovers that parked work in `.aidlc/restored/bolt-<slug>-<stamp>` on
-`restore/bolt-<slug>-<stamp>`, without overwriting a new live Bolt or reviving
-the old attempt's review authority.
+execute the returned abort command unchanged. When present, the abort result's
+`restore_operation` has route `worktree` and exact args selecting the saved
+stamp and repository (`--repo <name>` or `--repo .`). On a human
+restore request, invoke `{{INVOKE}} engine worktree <args...>` with each listed
+arg passed exactly as a separate argv argument, never joined into a shell
+command. Restoration recovers files in `.aidlc/restored/bolt-<slug>-<stamp>` on
+`restore/bolt-<slug>-<stamp>`, without overwriting a new live Bolt or reviving the
+old attempt's review authority. `restore_hint` is optional human display text
+only, not execution input. If safe rendering fails, the hint is omitted and
+`restore_hint_error` explains why while the operation remains. Offer restoration
+based on the operation, not the hint. If only review evidence remained, the
+`evidence-only` descriptor has no restoration operation, hint, hint error, or
+exclusions: no working files were saved, restore refuses, and doctor offers
+purge only.
+The [recovery walkthrough](../../guide/15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
+explains what was set aside, the exclusions, exact restore selection, and
+informational doctor listings and purge options.
 
 ---
 
@@ -1175,9 +1188,13 @@ with the aidlc-devsecops-agent providing security testing expertise.
     boundary token, so stale convergence rows cannot count. Park/discard stale
     worktrees/branches and run a fresh `prepare`; they cannot be adopted into
     the new attempt because `finalize` requires its current prepare stamp.
-    `aidlc engine worktree restore --slug <slug>` can recover the parked work
-    separately, not its current-attempt authority. Run `check` first. A green
-    Unit can skip a builder turn, but it still needs a
+    The saved abort result's or doctor's `restore_operation`, when present,
+    recovers parked files separately, not their current-attempt authority.
+    Invoke its `worktree` engine route with each listed arg exactly as argv,
+    never joined into a shell command. Hints and rendered commands are human
+    display text only; rendering errors do not remove typed operations.
+    Evidence-only attempts have no restore operation or files to restore. Run
+    `check` first. A green Unit can skip a builder turn, but it still needs a
     terminal current-attempt reviewer receipt in the fresh worktree before it
     enters `finalize --claimed`; `finalize` verifies that receipt's current
     artifact fingerprint as well as the attempt stamp.

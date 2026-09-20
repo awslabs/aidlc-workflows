@@ -70,13 +70,32 @@ aidlc unit claim payments --team "Payments team"
 Run the same scoped build and `publish` commands below from that worktree. After
 main lands and pushes the candidate, return to main and discard the completed
 local worktree with `aidlc worktree discard --slug payments`.
-Discard parks tracked files, non-ignored untracked files, and reviewed source
-refs before removing the checkout and branch. To inspect that work later, run
-`aidlc engine worktree restore --slug payments`; it creates an isolated checkout
-under `.aidlc/restored/` without touching a new live `bolt-payments`. To remove
-the parked recovery refs, use `aidlc engine worktree purge --slug payments`
-(optionally `--parked <stamp>` for one snapshot); purge refuses while a matching
-restored checkout exists.
+Discard sets aside tracked files, non-ignored untracked files, and reviewed
+source refs before removing the checkout and branch. To inspect that work later,
+run `aidlc engine worktree restore --slug payments`; it creates an isolated
+checkout under `.aidlc/restored/` without touching a new live `bolt-payments`.
+Add `--parked <stamp>` for one saved attempt or bare `--raw` to bypass checkout
+conversions. Ignored untracked files are not saved, and `eol/text=auto`
+normalization during saving cannot be reversed by restore.
+
+To remove the recovery refs, use `aidlc engine worktree purge --slug payments`,
+optionally with `--parked <stamp>` for one attempt or `--older-than <days>` for
+attempts strictly older than a nonnegative finite number of days. Age uses the
+stamp's UTC timestamp, ignoring its `-N` collision suffix; the two selectors are
+mutually exclusive. Purge refuses while a matching restored checkout exists,
+including one moved elsewhere. Doctor lists saved attempts informationally with
+typed `restore_operation` and `purge_operation` values for the exact stamp and
+repository. Conductors invoke their `worktree` engine route with each listed
+arg exactly as argv, never joined into a shell command. Optional
+`restore_command` and `purge_command` are safe human display text; rendering
+failures omit the corresponding command and supply `restore_command_error` or
+`purge_command_error` while keeping the operation. If only reviewed source refs
+remained to save, the attempt is `evidence-only` with `parked_commit: "-"`: no
+files can be restored, abort omits `restore_operation`, `restore_hint`,
+`restore_hint_error`, and `parked_excludes`, and doctor offers only the purge
+operation and its command-or-error fields. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
+for the recovery walkthrough and [CLI Commands](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs)
+for the flags.
 
 Normal scoped `next`, lifecycle, review, and gate work is offline-first. Network
 access is confined to explicit claim, publish, status, pin, and merge-ref

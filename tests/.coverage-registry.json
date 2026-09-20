@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1046,
+    "total": 1050,
     "enumeratedByClass": {
-      "function": 726,
+      "function": 730,
       "audit": 102,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 440,
+      "function": 442,
       "audit": 63,
       "scope": 11,
       "stage": 11,
@@ -4196,6 +4196,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isWorkspaceRepoDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:keywordCollisions",
       "minMechanism": "none",
       "coveredBy": [],
@@ -5101,6 +5108,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseParkedStampInstant",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -6018,6 +6032,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recoveryRepoCandidates",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t83-doctor-orphan-worktree.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:redactProjectDirPrefix",
       "minMechanism": "none",
       "coveredBy": [
@@ -6172,6 +6202,18 @@
         {
           "file": "tests/unit/t344-composed-scope-record.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:renderEngineInvocation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

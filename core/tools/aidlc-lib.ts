@@ -9,7 +9,6 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
-  aidlcToolInvocation,
   resolveHarnessPath,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
@@ -10558,6 +10557,25 @@ export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
 }
 
+/** Parse a parked-attempt stamp without normalizing impossible calendar dates. */
+export function parseParkedStampInstant(stamp: string): number | null {
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-[2-9]|-[1-9]\d+)?$/.exec(stamp);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const instant = new Date(Date.UTC(year, month, day, hour, minute, second));
+  // Date.UTC treats years 00–99 as 1900–1999; restore the literal year and date.
+  if (year < 100) instant.setUTCFullYear(year, month, day);
+  if (instant.getUTCFullYear() !== year || instant.getUTCMonth() !== month ||
+    instant.getUTCDate() !== day || instant.getUTCHours() !== hour ||
+    instant.getUTCMinutes() !== minute || instant.getUTCSeconds() !== second) return null;
+  return instant.getTime();
+}
+
 export function resolveAuditProjectPath(
   projectDir: string,
   recordedPath: string,
@@ -19551,9 +19569,22 @@ const NON_REPO_WORKSPACE_DIRS = new Set([
   "node_modules",
 ]);
 
+/** Unrecorded recovery candidates must be real immediate children, not symlinks or junctions. */
+export function isWorkspaceRepoDir(projectDir: string, name: string): boolean {
+  if (basename(name) !== name || name === "." || name === "..") return false;
+  const dir = join(projectDir, name);
+  try {
+    const stat = lstatSync(dir);
+    return !stat.isSymbolicLink() && stat.isDirectory() &&
+      realpathSync(dir) === join(realpathSync(projectDir), name) && isGitRepoDir(dir);
+  } catch {
+    return false;
+  }
+}
+
 // Auto-discover the code repos that are immediate children of the workspace root:
-// any child dir holding a `.git`, excluding the workspace's own internal dirs and
-// the harness engine dir. Sorted + deduped. Returns [] when the workspace root is
+// any child directory holding a `.git`, following directory symlinks but excluding
+// workspace internal dirs and the harness engine dir. Sorted + deduped. Returns [] when the workspace root is
 // unreadable or holds no sibling repos (the legacy single-repo / fresh-greenfield
 // case — the caller records no repos row and the lone repo is inferred later).
 export function discoverSiblingRepos(projectDir: string): string[] {
@@ -19569,11 +19600,10 @@ export function discoverSiblingRepos(projectDir: string): string[] {
     if (isHarnessDirName(name)) continue; // .claude / .kiro / .codex
     const dir = join(projectDir, name);
     try {
-      if (!statSync(dir).isDirectory()) continue;
+      if (statSync(dir).isDirectory() && isGitRepoDir(dir)) found.push(name);
     } catch {
-      continue;
+      // Ignore unreadable entries and dangling directory symlinks.
     }
-    if (isGitRepoDir(dir)) found.push(name);
   }
   return [...new Set(found)].sort();
 }
@@ -19625,6 +19655,54 @@ export function intentRepos(
     return entry.repos ?? [];
   }
   return [];
+}
+
+/** Recovery operates exactly where the framework recorded parking this slug;
+ * records never widen to other slugs; unrecorded discovery requires a real child.
+ * Intent membership alone does not authorize recovery through a repository symlink.
+ * A null slug set admits every parked slug in a real workspace repository.
+ */
+export function recoveryRepoCandidates(
+  projectDir: string,
+  rows: readonly AuditShardEvent[],
+): Map<string | null, Set<string> | null> {
+  const candidates = new Map<string | null, Set<string> | null>([[null, null]]);
+  for (const repo of discoverSiblingRepos(projectDir)) {
+    if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo)) candidates.set(repo, null);
+  }
+  const checkedRepos = new Map<string, boolean>();
+  const isRecordedRepo = (repo: string): boolean => {
+    const checked = checkedRepos.get(repo);
+    if (checked !== undefined) return checked;
+    const valid = isValidRepoName(repo) && isGitRepoDir(repoDir(projectDir, repo));
+    checkedRepos.set(repo, valid);
+    return valid;
+  };
+  const checkedIntents = new Set<string>();
+  for (const row of rows) {
+    // Derive the historical intent from the shard, never the active cursor.
+    const shard = relative(spacesRoot(projectDir), row.shard).replaceAll("\\", "/");
+    const record = /^([^/]+)\/intents\/([^/]+)\/audit\/[^/]+$/.exec(shard);
+    if (record !== null) {
+      const [, space, intent] = record;
+      const key = `${space}\0${intent}`;
+      if (!checkedIntents.has(key)) {
+        checkedIntents.add(key);
+        for (const repo of intentRepos(projectDir, intent, space)) {
+          if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo)) candidates.set(repo, null);
+        }
+      }
+    }
+    if (row.event !== "WORKTREE_CREATED" && row.event !== "WORKTREE_DISCARDED") continue;
+    const repo = auditBlockField(row.block, "Repo");
+    const slug = auditBlockField(row.block, "Bolt slug");
+    if (repo === null || slug === null || validateBoltSlug(slug) !== null ||
+      candidates.get(repo) === null || !isRecordedRepo(repo)) continue;
+    const slugs = candidates.get(repo) ?? new Set<string>();
+    slugs.add(slug);
+    candidates.set(repo, slugs);
+  }
+  return candidates;
 }
 
 export interface RepoResolution {
@@ -20086,8 +20164,9 @@ export function turnMarkersShowConversational(
 }
 
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
-// record. The conductor writes it at stage-protocol-reviewer.md §12a step 1 (per-unit
-// stages only) before invoking the reviewer sub-agent, and deletes it at step
+// record. The conductor writes it at stage-protocol-reviewer.md §12a step 1
+// (per-unit stages, and each unit reviewed under an `invoke-swarm`) before invoking
+// the reviewer sub-agent, and deletes it at step
 // 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
 // it back to learn WHICH unit is under review and which contract paths are
 // exempt — the two facts no harness payload carries. Lives under the intent's
@@ -22509,9 +22588,10 @@ export function evaluateGuardRefusal(
       op: "abort-bolt",
       action:
         `Halt and ask the human whether to restart autonomous Unit ` +
-        `"${input.autonomousBolt.unit}". On approval, abort and park (discard) the old ` +
-        `attempt, restorable with \`${aidlcToolInvocation("worktree")} restore --slug ${slug}\`, ` +
-        `then rerun the current prepare step in${batch} so a fresh ` +
+        `"${input.autonomousBolt.unit}". On approval, execute the returned abort ` +
+        "command unchanged. After success, use the post-discard SAY line in " +
+        "stage-protocol-construction.md under Halt-and-ask on failure, then " +
+        `rerun the current prepare step in${batch} so a fresh ` +
         "BOLT_STARTED boundary creates a new review allowance.",
       ...guardOperation({ kind: "abort-bolt", unit: input.autonomousBolt.unit, slug }),
       requiresHuman: true,
