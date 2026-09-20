@@ -860,13 +860,19 @@ const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
 // (no `directive.unit`) writes none - so on a scope that skips units-generation
 // the absence is compliance and the advisory would be false for the whole phase.
 // The active-directive marker is the authority: reading it revalidates the state
-// digest, so a marker left from a different state does not answer. Keyed on the
-// unit fields rather than on `kind` or `version`, because a version-1 marker
-// carries `unit` and no `kind` at all.
+// digest, so a marker left from a different state does not answer. `unit` is
+// keyed on the field rather than on `kind` or `version`, because a version-1
+// marker carries `unit` and no `kind` at all. `units` counts only on a live
+// `invoke-swarm` marker: writeActiveDirectiveMarker carries it onto every later
+// marker in the intent (`requestedUnits = marker.units ?? base.units`), so an
+// inherited list on a later no-unit `run-stage` is not evidence a record was owed.
 function perUnitReviewOwed(projectDir: string, stateContent: string | null): boolean {
   if (stateContent === null) return false;
   const active = readActiveDirectiveMarker(projectDir, stateContent);
-  return (active?.unit ?? "").length > 0 || (active?.units?.length ?? 0) > 0;
+  return (
+    (active?.unit ?? "").length > 0 ||
+    (active?.kind === "invoke-swarm" && (active.units?.length ?? 0) > 0)
+  );
 }
 
 // --- Main ---------------------------------------------------------------------
