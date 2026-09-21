@@ -260,6 +260,19 @@ describe("t345 complete nightly coverage", () => {
     expect(FAMILIES.cursor).toMatchObject({ hosting: "excluded", platforms: [], reason: "no credential separation: vendor CLI reads the API key from the agent environment" });
   });
 
+  test("self-hosted Kiro cannot persist the read-only checkout token before agents run", () => {
+    const job = workflow.jobs.live_kiro_windows;
+    expect(job.permissions).toEqual({ contents: "read" });
+    const checkout = job.steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
+    expect(checkout).toBeGreaterThanOrEqual(0);
+    expect(job.steps[checkout].with?.["persist-credentials"]).toBe(false);
+    const proof = job.steps.findIndex((step) => step.name?.startsWith("Prove no persisted checkout credential"));
+    expect(proof).toBe(checkout + 1);
+    for (const [index, step] of job.steps.entries()) {
+      if (step.name?.startsWith("Run kiro-")) expect(proof).toBeLessThan(index);
+    }
+  });
+
   test("no workflow step or job exposes vendor API keys", () => {
     for (const job of Object.values(workflow.jobs)) {
       for (const value of Object.values(job.env ?? {})) expect(value).not.toContain("secrets.");

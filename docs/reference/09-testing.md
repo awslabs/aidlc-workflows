@@ -1072,6 +1072,15 @@ Kiro host jobs are reported as exclusions and never block
 preview/stable publication. A missing, failed or cancelled leg still fails, as
 does a skipped leg whose enabling variable is on. Exclusions are not coverage.
 
+The Kiro lane trusts a maintainer-owned self-hosted host and is default-off
+unless `vars.AIDLC_NIGHTLY_KIRO_RUNNERS` is `1`. Agents run as the runner user
+with the host's own Kiro login, the host's primary credential rather than a
+repository secret; no repository secrets are passed to this job. Its job token
+has only `contents: read`, and checkout never persists it. Immediately after
+checkout, a proof step fails on local Git extraheaders or conditional includes,
+`RUNNER_TEMP` credential files, or a `GITHUB_TOKEN` environment variable, before
+any Kiro agent runs.
+
 Provision these repository/environment settings before expecting a green run:
 
 - Repository variable `AIDLC_NIGHTLY_KIRO_RUNNERS=1` enables Kiro ACP/TUI/IDE

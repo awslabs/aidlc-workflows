@@ -185,6 +185,13 @@ The self-hosted Windows runner needs only Windows PowerShell 5.1 and Git for
 Windows for its shell environment, alongside the documented Bun/Node/Kiro tools.
 Its steps never rely on `bash`: `C:\Windows\System32\bash.exe` is the WSL launcher.
 
+This maintainer-owned lane is default-off. Agents run as the runner user with
+the host's own Kiro login, its primary credential rather than a repository
+secret; no repository secrets are passed. The job token has only `contents: read`
+and is never persisted. A post-checkout proof rejects local Git extraheaders or
+conditional includes, `RUNNER_TEMP` credential files, and a `GITHUB_TOKEN`
+environment variable before any `Run kiro-*` step.
+
 Set `AIDLC_NIGHTLY_KIRO_RUNNERS=1` for the dedicated Windows Kiro host.
 No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Disabled
 Kiro jobs are reported in `excluded` and never block publication. `passed` requires all
