@@ -161,24 +161,29 @@ token-spending live TUI journeys. Set `AIDLC_TUI_LIVE=0` explicitly to keep thos
 tests on their in-file SKIP path.
 # Required coverage
 
-Add `--require-coverage` to a required nightly gate. It rejects skipped cases,
-empty test files, missing executions, and zero-file selections with a nonzero
-exit. Verbose runs write `coverage.json` separately from assertion results.
-Select the required platform/provider files explicitly; a capability skip is
-not successful coverage.
-Automatically required preflights appear in the effective inventory even under
-a narrow filter. Missing, empty or skipped terminal capability evidence blocks
-dependent journeys.
+Required platform/provider gates use `--require-coverage`: skipped cases,
+empty selections and missing executions fail. `coverage.json` records the
+effective inventory, including automatically required terminal preflights.
+Mixed-provider and release-contract suites contain intentional conditional
+cases and do not use strict coverage; their declared jobs must still succeed.
 
-For jobs split across operating systems or backends, prepare a source-bound
-plan with `tests/reconcile-tests.ts prepare`, run each job using
-`--matrix-plan <file> --matrix-job <id>`, then reconcile its sealed receipts.
-The committed `tests/native-terminal-profile.json` preserves deterministic Bun
-and compatibility controls with explicit Linux/Windows owners. A missing job,
-stale source, wrong backend, skipped case or conflicting receipt cannot satisfy
-the matrix. This native profile has a separate scope from live workflow and GUI
-coverage. See [required matrix jobs](../docs/reference/09-testing.md#required-jobs-across-platforms)
-for commands and receipt handling.
+Nightly `preview-release.yml` calls the reusable `full-suite.yml`: deterministic
+tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
+hosted Claude/Codex/opencode/release-contract and Linux mixed-provider suites,
+self-hosted Kiro ACP/TUI and Windows IDE, plus opt-in Cursor legs. Copilot is
+excluded by account policy; there is no macOS Kiro IDE runner.
+
+Set repository variables `AIDLC_NIGHTLY_KIRO_RUNNERS=1` and
+`AIDLC_NIGHTLY_CURSOR=1` after provisioning the hosts and secrets. Disabled legs
+are recorded as excluded, never complete. `full-suite-result` retains the exact
+SHA, run identity and every leg's result for 90 days; preview publication and
+stable tags require complete evidence. Tag a green nightly SHA or dispatch
+`preview-release.yml` first. `bun scripts/ci-live-filter.ts --list` shows the
+discovered partition; append `--platform linux|darwin|win32` to a family query
+for its exact platform filter. See
+[required matrix jobs](../docs/reference/09-testing.md#required-jobs-across-platforms)
+and [nightly provisioning](../docs/reference/09-testing.md#nightly-full-suite-matrix-and-provisioning)
+for commands, receipt handling and environment requirements.
 
 Terminal automation reads physical screen rows so repainted menus remain
 detectable. Public `capture` retains joined logical text; use `capture --physical`

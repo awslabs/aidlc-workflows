@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       tag: ${{ steps.validate.outputs.tag }}
       sha: ${{ steps.validate.outputs.sha }}
@@ -46,6 +47,36 @@ jobs:
           version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
           test "$RELEASE_TAG" = "v$version"
           printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Require complete full-suite evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_SHA: ${{ steps.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          tag_sha="$TAG_SHA"
+          runs="$(gh run list --workflow preview-release.yml --commit "$tag_sha" --status success --json databaseId --jq '.[].databaseId')"
+          accepted=false
+          for run in $runs; do
+            evidence="$RUNNER_TEMP/full-suite-evidence-$run"
+            mkdir -p "$evidence"
+            if ! gh run download "$run" --name full-suite-result --dir "$evidence"; then
+              echo "Preview run $run: missing full-suite-result artifact"
+              continue
+            fi
+            result="$evidence/full-suite-result.json"
+            if jq -e --arg sha "$tag_sha" '.sha == $sha and .complete == true' "$result"; then
+              accepted=true
+              break
+            fi
+            echo "Preview run $run: wrong source or incomplete full-suite legs"
+            jq '{sha, complete, excluded, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
+          done
+          if [ "$accepted" != true ]; then
+            echo "::error::No successful preview has complete full-suite-result evidence for $tag_sha. Missing/incomplete legs are listed above; no artifact means every leg is unproven. Tag a green nightly SHA or dispatch preview-release.yml first."
+            exit 1
+          fi
 
   verify:
     needs: validate

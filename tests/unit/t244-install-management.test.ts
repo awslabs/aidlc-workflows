@@ -1982,6 +1982,7 @@ describe("t244 Windows and completion release surfaces", () => {
   test("release workflow keeps actions pinned, lints installers, and regenerates before consumers", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
     const previewWorkflow = readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8");
+    const fullSuiteWorkflow = readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
       permissions?: Record<string, string>;
       jobs: Record<string, {
@@ -2013,7 +2014,7 @@ describe("t244 Windows and completion release surfaces", () => {
     // Third-party actions are pinned to a full commit SHA. A same-repository
     // reusable workflow (`./.github/workflows/...`) is referenced by path and
     // resolves to the commit already being run, so it carries no ref to pin.
-    const actionRefs = [workflow, previewWorkflow].flatMap(
+    const actionRefs = [workflow, previewWorkflow, fullSuiteWorkflow].flatMap(
       (workflowText) =>
         [...workflowText.matchAll(/^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm)]
           .map((match) => match[1]),

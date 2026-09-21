@@ -1035,6 +1035,8 @@ describe("t332 preview publication pipeline", () => {
       environment?: string;
       permissions?: Record<string, string>;
       uses?: string;
+      with?: Record<string, string>;
+      secrets?: string;
       env?: Record<string, string>;
       outputs?: Record<string, string>;
       steps?: Array<{
@@ -1078,6 +1080,10 @@ describe("t332 preview publication pipeline", () => {
     expect(stableText).not.toContain("plan-preview-release.ts");
     expect(stableText).not.toContain("AIDLC_BUILD_VERSION");
     expect(stableText).not.toContain("./.github/workflows/ci.yml");
+    expect(stable.jobs.validate.permissions).toEqual({ contents: "read", actions: "read" });
+    const evidence = stable.jobs.validate.steps?.find((step) => step.name === "Require complete full-suite evidence");
+    expect(evidence?.run).toContain("full-suite-result");
+    expect(evidence?.run).toContain(".sha == $sha and .complete == true");
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
     expect(preview.on.schedule).toEqual([{
@@ -1094,15 +1100,15 @@ describe("t332 preview publication pipeline", () => {
     });
     expect(preview.jobs.gate.if).toContain("needs.validate.outputs.skip");
     expect(preview.jobs.verify.needs).toEqual(["validate", "gate"]);
-    expect(preview.jobs.test_smoke.needs).toEqual(["validate", "gate"]);
-    expect(preview.jobs.test_unit.needs).toEqual(["validate", "gate"]);
-    expect(preview.jobs.test_deep.needs).toEqual(["validate", "gate"]);
-    expect(preview.jobs.test.needs).toEqual([
-      "validate",
-      "test_smoke",
-      "test_unit",
-      "test_deep",
-    ]);
+    expect(preview.jobs.full_suite).toMatchObject({
+      needs: ["validate", "gate"],
+      uses: "./.github/workflows/full-suite.yml",
+      with: { ref: `\${{ needs.validate.outputs.sha }}` },
+      secrets: "inherit",
+    });
+    expect(preview.jobs.full_suite.if).toContain("needs.validate.outputs.skip");
+    expect(preview.jobs.test.needs).toEqual(["validate", "full_suite"]);
+    expect(preview.jobs.test.steps?.[0].env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.result }}`);
     expect(preview.jobs.test.if).toContain("needs.validate.outputs.skip");
     expect(preview.jobs.release.environment).toBe("preview");
     expect(preview.jobs.release.permissions).toEqual({ contents: "write" });
@@ -1124,9 +1130,7 @@ describe("t332 preview publication pipeline", () => {
     };
     for (const name of [
       "verify",
-      "test_smoke",
-      "test_unit",
-      "test_deep",
+      "full_suite",
       "test",
       "native-smoke",
       "build",

@@ -51,161 +51,14 @@
 // driver subprocess remains the source of the `tui` mechanism evidence.
 
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import * as os from "node:os";
-import { join } from "node:path";
-import { AIDLC_SRC, cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
-import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+import {
+  absentReason, captureOrientationStatusline, ORIENTATION_MARKER, type OrientationSample,
+} from "../harness/tui-orientation.ts";
 
-const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
-const FIXTURE = join(import.meta.dir, "..", "fixtures", "state-mid-ideation.md");
-const IS_WIN = os.platform() === "win32";
-const ORIENTATION_MARKER = "default · fixture · IDEATION";
-const STARTUP_TIMEOUT_MS = 15_000;
-const STARTUP_WALL_BOUND_MS = 20_000;
-const PROCESS_EXIT_TIMEOUT_MS = 5_000;
-const WINDOWS_SAMPLE_COUNT = 3;
-
-interface Run {
-  rc: number;
-  stdout: string;
-  stderr: string;
-}
-function drive(args: string[]): Run {
-  const { bin, prefix } = resolveTuiRuntime(DRIVER);
-  const res = spawnSync(bin, [...prefix, ...args], { encoding: "utf-8" });
-  return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
-}
-// Gate: the watched live-TUI tier (AIDLC_TUI_LIVE) + the selected substrate.
-// Claude is needed on every platform; the distributable +
-// the fixture must be present. A creds-less / binary-less machine SKIPs with a
-// reason — never a hard fail (the P10 live-leg posture).
-function absentReason(): string | null {
-  if (process.env.AIDLC_TUI_LIVE !== "1") {
-    return "set AIDLC_TUI_LIVE=1 to run the live Claude TUI orientation render (watched tier)";
-  }
-  const runtimeReason = tuiUnavailableReason();
-  if (runtimeReason) return runtimeReason;
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
-    return "claude CLI not found";
-  }
-  if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
-  if (!existsSync(FIXTURE)) return `fixture missing: ${FIXTURE}`;
-  return null;
-}
-const ABSENT_REASON = absentReason();
-
-interface OrientationSample {
-  pane: string;
-  startupWallMs: number;
-}
-
-// Launch the claude TUI on the >1-space + active-intent fixture and return the
-// captured pane once the orientation-bearing workflow statusline has painted.
-// Every launch uses a unique session and proves its process tree is gone before
-// the next launch can begin.
-function captureOrientationStatusline(sampleIndex: number): OrientationSample {
-  const session = `aidlc_tui_journey_orient_${process.pid}_${sampleIndex}`;
-  // setupTuiProject seeds the per-intent shell (default space's record + cursors)
-  // and writes the mid-ideation state into it; secondSpace seeds a non-default
-  // sibling space so listSpaces().length > 1 and the orientation prefix paints
-  // its `<space> ·` segment. With the active space still `default`, the prefix
-  // renders `default · fixture · IDEATION …`. No prompt, no tokens.
-  const sandbox = setupTuiProject({ withState: "state-mid-ideation.md", secondSpace: true });
-  let sample: OrientationSample | undefined;
-  let launchError: unknown;
-  try {
-    // The statusLine key is what wires aidlc-statusline.ts into the TUI; a copy
-    // that dropped it would render no [AIDLC] line at all.
-    expect(readFileSync(join(sandbox, ".claude", "settings.json"), "utf8")).toContain(
-      '"statusLine"',
-    );
-
-    const launchStartedAt = Date.now();
-    const started = drive([
-      "start",
-      "--session",
-      session,
-      "--cwd",
-      sandbox,
-      "--width",
-      "120",
-      "--height",
-      "40",
-      "--",
-      "claude",
-      "--dangerously-skip-permissions",
-    ]);
-    expect(started.rc).toBe(0);
-
-    // One bounded grid-driven startup loop handles both old Claude modal paths
-    // and the current preseeded path. A visible trust / bypass modal is answered;
-    // otherwise the already-painted orientation statusline returns immediately.
-    const startup = drive([
-      "startup",
-      "--session",
-      session,
-      "--ready-pattern",
-      ORIENTATION_MARKER,
-      "--timeout-ms",
-      String(STARTUP_TIMEOUT_MS),
-    ]);
-    const pane = drive(["capture", "--session", session]).stdout;
-    if (startup.rc !== 0) {
-      throw new Error(
-        `orientation statusline "${ORIENTATION_MARKER}" never painted.\n` +
-          `---- startup stderr ----\n${startup.stderr}\n` +
-          `---- last pane ----\n${pane}\n-------------------`,
-      );
-    }
-    sample = {
-      pane,
-      startupWallMs: Date.now() - launchStartedAt,
-    };
-  } catch (error) {
-    launchError = error;
-  }
-
-  const killed = drive(["kill", "--session", session]);
-  const dead = drive([
-    "wait-dead",
-    "--session",
-    session,
-    "--timeout-ms",
-    String(PROCESS_EXIT_TIMEOUT_MS),
-  ]);
-  let fixtureCleanupError: unknown;
-  if (killed.rc === 0 && dead.rc === 0) {
-    try {
-      cleanupTuiProject(sandbox);
-    } catch (error) {
-      fixtureCleanupError = error;
-    }
-  } else {
-    fixtureCleanupError =
-      `skipped because process teardown failed; workspace preserved at ${sandbox}`;
-  }
-
-  if (killed.rc !== 0 || dead.rc !== 0 || fixtureCleanupError !== undefined) {
-    throw new Error(
-      `TUI session '${session}' did not cleanly reap its process tree and fixture.\n` +
-        `---- kill stderr ----\n${killed.stderr}\n` +
-        `---- wait-dead stderr ----\n${dead.stderr}\n` +
-        `---- fixture cleanup ----\n${String(fixtureCleanupError ?? "ok")}\n` +
-        `---- original launch error ----\n${String(launchError ?? "none")}\n`,
-    );
-  }
-
-  if (launchError !== undefined) throw launchError;
-  if (sample === undefined) {
-    throw new Error(`TUI session '${session}' produced no orientation sample`);
-  }
-  return sample;
-}
+const ABSENT_REASON = process.env.AIDLC_TUI_LIVE === "1" ? absentReason() : "set AIDLC_TUI_LIVE=1";
 
 describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you are here')", () => {
-  const sampleCount = IS_WIN ? WINDOWS_SAMPLE_COUNT : 1;
+  const sampleCount = process.platform === "win32" ? 3 : 1;
   let SAMPLES: OrientationSample[] | null = null;
   function samples(): OrientationSample[] {
     if (SAMPLES === null) {
@@ -216,21 +69,6 @@ describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you ar
     }
     return SAMPLES;
   }
-
-  test.skipIf(ABSENT_REASON !== null || !IS_WIN)(
-    `three native Windows launches stay within ${STARTUP_WALL_BOUND_MS}ms and reap each process tree` +
-      `${ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : !IS_WIN ? " — SKIP: Windows-only" : ""}`,
-    () => {
-      const observed = samples();
-      expect(observed).toHaveLength(WINDOWS_SAMPLE_COUNT);
-      for (const sample of observed) {
-        expect(sample.startupWallMs).toBeLessThanOrEqual(
-          STARTUP_WALL_BOUND_MS,
-        );
-      }
-    },
-    90_000,
-  );
 
   // The full orientation prefix: space token (because >1 space) + intent slug +
   // phase, in the `<space> · <intent> · <phase>` order the builder emits. This is

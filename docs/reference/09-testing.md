@@ -411,10 +411,15 @@ from disk reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| CI pipeline | L2 | `bun tests/run-tests.ts --ci` | CI/CD pipeline |
-| Release / merge to `main` | L3 | `bun tests/run-tests.ts --release` | CI/CD pipeline |
+| Pull request | Deterministic gate | `ci.yml`: smoke + unit shards + native-terminal units on Linux/macOS/Windows + deterministic integration/e2e | GitHub Actions |
+| Nightly preview / manual preview dispatch | Complete matrix | `preview-release.yml` calls `full-suite.yml` before publishing | GitHub Actions |
+| Stable tag | Exact-source evidence | `release.yml` requires a successful preview's `full-suite-result` with the tag SHA and `complete: true` | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
+
+Tag the SHA of a green nightly for a stable release, or dispatch
+`preview-release.yml` on `main` first. A deterministic PR gate alone is not
+stable-release evidence.
 
 ## Stubs
 
@@ -869,9 +874,75 @@ a later passing receipt cannot erase an earlier failure. Explicitly excluded
 profile obligations appear as `NOT_REQUESTED`, never as fulfilled coverage.
 
 This profile verifies the terminal driver and retained compatibility controls.
-Live workflows and Kiro IDE GUI tests need their own declared jobs and evidence.
-The scheduled preview distribution workflow's `--no-llm` checks do not establish
-live or GUI coverage.
+The scheduled preview now calls `full-suite.yml`, which reconciles native
+receipts and requires the separately declared live/GUI jobs before publishing.
+
+### Nightly full-suite matrix and provisioning
+
+`Full Suite` is callable with an explicit `ref` and manually dispatchable
+(default `main`). Its plan job resolves that ref once; all matrix legs check out
+the resulting immutable SHA. `preview-release.yml` calls it after the normal CI
+gate and cannot publish unless the complete matrix passes. Stable releases
+download `full-suite-result` from successful preview runs for the exact tag SHA;
+an expired, missing, wrong-source or incomplete artifact blocks publication.
+
+The declared coverage is:
+
+- Deterministic smoke/unit and isolated integration/e2e on Linux, macOS and Windows.
+- Source-bound native terminal obligations on Linux arm64/Bun and tmux,
+  macOS arm64/Bun (`macos-15`), and Windows/Bun and node-pty. Hosted Windows
+  supplies Node; Bun installs the pinned dependencies and native addon.
+- Claude SDK, Claude TUI, Codex, opencode and release-endpoint contracts on
+  hosted Linux/macOS/Windows; mixed-provider plugin suites on hosted Linux.
+- Kiro ACP and TUI on self-hosted Linux and Windows; Kiro IDE on a logged-in
+  Windows desktop. No macOS Kiro IDE host exists, so it is not a declared leg.
+- Cursor on hosted Linux/macOS/Windows when enabled. Copilot is excluded by
+  account policy, not reported as successful coverage.
+
+`scripts/ci-live-filter.ts --list` prints the discovered family partition.
+`bun scripts/ci-live-filter.ts claude-tui --platform linux` prints an anchored
+runner filter. Discovery includes integration/e2e live gates, the derived
+Claude substrate list, plugin dispatchers' own gate mapping, and the unit
+release-contract opt-in. Unit gate-fixture tests are deterministic, not live
+families. `PLATFORM_ONLY` declares separately selectable Windows-only files;
+it never hides a skipped case inside a selected file. Strict live legs use
+`--require-coverage`; mixed-provider and release-contract files retain their
+provider/platform-conditional cases and do not use that flag.
+
+Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
+stamp directories and JUnit), `full-suite-native-result`,
+`full-suite-deterministic-<tier>-<OS>`, `full-suite-live-<family>-<OS>`, and
+`full-suite-result` (90-day retention). The final JSON records `sha`, `runId`,
+`runAttempt`, `complete`, every job's result in `legs`, and variable-disabled
+jobs in `excluded`. Failed, cancelled, skipped or missing legs cannot produce
+`complete: true`; disabling a runner family is diagnostic, not a release bypass.
+
+Provision these repository/environment settings before expecting a green run:
+
+- Repository variable `AIDLC_NIGHTLY_KIRO_RUNNERS=1` enables runner labels
+  `[self-hosted, Linux, kiro]` and `[self-hosted, Windows, kiro]`.
+  The hosts supply signed-in `kiro-cli`; the Windows host also supplies Kiro IDE.
+  Register the Windows runner as a logged-on-session scheduled task, **not a
+  service**: GUI automation must share the interactive user's desktop.
+- Repository variable `AIDLC_NIGHTLY_CURSOR=1` enables the three Cursor legs;
+  set secret `CURSOR_API_KEY` for their authenticated `agent` CLI. Disabled Kiro
+  or Cursor legs remain excluded/incomplete in the result and block releases.
+- Environment `nightly-live` holds secret `AWS_NIGHTLY_TEST_ROLE_ARN` (required)
+  and optionally `CURSOR_API_KEY`. The AWS role's OIDC trust must be scoped to
+  this repository's `environment:nightly-live` subject. Set `MaxSessionDuration`
+  to at least six hours; each assumption requests 21,600 seconds.
+- Grant Bedrock invoke/stream access to the Claude aliases in
+  `harness/claude/settings.json` in `us-east-1` (Fable 5, Opus 4.8, Sonnet 4.6,
+  Haiku 4.5 and their inference-profile destinations), `openai.gpt-5.5` in
+  `us-east-2`, and opencode's default
+  `amazon-bedrock/global.anthropic.claude-sonnet-4-6` in `us-east-1`.
+  The workflow writes the temporary OIDC credentials to the `codex` named AWS
+  profile with region `us-east-2`; Kiro instead uses its host login, without OIDC.
+
+Claude Code and opencode npm versions are pinned in the workflow; update those
+pins deliberately after verifying the registry and compatibility. Cursor uses
+its official Unix/native-Windows installer. CLI/authentication preflights fail
+loudly rather than letting absent substrates masquerade as passing live tests.
 
 ## Kiro prompt-hook transport controls
 

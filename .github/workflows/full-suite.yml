@@ -1,0 +1,545 @@
+name: "Full Suite"
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+    secrets:
+      AWS_NIGHTLY_TEST_ROLE_ARN:
+        required: true
+      CURSOR_API_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit or ref to test"
+        required: true
+        default: main
+        type: string
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+env:
+  BUN_VERSION: 1.3.14
+  CLAUDE_CODE_VERSION: 2.1.278 # @anthropic-ai/claude-code npm latest, verified 2026-09-21
+  CODEX_VERSION: 0.151.0
+  OPENCODE_VERSION: 1.18.31 # opencode-ai npm latest, verified 2026-09-21
+  AWS_REGION: us-east-1
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: "${{ steps.source.outputs.sha }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ inputs.ref }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - name: "Resolve immutable source"
+        id: source
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: "Prepare native obligations"
+        run: |
+          bun tests/reconcile-tests.ts prepare --profile tests/native-terminal-profile.json --cohort "nightly-${{ github.run_id }}-${{ github.run_attempt }}" --repo . --output "$RUNNER_TEMP/native-plan.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-native-plan
+          path: "${{ runner.temp }}/native-plan.json"
+  native_terminal:
+    needs: plan
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: linux-bun
+            runner: ubuntu-24.04-arm
+            backend: bun
+          - job: linux-tmux
+            runner: ubuntu-24.04-arm
+            backend: tmux
+          - job: darwin-bun
+            runner: macos-15
+            backend: bun
+          - job: windows-bun
+            runner: windows-latest
+            backend: bun
+          - job: windows-node-pty
+            runner: windows-latest
+            backend: node-pty
+    env:
+      AIDLC_TUI_BACKEND: "${{ matrix.backend }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Install compatibility tmux"
+        if: "matrix.backend == 'tmux'"
+        run: "sudo apt-get update -qq && sudo apt-get install -y -qq tmux"
+      - name: "Verify hosted Node compatibility runtime"
+        if: "matrix.backend == 'node-pty'"
+        run: "node --version"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: full-suite-native-plan
+          path: "${{ runner.temp }}"
+      - name: "Run exact native obligations"
+        run: |
+          TEST_MATRIX_FILTER=$(bun -e '
+            const plan = await Bun.file(process.argv[1]).json();
+            const job = plan.jobs.find(job => job.id === process.argv[2]);
+            if (!job) throw new Error("unknown matrix job");
+            const names = job.files.map(({path}) => {
+              const parts = path.split("/");
+              if (parts[0] !== "tests") throw new Error("expected native-profile test path");
+              return `${parts[1]}-${parts.at(-1).replace(/\.test\.ts$/, "")}`
+                .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            });
+            console.log(`^(?:${names.join("|")})$`);
+          ' "$RUNNER_TEMP/native-plan.json" "${{ matrix.job }}")
+          bun tests/run-tests.ts --debug -P 4 --unit --integration --e2e --no-llm --isolated-e2e --filter "$TEST_MATRIX_FILTER" --matrix-plan "$RUNNER_TEMP/native-plan.json" --matrix-job "${{ matrix.job }}"
+      - name: "Upload diagnostic logs"
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-native-${{ matrix.job }}"
+          path: tests/logs/
+          include-hidden-files: true
+  native_reconcile:
+    if: "${{ always() }}"
+    needs: [plan, native_terminal]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: full-suite-native-plan
+          path: "${{ runner.temp }}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: "full-suite-native-*"
+          path: "${{ runner.temp }}/native-receipts"
+      - name: "Reconcile source-bound receipts"
+        run: |
+          bun -e '
+            const root = process.env.RUNNER_TEMP;
+            const receipts = [...new Bun.Glob("**/test-matrix-receipt.json").scanSync({ cwd: `${root}/native-receipts`, absolute: true })];
+            const child = Bun.spawnSync([process.execPath, "tests/reconcile-tests.ts", "reconcile", "--plan", `${root}/native-plan.json`, ...receipts.flatMap(path => ["--receipt", path]), "--output", `${root}/native-matrix-result.json`], { stdout: "inherit", stderr: "inherit" });
+            process.exit(child.exitCode);
+          '
+      - if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-native-result
+          path: "${{ runner.temp }}/native-matrix-result.json"
+  deterministic:
+    needs: plan
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+        tier: [smoke-unit, deep]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Install zsh completion substrate"
+        if: "runner.os == 'Linux' && matrix.tier == 'smoke-unit'"
+        run: "sudo apt-get update -qq && sudo apt-get install -y -qq zsh"
+      - name: "Run smoke and unit"
+        if: "matrix.tier == 'smoke-unit'"
+        run: "bun tests/run-tests.ts --smoke --unit"
+      - name: "Run deterministic deep tiers"
+        if: "matrix.tier == 'deep'"
+        run: "bun tests/run-tests.ts --debug -P 4 --integration --e2e --no-llm --isolated-e2e"
+      - name: "Upload diagnostic logs"
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-deterministic-${{ matrix.tier }}-${{ runner.os }}"
+          path: tests/logs/
+          include-hidden-files: true
+  live_hosted:
+    needs: plan
+    environment: nightly-live
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - family: claude-sdk
+            runner: ubuntu-latest
+            platform: linux
+          - family: claude-sdk
+            runner: macos-15
+            platform: darwin
+          - family: claude-sdk
+            runner: windows-latest
+            platform: win32
+          - family: claude-tui
+            runner: ubuntu-latest
+            platform: linux
+          - family: claude-tui
+            runner: macos-15
+            platform: darwin
+          - family: claude-tui
+            runner: windows-latest
+            platform: win32
+          - family: codex
+            runner: ubuntu-latest
+            platform: linux
+          - family: codex
+            runner: macos-15
+            platform: darwin
+          - family: codex
+            runner: windows-latest
+            platform: win32
+          - family: opencode
+            runner: ubuntu-latest
+            platform: linux
+          - family: opencode
+            runner: macos-15
+            platform: darwin
+          - family: opencode
+            runner: windows-latest
+            platform: win32
+          - family: release-contract
+            runner: ubuntu-latest
+            platform: linux
+          - family: release-contract
+            runner: macos-15
+            platform: darwin
+          - family: release-contract
+            runner: windows-latest
+            platform: win32
+          - family: multi-provider
+            runner: ubuntu-latest
+            platform: linux
+    env:
+      CURSOR_API_KEY: "${{ secrets.CURSOR_API_KEY }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Install pinned family CLIs"
+        run: |
+          case "${{ matrix.family }}" in
+            claude-*|multi-provider) npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" ;;
+          esac
+          case "${{ matrix.family }}" in
+            codex|multi-provider) npm install -g "@openai/codex@$CODEX_VERSION" ;;
+          esac
+          case "${{ matrix.family }}" in
+            opencode|multi-provider) npm install -g "opencode-ai@$OPENCODE_VERSION" ;;
+          esac
+      - name: "Install Cursor agent on Unix"
+        if: "matrix.family == 'multi-provider' && vars.AIDLC_NIGHTLY_CURSOR == '1' && (runner.os != 'Windows')"
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: "Install Cursor agent on Windows"
+        if: "matrix.family == 'multi-provider' && vars.AIDLC_NIGHTLY_CURSOR == '1' && (runner.os == 'Windows')"
+        shell: powershell
+        run: |
+          irm 'https://cursor.com/install?win32=true' | iex
+          "$env:LOCALAPPDATA\cursor-agent" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: "Assume nightly Bedrock role"
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: "${{ secrets.AWS_NIGHTLY_TEST_ROLE_ARN }}"
+          role-session-name: "aidlc-nightly-${{ matrix.family }}-${{ runner.os }}"
+          role-duration-seconds: 21600
+          aws-region: "${{ env.AWS_REGION }}"
+      - name: "Materialize Codex named profile"
+        if: "matrix.family == 'codex' || matrix.family == 'multi-provider'"
+        run: |
+          umask 077
+          mkdir -p "$HOME/.aws"
+          printf '[profile codex]\nregion = us-east-2\n' > "$HOME/.aws/config"
+          printf '[codex]\naws_access_key_id = %s\naws_secret_access_key = %s\naws_session_token = %s\n' "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" "$AWS_SESSION_TOKEN" > "$HOME/.aws/credentials"
+      - name: "Require authenticated live substrates"
+        run: |
+          aws sts get-caller-identity
+          case "${{ matrix.family }}" in
+            claude-*|multi-provider) claude --version ;;
+          esac
+          case "${{ matrix.family }}" in
+            codex|multi-provider) codex --version; aws sts get-caller-identity --profile codex --region us-east-2 ;;
+          esac
+          case "${{ matrix.family }}" in
+            opencode|multi-provider) opencode --version ;;
+          esac
+          if [ "${{ matrix.family }}" = multi-provider ] && [ "${{ vars.AIDLC_NIGHTLY_CURSOR }}" = 1 ]; then
+            test -n "$CURSOR_API_KEY"
+            agent --version
+          fi
+      - name: "Run claude-sdk"
+        if: "matrix.family == 'claude-sdk'"
+        env:
+          AIDLC_CLAUDE_SDK_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts claude-sdk --platform ${{ matrix.platform }})
+          bun tests/run-tests.ts --debug -P 4 --integration --e2e --isolated-e2e --bedrock-parallel 2 --require-coverage --filter "$FILTER"
+      - name: "Run claude-tui"
+        if: "matrix.family == 'claude-tui'"
+        env:
+          AIDLC_TUI_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts claude-tui --platform ${{ matrix.platform }})
+          bun tests/run-tests.ts --debug -P 4 --integration --e2e --isolated-e2e --bedrock-parallel 2 --require-coverage --filter "$FILTER"
+      - name: "Run codex"
+        if: "matrix.family == 'codex'"
+        env:
+          AIDLC_CODEX_EXEC_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts codex --platform ${{ matrix.platform }})
+          bun tests/run-tests.ts --debug -P 4 --e2e --isolated-e2e --bedrock-parallel 2 --require-coverage --filter "$FILTER"
+      - name: "Run opencode"
+        if: "matrix.family == 'opencode'"
+        env:
+          AIDLC_OPENCODE_RUN_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts opencode --platform ${{ matrix.platform }})
+          bun tests/run-tests.ts --debug -P 4 --e2e --isolated-e2e --bedrock-parallel 2 --require-coverage --filter "$FILTER"
+      - name: "Run release-contract"
+        if: "matrix.family == 'release-contract'"
+        env:
+          AIDLC_RELEASE_CONTRACT_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts release-contract --platform ${{ matrix.platform }})
+          bun tests/run-tests.ts --debug -P 4 --unit --filter "$FILTER"
+      - name: "Run multi-provider"
+        if: "matrix.family == 'multi-provider'"
+        env:
+          AIDLC_CLAUDE_SDK_LIVE: "1"
+          AIDLC_TUI_LIVE: "1"
+          AIDLC_CODEX_EXEC_LIVE: "1"
+          AIDLC_OPENCODE_RUN_LIVE: "1"
+          AIDLC_CURSOR_RUN_LIVE: "1"
+          AIDLC_RELEASE_CONTRACT_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts multi-provider --platform ${{ matrix.platform }})
+          bun tests/run-tests.ts --debug -P 4 --integration --e2e --isolated-e2e --bedrock-parallel 2 --filter "$FILTER"
+      - name: "Upload diagnostic logs"
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
+          path: tests/logs/
+          include-hidden-files: true
+  live_kiro_linux:
+    needs: plan
+    if: "vars.AIDLC_NIGHTLY_KIRO_RUNNERS == '1'"
+    runs-on: [self-hosted, Linux, kiro]
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [kiro-acp, kiro-tui]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Require signed-in Kiro host"
+        run: "kiro-cli whoami"
+      - name: "Run kiro-acp"
+        if: "matrix.family == 'kiro-acp'"
+        env:
+          AIDLC_KIRO_ACP_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts kiro-acp --platform linux)
+          bun tests/run-tests.ts --debug -P 4 --e2e --isolated-e2e --require-coverage --kiro-parallel 2 --ide-parallel 1 --filter "$FILTER"
+      - name: "Run kiro-tui"
+        if: "matrix.family == 'kiro-tui'"
+        env:
+          AIDLC_KIRO_TUI_LIVE: "1"
+          AIDLC_TUI_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts kiro-tui --platform linux)
+          bun tests/run-tests.ts --debug -P 4 --e2e --isolated-e2e --require-coverage --kiro-parallel 2 --ide-parallel 1 --filter "$FILTER"
+      - name: "Upload diagnostic logs"
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
+          path: tests/logs/
+          include-hidden-files: true
+  live_kiro_windows:
+    needs: plan
+    if: "vars.AIDLC_NIGHTLY_KIRO_RUNNERS == '1'"
+    runs-on: [self-hosted, Windows, kiro]
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [kiro-acp, kiro-tui, kiro-ide]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Require signed-in Kiro host"
+        run: "kiro-cli whoami"
+      - name: "Run kiro-acp"
+        if: "matrix.family == 'kiro-acp'"
+        env:
+          AIDLC_KIRO_ACP_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts kiro-acp --platform win32)
+          bun tests/run-tests.ts --debug -P 4 --e2e --isolated-e2e --require-coverage --kiro-parallel 2 --ide-parallel 1 --filter "$FILTER"
+      - name: "Run kiro-tui"
+        if: "matrix.family == 'kiro-tui'"
+        env:
+          AIDLC_KIRO_TUI_LIVE: "1"
+          AIDLC_TUI_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts kiro-tui --platform win32)
+          bun tests/run-tests.ts --debug -P 4 --e2e --isolated-e2e --require-coverage --kiro-parallel 2 --ide-parallel 1 --filter "$FILTER"
+      - name: "Run kiro-ide"
+        if: "matrix.family == 'kiro-ide'"
+        env:
+          AIDLC_KIRO_IDE_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts kiro-ide --platform win32)
+          bun tests/run-tests.ts --debug -P 4 --e2e --isolated-e2e --require-coverage --kiro-parallel 2 --ide-parallel 1 --filter "$FILTER"
+      - name: "Upload diagnostic logs"
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
+          path: tests/logs/
+          include-hidden-files: true
+  live_cursor:
+    needs: plan
+    if: "vars.AIDLC_NIGHTLY_CURSOR == '1'"
+    runs-on: "${{ matrix.runner }}"
+    environment: nightly-live
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - family: cursor
+            runner: ubuntu-latest
+            platform: linux
+          - family: cursor
+            runner: macos-15
+            platform: darwin
+          - family: cursor
+            runner: windows-latest
+            platform: win32
+    env:
+      CURSOR_API_KEY: "${{ secrets.CURSOR_API_KEY }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Install Cursor agent on Unix"
+        if: "runner.os != 'Windows'"
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: "Install Cursor agent on Windows"
+        if: "runner.os == 'Windows'"
+        shell: powershell
+        run: |
+          irm 'https://cursor.com/install?win32=true' | iex
+          "$env:LOCALAPPDATA\cursor-agent" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: "Require Cursor credentials and executable"
+        run: |
+          test -n "$CURSOR_API_KEY"
+          agent --version
+      - name: "Run cursor"
+        if: "matrix.family == 'cursor'"
+        env:
+          AIDLC_CURSOR_RUN_LIVE: "1"
+        run: |
+          FILTER=$(bun scripts/ci-live-filter.ts cursor --platform ${{ matrix.platform }})
+          bun tests/run-tests.ts --debug -P 4 --e2e --isolated-e2e --require-coverage --filter "$FILTER"
+      - name: "Upload diagnostic logs"
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-live-cursor-${{ runner.os }}"
+          path: tests/logs/
+          include-hidden-files: true
+  result:
+    if: "${{ always() }}"
+    needs: [plan, native_terminal, native_reconcile, deterministic, live_hosted, live_kiro_linux, live_kiro_windows, live_cursor]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha || inputs.ref }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - name: "Bind result to checked-out SHA"
+        run: |
+          echo "FULL_SUITE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: "Require every declared leg"
+        env:
+          FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
+          FULL_SUITE_REF: "${{ inputs.ref }}"
+          AIDLC_NIGHTLY_KIRO_RUNNERS: "${{ vars.AIDLC_NIGHTLY_KIRO_RUNNERS }}"
+          AIDLC_NIGHTLY_CURSOR: "${{ vars.AIDLC_NIGHTLY_CURSOR }}"
+        run: |
+          bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
+      - if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-result
+          path: "${{ runner.temp }}/full-suite-result.json"
+          retention-days: 90
