@@ -205,7 +205,7 @@ export function parseRunnerArgs(
     );
   }
   if ((out.isolatedE2e && !out.runE2e) || (workerOption && !out.isolatedE2e)) {
-    throw new RunnerArgsError("isolated e2e options require --e2e --isolated-e2e (or --e2e-plan)", 2, true);
+    throw new RunnerArgsError("isolated e2e options require --e2e --isolated-e2e or --e2e --e2e-plan; --e2e-plan implies --isolated-e2e, not --e2e", 2, true);
   }
   if (out.isolatedE2e && (!Number.isSafeInteger(out.parallel) || out.parallel > 256)) {
     throw new RunnerArgsError("isolated e2e --parallel must be a safe integer in 1..256", 2, true);

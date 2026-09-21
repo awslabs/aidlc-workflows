@@ -585,6 +585,7 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
                 # Requires --unit with no other level or profile flags.
 --isolated-e2e  # Run e2e in independent checkouts; -P sets worker count.
 --e2e-plan      # Print selected files/resources without builds or test execution.
+                # Requires --e2e; implies --isolated-e2e, not --e2e.
 --bedrock-parallel N  # Concurrent Bedrock test files (default 2).
 --kiro-parallel N     # Concurrent Kiro test files (default 2).
 --ide-parallel N      # Concurrent IDE files, also charged to Kiro (default 1).
@@ -768,7 +769,9 @@ to be a regular file. Relative IDE seed paths and
 path-valued executable overrides resolve against the source checkout before the
 worker starts. The IDE still copies the seed into its private profile.
 
-Inspect the complete selection without building or starting a CLI:
+Inspect the complete selection without building or starting a CLI. Combine
+`--e2e-plan` with `--e2e`: it implies `--isolated-e2e` but does not select the e2e
+tier itself.
 
 ```bash
 bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan

@@ -204,6 +204,18 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(r.out).toContain("ERROR: --parallel requires a positive integer");
   }, PER_TEST_TIMEOUT);
 
+  test("--e2e-plan requires --e2e and implies isolated planning without running tests", () => {
+    const rejected = run(["--e2e-plan"]);
+    expect(rejected.status).toBe(2);
+    expect(rejected.out).toContain("--e2e --isolated-e2e or --e2e --e2e-plan");
+    expect(rejected.out).toContain("--e2e-plan implies --isolated-e2e, not --e2e");
+
+    const planned = run(["--e2e", "--e2e-plan", "--filter", "^t01-helpers$"]);
+    expect(planned.status, planned.out).toBe(0);
+    const plan = JSON.parse(planned.out) as { files: Array<{ file: string }> };
+    expect(plan.files.map(({ file }) => file)).toEqual(["tests/e2e/t01-helpers.test.ts"]);
+  }, PER_TEST_TIMEOUT);
+
   test("rejects malformed and out-of-range --shard values", () => {
     for (const bad of ["0/4", "1/0", "5/4", "abc"]) {
       const r = run(["--unit", "--shard", bad]);

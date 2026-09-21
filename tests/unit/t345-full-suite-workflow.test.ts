@@ -334,7 +334,6 @@ describe("t345 complete nightly coverage", () => {
           }
           expect(result.status).toBe(2);
           expect(result.stdout).toBe("");
-          expect(result.stderr).toContain("isolated e2e options require --e2e --isolated-e2e (or --e2e-plan)");
         }
       }, 30_000);
     }

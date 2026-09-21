@@ -134,13 +134,14 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --isolated-e2e  Dispatch e2e files across -P isolated checkout workers.
                   Known serial driver families may overlap; assertions are unchanged.
   --e2e-plan      Print the isolated e2e inventory/resource plan; run no tests or builds.
+                  Requires --e2e; implies --isolated-e2e, not --e2e.
   --bedrock-parallel N  Maximum simultaneous Bedrock test files (default: 2).
   --kiro-parallel N     Maximum simultaneous Kiro test files (default: 2).
   --ide-parallel N      Maximum simultaneous Kiro IDE files (default: 1).
   --e2e-file-timeout N  Isolated worker file deadline, seconds (default: 10800).
   --e2e-timings FILE    Prior summary.txt used for longest-first scheduling.
   --e2e-cancel-file FILE  Create this file to request portable worker cancellation.
-                  These options require --e2e and --isolated-e2e (or --e2e-plan).
+                  These options require --e2e --isolated-e2e or --e2e --e2e-plan.
 
   -h, --help      Show this help and exit
 
