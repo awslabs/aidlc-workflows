@@ -411,20 +411,20 @@ jobs:
     timeout-minutes: 720
     defaults:
       run:
-        shell: pwsh
+        shell: powershell
     strategy:
       fail-fast: false
       matrix:
         family: [kiro-acp, kiro-tui, kiro-ide]
     steps:
       - name: "Inventory self-hosted Windows host"
-        shell: pwsh
+        shell: powershell
         env:
           KIRO_FAMILY: "${{ matrix.family }}"
         run: |
           $ErrorActionPreference = 'Stop'
           Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List
-          $sessions = & query user 2>&1
+          $sessions = & cmd /c "query user 2>&1"
           Write-Host ($sessions -join "`n")
           if ($LASTEXITCODE -ne 0) { throw 'query user failed; an interactive user session is required' }
           $userPattern = '^\s*>?\s*' + [regex]::Escape($env:USERNAME) + '\s+'

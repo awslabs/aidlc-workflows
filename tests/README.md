@@ -172,6 +172,9 @@ tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
 hosted Claude/Codex/opencode/release-contract and Linux mixed-provider suites,
 self-hosted Kiro ACP/TUI and Windows IDE, plus opt-in Cursor legs. Copilot is
 excluded by account policy; there is no macOS Kiro IDE runner.
+The self-hosted Windows runner needs only Windows PowerShell 5.1 and Git for
+Windows for its shell environment, alongside the documented Bun/Node/Kiro tools.
+Its steps never rely on `bash`: `C:\Windows\System32\bash.exe` is the WSL launcher.
 
 Set repository variables `AIDLC_NIGHTLY_KIRO_RUNNERS=1` and
 `AIDLC_NIGHTLY_CURSOR=1` after provisioning the hosts and secrets. Disabled legs

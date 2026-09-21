@@ -950,6 +950,9 @@ Provision these repository/environment settings before expecting a green run:
   The hosts supply signed-in `kiro-cli`; the Windows host also supplies Kiro IDE.
   Register the Windows runner as a logged-on-session scheduled task, **not a
   service**: GUI automation must share the interactive user's desktop.
+  Its shell requirements are Windows PowerShell 5.1 and Git for Windows; PowerShell
+  7 (`pwsh`) is not required. These Windows steps never rely on `bash`, because
+  `C:\Windows\System32\bash.exe` is the WSL launcher, not Git Bash.
 - Repository variable `AIDLC_NIGHTLY_CURSOR=1` enables the three Cursor legs;
   set secret `CURSOR_API_KEY` for their authenticated `agent` CLI. Disabled Kiro
   or Cursor legs remain excluded/incomplete in the result and block releases.

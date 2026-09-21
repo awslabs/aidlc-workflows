@@ -112,12 +112,12 @@ describe("t345 complete nightly coverage", () => {
     expect(actual.sort()).toEqual(expected.sort());
   });
 
-  test("self-hosted Windows inventories its desktop and uses native PowerShell for every command", () => {
+  test("self-hosted Windows inventories its desktop and uses Windows PowerShell 5.1 for every command", () => {
     const job = workflow.jobs.live_kiro_windows;
-    expect(job.steps[0]).toMatchObject({ name: "Inventory self-hosted Windows host", shell: "pwsh" });
+    expect(job.steps[0]).toMatchObject({ name: "Inventory self-hosted Windows host", shell: "powershell" });
     for (const step of job.steps) {
       if (!step.run) continue;
-      expect(step.shell ?? job.defaults?.run?.shell).toBe("pwsh");
+      expect(step.shell ?? job.defaults?.run?.shell).toBe("powershell");
     }
   });
 
