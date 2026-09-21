@@ -1201,7 +1201,13 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     writeFileSync(join(repo, "response.ts"), "export const response = 1;\n");
     run("add", ".");
     run("commit", "--quiet", "-m", "base");
+    const originalBase = run("rev-parse", "HEAD");
+    run("checkout", "--quiet", "-b", "upstream");
+    writeFileSync(join(repo, "upstream.ts"), "export const upstream = 2;\n");
+    run("add", ".");
+    run("commit", "--quiet", "-m", "upstream change");
     const base = run("rev-parse", "HEAD");
+    run("checkout", "--quiet", "-b", "feature", originalBase);
     writeFileSync(join(repo, "existing.ts"), "export const existing = 2;\n");
     run("add", ".");
     run("commit", "--quiet", "-m", "first reviewed head");
@@ -1209,6 +1215,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     writeFileSync(join(repo, "response.ts"), "export const response = 2;\n");
     run("add", ".");
     run("commit", "--quiet", "-m", "author response");
+    run("merge", "--quiet", "--no-edit", base);
     const head = run("rev-parse", "HEAD");
 
     const discussion = {
@@ -1246,6 +1253,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     const delta = readFileSync(join(output, "follow-up.diff"), "utf8");
     expect(delta).toContain("diff --git a/response.ts b/response.ts");
     expect(delta).not.toContain("diff --git a/existing.ts b/existing.ts");
+    expect(delta).not.toContain("diff --git a/upstream.ts b/upstream.ts");
 
     const conversationOutput = join(repo, "conversation-context");
     buildContext(
@@ -1306,6 +1314,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     buildContext(base, head, output, repo);
     const initial = readFileSync(join(output, "context-id.txt"), "utf8");
 
+    const canonicalTitle = "Existing `mode_value` [defect]";
     writeFileSync(
       join(output, "current-ai-reviews.json"),
       `${JSON.stringify([{
@@ -1316,7 +1325,9 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
           association: "CONTRIBUTOR",
           maintainer: false,
         },
-        body: `<!-- ai-pr-review context=${"e".repeat(64)} -->\n**P1: Existing defect**`,
+        body: `<!-- ai-pr-review context=${"e".repeat(64)} -->\n<!-- ai-pr-finding title=${
+          Buffer.from(canonicalTitle, "utf8").toString("base64url")
+        } -->\n**P1: Existing \`mode_value\` [defect] · Retained**`,
         createdAt: "2026-09-20T02:00:00Z",
         updatedAt: "2026-09-20T02:00:00Z",
         commitId: head,
@@ -1327,7 +1338,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     const currentHeadFollowUp = JSON.parse(
       readFileSync(join(output, "follow-up.json"), "utf8"),
     );
-    expect(currentHeadFollowUp.previousReview.findingTitles).toEqual(["Existing defect"]);
+    expect(currentHeadFollowUp.previousReview.findingTitles).toEqual([canonicalTitle]);
 
     writeFileSync(join(output, "discussion.json"), '{"comments":["all conversation","outsider reply"]}\n');
     buildContext(base, head, output, repo);

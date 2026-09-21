@@ -16,6 +16,7 @@ const DISCUSSION_FILE = "discussion.json";
 const FOLLOW_UP_FILE = "follow-up.json";
 const AI_REVIEW_MARKER = "<!-- ai-pr-review context=";
 const AI_REVIEW_DECISION_MARKER = "<!-- ai-pr-review decision=";
+const AI_FINDING_TITLE_MARKER = "<!-- ai-pr-finding title=";
 
 export type Priority = "P0" | "P1" | "P2" | "P3";
 export type FindingCategory =
@@ -723,9 +724,53 @@ function previousReviewedHead(
 }
 
 function findingTitles(body: string): string[] {
-  return [...body.matchAll(/^\*\*P[0-3]: (.+)\*\*$/gm)]
-    .map(match => match[1].replace(/ · Late discovery$/, "").trim())
-    .filter(Boolean);
+  const titles: string[] = [];
+  const pattern = /^<!-- ai-pr-finding title=([A-Za-z0-9_-]+) -->$/gm;
+  for (const match of body.matchAll(pattern)) {
+    try {
+      const title = Buffer.from(match[1], "base64url").toString("utf8");
+      if (
+        title.length > 0 &&
+        title.length <= 160 &&
+        Buffer.from(title, "utf8").toString("base64url") === match[1]
+      ) {
+        titles.push(title);
+      }
+    } catch {
+      // Ignore malformed markers from untrusted historical review content.
+    }
+  }
+  return titles;
+}
+
+function authorResponse(
+  previousHead: string,
+  head: string,
+  repoDir: string,
+): { diff: Buffer; changed: ReturnType<typeof parseNameStatus> } {
+  const commits = (git(
+    ["rev-list", "--reverse", "--first-parent", "--no-merges", `${previousHead}..${head}`],
+    "utf8",
+    repoDir,
+  ) as string).split("\n").filter(Boolean);
+  const diffs: Buffer[] = [];
+  const changed: ReturnType<typeof parseNameStatus> = [];
+  for (const commit of commits) {
+    const parent = (git(["rev-parse", `${commit}^`], "utf8", repoDir) as string).trim();
+    diffs.push(git(
+      ["diff", "--binary", "--find-renames", "--unified=0", parent, commit],
+      undefined,
+      repoDir,
+    ) as Buffer);
+    changed.push(...parseNameStatus(
+      git(
+        ["diff", "--name-status", "-z", "--find-renames", parent, commit],
+        undefined,
+        repoDir,
+      ) as Buffer,
+    ));
+  }
+  return { diff: Buffer.concat(diffs), changed };
 }
 
 function followUpContext(
@@ -745,19 +790,9 @@ function followUpContext(
       changedFilesSincePrevious: [],
     };
   }
-  const diff = git(
-    ["diff", "--binary", "--find-renames", "--unified=0", `${previous.commitId}..${head}`],
-    undefined,
-    repoDir,
-  ) as Buffer;
+  const response = authorResponse(previous.commitId, head, repoDir);
+  const diff = response.diff;
   writeFileSync(join(outputDir, "follow-up.diff"), diff);
-  const changed = parseNameStatus(
-    git(
-      ["diff", "--name-status", "-z", "--find-renames", `${previous.commitId}..${head}`],
-      undefined,
-      repoDir,
-    ) as Buffer,
-  );
   return {
     version: 1,
     mode: "follow-up",
@@ -768,7 +803,11 @@ function followUpContext(
       findingTitles: findingTitles(previous.body),
     },
     changedFilesSincePrevious: [
-      ...new Set(changed.flatMap(file => [file.previousPath, file.path].filter(Boolean) as string[])),
+      ...new Set(
+        response.changed.flatMap(
+          file => [file.previousPath, file.path].filter(Boolean) as string[],
+        ),
+      ),
     ].sort(),
   };
 }
@@ -1241,6 +1280,9 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
   const appendFinding = (finding: Finding): void => {
     lines.push(
       "",
+      `${AI_FINDING_TITLE_MARKER}${
+        Buffer.from(finding.title, "utf8").toString("base64url")
+      } -->`,
       `**${finding.priority}: ${markdownText(finding.title)}${
         finding.origin === "retained"
           ? " · Retained"

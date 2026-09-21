@@ -40,7 +40,7 @@ changed head file cannot be snapshotted.
 Review mode is recorded in `.ai-review-context/follow-up.json`. An initial
 review inspects the complete PR. A follow-up review also receives
 `.ai-review-context/follow-up.diff`, the exact range from the most recent
-previously reviewed ancestor to the current head, and
+previously reviewed ancestor to the current head, excluding merge commits, and
 `changedFilesSincePrevious`. On a follow-up, verify each previous finding
 against the current head, inspect the new range first, and use the complete PR
 diff only to preserve full coverage and context. A finding grounded entirely
