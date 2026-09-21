@@ -1699,6 +1699,20 @@ function providerRecordFromArgs(
   return reconciled;
 }
 
+function currentProviderNarration(harness: ModelHarness): string {
+  if (harness === "claude" || harness === "codex" || harness === "opencode") {
+    return "  Keeping the current harness provider; attributable AI-DLC Bedrock overrides will be removed when present, and other provider settings will be kept.";
+  }
+  return "  Keeping the current harness provider; no project provider settings will be written.";
+}
+
+function currentProviderSummary(harness: ModelHarness): string {
+  if (harness === "claude" || harness === "codex" || harness === "opencode") {
+    return "  Providers    current harness provider; attributable AI-DLC overrides cleared when present";
+  }
+  return "  Providers    current harness provider; no project provider settings written";
+}
+
 function diagnosticWizard(
   section: DiagnosticSection,
   projectDir: string,
@@ -1825,9 +1839,7 @@ function diagnosticWizard(
         }
       }
     } else {
-      process.stdout.write(
-        "  Keeping the current harness provider; project Bedrock overrides will be removed.\n\n",
-      );
+      process.stdout.write(`${currentProviderNarration(selected.harness)}\n\n`);
     }
     let next = providerRecordFromArgs(records.providers, args, selected);
     for (const action of next.pendingActions ?? []) {
@@ -1885,7 +1897,7 @@ function diagnosticSummary(
         !record
           ? "  Providers    reset to provider-neutral shipped bytes"
           : record.provider === "current"
-          ? "  Providers    current harness provider; project overrides removed"
+          ? currentProviderSummary(harness)
           : record.provider === "builtin"
           ? "  Providers    legacy builtin answer; no provider settings written"
           : `  Providers    ${record.provider} region=${record.region ?? "manual"} profile=${
@@ -3704,6 +3716,7 @@ function preserveClaudeProviderFields(
   harnessDir: string,
   previousProvider: ProvidersRecord | null,
   nextProvider: ProvidersRecord | null,
+  projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
 ): boolean {
   const relative = `${harnessDir}/settings.json`;
@@ -3782,9 +3795,11 @@ function preserveClaudeProviderFields(
       delete stagedEnv.AWS_REGION;
     }
   }
-  // The project-flags record owns this value. Do not allow the current file to
-  // override a newly selected scope when user fields are carried into staging.
-  delete currentEnv.AWS_AIDLC_DEFAULT_SCOPE;
+  // A recorded project flag owns this value. Without one, preserve the
+  // documented direct settings.json customization during unrelated refreshes.
+  if (projectFlags?.defaultScope) {
+    delete currentEnv.AWS_AIDLC_DEFAULT_SCOPE;
+  }
   staged.env = { ...stagedEnv, ...currentEnv };
   writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
   return frameworkOwnedClean;
@@ -3920,6 +3935,7 @@ function preserveUserProviderFields(
   harness: ModelHarness,
   previousProvider: ProvidersRecord | null,
   nextProvider: ProvidersRecord | null,
+  projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
 ): boolean {
   if (harness === "claude") {
@@ -3929,6 +3945,7 @@ function preserveUserProviderFields(
       harnessDir,
       previousProvider,
       nextProvider,
+      projectFlags,
       prior,
     );
   } else if (harness === "codex") {
@@ -4111,10 +4128,10 @@ function prepareRefreshSource(
     modelHarness(distribution),
     previousProvider,
     normalizeProvidersRecord(staged.providers),
+    projectFlags,
     prior,
   );
-  // User environment preservation intentionally excludes this managed value,
-  // but reapply it here to keep the ordering explicit.
+  // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
     root,
     descriptor.harnessDir,
@@ -5407,7 +5424,9 @@ function customizeFirstRun(
         );
       } else {
         process.stdout.write(
-          "  Keeping the current harness provider; project Bedrock overrides will be removed.\n\n",
+          `${currentProviderNarration(
+            modelHarness(choices.candidate.stamp.distribution),
+          )}\n\n`,
         );
       }
       return;

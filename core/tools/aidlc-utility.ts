@@ -3228,7 +3228,7 @@ export async function collectDoctorReport(
             results.push({
               pass: false,
               label: `${basename} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
-              fix: `re-add the hook entry, or delete the hooks key and rerun \`${aidlcInvocation()} config\` to restore the shipped wiring`,
+              fix: `re-add the hook entry, or rerun \`${aidlcInvocation()} config --force\` to restore the shipped wiring`,
             });
           }
         }

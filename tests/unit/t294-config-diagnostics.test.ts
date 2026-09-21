@@ -1002,7 +1002,7 @@ describe("t294 trust diagnostics", () => {
       const shippedHooks = structuredClone(settings.hooks);
       const doctor = (): {
         status: number | null;
-        checks: Array<{ pass: boolean; label: string; severity?: string }>;
+        checks: Array<{ pass: boolean; label: string; fix?: string; severity?: string }>;
         failed: number;
       } => {
         const result = spawnSync(BUN, [
@@ -1083,6 +1083,8 @@ describe("t294 trust diagnostics", () => {
       const label = `aidlc-${hook}.ts shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`;
       const unwired = doctor();
       expect(unwired.checks).toContainEqual(expect.objectContaining({ pass: false, label }));
+      expect(unwired.checks.find((check) => check.label === label)?.fix)
+        .toContain("config --force");
       expect(unwired.failed).toBeGreaterThan(pristine.failed);
       expect(unwired.status).toBe(1);
 
@@ -2420,6 +2422,42 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 120_000);
 
+  test("provider changes and ordinary refresh preserve a directly customized Claude default scope", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    settings.env.AWS_AIDLC_DEFAULT_SCOPE = "feature";
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const provider = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(provider.status, provider.stdout + provider.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).env.AWS_AIDLC_DEFAULT_SCOPE)
+      .toBe("feature");
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).env.AWS_AIDLC_DEFAULT_SCOPE)
+      .toBe("feature");
+  }, 120_000);
+
   test("reset removes the OpenCode provider block AI-DLC wrote and keeps a user-authored one", () => {
     const env = runtimeEnv();
     for (const customized of [false, true]) {
@@ -2512,6 +2550,90 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 120_000);
 
+  test("OpenCode other treats retained user Bedrock providers as intentional warnings", () => {
+    const env = runtimeEnv();
+
+    const userProject = install("opencode");
+    const userPath = join(userProject, "opencode.json");
+    const userConfig = JSON.parse(readFileSync(userPath, "utf-8"));
+    userConfig.provider = {
+      "team-provider": { npm: "@example/provider" },
+      "amazon-bedrock": {
+        models: { "team-model": { name: "Team model" } },
+        options: { region: "eu-west-1", maxRetries: 3 },
+      },
+    };
+    writeFileSync(userPath, `${JSON.stringify(userConfig, null, 2)}\n`);
+    const recordedOther = run([
+      "config",
+      "providers",
+      "--project-dir",
+      userProject,
+      "--provider",
+      "other",
+      "--acknowledge",
+      "--yes",
+    ], userProject, env);
+    expect(recordedOther.status, recordedOther.stdout + recordedOther.stderr).toBe(0);
+    const userCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      userProject,
+      "--check",
+    ], userProject, env);
+    expect(userCheck.status, userCheck.stdout + userCheck.stderr).toBe(0);
+    expect(userCheck.stdout).toContain("provider-opencode-project-override");
+    expect(userCheck.stdout).toContain("warning(s)");
+
+    const transitioned = install("opencode");
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      transitioned,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-east-1",
+      "--opencode-default",
+      "yes",
+      "--yes",
+    ], transitioned, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const transitionedPath = join(transitioned, "opencode.json");
+    const transitionedConfig = JSON.parse(readFileSync(transitionedPath, "utf-8"));
+    transitionedConfig.provider["amazon-bedrock"].models = {
+      "team-model": { name: "Team model" },
+    };
+    transitionedConfig.provider["amazon-bedrock"].options.maxRetries = 3;
+    writeFileSync(
+      transitionedPath,
+      `${JSON.stringify(transitionedConfig, null, 2)}\n`,
+    );
+    const changed = run([
+      "config",
+      "providers",
+      "--project-dir",
+      transitioned,
+      "--provider",
+      "other",
+      "--acknowledge",
+      "--yes",
+    ], transitioned, env);
+    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    const transitionedCheck = run([
+      "config",
+      "providers",
+      "--project-dir",
+      transitioned,
+      "--check",
+    ], transitioned, env);
+    expect(transitionedCheck.status, transitionedCheck.stdout + transitionedCheck.stderr)
+      .toBe(0);
+    expect(transitionedCheck.stdout).toContain("provider-opencode-project-override");
+  }, 120_000);
+
   test("keep-current preserves a customized legacy Codex Bedrock table and removes a record-written one", () => {
     const legacyBlock =
       `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
@@ -2538,6 +2660,7 @@ describe("t294 config diagnostics CLI", () => {
         "--yes",
       ], project, env);
       expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+      expect(changed.stdout).not.toContain("project overrides removed");
       expect(readFileSync(configPath, "utf-8")).toBe(customized);
       const check = run([
         "config",

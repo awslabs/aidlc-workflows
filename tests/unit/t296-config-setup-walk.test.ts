@@ -213,7 +213,7 @@ describe("t296 first-run config setup walk", () => {
       expect(result.stdout).not.toContain(vendor);
     }
     expect(result.stdout).toContain(
-      "Keeping the current harness provider; project Bedrock overrides will be removed.",
+      "Keeping the current harness provider; attributable AI-DLC Bedrock overrides will be removed when present, and other provider settings will be kept.",
     );
     expect(result.stdout).not.toContain("Manual provider setup complete?");
   }, 90_000);

@@ -297,7 +297,10 @@ Edit `.claude/hooks/aidlc-statusline.ts` directly. The output format is defined 
 
 ### Disabling the statusline
 
-Remove the `statusLine` block from `settings.json`. The terminal status bar reverts to Claude Code's default until the next `aidlc config` release refresh, which restores missing shipped keys.
+Remove the `statusLine` block from `settings.json`. The terminal status bar
+reverts to Claude Code's default. Because `statusLine` is a shipped key, the
+next `aidlc config` release refresh reports a conflict; run
+`aidlc config --force` to restore the shipped entry.
 
 ---
 

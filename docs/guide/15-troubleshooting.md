@@ -144,8 +144,9 @@ On Claude Code, per-stage token usage and cost tracking is on by default: the fo
 Hooks are registered project-wide in the harness's native configuration. On
 Claude, verify that `.claude/settings.json` contains the expected `hooks`
 events and `statusLine`. For a native project, complete active workflows,
-delete the affected key if you want to discard your wiring edits, and run
-`aidlc config` to restore the shipped entry. For a manual copy,
+then re-add the affected entry or run `aidlc config --force` to restore the
+shipped wiring. An ordinary refresh reports a conflict when a shipped key is
+missing or changed. For a manual copy,
 replace the complete harness root from the same versioned
 `runtime/<harness>/` archive while preserving project root integrations; do
 not patch one hook command in isolation. The manual archive is Bun-shaped and

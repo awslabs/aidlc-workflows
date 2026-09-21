@@ -2073,10 +2073,10 @@ export function providerSurfaceIssues(
         const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
         const providers = isRecord(value.provider) ? value.provider : {};
         if (Object.hasOwn(providers, "amazon-bedrock")) {
-          mismatch(
+          warning(
             "provider-opencode-project-override",
-            path,
-            "opencode project configuration still carries amazon-bedrock provider options",
+            "opencode project configuration still defines an amazon-bedrock provider despite the recorded other choice",
+            `Review ${path}. Leave the provider in place if the multi-provider configuration is intentional.`,
           );
         }
       }
