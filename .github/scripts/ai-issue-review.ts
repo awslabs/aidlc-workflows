@@ -63,6 +63,19 @@ export interface IssueConversation {
   comments: IssueConversationEntry[];
 }
 
+export interface IssueConversationIdentity {
+  version: 1;
+  issue: number;
+  comments: Array<{
+    id: number;
+    login: string;
+    association: string;
+    bodySha256: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+}
+
 export interface IssueAuthorization {
   version: 1;
   issue: number;
@@ -83,6 +96,7 @@ export interface IssueContext {
   catalog: IssueCatalogEntry[];
   authorization: IssueAuthorization;
   conversation: IssueConversation;
+  conversationIdentity: IssueConversationIdentity;
   currentAidaReview: CurrentAidaReview | null;
   contextId: string;
   reviewId: string;
@@ -296,9 +310,14 @@ function canonicalConversationWithFilter(
     .filter((entry): entry is IssueConversationEntry => entry !== null)
     .filter(include)
     .sort((left, right) =>
-      left.createdAt.localeCompare(right.createdAt) || left.id - right.id
+      left.updatedAt.localeCompare(right.updatedAt) ||
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.id - right.id
     )
-    .slice(-MAX_CONVERSATION_ENTRIES);
+    .slice(-MAX_CONVERSATION_ENTRIES)
+    .sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id - right.id
+    );
   return { version: 1, issue, comments };
 }
 
@@ -307,6 +326,39 @@ export function canonicalConversation(
   issue: number,
 ): IssueConversation {
   return canonicalConversationWithFilter(value, issue, () => true);
+}
+
+export function canonicalConversationIdentity(
+  value: unknown,
+  issue: number,
+): IssueConversationIdentity {
+  if (!Array.isArray(value)) throw new Error("issue conversation must be an array");
+  const comments = value
+    .map((entry, index) => {
+      const candidate = record(entry, `issue conversation[${index}]`);
+      const user = candidate.user && typeof candidate.user === "object" &&
+          !Array.isArray(candidate.user)
+        ? candidate.user as Record<string, unknown>
+        : {};
+      const login = text(user.login) || "[deleted]";
+      const body = text(candidate.body);
+      if (login === "github-actions[bot]" && body.startsWith(AI_ISSUE_REVIEW_MARKER)) {
+        return null;
+      }
+      return {
+        id: positiveInteger(candidate.id, `issue conversation[${index}].id`),
+        login,
+        association: text(candidate.author_association).toUpperCase(),
+        bodySha256: createHash("sha256").update(body).digest("hex"),
+        createdAt: text(candidate.created_at),
+        updatedAt: text(candidate.updated_at),
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id - right.id
+    );
+  return { version: 1, issue, comments };
 }
 
 export function issueHasReviewOptIn(value: unknown): boolean {
@@ -373,6 +425,7 @@ function contextDigest(
   catalog: IssueCatalogEntry[],
   authorization: IssueAuthorization,
   conversation: IssueConversation,
+  conversationIdentity: IssueConversationIdentity,
 ): string {
   const hash = createHash("sha256");
   for (const [name, value] of [
@@ -381,6 +434,7 @@ function contextDigest(
     ["catalog", JSON.stringify(catalog)],
     ["authorization", JSON.stringify(authorization)],
     ["conversation", JSON.stringify(conversation)],
+    ["conversationIdentity", JSON.stringify(conversationIdentity)],
   ]) {
     hash.update(name);
     hash.update("\0");
@@ -393,13 +447,13 @@ function contextDigest(
 function reviewDigest(
   issue: IssueMetadata,
   authorization: IssueAuthorization,
-  conversation: IssueConversation,
+  conversationIdentity: IssueConversationIdentity,
 ): string {
   const hash = createHash("sha256");
   for (const [name, value] of [
     ["issue", JSON.stringify(issue)],
     ["authorization", JSON.stringify(authorization)],
-    ["conversation", JSON.stringify(conversation)],
+    ["conversationIdentity", JSON.stringify(conversationIdentity)],
   ]) {
     hash.update(name);
     hash.update("\0");
@@ -421,9 +475,17 @@ export function buildImmutableContext(
   const catalog = canonicalCatalog(catalogRaw, issue.number);
   const authorization = canonicalIssueAuthorization(issueRaw);
   const conversation = canonicalConversation(commentsRaw, issue.number);
+  const conversationIdentity = canonicalConversationIdentity(commentsRaw, issue.number);
   const currentAidaReview = canonicalCurrentAidaReview(commentsRaw, issue.number);
-  const contextId = contextDigest(base, issue, catalog, authorization, conversation);
-  const reviewId = reviewDigest(issue, authorization, conversation);
+  const contextId = contextDigest(
+    base,
+    issue,
+    catalog,
+    authorization,
+    conversation,
+    conversationIdentity,
+  );
+  const reviewId = reviewDigest(issue, authorization, conversationIdentity);
   mkdirSync(outputDir, { recursive: true });
   writeFileSync(resolve(outputDir, "issue.json"), `${JSON.stringify(issue, null, 2)}\n`);
   writeFileSync(resolve(outputDir, "issue-catalog.json"), `${JSON.stringify(catalog, null, 2)}\n`);
@@ -434,6 +496,10 @@ export function buildImmutableContext(
   writeFileSync(
     resolve(outputDir, "conversation.json"),
     `${JSON.stringify(conversation, null, 2)}\n`,
+  );
+  writeFileSync(
+    resolve(outputDir, "conversation-identity.json"),
+    `${JSON.stringify(conversationIdentity, null, 2)}\n`,
   );
   writeFileSync(
     resolve(outputDir, "current-aida-review.json"),
@@ -448,6 +514,7 @@ export function buildImmutableContext(
     catalog,
     authorization,
     conversation,
+    conversationIdentity,
     currentAidaReview,
     contextId,
     reviewId,
@@ -1016,6 +1083,18 @@ function main(): void {
     );
     return;
   }
+  if (command === "canonicalize-conversation-identity") {
+    const input = JSON.parse(readFileSync(argValue(args, "--input"), "utf8"));
+    writeFileSync(
+      argValue(args, "--output"),
+      `${JSON.stringify(
+        canonicalConversationIdentity(input, Number(argValue(args, "--issue"))),
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
   if (command === "canonicalize-authorization") {
     const input = JSON.parse(readFileSync(argValue(args, "--input"), "utf8"));
     writeFileSync(
@@ -1097,7 +1176,7 @@ function main(): void {
     return;
   }
   throw new Error(
-    "usage: ai-issue-review.ts canonicalize|canonicalize-authorization|canonicalize-conversation|build-context|validate-triage|validate",
+    "usage: ai-issue-review.ts canonicalize|canonicalize-authorization|canonicalize-conversation|canonicalize-conversation-identity|build-context|validate-triage|validate",
   );
 }
 

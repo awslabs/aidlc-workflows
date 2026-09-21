@@ -946,6 +946,10 @@ process.stdout.write(JSON.stringify(value));
     expect(RUNTIME_SETUP).toContain('test -w "$GITHUB_WORKSPACE/.ai-review-context/pr.diff"');
     expect(RUNTIME_SETUP).toContain('"$claude_bin"');
     expect(RUNTIME_SETUP).toContain("--version");
+    expect(RUNTIME_SETUP).toContain('"shell_tool" && $2 == "stable"');
+    expect(RUNTIME_SETUP).toContain(
+      "Pinned Codex CLI does not expose the shell_tool isolation control",
+    );
     expect(RUNTIME_SETUP).toContain("Defaults:runner env_keep");
     expect(RUNTIME_SETUP).toContain("AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN");
     expect(WORKFLOW).not.toMatch(/ref:\s+\$\{\{\s*needs\.context\.outputs\.head/);
@@ -1059,6 +1063,13 @@ process.stdout.write(JSON.stringify(value));
     expect(modelStep).toContain(
       '"sol" \\\n            "Final review judge" \\\n            "high"',
     );
+    expect(modelStep).toContain("--disable shell_tool");
+    expect(modelStep).toContain("--disable unified_exec");
+    expect(modelStep).toContain("--disable multi_agent");
+    expect(modelStep).toContain("--strict-config");
+    expect(modelStep).toContain("The final judge has no tools");
+    expect(modelStep).toContain('cat ".ai-review-lenses/$lens.md"');
+    expect(modelStep).toContain('"$judge_schema" \\\n            "none"');
     expect(modelStep).toContain("--output-schema");
     expect(modelStep).toContain("--output-format json --json-schema");
     expect(modelStep).toContain(".structured_output");

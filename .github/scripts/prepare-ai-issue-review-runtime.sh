@@ -43,6 +43,11 @@ if sudo -u "$review_user" test -w "$context_file"; then
   echo "$review_user can modify the immutable issue-review context" >&2
   exit 1
 fi
+if ! "$codex_bin" features list \
+  | awk '$1 == "shell_tool" && $2 == "stable" { found = 1 } END { exit !found }'; then
+  echo "Pinned Codex CLI does not expose the shell_tool isolation control" >&2
+  exit 1
+fi
 
 sudo sh -c \
   'printf "%s\n" \
