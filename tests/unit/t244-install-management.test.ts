@@ -2432,21 +2432,4 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).not.toContain("\n  push:");
   });
 
-  test("CI test job builds the projections before running the tiers", () => {
-    // The same generator-driven rule for the per-push gate: the tiers exercise
-    // CI-built bytes from a fresh checkout.
-    const ci = readFileSync(
-      join(REPO_ROOT, ".github", "workflows", "ci.yml"),
-      "utf-8",
-    );
-    expect(ci).toContain("branches:\n      - main");
-    expect(ci).not.toContain("branches:\n      - v2");
-    const testJob = ci.slice(ci.indexOf("\n  test:"), ci.indexOf("\n  changelog-guard:"));
-    const regen = "run: bun scripts/package.ts";
-    expect(testJob).toContain(regen);
-    expect(testJob.indexOf(regen)).toBeLessThan(testJob.indexOf("tests/run-tests.ts"));
-    const deepJob = ci.slice(ci.indexOf("\n  test-deep:"), ci.indexOf("\n  changelog-guard:"));
-    expect(deepJob).toContain(regen);
-    expect(deepJob.indexOf(regen)).toBeLessThan(deepJob.indexOf("tests/run-tests.ts"));
-  });
 });

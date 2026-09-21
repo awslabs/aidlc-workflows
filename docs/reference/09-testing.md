@@ -418,7 +418,7 @@ from disk reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request | Deterministic gate | `ci.yml`: smoke + unit shards + native-terminal units on Linux/macOS/Windows + production guards + deterministic integration/e2e | GitHub Actions |
+| Pull request | Deterministic gate | `ci.yml`: contract checks + smoke + unit shards + native-terminal units on Linux/macOS/Windows + production guards | GitHub Actions |
 | Nightly preview / manual preview dispatch | Enabled matrix | `preview-release.yml` calls `full-suite.yml` before publishing; disabled families are reported | GitHub Actions |
 | Stable tag | Exact-source evidence | `release.yml` requires a successful preview's `full-suite-result` with the tag SHA and `passed: true`; exclusions are warned | GitHub Actions |
 
@@ -675,9 +675,9 @@ matrix are both part of the required CI gate.
 Dropping `--production-guards` from this filtered command fails because
 `t-guard-recovery-production.test.ts` executes no journeys under the fixture
 profile. Passing runner unit tests cannot mask that missing coverage.
-The unfiltered deterministic deep job keeps its deliberate fixture profile
-and reports the production journey file as `SKIP`; the separate required
-production job exercises those journeys.
+The unfiltered deterministic deep jobs in the preview's `full-suite.yml` keep
+their deliberate fixture profile and report the production journey file as
+`SKIP`; the separate required PR production job exercises those journeys.
 
 ## Parallel Execution
 
