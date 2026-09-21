@@ -13,8 +13,11 @@ const MAX_BUG_TEST_FILES = 5;
 const AI_ISSUE_REVIEW_MARKER = "<!-- ai-issue-review issue=";
 
 export type FindingLevel = "blocking-question" | "recommendation";
+export type FindingPriority = "P0" | "P1" | "P2" | "P3";
+export type IssueAlignment = "aligned" | "not-aligned";
 export type IssueDecision =
   | { actor: "author"; action: "clarify"; rationale: string }
+  | { actor: "maintainer"; action: "direction"; rationale: string }
   | { actor: "maintainer"; action: "plan"; rationale: string };
 export type FindingCategory =
   | "intent"
@@ -112,6 +115,7 @@ export type FindingEvidence =
   | IssueCommentEvidence;
 
 export interface Finding {
+  priority: FindingPriority;
   level: FindingLevel;
   category: FindingCategory;
   title: string;
@@ -138,6 +142,10 @@ export interface StructuredIssueReview {
       rationale: string;
     };
   };
+  alignment: {
+    status: IssueAlignment;
+    rationale: string;
+  };
   decision: IssueDecision;
   findings: Finding[];
   residualRisk: string;
@@ -146,6 +154,46 @@ export interface StructuredIssueReview {
 export interface IssueCommentPayload {
   body: string;
 }
+
+export interface IssueReviewLabelState {
+  alignment: IssueAlignment;
+  priority: FindingPriority | "none";
+}
+
+const ISSUE_REVIEW_LABELS = [
+  {
+    name: "aida:p0",
+    color: "B60205",
+    description: "AIDA found a critical issue that blocks responsible planning",
+  },
+  {
+    name: "aida:p1",
+    color: "D93F0B",
+    description: "AIDA found a major issue that blocks responsible planning",
+  },
+  {
+    name: "aida:p2",
+    color: "FBCA04",
+    description: "AIDA found a significant bounded issue for planning",
+  },
+  {
+    name: "aida:p3",
+    color: "FEF2C0",
+    description: "AIDA found a minor issue or clarity improvement",
+  },
+  {
+    name: "aida:aligned",
+    color: "0E8A16",
+    description: "AIDA considers the current issue direction aligned with AI-DLC",
+  },
+  {
+    name: "aida:not-aligned",
+    color: "5319E7",
+    description: "AIDA found a material conflict with the current AI-DLC direction",
+  },
+] as const;
+
+const PRIORITY_ORDER: FindingPriority[] = ["P0", "P1", "P2", "P3"];
 
 export interface BugTriage {
   issue: number;
@@ -198,6 +246,139 @@ function assertContextId(value: string): void {
   if (!/^[0-9a-f]{64}$/.test(value)) {
     throw new Error("context id must be a lowercase SHA-256 digest");
   }
+}
+
+function ghRaw(args: string[], executable = "gh", input?: string): string {
+  return execFileSync(executable, args, {
+    encoding: "utf8",
+    input,
+    maxBuffer: Number.POSITIVE_INFINITY,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+function issueLabels(issue: Record<string, unknown>): string[] {
+  return Array.isArray(issue.labels)
+    ? issue.labels.map((value, index) =>
+      text(record(value, `issue labels[${index}]`).name)
+    )
+    : [];
+}
+
+function highestPriority(findings: Finding[]): FindingPriority | "none" {
+  for (const priority of PRIORITY_ORDER) {
+    if (findings.some(finding => finding.priority === priority)) return priority;
+  }
+  return "none";
+}
+
+export function labelStateForIssueReview(
+  review: StructuredIssueReview,
+): IssueReviewLabelState {
+  return {
+    alignment: review.alignment.status,
+    priority: highestPriority(review.findings),
+  };
+}
+
+export function labelsForIssueReviewState(state: IssueReviewLabelState): string[] {
+  const labels = [`aida:${state.alignment}`];
+  if (state.priority !== "none") labels.push(`aida:${state.priority.toLowerCase()}`);
+  return labels;
+}
+
+function validateIssueReviewLabelState(value: unknown): IssueReviewLabelState {
+  const candidate = record(value, "issue review label state");
+  if (candidate.alignment !== "aligned" && candidate.alignment !== "not-aligned") {
+    throw new Error("issue review label alignment is invalid");
+  }
+  if (
+    candidate.priority !== "none" &&
+    !PRIORITY_ORDER.includes(candidate.priority as FindingPriority)
+  ) {
+    throw new Error("issue review label priority is invalid");
+  }
+  return {
+    alignment: candidate.alignment,
+    priority: candidate.priority as FindingPriority | "none",
+  };
+}
+
+export function reconcileIssueReviewLabels(
+  repository: string,
+  issueNumber: number,
+  state: IssueReviewLabelState,
+  ghExecutable = "gh",
+): boolean {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("repository must use owner/name format");
+  }
+  if (!Number.isInteger(issueNumber) || issueNumber < 1) {
+    throw new Error("issue number must be a positive integer");
+  }
+  const readIssue = (): Record<string, unknown> =>
+    record(
+      JSON.parse(ghRaw(["api", `repos/${repository}/issues/${issueNumber}`], ghExecutable)),
+      "issue",
+    );
+  const eligible = (issue: Record<string, unknown>): boolean =>
+    issue.state === "open" && issue.pull_request === undefined;
+  if (!eligible(readIssue())) return false;
+
+  for (const definition of ISSUE_REVIEW_LABELS) {
+    const endpoint = `repos/${repository}/labels/${encodeURIComponent(definition.name)}`;
+    try {
+      ghRaw(["api", "--silent", endpoint], ghExecutable);
+    } catch {
+      try {
+        ghRaw(
+          ["api", "--method", "POST", `repos/${repository}/labels`, "--input", "-"],
+          ghExecutable,
+          `${JSON.stringify(definition)}\n`,
+        );
+      } catch {
+        ghRaw(["api", "--silent", endpoint], ghExecutable);
+      }
+    }
+  }
+
+  const issueBeforeMutation = readIssue();
+  if (!eligible(issueBeforeMutation)) return false;
+  const current = issueLabels(issueBeforeMutation);
+  const managed = new Set(ISSUE_REVIEW_LABELS.map(definition => definition.name));
+  const desired = new Set(labelsForIssueReviewState(state));
+  for (const label of current) {
+    if (!managed.has(label as typeof ISSUE_REVIEW_LABELS[number]["name"]) || desired.has(label)) {
+      continue;
+    }
+    ghRaw(
+      [
+        "api",
+        "--silent",
+        "--method",
+        "DELETE",
+        `repos/${repository}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`,
+      ],
+      ghExecutable,
+    );
+  }
+  const missing = [...desired].filter(label => !current.includes(label));
+  if (missing.length > 0) {
+    ghRaw(
+      [
+        "api",
+        "--silent",
+        "--method",
+        "POST",
+        `repos/${repository}/issues/${issueNumber}/labels`,
+        "--input",
+        "-",
+      ],
+      ghExecutable,
+      `${JSON.stringify({ labels: missing })}\n`,
+    );
+  }
+  return eligible(readIssue());
 }
 
 export function canonicalIssue(value: unknown): IssueMetadata {
@@ -624,13 +805,48 @@ export function validateStructuredIssueReview(
     readiness: assessmentDimension(assessmentCandidate, "readiness"),
     risk: assessmentDimension(assessmentCandidate, "risk"),
   };
+  const alignmentCandidate = record(candidate.alignment, "alignment");
+  if (
+    alignmentCandidate.status !== "aligned" &&
+    alignmentCandidate.status !== "not-aligned"
+  ) {
+    throw new Error("alignment.status must be aligned or not-aligned");
+  }
+  const alignment = {
+    status: alignmentCandidate.status,
+    rationale: requiredText(alignmentCandidate.rationale, "alignment.rationale", 1000),
+  } satisfies StructuredIssueReview["alignment"];
   if (!Array.isArray(candidate.findings)) throw new Error("findings must be an array");
 
   let recommendationsStarted = false;
+  let previousPriority = -1;
   const findings = candidate.findings.map((value, index): Finding => {
     const finding = record(value, `findings[${index}]`);
+    if (
+      typeof finding.priority !== "string" ||
+      !PRIORITY_ORDER.includes(finding.priority as FindingPriority)
+    ) {
+      throw new Error(`findings[${index}].priority is invalid`);
+    }
     if (finding.level !== "blocking-question" && finding.level !== "recommendation") {
       throw new Error(`findings[${index}].level is invalid`);
+    }
+    const priorityIndex = PRIORITY_ORDER.indexOf(finding.priority as FindingPriority);
+    if (priorityIndex < previousPriority) {
+      throw new Error("findings must be ordered from P0 through P3");
+    }
+    previousPriority = priorityIndex;
+    if (
+      (finding.priority === "P0" || finding.priority === "P1") &&
+      finding.level !== "blocking-question"
+    ) {
+      throw new Error(`${finding.priority} findings must be blocking questions`);
+    }
+    if (
+      (finding.priority === "P2" || finding.priority === "P3") &&
+      finding.level !== "recommendation"
+    ) {
+      throw new Error(`${finding.priority} findings must be recommendations`);
     }
     if (finding.level === "recommendation") recommendationsStarted = true;
     else if (recommendationsStarted) {
@@ -720,6 +936,7 @@ export function validateStructuredIssueReview(
     const title = requiredText(finding.title, `findings[${index}].title`, 160);
     if (/[\r\n]/.test(title)) throw new Error(`findings[${index}].title must be one line`);
     return {
+      priority: finding.priority as FindingPriority,
       level: finding.level,
       category: finding.category as FindingCategory,
       title,
@@ -740,13 +957,33 @@ export function validateStructuredIssueReview(
     decision = { actor: "author", action: "clarify", rationale };
   } else if (
     decisionCandidate.actor === "maintainer" &&
+    decisionCandidate.action === "direction"
+  ) {
+    decision = { actor: "maintainer", action: "direction", rationale };
+  } else if (
+    decisionCandidate.actor === "maintainer" &&
     decisionCandidate.action === "plan"
   ) {
     decision = { actor: "maintainer", action: "plan", rationale };
   } else {
-    throw new Error("decision must be author/clarify or maintainer/plan");
+    throw new Error(
+      "decision must be author/clarify, maintainer/direction, or maintainer/plan",
+    );
   }
   const blocking = findings.some(finding => finding.level === "blocking-question");
+  if (alignment.status === "not-aligned") {
+    if (decision.action !== "direction") {
+      throw new Error("not-aligned issues require a maintainer/direction decision");
+    }
+    if (!findings.some(finding =>
+      (finding.priority === "P0" || finding.priority === "P1") &&
+      finding.category === "direction"
+    )) {
+      throw new Error("not-aligned issues require a P0 or P1 direction finding");
+    }
+  } else if (decision.action === "direction") {
+    throw new Error("maintainer/direction requires a not-aligned issue");
+  }
   if (decision.action === "plan" && blocking) {
     throw new Error("decision maintainer/plan is invalid while blocking questions remain");
   }
@@ -760,6 +997,7 @@ export function validateStructuredIssueReview(
   }
   if (
     decision.action === "clarify" &&
+    alignment.status === "aligned" &&
     !blocking &&
     assessment.readiness.score >= 4 &&
     assessment.risk.score <= 3
@@ -774,6 +1012,7 @@ export function validateStructuredIssueReview(
     inspection: { status: "complete" },
     validation,
     assessment,
+    alignment,
     decision,
     findings,
     residualRisk: requiredText(candidate.residualRisk, "residualRisk", 1000),
@@ -828,12 +1067,6 @@ export function renderIssueReview(
     "",
     `Risk: **${review.assessment.risk.score}/5** — ${markdownText(review.assessment.risk.rationale)}`,
     "",
-    `Decision required: **${
-      review.decision.action === "clarify"
-        ? "Author — clarify the issue before planning."
-        : "Maintainer — decide whether to move this issue into planning or implementation."
-    }** ${markdownText(review.decision.rationale)}`,
-    "",
     `Findings: ${blocking} blocking ${
       blocking === 1 ? "question" : "questions"
     }, ${recommendations} ${recommendations === 1 ? "recommendation" : "recommendations"}.`,
@@ -885,7 +1118,7 @@ export function renderIssueReview(
       const label = finding.level === "blocking-question" ? "Blocking question" : "Recommendation";
       lines.push(
         "",
-        `**${label}: ${markdownText(finding.title)}**`,
+        `**${finding.priority} · ${label}: ${markdownText(finding.title)}**`,
         "",
         `Evidence: ${finding.evidence.map(evidenceText).join(", ")}.`,
         "",
@@ -897,9 +1130,25 @@ export function renderIssueReview(
       );
     }
   }
+  const priority = highestPriority(review.findings);
+  const decisionText = review.decision.action === "clarify"
+    ? "Author — clarify the issue before planning."
+    : review.decision.action === "direction"
+    ? "Maintainer — decide whether this direction should change or proceed."
+    : "Maintainer — decide whether to move this issue into planning or implementation.";
   lines.push(
     "",
     `Residual risk: ${markdownText(review.residualRisk)}`,
+    "",
+    "## Decision",
+    "",
+    `Alignment: **${
+      review.alignment.status === "aligned" ? "Aligned" : "Not aligned"
+    }** — ${markdownText(review.alignment.rationale)}`,
+    "",
+    `Highest priority: **${priority === "none" ? "None" : priority}**`,
+    "",
+    `Next decision: **${decisionText}** ${markdownText(review.decision.rationale)}`,
     "",
     "Reviewed by AIDA (AI-DLC Developer Agent).",
   );
@@ -1008,10 +1257,28 @@ function main(): void {
       argValue(args, "--output"),
       `${JSON.stringify(renderIssueReview(review, bugVerification), null, 2)}\n`,
     );
+    if (args.includes("--label-state-output")) {
+      writeFileSync(
+        argValue(args, "--label-state-output"),
+        `${JSON.stringify(labelStateForIssueReview(review), null, 2)}\n`,
+      );
+    }
+    return;
+  }
+  if (command === "labels") {
+    const state = validateIssueReviewLabelState(
+      JSON.parse(readFileSync(argValue(args, "--input"), "utf8")),
+    );
+    const applied = reconcileIssueReviewLabels(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--issue")),
+      state,
+    );
+    process.stdout.write(applied ? "applied\n" : "stale\n");
     return;
   }
   throw new Error(
-    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|build-context|validate-triage|validate",
+    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|build-context|validate-triage|validate|labels",
   );
 }
 

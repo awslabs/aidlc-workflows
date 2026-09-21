@@ -166,6 +166,15 @@ export interface Finding {
   requiredCorrection: string;
 }
 
+export interface UserExperienceAssessment {
+  status: "changed" | "no-user-visible-change" | "uncertain";
+  change: string;
+  before: string | null;
+  after: string | null;
+  example: string | null;
+  assessment: string;
+}
+
 export interface StructuredReview {
   base: string;
   head: string;
@@ -184,6 +193,7 @@ export interface StructuredReview {
       rationale: string;
     };
   };
+  userExperience: UserExperienceAssessment;
   decision: PullRequestDecision;
   findings: Finding[];
   residualRisk: string;
@@ -722,6 +732,11 @@ function requiredText(value: unknown, field: string, maxLength: number): string 
   return value.trim();
 }
 
+function nullableText(value: unknown, field: string, maxLength: number): string | null {
+  if (value === null) return null;
+  return requiredText(value, field, maxLength);
+}
+
 function isChangedLine(file: ChangedFile, evidence: DiffEvidence): boolean {
   const expectedPath = evidence.side === "RIGHT" ? file.path : (file.previousPath ?? file.path);
   if (evidence.path !== expectedPath) return false;
@@ -818,6 +833,42 @@ export function validateStructuredReview(
     readiness: assessmentDimension("readiness"),
     risk: assessmentDimension("risk"),
   };
+  const userExperienceCandidate = record(candidate.userExperience, "userExperience");
+  if (
+    userExperienceCandidate.status !== "changed" &&
+    userExperienceCandidate.status !== "no-user-visible-change" &&
+    userExperienceCandidate.status !== "uncertain"
+  ) {
+    throw new Error("userExperience.status is invalid");
+  }
+  const userExperience: UserExperienceAssessment = {
+    status: userExperienceCandidate.status,
+    change: requiredText(userExperienceCandidate.change, "userExperience.change", 1500),
+    before: nullableText(userExperienceCandidate.before, "userExperience.before", 1500),
+    after: nullableText(userExperienceCandidate.after, "userExperience.after", 1500),
+    example: nullableText(userExperienceCandidate.example, "userExperience.example", 2000),
+    assessment: requiredText(
+      userExperienceCandidate.assessment,
+      "userExperience.assessment",
+      1500,
+    ),
+  };
+  if (
+    userExperience.status === "changed" &&
+    (userExperience.before === null || userExperience.after === null)
+  ) {
+    throw new Error("changed user experience requires before and after descriptions");
+  }
+  if (
+    userExperience.status === "no-user-visible-change" &&
+    (userExperience.before !== null ||
+      userExperience.after !== null ||
+      userExperience.example !== null)
+  ) {
+    throw new Error(
+      "no-user-visible-change requires null before, after, and example fields",
+    );
+  }
   if (!Array.isArray(candidate.findings)) throw new Error("findings must be an array");
 
   let previousRank = -1;
@@ -948,6 +999,7 @@ export function validateStructuredReview(
     inspection,
     validation,
     assessment,
+    userExperience,
     decision,
     findings,
     residualRisk,
@@ -1052,6 +1104,33 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "Validation performed:",
     ...review.validation.map(item => `- ${markdownText(item)}`),
   ];
+  const appendFinding = (finding: Finding): void => {
+    lines.push(
+      "",
+      `**${finding.priority}: ${markdownText(finding.title)}**`,
+      "",
+      `Evidence: ${finding.evidence
+        .map(item => {
+          if (item.source === "DIFF") {
+            return `<code>${codeText(item.path)}:${item.line}</code>${
+              item.side === "LEFT" ? " (deleted line)" : ""
+            }`;
+          }
+          if (item.source === "DIFF_FILE") {
+            return `<code>${codeText(item.path)}</code> (file-level change)`;
+          }
+          const label = item.source === "PR_TITLE" ? "PR title" : "PR body";
+          return `${label}: “${markdownText(item.quote)}”`;
+        })
+        .join(", ")}.`,
+      "",
+      `Problem: ${markdownText(finding.problem)}`,
+      "",
+      `Impact: ${markdownText(finding.impact)}`,
+      "",
+      `Required correction: ${markdownText(finding.requiredCorrection)}`,
+    );
+  };
   const blocking = review.findings.filter(
     finding => finding.priority === "P0" || finding.priority === "P1",
   ).length;
@@ -1067,40 +1146,38 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       categoryOrder,
       findings: review.findings.filter(finding => finding.category === category.value),
     }))
-    .filter(category => category.findings.length > 0)
+    .filter(category =>
+      category.value === "user-experience" || category.findings.length > 0
+    )
     .sort((left, right) => {
-      const leftRank = Number(left.findings[0].priority.slice(1));
-      const rightRank = Number(right.findings[0].priority.slice(1));
+      const leftRank = left.findings.length > 0
+        ? Number(left.findings[0].priority.slice(1))
+        : 4;
+      const rightRank = right.findings.length > 0
+        ? Number(right.findings[0].priority.slice(1))
+        : 4;
       return leftRank - rightRank || left.categoryOrder - right.categoryOrder;
     });
   for (const category of populatedCategories) {
     lines.push("", `## ${category.heading}`);
-    for (const finding of category.findings) {
+    if (category.value === "user-experience") {
       lines.push(
         "",
-        `**${finding.priority}: ${markdownText(finding.title)}**`,
-        "",
-        `Evidence: ${finding.evidence
-          .map(item => {
-            if (item.source === "DIFF") {
-              return `<code>${codeText(item.path)}:${item.line}</code>${
-                item.side === "LEFT" ? " (deleted line)" : ""
-              }`;
-            }
-            if (item.source === "DIFF_FILE") {
-              return `<code>${codeText(item.path)}</code> (file-level change)`;
-            }
-            const label = item.source === "PR_TITLE" ? "PR title" : "PR body";
-            return `${label}: “${markdownText(item.quote)}”`;
-          })
-          .join(", ")}.`,
-        "",
-        `Problem: ${markdownText(finding.problem)}`,
-        "",
-        `Impact: ${markdownText(finding.impact)}`,
-        "",
-        `Required correction: ${markdownText(finding.requiredCorrection)}`,
+        `**User experience change:** ${markdownText(review.userExperience.change)}`,
       );
+      if (review.userExperience.before !== null) {
+        lines.push("", `**Before:** ${markdownText(review.userExperience.before)}`);
+      }
+      if (review.userExperience.after !== null) {
+        lines.push("", `**After:** ${markdownText(review.userExperience.after)}`);
+      }
+      if (review.userExperience.example !== null) {
+        lines.push("", `**Example:** ${markdownText(review.userExperience.example)}`);
+      }
+      lines.push("", `**Assessment:** ${markdownText(review.userExperience.assessment)}`);
+    }
+    for (const finding of category.findings) {
+      appendFinding(finding);
     }
   }
   lines.push(

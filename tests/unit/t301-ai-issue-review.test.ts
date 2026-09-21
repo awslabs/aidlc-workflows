@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,6 +15,9 @@ import {
   canonicalConversation,
   canonicalCurrentAidaReview,
   canonicalIssue,
+  labelStateForIssueReview,
+  labelsForIssueReviewState,
+  reconcileIssueReviewLabels,
   renderIssueReview,
   type BugVerification,
   type IssueCatalogEntry,
@@ -110,12 +114,17 @@ function review(): StructuredIssueReview {
         rationale: "The proposal is advisory and has a bounded workflow impact.",
       },
     },
+    alignment: {
+      status: "aligned",
+      rationale: "The proposal supports the intent-led AI-DLC workflow.",
+    },
     decision: {
       actor: "author",
       action: "clarify",
       rationale: "The blocking scope question must be resolved before planning.",
     },
     findings: [{
+      priority: "P1",
       level: "blocking-question",
       category: "scope",
       title: "Define the completion boundary",
@@ -127,6 +136,7 @@ function review(): StructuredIssueReview {
       impact: "Planning cannot distinguish a useful advisory result from an incomplete review.",
       suggestedIssueChange: "Add an acceptance criterion for the final sectioned assessment.",
     }, {
+      priority: "P2",
       level: "recommendation",
       category: "direction",
       title: "Preserve the clarified conversational direction",
@@ -140,6 +150,7 @@ function review(): StructuredIssueReview {
       impact: "Reviewing only the issue body would repeat a concern the maintainer resolved.",
       suggestedIssueChange: "Carry the latest maintainer clarification into subsequent planning.",
     }, {
+      priority: "P3",
       level: "recommendation",
       category: "feasibility",
       title: "Clarify the relationship with PR review",
@@ -269,6 +280,7 @@ describe("t301 AI issue intent review", () => {
       writeFileSync(join(root, "docs", "direction.md"), "Forged mutable workspace content.\n");
       const candidate = review();
       candidate.findings.push({
+        priority: "P3",
         level: "recommendation",
         category: "direction",
         title: "Tie the review to the software-factory direction",
@@ -453,9 +465,6 @@ describe("t301 AI issue intent review", () => {
     expect(payload.body).toContain(
       "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.**",
     );
-    expect(payload.body).toContain(
-      "Decision required: **Author — clarify the issue before planning.**",
-    );
     expect(payload.body).toContain("## Intent and Problem Clarity");
     expect(payload.body).toContain("## Direction");
     expect(payload.body).toContain("## User Experience");
@@ -467,12 +476,25 @@ describe("t301 AI issue intent review", () => {
       "selected tests failed; the failure must be compared with the report",
     );
     expect(payload.body).toContain("<code>tests/unit/relevant.test.ts</code>");
-    expect(payload.body).toContain("**Blocking question: Define the completion boundary**");
+    expect(payload.body).toContain("**P1 · Blocking question: Define the completion boundary**");
     expect(payload.body).toContain(
-      "**Recommendation: Preserve the clarified conversational direction**",
+      "**P2 · Recommendation: Preserve the clarified conversational direction**",
     );
     expect(payload.body).toContain("comment by @maintainer: “latest conversation”");
-    expect(payload.body).toContain("**Recommendation: Clarify the relationship with PR review**");
+    expect(payload.body).toContain(
+      "**P3 · Recommendation: Clarify the relationship with PR review**",
+    );
+    expect(payload.body).toContain("## Decision");
+    expect(payload.body).toContain(
+      "Alignment: **Aligned** — The proposal supports the intent-led AI-DLC workflow.",
+    );
+    expect(payload.body).toContain("Highest priority: **P1**");
+    expect(payload.body).toContain(
+      "Next decision: **Author — clarify the issue before planning.**",
+    );
+    expect(payload.body.indexOf("## Decision")).toBeGreaterThan(
+      payload.body.indexOf("## Risks and Open Decisions"),
+    );
     expect(payload.body).toEndWith("Reviewed by AIDA (AI-DLC Developer Agent).");
   });
 
@@ -512,7 +534,7 @@ describe("t301 AI issue intent review", () => {
     );
     expect(validated.decision).toEqual(ready.decision);
     expect(renderIssueReview(validated).body).toContain(
-      "Decision required: **Maintainer — decide whether to move this issue into planning or implementation.**",
+      "Next decision: **Maintainer — decide whether to move this issue into planning or implementation.**",
     );
 
     ready.assessment.readiness.score = 3;
@@ -557,9 +579,163 @@ describe("t301 AI issue intent review", () => {
     );
   });
 
+  test("validator binds alignment and severity to the final human decision", () => {
+    const notAligned = review();
+    notAligned.alignment = {
+      status: "not-aligned",
+      rationale: "The proposal conflicts with the current intent-led lifecycle.",
+    };
+    notAligned.findings = [{
+      ...notAligned.findings[0],
+      priority: "P1",
+      category: "direction",
+      title: "Resolve the project-direction conflict",
+    }];
+    notAligned.decision = {
+      actor: "maintainer",
+      action: "direction",
+      rationale: "A maintainer must decide whether the project direction should change.",
+    };
+    const validated = validateStructuredIssueReview(
+      JSON.stringify(notAligned),
+      ISSUE.number,
+      CONTEXT_ID,
+      BASE,
+      ISSUE,
+      CATALOG,
+      CONVERSATION,
+    );
+    expect(validated.alignment.status).toBe("not-aligned");
+    expect(renderIssueReview(validated).body).toContain(
+      "Next decision: **Maintainer — decide whether this direction should change or proceed.**",
+    );
+
+    notAligned.decision = {
+      actor: "maintainer",
+      action: "plan",
+      rationale: "Plan despite the direction conflict.",
+    };
+    expect(() => validateStructuredIssueReview(
+      JSON.stringify(notAligned),
+      ISSUE.number,
+      CONTEXT_ID,
+      BASE,
+      ISSUE,
+      CATALOG,
+      CONVERSATION,
+    )).toThrow("not-aligned issues require a maintainer/direction decision");
+
+    const invalidPriority = review();
+    invalidPriority.findings[0].priority = "P2";
+    expect(() => validateStructuredIssueReview(
+      JSON.stringify(invalidPriority),
+      ISSUE.number,
+      CONTEXT_ID,
+      BASE,
+      ISSUE,
+      CATALOG,
+      CONVERSATION,
+    )).toThrow("P2 findings must be recommendations");
+
+    const invalidOrder = review();
+    invalidOrder.findings[0].priority = "P1";
+    invalidOrder.findings[1].priority = "P3";
+    invalidOrder.findings[2].priority = "P2";
+    expect(() => validateStructuredIssueReview(
+      JSON.stringify(invalidOrder),
+      ISSUE.number,
+      CONTEXT_ID,
+      BASE,
+      ISSUE,
+      CATALOG,
+      CONVERSATION,
+    )).toThrow("findings must be ordered from P0 through P3");
+  });
+
+  test("Issue labels expose only alignment and the highest finding priority", () => {
+    const state = labelStateForIssueReview(review());
+    expect(state).toEqual({ alignment: "aligned", priority: "P1" });
+    expect(labelsForIssueReviewState(state)).toEqual(["aida:aligned", "aida:p1"]);
+
+    const clean = review();
+    clean.findings = [];
+    clean.assessment.readiness.score = 5;
+    clean.decision = {
+      actor: "maintainer",
+      action: "plan",
+      rationale: "The aligned issue is ready for planning.",
+    };
+    expect(labelsForIssueReviewState(labelStateForIssueReview(clean))).toEqual([
+      "aida:aligned",
+    ]);
+
+    const root = mkdtempSync(join(tmpdir(), "aidlc-issue-labels-"));
+    try {
+      const log = join(root, "calls.jsonl");
+      const fakeGh = join(root, "gh");
+      writeFileSync(fakeGh, `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const input = await Bun.stdin.text();
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input }) + "\\n");
+if (args.some(value => value === "repos/acme/repo/issues/1285")) {
+  process.stdout.write(JSON.stringify({
+    number: 1285,
+    state: "open",
+    labels: [
+      { name: "enhancement" },
+      { name: "aida:not-aligned" },
+      { name: "aida:p0" }
+    ]
+  }));
+} else if (args.some(value => value.startsWith("repos/acme/repo/labels/"))) {
+  process.exit(1);
+} else {
+  process.stdout.write("{}");
+}
+`);
+      chmodSync(fakeGh, 0o755);
+      expect(reconcileIssueReviewLabels(
+        "acme/repo",
+        1285,
+        { alignment: "aligned", priority: "P2" },
+        fakeGh,
+      )).toBe(true);
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const deleted = calls
+        .filter(call => call.args.includes("DELETE"))
+        .map(call => call.args.at(-1));
+      expect(deleted).toEqual([
+        "repos/acme/repo/issues/1285/labels/aida%3Anot-aligned",
+        "repos/acme/repo/issues/1285/labels/aida%3Ap0",
+      ]);
+      const applied = calls.find(
+        call => call.args.includes("repos/acme/repo/issues/1285/labels") &&
+          call.args.includes("POST"),
+      );
+      expect(JSON.parse(applied.input)).toEqual({
+        labels: ["aida:aligned", "aida:p2"],
+      });
+      const created = calls
+        .filter(call => call.args.includes("repos/acme/repo/labels") && call.args.includes("POST"))
+        .map(call => JSON.parse(call.input).name);
+      expect(created).toEqual([
+        "aida:p0",
+        "aida:p1",
+        "aida:p2",
+        "aida:p3",
+        "aida:aligned",
+        "aida:not-aligned",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("renderer refuses a comment larger than GitHub's issue-comment limit", () => {
     const candidate = review();
     candidate.findings = Array.from({ length: 30 }, (_, index) => ({
+      priority: "P3",
       level: "recommendation",
       category: "scope",
       title: `Bounded recommendation ${index}`,
@@ -607,6 +783,11 @@ describe("t301 AI issue intent review", () => {
     expect(WORKFLOW).toContain(`"$bun_bin" test "\${bug_test_files[@]}"`);
     expect(WORKFLOW).toContain("ulimit -f 20480");
     expect(WORKFLOW).toContain("--bug-verification .ai-issue-review-context/bug-verification.json");
+    expect(WORKFLOW).toContain(
+      "--label-state-output .ai-issue-review-final/labels.json",
+    );
+    expect(WORKFLOW).toContain("ai-issue-review.ts labels");
+    expect(WORKFLOW).toContain("--input .ai-issue-review-final/labels.json");
     expect(WORKFLOW).toContain('stable_marker="<!-- ai-issue-review issue=$ISSUE_NUMBER -->"');
     expect(WORKFLOW).toContain('--method PATCH "repos/$REPO/issues/comments/$existing_id"');
     expect(WORKFLOW).toContain("already_reviewed=true");
@@ -648,10 +829,18 @@ describe("t301 AI issue intent review", () => {
     expect(JUDGE_PROMPT).toContain("regular tracked files in the trusted base revision");
     expect(JUDGE_PROMPT).toContain("Never cite `.ai-issue-review-*` artifacts");
     expect(JUDGE_PROMPT).toContain("author/clarify");
+    expect(JUDGE_PROMPT).toContain("maintainer/direction");
     expect(JUDGE_PROMPT).toContain("maintainer/plan");
-    expect(JUDGE_PROMPT).toContain("Any surviving blocking question");
+    expect(JUDGE_PROMPT).toContain("P0");
+    expect(JUDGE_PROMPT).toContain("P1");
+    expect(JUDGE_PROMPT).toContain("P2");
+    expect(JUDGE_PROMPT).toContain("P3");
+    expect(JUDGE_PROMPT).toContain("not-aligned");
     expect(JUDGE_PROMPT).toContain("risk is at most 3");
+    expect(JUDGE_SCHEMA.required).toContain("alignment");
     expect(JUDGE_SCHEMA.required).toContain("decision");
+    expect(JUDGE_SCHEMA.properties.findings.items.$ref).toBe("#/$defs/finding");
+    expect(JUDGE_SCHEMA.$defs.finding.required).toContain("priority");
     expect(JUDGE_SCHEMA.properties.decision.required).toEqual([
       "actor",
       "action",

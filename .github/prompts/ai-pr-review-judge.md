@@ -69,6 +69,24 @@ risk 1/5 is the best risk result.
 These scores inform a human merge decision. They are not an approval, rejection,
 or merge instruction.
 
+Provide a user-experience explanation before the user-experience assessment:
+
+- `status: "changed"` when the PR changes an observable user interaction.
+  Identify the affected user, their action, and the resulting behavior in
+  `change`; provide concrete `before` and `after` descriptions; add `example`
+  when a concise command, error-recovery, approval, or workflow example helps.
+- `status: "no-user-visible-change"` for internal-only changes. Explain why in
+  `change`, set `before`, `after`, and `example` to `null`, and assess any
+  indirect UX risk without inventing an interaction.
+- `status: "uncertain"` when the experience cannot be established from the
+  immutable diff and trusted repository. State the uncertainty in `change`, use
+  `null` for unavailable before/after/example fields, and explain what remains
+  uncertain in `assessment`.
+
+In every case, describe the change and any before/after example before the
+assessment. Ground the explanation in inspected behavior even when no
+user-experience finding survives.
+
 Provide one explicit next decision:
 
 - `{"actor":"author","action":"change"}` means the author should address the
@@ -121,6 +139,14 @@ preamble, progress, or trailing text:
       "score": 2,
       "rationale": "Concrete explanation of blast radius and residual uncertainty."
     }
+  },
+  "userExperience": {
+    "status": "changed",
+    "change": "A person running the workflow receives a specific recovery instruction when setup is incomplete.",
+    "before": "The workflow reported that setup was incomplete without naming the missing setting.",
+    "after": "The workflow names the missing setting and explains how to resume.",
+    "example": "Before: Setup incomplete. After: Configure projectRegion, then rerun /aidlc.",
+    "assessment": "The change improves recovery because the user has a concrete next action."
   },
   "decision": {
     "actor": "author",

@@ -88,10 +88,18 @@ decisions. For a bug report, it may run up to five relevant existing tests in
 an isolated, network-disabled test process and reports the bounded result as
 evidence. It updates one advisory comment; it does not prioritize, approve,
 reject, label, assign, close, or implement the issue. The final assessment names
-the next human decision: `author/clarify` when blocking questions remain, or
-`maintainer/plan` when the issue is ready to move into planning or
-implementation. Planning requires no blocking question, readiness of at least
-4/5, and risk of at most 3/5.
+the next human decision: `author/clarify` when an aligned issue still has
+blocking questions, `maintainer/direction` when the proposal conflicts with the
+current AI-DLC direction, or `maintainer/plan` when the issue is ready to move
+into planning or implementation. Planning requires alignment, no blocking
+question, readiness of at least 4/5, and risk of at most 3/5.
+
+After a successful Issue review, AIDA replaces its Issue assessment labels with
+exactly one direction label (`aida:aligned` or `aida:not-aligned`) and, when
+findings exist, the highest priority found (`aida:p0`, `aida:p1`, `aida:p2`, or
+`aida:p3`). P0 and P1 block planning; P2 and P3 are bounded recommendations.
+These labels describe AIDA's latest successful assessment and do not assign,
+prioritize, close, or implement the Issue.
 
 ## Contributing via Pull Requests
 
@@ -117,6 +125,11 @@ author should address the reported gaps. `maintainer/merge` means the review
 found no blocking issue and considers the PR ready for a maintainer's merge
 decision; AIDA does not approve or merge the PR. The merge decision requires no
 P0 or P1 finding, readiness of at least 4/5, and risk of at most 2/5.
+
+Every PR review includes a User Experience section before its UX assessment.
+For user-visible changes, it explains the affected user, the previous and
+proposed experience, and a concise before/after example when useful.
+Internal-only changes receive a brief no-user-visible-change explanation.
 
 The PR workflow reflects its latest state through three label dimensions. A new
 review clears all six managed labels. A successfully published

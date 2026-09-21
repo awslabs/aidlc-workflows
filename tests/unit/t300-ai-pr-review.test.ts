@@ -76,6 +76,14 @@ function review(priority?: "P0" | "P1" | "P2" | "P3"): StructuredReview {
         rationale: "The affected contract has a bounded but user-visible blast radius.",
       },
     },
+    userExperience: {
+      status: "changed",
+      change: "A person using the generated contract encounters different validation behavior.",
+      before: "The generated contract accepted the supported input.",
+      after: "The generated contract rejects the supported input.",
+      example: "Before: the input succeeds. After: the same input fails validation.",
+      assessment: "The change introduces a visible compatibility regression.",
+    },
     decision: priority === "P0" || priority === "P1"
       ? {
           actor: "author",
@@ -277,6 +285,23 @@ process.stdout.write(JSON.stringify(value));
     );
     expect(payload.body).toContain("<!-- ai-pr-review decision=author/change -->");
     expect(payload.body).toContain("Findings: 1 blocking, 0 advisory.");
+    expect(payload.body).toContain("## User Experience");
+    expect(payload.body).toContain(
+      "**User experience change:** A person using the generated contract encounters different validation behavior.",
+    );
+    expect(payload.body).toContain(
+      "**Before:** The generated contract accepted the supported input.",
+    );
+    expect(payload.body).toContain(
+      "**After:** The generated contract rejects the supported input.",
+    );
+    expect(payload.body).toContain("**Example:** Before: the input succeeds.");
+    expect(payload.body).toContain(
+      "**Assessment:** The change introduces a visible compatibility regression.",
+    );
+    expect(payload.body.indexOf("**Before:**")).toBeLessThan(
+      payload.body.indexOf("**Assessment:**"),
+    );
     expect(payload.body).toContain("## Contracts & Compatibility");
     expect(payload.body).toContain("**P1: Generated contract is incomplete**");
     expect(payload.body).toContain("Required correction: Restore the contract");
@@ -331,6 +356,40 @@ process.stdout.write(JSON.stringify(value));
     };
     expect(() => validate(JSON.stringify(unjustifiedChange))).toThrow(
       "requires a finding, readiness below 4, or risk above 2",
+    );
+  });
+
+  test("validator requires a grounded user-experience summary before assessment", () => {
+    const noVisibleChange = review();
+    noVisibleChange.userExperience = {
+      status: "no-user-visible-change",
+      change: "The change only updates internal review metadata.",
+      before: null,
+      after: null,
+      example: null,
+      assessment: "No direct user interaction changes; review workflow cost remains unchanged.",
+    };
+    const rendered = renderReview(
+      validate(JSON.stringify(noVisibleChange)),
+      CONTEXT_ID,
+    ).body;
+    expect(rendered).toContain(
+      "**User experience change:** The change only updates internal review metadata.",
+    );
+    expect(rendered).not.toContain("**Before:**");
+    expect(rendered).not.toContain("**After:**");
+    expect(rendered).not.toContain("**Example:**");
+
+    const missingBefore = review();
+    missingBefore.userExperience.before = null;
+    expect(() => validate(JSON.stringify(missingBefore))).toThrow(
+      "changed user experience requires before and after descriptions",
+    );
+
+    const inventedNoChangeExample = review();
+    inventedNoChangeExample.userExperience.status = "no-user-visible-change";
+    expect(() => validate(JSON.stringify(inventedNoChangeExample))).toThrow(
+      "no-user-visible-change requires null before, after, and example fields",
     );
   });
 
@@ -1425,6 +1484,10 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(userExperience).toMatch(/speaks\s+as a teammate or colleague/);
     expect(userExperience).toContain("model, bot, robot, framework, or impersonal workflow");
     expect(userExperience).toContain("every message the user reads");
+    expect(userExperience).toContain("describing the user-visible change before judging it");
+    expect(userExperience).toContain("previous and proposed experience");
+    expect(userExperience).toContain("before/after example");
+    expect(userExperience).toContain("no user-visible change");
     const common = readFileSync(
       join(REPO_ROOT, ".github", "prompts", "ai-pr-review-common.md"),
       "utf8",
@@ -1494,6 +1557,9 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(judge).toContain('"assessment"');
     expect(judge).toContain('"readiness"');
     expect(judge).toContain('"risk"');
+    expect(judge).toContain('"userExperience"');
+    expect(judge).toContain('"no-user-visible-change"');
+    expect(judge).toContain("describe the change and any before/after example before");
     expect(judge).toContain('"decision"');
     expect(judge).toContain("author/change");
     expect(judge).toContain("maintainer/merge");
@@ -1509,11 +1575,20 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "inspection",
       "validation",
       "assessment",
+      "userExperience",
       "decision",
       "findings",
       "residualRisk",
     ]);
     expect(judgeSchema.properties.assessment.required).toEqual(["readiness", "risk"]);
+    expect(judgeSchema.properties.userExperience.required).toEqual([
+      "status",
+      "change",
+      "before",
+      "after",
+      "example",
+      "assessment",
+    ]);
     expect(judgeSchema.properties.decision.required).toEqual([
       "actor",
       "action",

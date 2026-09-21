@@ -570,7 +570,8 @@ jobs:
             --conversation .ai-issue-review-context/conversation.json \
             --bug-verification .ai-issue-review-context/bug-verification.json \
             --repository-root "$GITHUB_WORKSPACE" \
-            --output .ai-issue-review-final/comment.json
+            --output .ai-issue-review-final/comment.json \
+            --label-state-output .ai-issue-review-final/labels.json
 
       - name: Upsert advisory issue review
         if: >-
@@ -657,3 +658,8 @@ jobs:
           for comment_id in "${duplicate_ids[@]}"; do
             gh api --method DELETE "repos/$REPO/issues/comments/$comment_id"
           done
+
+          bun .github/scripts/ai-issue-review.ts labels \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --input .ai-issue-review-final/labels.json
