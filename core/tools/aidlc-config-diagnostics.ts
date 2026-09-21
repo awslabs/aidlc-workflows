@@ -247,6 +247,8 @@ export type RuntimeProbeOptions = {
   includeHarnessCli?: boolean;
   env?: NodeJS.ProcessEnv;
   home?: string;
+  /** Root the system PATH registries (/etc/...) are read under; tests point it at a fixture. */
+  systemRoot?: string;
   platform?: NodeJS.Platform;
   which?: (command: string, pathValue: string) => string | null;
   run?: (
@@ -566,14 +568,15 @@ export function deriveNonInteractivePath(
       : "/usr/local/bin:/usr/bin:/bin",
     platform,
   );
+  const systemRoot = options.systemRoot ?? "/";
   if (platform === "darwin") {
-    for (const path of ["/etc/paths"]) {
+    for (const path of [join(systemRoot, "etc", "paths")]) {
       if (!existsSync(path)) continue;
       entries.push(
         ...readFileSync(path, "utf-8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
       );
     }
-    const pathsDir = "/etc/paths.d";
+    const pathsDir = join(systemRoot, "etc", "paths.d");
     if (existsSync(pathsDir)) {
       for (const file of readdirSync(pathsDir).sort()) {
         const path = join(pathsDir, file);
@@ -587,8 +590,80 @@ export function deriveNonInteractivePath(
         }
       }
     }
+  } else {
+    // getconf PATH is glibc's compile-time _CS_PATH (/bin:/usr/bin on the
+    // Debian family), not what a login session or a systemd user service
+    // receives. Those come from pam_env's /etc/environment, login.defs
+    // ENV_PATH, and environment.d - the surfaces the remediation names.
+    const home = options.home ?? env.HOME ?? homedir();
+    const configHome = env.XDG_CONFIG_HOME || join(home, ".config");
+    entries.push(
+      ...pathAssignments(join(systemRoot, "etc", "environment"), "pam-env", home),
+      ...pathAssignments(join(systemRoot, "etc", "login.defs"), "login-defs", home),
+      ...environmentDirectoryPaths(join(systemRoot, "etc", "environment.d"), home),
+      ...environmentDirectoryPaths(join(configHome, "environment.d"), home),
+    );
   }
   return [...new Set(entries)].join(delimiter);
+}
+
+// pam_env and login.defs values are literal; environment.d expands HOME and
+// removes separator-carrying PATH splices. Entries with unresolved variables
+// are discarded: blanking them would manufacture directories.
+function pathAssignments(
+  path: string,
+  kind: "pam-env" | "login-defs" | "environment-d",
+  home: string,
+): string[] {
+  let content: string;
+  try {
+    if (!existsSync(path) || !statSync(path).isFile()) return [];
+    content = readFileSync(path, "utf-8");
+  } catch {
+    return [];
+  }
+  const prefix = kind === "login-defs"
+    ? /^ENV_PATH\s+(?:PATH=)?(\S+)/
+    : kind === "pam-env"
+    ? /^(?:export\s+)?PATH=(.*)$/
+    : /^PATH\s*=\s*(.*)$/;
+  const entries: string[] = [];
+  for (const raw of content.split(/\r?\n/)) {
+    const line = raw.trim();
+    const match = prefix.exec(line);
+    if (!match) continue;
+    let value = match[1];
+    if (kind === "pam-env") {
+      const comment = value.indexOf("#");
+      if (comment !== -1) value = value.slice(0, comment);
+    }
+    if (kind !== "login-defs") {
+      value = value.trim().replace(/^(["'])(.*)\1$/, "$2");
+    }
+    if (kind === "environment-d") {
+      value = value
+        .replace(/\$\{HOME\}|\$HOME(?![A-Za-z0-9_])/g, () => home)
+        .replace(/\$\{PATH:\+:[^}]*\}/g, "")
+        .replace(/\$\{PATH:\+[^}]*:\}/g, "");
+    }
+    for (const entry of value.split(":")) {
+      const trimmed = entry.trim();
+      if (trimmed && !trimmed.includes("$")) entries.push(trimmed);
+    }
+  }
+  return entries;
+}
+
+// systemd environment.d: every *.conf in the directory, sorted, PATH= lines.
+function environmentDirectoryPaths(directory: string, home: string): string[] {
+  let files: string[];
+  try {
+    if (!existsSync(directory)) return [];
+    files = readdirSync(directory).filter((file) => file.endsWith(".conf")).sort();
+  } catch {
+    return [];
+  }
+  return files.flatMap((file) => pathAssignments(join(directory, file), "environment-d", home));
 }
 
 function walkTextFiles(root: string): string[] {
@@ -649,6 +724,12 @@ function runtimeRequirements(files: readonly string[]): {
   return { bun, aidlc };
 }
 
+function runtimePathSurfaces(platform: NodeJS.Platform): string {
+  return platform === "darwin"
+    ? "a file in /etc/paths.d"
+    : "the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf";
+}
+
 function runtimeRemediation(
   name: "bun" | "aidlc",
   platform: NodeJS.Platform,
@@ -662,11 +743,11 @@ function runtimeRemediation(
       "a native install runs them through the aidlc command instead. ";
     return platform === "win32"
       ? `${channel}Install Bun, then add its install directory to the Windows User or Machine PATH, not only a shell profile.`
-      : `${channel}Install Bun, then add ~/.bun/bin to the login-independent environment used by the harness, not only .zshrc or .bash_profile.`;
+      : `${channel}Install Bun, then add ~/.bun/bin to the login-independent PATH the harness inherits (${runtimePathSurfaces(platform)}), not only .zshrc or .bash_profile.`;
   }
   return platform === "win32"
     ? "Add the aidlc command directory to the Windows User or Machine PATH."
-    : "Add ~/.local/bin to the login-independent environment used by the harness, not only an interactive shell rc file.";
+    : `Add ~/.local/bin to the login-independent PATH the harness inherits (${runtimePathSurfaces(platform)}), not only an interactive shell rc file.`;
 }
 
 function binaryProbe(

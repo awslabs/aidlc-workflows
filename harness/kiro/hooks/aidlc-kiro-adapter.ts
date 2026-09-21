@@ -51,9 +51,11 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  leadingOrchestratorVerb,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   stateFilePath,
+  stripOrchestratorLauncherOptions,
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -500,7 +502,12 @@ if (target === "guard-tool-call") {
   const m = cmdStr.match(
     /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\b([^\n]*)/,
   );
-  const nextArgs = m ? splitKiroCommandArgs(m[1].trim()) : [];
+  const raw = m ? splitKiroCommandArgs(m[1].trim()) : [];
+  // The engine strips launcher options anywhere before reading the subcommand,
+  // so bare-advancing classification must see the same leading token. The
+  // first-next fidelity comparison below deliberately stays byte-exact: a
+  // launcher option the user did not type is an alteration.
+  const nextArgs = stripOrchestratorLauncherOptions(raw);
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
   // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing
@@ -513,9 +520,13 @@ if (target === "guard-tool-call") {
   // A leading `compose` verb is a deliberate composer dispatch (the engine's
   // Branch 0 exempts flags.compose the same way) - never the spurious bare
   // roll-forward this backstop exists to block.
+  // A sole park / leading team-board deliberately dispatches an orchestrator verb
+  // (engine Branch 1c), using the engine's rule so park <description> stays freeform
+  // and this guard still blocks it.
   const isBareAdvancing =
     m !== null &&
     nextArgs[0] !== "compose" &&
+    leadingOrchestratorVerb(nextArgs) === null &&
     !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
     classifyTerminalCommand(nextArgs) === null;
 
@@ -550,8 +561,8 @@ if (target === "guard-tool-call") {
         Array.isArray(forwarding.args)
       ) {
         const matches =
-          forwarding.args.length === nextArgs.length &&
-          forwarding.args.every((arg, index) => arg === nextArgs[index]);
+          forwarding.args.length === raw.length &&
+          forwarding.args.every((arg, index) => arg === raw[index]);
         if (!matches) {
           process.stderr.write(
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +

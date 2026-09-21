@@ -619,7 +619,19 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
   }
   const rootIntegrations = m.rootIntegrations.map((integration) => {
     if (integration.policy !== "managed-block") return integration;
-    const currentHash = sha256Bytes(readFileSync(join(outRoot, integration.path)));
+    const bytes = readFileSync(join(outRoot, integration.path));
+    if (integration.shared === "union") {
+      const dst = join(
+        treeRoot,
+        "tools",
+        "data",
+        "root-blocks",
+        integration.marker || basename(integration.path),
+      );
+      mkdirSync(dirname(dst), { recursive: true });
+      writeFileSync(dst, bytes);
+    }
+    const currentHash = sha256Bytes(bytes);
     return {
       ...integration,
       legacySignatures: {

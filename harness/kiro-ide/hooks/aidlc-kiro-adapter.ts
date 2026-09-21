@@ -118,6 +118,7 @@ import {
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -202,6 +203,21 @@ function isKiroShellTool(toolName: string): boolean {
   return toolName === "execute_bash" || toolName === "execute_pwsh" || toolName === "shell";
 }
 
+// Kiro IDE's delegation surface: `invoke_sub_agent` (generic dispatch) and
+// `subagent_<agent>` (named dispatch). `subagent_response` is excluded because it is
+// the completion shell, not a dispatch — the same exclusion the SUBAGENT_COMPLETED
+// matcher makes, for the same reason.
+//
+// A delegation call carries `name` + `prompt` and no file path, so the opaque-mutation
+// test below reads it as unattributable and refuses it. It is not: the target agent IS
+// the attribution, and the forward further down translates the call into a synthetic
+// `Task` payload for the core guard, which consults approval state properly. Naming the
+// shape here is what lets control reach that forward (#1175).
+function isKiroDelegationTool(toolName: string): boolean {
+  return toolName === "invoke_sub_agent" ||
+    (toolName.startsWith("subagent_") && toolName !== "subagent_response");
+}
+
 function upsertTestingContract(plan: string, rendered: string): string {
   const section = /(^|\n)## Testing Contract[^\n]*\n[\s\S]*?(?=\n## |\s*$)/m;
   if (section.test(plan)) {
@@ -216,10 +232,11 @@ function legacyToolCommand(
   tool: "aidlc-log.ts" | "aidlc-orchestrate.ts",
   args: string[],
 ): string[] {
-  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  return executable
-    ? [executable, "engine", tool.replace(/^aidlc-|\.ts$/g, ""), ...args]
-    : [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args];
+  return aidlcEngineCommand(
+    tool === "aidlc-log.ts" ? "log" : "orchestrate",
+    args,
+    join(HOOKS_DIR, "..", "tools", tool),
+  );
 }
 
 function runLegacyPlanTool(
@@ -1347,10 +1364,15 @@ function buildForward(): Forward {
           },
         };
       }
+      // Delegation is attributable and must NOT be treated as opaque: falling into the
+      // block below either refuses it outright or returns null (no mediation at all),
+      // and both are wrong. Excluding it here lets control reach the delegation forward,
+      // which hands a synthetic `Task` to the core guard so approval state decides.
       const opaqueMutation =
         toolName === "" ||
         (
           mutationCapableTool(toolName) &&
+          !isKiroDelegationTool(toolName) &&
           (
             Object.keys(toolArgs).length === 0 ||
             (

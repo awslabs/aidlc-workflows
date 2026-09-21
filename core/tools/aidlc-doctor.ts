@@ -272,6 +272,23 @@ function humanReport(
       : ""
   }`, out)}\n`;
   output += renderSection(project, findingRows);
+  if (report.parked_attempts.length > 0) {
+    output += `\n${heading("Parked attempts", out)}\n`;
+    for (const attempt of report.parked_attempts) {
+      output += `  ${okVerdict("ok   ", out)} ${attempt.slug} / ${attempt.stamp} (repo ${attempt.repo ?? "."}, age ${attempt.age_days ?? "unknown"} days, mode ${attempt.mode})\n`;
+      output += `        restored checkout: ${attempt.restored_exists ? "present" : "absent"} - ${attempt.restored_path}\n`;
+      if (attempt.restore_command !== undefined) {
+        output += `        restore: ${attempt.restore_command}\n`;
+      } else if (attempt.restore_command_error !== undefined) {
+        output += `        restore display unavailable: ${attempt.restore_command_error}; use restore_operation from --json\n`;
+      }
+      if (attempt.purge_command !== undefined) {
+        output += `        purge: ${attempt.purge_command}\n`;
+      } else if (attempt.purge_command_error !== undefined) {
+        output += `        purge display unavailable: ${attempt.purge_command_error}; use purge_operation from --json\n`;
+      }
+    }
+  }
   output += `\n${heading("Framework integrity", out)}\n`;
   output += renderSection(framework);
   const visibleWarnings = report.warnings + findings.length;

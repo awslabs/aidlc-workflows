@@ -34,6 +34,7 @@ async function fixture(files: Record<string, string>, preparing = false): Promis
   for (const path of [
     "tests/run-tests.ts", "tests/run-tests.sh", "tests/gen-coverage-registry.ts",
     "tests/harness/claude-gate.ts", "tests/harness/tui-runtime.ts", "tests/harness/tui-record-file.ts",
+    "tests/harness/runner-profile.ts",
   ]) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     cpSync(join(SOURCE, path), join(dir, path));

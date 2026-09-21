@@ -22,6 +22,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -790,6 +791,21 @@ describe("t165 P7 intent repo set captured at creation", () => {
     const r = util(["intent-create", "--scope", "feature"]);
     expect(r.status).toBe(0);
     expect(readIntentRegistry(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
+  });
+
+  test("sibling auto-discovery follows a symlinked immediate child Git repository", () => {
+    const external = mkdtempSync(join(tmpdir(), "aidlc-linked-repo-"));
+    try {
+      expect(Bun.spawnSync(["git", "init", "-q", external]).exitCode).toBe(0);
+      makeRepo(proj, "svc-api");
+      symlinkSync(external, join(proj, "svc-web"), process.platform === "win32" ? "junction" : "dir");
+      const r = util(["intent-create", "--scope", "feature"]);
+      expect(r.status, r.out).toBe(0);
+      expect(readIntentRegistry(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
+      expect(listIntents(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
   });
 
   test("no --repos and no sibling repos → no repos row (legacy single-repo inference)", () => {

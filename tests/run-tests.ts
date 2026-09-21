@@ -21,12 +21,17 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { buildMeta, renderMeta, type MetaCounts } from "./lib/bun-junit-to-meta.ts";
 import {
-  parseShardSpec,
+  guardProfileDescription,
+  parseRunnerArgs,
+  RunnerArgsError,
+  testGuardEnvironment,
+  type ParsedArgs,
+} from "./harness/runner-profile.ts";
+import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
+import {
   selectShard,
   type ShardConfig,
-  type ShardSpec,
 } from "./lib/test-sharding.ts";
 import type { E2eWorker } from "./lib/e2e-workers.ts";
 import type { E2eCaseCounts } from "./lib/e2e-plan.ts";
@@ -59,39 +64,15 @@ const LIVE_MODEL_GATES = [
 type Level = "smoke" | "unit" | "integration" | "e2e";
 type Status = "PASS" | "FAIL" | "SKIP";
 
-interface ParsedArgs {
-  runSmoke: boolean;
-  runUnit: boolean;
-  runIntegration: boolean;
-  runE2e: boolean;
-  verbose: boolean;
-  debug: boolean;
-  filter: string;
-  parallel: number;
-  shard: ShardSpec | null;
-  fullProfile: boolean;
-  // Force every live-model gate closed so deterministic tests in integration
-  // and e2e still run. Also via AIDLC_NO_LLM=1.
-  noLlm: boolean;
-  requireCoverage: boolean;
-  isolatedE2e: boolean;
-  e2ePlan: boolean;
-  bedrockParallel: number;
-  kiroParallel: number;
-  ideParallel: number;
-  e2eFileTimeout: number;
-  e2eTimings: string;
-  e2eCancelFile: string;
-  matrixPlan: string;
-  matrixJob: string;
-}
 
 interface ResultRow {
   name: string;
   status: Status;
   tests: number;
+  skipped: number;
   failed: number;
   duration: string;
+  reason?: string;
 }
 
 interface IsolatedFileContext {
@@ -130,6 +111,9 @@ PROFILE FLAGS (shortcuts -- map to test pyramid layers):
   --all           Same as --release
 
 OUTPUT MODIFIERS (combinable with any tier/profile):
+  --production-guards
+                  Run selected tests with guard bypasses and direct authority
+                  off (default: fixture). Neutralizes inherited off-switches.
   --verbose       Write per-test logs to tests/logs/
   --no-llm        Force all live-model gates closed while deterministic
                   integration/e2e tests still run. Also via AIDLC_NO_LLM=1.
@@ -140,6 +124,7 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --debug         Implies --verbose; streams per-test output and writes SDK/TUI
                   driver traces to tests/logs/
   --filter PAT    Only run tests whose filename matches extended regex PAT
+                  Fails if a selected file executes no cases or no files match.
   --parallel N    Run up to N test files concurrently within a tier (alias: -P N).
                   Default: 1 (serial). Smoke and unit tiers always run serially.
                   Recommended range: 1-8. See docs/reference/09-testing.md.
@@ -169,202 +154,24 @@ EXAMPLES:
   bash tests/run-tests.sh --integration --filter "t25|t26" --debug
   bash tests/run-tests.sh --all --parallel 4     # 4-way parallel for larger levels
   bash tests/run-tests.sh --unit --shard 1/4    # CI-style isolated unit shard
+  bash tests/run-tests.sh --debug -P 8 --unit --production-guards --filter "t-runner-production-guards"
 `;
 }
 
-function failUsage(message: string, code = 1): never {
-  process.stderr.write(`${message}\n\n${usage()}`);
-  process.exit(code);
-}
-
 function parseArgs(argv: string[]): ParsedArgs {
-  const out: ParsedArgs = {
-    runSmoke: false,
-    runUnit: false,
-    runIntegration: false,
-    runE2e: false,
-    verbose: false,
-    debug: false,
-    filter: "",
-    parallel: 1,
-    shard: null,
-    fullProfile: false,
-    noLlm: process.env.AIDLC_NO_LLM === "1",
-    requireCoverage: false,
-    isolatedE2e: false,
-    e2ePlan: false,
-    bedrockParallel: 2,
-    kiroParallel: 2,
-    ideParallel: 1,
-    e2eFileTimeout: 10_800,
-    e2eTimings: "",
-    e2eCancelFile: "",
-    matrixPlan: "",
-    matrixJob: "",
-  };
-  let levelSelected = false;
-  let workerOption = false;
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--smoke":
-        out.runSmoke = true;
-        levelSelected = true;
-        break;
-      case "--unit":
-        out.runUnit = true;
-        levelSelected = true;
-        break;
-      case "--integration":
-        out.runIntegration = true;
-        levelSelected = true;
-        break;
-      case "--e2e":
-        out.runE2e = true;
-        levelSelected = true;
-        break;
-      case "--ci":
-        out.runSmoke = true;
-        out.runUnit = true;
-        out.runIntegration = true;
-        levelSelected = true;
-        break;
-      case "--release":
-      case "--all":
-        out.runSmoke = true;
-        out.runUnit = true;
-        out.runIntegration = true;
-        out.runE2e = true;
-        out.fullProfile = true;
-        levelSelected = true;
-        break;
-      case "--verbose":
-        out.verbose = true;
-        break;
-      case "--no-llm":
-        out.noLlm = true;
-        break;
-      case "--require-coverage":
-        out.requireCoverage = true;
-        out.verbose = true;
-        break;
-      case "--matrix-plan":
-      case "--matrix-job": {
-        const value = argv[++i];
-        if (!value || value.startsWith("--")) failUsage(`${arg} requires a value`, 2);
-        if (arg === "--matrix-plan") out.matrixPlan = resolve(value);
-        else out.matrixJob = value;
-        break;
-      }
-      case "--debug":
-        out.debug = true;
-        out.verbose = true;
-        break;
-      case "--filter": {
-        const value = argv[++i] ?? "";
-        out.filter = value;
-        break;
-      }
-      case "--parallel":
-      case "-P": {
-        const value = argv[++i] ?? "";
-        if (!/^[1-9][0-9]*$/.test(value)) {
-          process.stderr.write(
-            `ERROR: --parallel requires a positive integer (got: '${value || "<missing>"}')\n`,
-          );
-          process.exit(2);
-        }
-        out.parallel = Number(value);
-        break;
-      }
-      case "--shard": {
-        const value = argv[++i] ?? "";
-        try {
-          out.shard = parseShardSpec(value);
-        } catch (error) {
-          process.stderr.write(`ERROR: ${error instanceof Error ? error.message : String(error)}\n`);
-          process.exit(2);
-        }
-        break;
-      }
-      case "--isolated-e2e":
-        out.isolatedE2e = true;
-        break;
-      case "--e2e-plan":
-        out.e2ePlan = true;
-        out.isolatedE2e = true;
-        break;
-      case "--bedrock-parallel":
-      case "--kiro-parallel":
-      case "--ide-parallel":
-      case "--e2e-file-timeout": {
-        const value = argv[++i] ?? "";
-        if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) {
-          failUsage(`${arg} requires a positive safe integer`, 2);
-        }
-        const key = {
-          "--bedrock-parallel": "bedrockParallel",
-          "--kiro-parallel": "kiroParallel",
-          "--ide-parallel": "ideParallel",
-          "--e2e-file-timeout": "e2eFileTimeout",
-        }[arg] as "bedrockParallel" | "kiroParallel" | "ideParallel" | "e2eFileTimeout";
-        out[key] = Number(value);
-        workerOption = true;
-        break;
-      }
-      case "--e2e-timings":
-        out.e2eTimings = argv[++i] ?? "";
-        if (!out.e2eTimings || out.e2eTimings.startsWith("--")) failUsage("--e2e-timings requires a file", 2);
-        workerOption = true;
-        break;
-      case "--e2e-cancel-file":
-        out.e2eCancelFile = argv[++i] ?? "";
-        if (!out.e2eCancelFile || out.e2eCancelFile.startsWith("--")) failUsage("--e2e-cancel-file requires a file", 2);
-        workerOption = true;
-        break;
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-        break;
-      case "-h":
-        process.stdout.write(usage());
-        process.exit(0);
-        break;
-      default:
-        failUsage(`Unknown flag: ${arg}`);
+  try {
+    const out = parseRunnerArgs(argv);
+    if (out.help) {
+      process.stdout.write(usage());
+      process.exit(0);
     }
+    return out;
+  } catch (error) {
+    if (!(error instanceof RunnerArgsError)) throw error;
+    process.stderr.write(`${error.message}\n${error.showUsage ? `\n${usage()}` : ""}`);
+    process.exit(error.exitCode);
   }
 
-  if (!levelSelected) {
-    out.runSmoke = true;
-    out.runUnit = true;
-    out.runIntegration = true;
-  }
-  if (
-    out.shard &&
-    (!out.runUnit || out.runSmoke || out.runIntegration || out.runE2e)
-  ) {
-    process.stderr.write("ERROR: --shard requires --unit with no other level or profile flags\n");
-    process.exit(2);
-  }
-  if ((out.isolatedE2e && !out.runE2e) || (workerOption && !out.isolatedE2e)) {
-    failUsage("isolated e2e options require --e2e --isolated-e2e (or --e2e-plan)", 2);
-  }
-  if (out.isolatedE2e && (!Number.isSafeInteger(out.parallel) || out.parallel > 256)) {
-    failUsage("isolated e2e --parallel must be a safe integer in 1..256", 2);
-  }
-  if (out.e2eFileTimeout > 2_147_483) failUsage("--e2e-file-timeout exceeds the supported timer range", 2);
-  if (out.isolatedE2e && !out.e2ePlan) out.verbose = true;
-  if (!!out.matrixPlan !== !!out.matrixJob) {
-    failUsage("--matrix-plan and --matrix-job must be supplied together", 2);
-  }
-  if (out.matrixPlan) {
-    if (out.e2ePlan) failUsage("--matrix-plan requires an executed test run, not --e2e-plan", 2);
-    out.requireCoverage = true;
-    out.verbose = true;
-  }
-  return out;
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -696,8 +503,9 @@ function coverageReport() {
 }
 
 function runFailed(): boolean {
-  return failedFiles > 0 || isolatedRunError || (args.requireCoverage && !coverageReport().complete);
+  return failedFiles > 0 || selectionErrors.length > 0 || isolatedRunError || (args.requireCoverage && !coverageReport().complete);
 }
+const selectionErrors: string[] = [];
 
 function testsRel(file: string): string {
   return `tests/${relative(SCRIPT_DIR, file).replace(/\\/g, "/")}`;
@@ -711,7 +519,7 @@ function shouldSkipForClaude(file: string): boolean {
   return !claudeGateOpen && isClaudeRequiredFile(file);
 }
 
-function writeMeta(name: string, meta: MetaCounts | ResultRow): void {
+function writeMeta(name: string, meta: ResultRow): void {
   const status = meta.status;
   const rc = status === "FAIL" ? 1 : 0;
   const content =
@@ -719,9 +527,9 @@ function writeMeta(name: string, meta: MetaCounts | ResultRow): void {
       ? [
           `NAME=${name}`,
           "STATUS=SKIP",
-          "TESTS=0",
+          `TESTS=${meta.tests}`,
           "FAILED=0",
-          "DURATION=0",
+          `DURATION=${meta.duration}`,
           "RC=0",
           "",
         ].join("\n")
@@ -733,7 +541,11 @@ function writeMeta(name: string, meta: MetaCounts | ResultRow): void {
           duration: meta.duration,
           rc,
         });
-  writeFileSync(join(resultsDir, `${name}.meta`), content, "utf8");
+  writeFileSync(
+    join(resultsDir, `${name}.meta`),
+    `${content}SKIPPED=${meta.skipped}\nREASON=${meta.reason ?? ""}\n`,
+    "utf8",
+  );
 }
 
 function parseMeta(file: string): ResultRow {
@@ -741,6 +553,7 @@ function parseMeta(file: string): ResultRow {
     name: "",
     status: "PASS",
     tests: 0,
+    skipped: 0,
     failed: 0,
     duration: "0",
   };
@@ -753,8 +566,10 @@ function parseMeta(file: string): ResultRow {
     else if (key === "STATUS" && (value === "PASS" || value === "FAIL" || value === "SKIP")) {
       row.status = value;
     } else if (key === "TESTS") row.tests = Number(value) || 0;
+    else if (key === "SKIPPED") row.skipped = Number(value) || 0;
     else if (key === "FAILED") row.failed = Number(value) || 0;
     else if (key === "DURATION") row.duration = value || "0";
+    else if (key === "REASON" && value) row.reason = value;
   }
   return row;
 }
@@ -1028,6 +843,27 @@ async function runSpawnCapture(
   return { rc: timedOut ? 124 : rc, output: Buffer.concat(chunks).toString("utf8"), timedOut, cleanupError };
 }
 
+function writeTestLog(file: string, row: ResultRow, rc: number, body: string): void {
+  if (!args.verbose || captureFailure) return;
+  writeFileSync(
+    join(logDir, `${row.name}.log`),
+    [
+      `Test: ${basename(file)}`,
+      `File: ${file}`,
+      `Status: ${row.status}`,
+      guardProfileDescription(args.guardProfile),
+      `Exit code: ${rc}`,
+      `Executed test cases: ${row.tests - row.skipped}`,
+      `Skipped test cases: ${row.skipped}`,
+      `Timestamp: ${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}`,
+      "",
+      "--- Output ---",
+      body,
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 async function runBunTestFile(
   file: string, parallelMode = false, context?: IsolatedFileContext, force = false,
 ): Promise<FileExecution | undefined> {
@@ -1043,47 +879,33 @@ async function runBunTestFile(
   if (!force && !context?.force && !matchesE2eFilter(file, filterRegex)) return;
 
   if (shouldSkipForClaude(file)) {
-    process.stdout.write(`\n=== SKIP ${base} ===\n`);
-    process.stdout.write(`--- SKIP: ${base} (Claude substrate unavailable; derived live mechanism) ---\n`);
-    process.stdout.write(`=== DONE ${base} (SKIP) ===\n`);
-    writeMeta(name, { name, status: "SKIP", tests: 0, failed: 0, duration: "0" });
+    // --no-llm deliberately excludes these files, even from a mixed filter.
+    // Missing prerequisites alone cannot satisfy an explicitly requested gate.
+    const required = filterRegex !== null && !args.noLlm;
+    const row: ResultRow = {
+      name, status: required ? "FAIL" : "SKIP",
+      tests: 0, skipped: 0, failed: 0, duration: "0",
+      reason: required
+        ? "Explicitly selected live coverage did not run: Claude substrate unavailable. Install/authenticate Claude and rerun."
+        : "Claude substrate unavailable; derived live mechanism",
+    };
+    const body = `${required ? "error: " : ""}${row.reason}\n`;
+    process.stdout.write(`\n=== ${row.status} ${base} ===\n${body}`);
+    process.stdout.write(`--- ${row.status}: ${base} ---\n`);
+    process.stdout.write(`=== DONE ${base} (${row.status}) ===\n`);
+    writeMeta(name, row);
+    writeTestLog(file, row, required ? 1 : 0, body);
     const execution: FileExecution = {
-      status: "SKIP", cases: { total: 0, passed: 0, failed: 0, skipped: 0 },
+      status: row.status, cases: { total: 0, passed: 0, failed: 0, skipped: 0 },
       wallTimeMs: 0, timedOut: false, throttlingSignals: 0,
     };
     fileExecutions.set(name, execution);
     return execution;
   }
 
-  // Disable the stage-completion artifact guard (issue #366) for the suite by
-  // default: most state/orchestrate tests drive approve/advance against bare
-  // fixtures that intentionally produce no artifacts, so the suite sets the env
-  // bypass globally. The dedicated guard test (t185-stage-artifact-guard)
-  // re-enables the guard by clearing this var in its own tool spawns, so
-  // enforcement is still covered.
-  //
-  // Disable the human-presence gate for the suite by default for the same
-  // reason: most approve/advance tests drive the gate without recording a
-  // HUMAN_TURN event (the gate requires one since the last gate resolution),
-  // so the suite sets the bypass globally. The dedicated guard test
-  // (t188-human-presence-gate) clears this var in its own tool spawns to
-  // exercise real enforcement.
-  //
-  // Disable the consolidated-summary receipt guard for synthetic transition
-  // fixtures. Focused summary-confirmation tests clear this variable and create
-  // the real prompt, human-turn, answer, digest, and artifact-write evidence.
-  //
-  // Disable the approve-time gate-revision backstop for the suite by default,
-  // for the same reason: many approve tests drive a revision-shaped ledger
-  // against bare fixtures and must not have their Revision Count / audit trail
-  // reconciled out from under them. The dedicated test (t205-gate-revision-
-  // backstop) clears this var in its own tool spawns to exercise the backfill.
-  //
-  // Allow direct CLI appends of authority-bearing audit events (HUMAN_TURN,
-  // GATE_*, REVIEW_*, ...) for the suite by default: fixtures simulate the
-  // owning emitters (the mint hook, aidlc-log review) through the public CLI
-  // (t188/t205 recordHumanTurn, t115 appendAudit). The dedicated ownership
-  // test clears this var in its own tool spawns to exercise the refusal.
+  // Fixture defaults allow synthetic transitions and authority-bearing audit
+  // appends. Production mode applies after shell/project-settings inheritance,
+  // before the test child starts. Tests still own their environment afterwards.
   //
   // Isolate git for the whole suite. The generated global config carries forward
   // protected safe.directory entries needed by mounted/foreign-owned CI
@@ -1095,15 +917,9 @@ async function runBunTestFile(
   // host cannot change unrelated test results. Focused managed-policy tests
   // override the path with their own fixture.
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...context?.env,
+    ...testGuardEnvironment({ ...process.env, ...context?.env }, args.guardProfile),
     AIDLC_TEST_NAME: base,
     AIDLC_MANAGED_SETTINGS_PATH: join(logDir, ".aidlc-managed-settings-absent.json"),
-    AIDLC_SKIP_ARTIFACT_GUARD: "1",
-    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
-    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
-    AIDLC_SKIP_REVISION_BACKSTOP: "1",
-    AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1",
   };
   // Command-scope config outranks the isolated global file. Preserve its safety
   // entries above, then remove all command-scope injection before spawning tests.
@@ -1181,21 +997,32 @@ async function runBunTestFile(
   const { e2eCaseCounts, validateJUnitEvidence } = await import("./lib/e2e-plan.ts");
   const evidence = validateJUnitEvidence(xml);
   const cases = evidence.complete ? evidence.cases : e2eCaseCounts(xml);
-  const meta = buildMeta(xml, name, run.rc);
+  const counts = buildMeta(xml, name, run.rc);
+  const meta: ResultRow = { ...counts, skipped: Math.min(counts.tests, cases.skipped) };
   if ((!evidence.complete && cases.total > 0) || (evidence.complete && cases.failed > 0)) {
     meta.status = "FAIL";
     meta.failed = Math.max(1, meta.failed, cases.failed);
     if (!evidence.complete) run.output += `\nerror: ${evidence.error}\n`;
+  }
+  if (meta.status === "PASS" && meta.tests === meta.skipped) {
+    meta.status = filterRegex ? "FAIL" : "SKIP";
+    meta.reason = filterRegex
+      ? "Explicitly selected file executed no test cases (all skipped or empty). For production guard journeys, rerun with --production-guards; for live gates, enable the documented live variable and install/authenticate its CLI."
+      : "No test cases executed (all skipped or empty)";
   }
   // Preserve a duration even if a future Bun omits root time.
   if (meta.duration === "0") meta.duration = String(Math.max(0, (Date.now() - start) / 1000));
   writeMeta(name, meta);
 
   const status = meta.status;
-  const body = run.output;
+  const diagnostic = meta.reason
+    ? `${status === "FAIL" ? "error: " : ""}${meta.reason}\n`
+    : "";
+  const body = `${run.output}${diagnostic ? `\n${diagnostic}` : ""}`;
   const doneBlock = (): void => {
     if (!args.debug) process.stdout.write(body);
-    process.stdout.write(status === "FAIL" ? `--- FAIL: ${base} ---\n` : `--- PASS: ${base} ---\n`);
+    else if (diagnostic) process.stdout.write(`[${base}] ${diagnostic}`);
+    process.stdout.write(`--- ${status}: ${base} ---\n`);
     process.stdout.write(`=== DONE ${base} (${status}) ===\n`);
   };
   if (parallelMode) {
@@ -1205,24 +1032,7 @@ async function runBunTestFile(
   }
 
   if (!context && !args.verbose) rmSync(junitXml, { force: true });
-
-  if (args.verbose && !captureFailure) {
-    const logFile = join(logDir, `${name}.log`);
-    writeFileSync(
-      logFile,
-      [
-        `Test: ${base}`,
-        `File: ${file}`,
-        `Status: ${status}`,
-        `Exit code: ${run.rc}`,
-        `Timestamp: ${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}`,
-        "",
-        "--- Output ---",
-        body,
-      ].join("\n"),
-      "utf8",
-    );
-  }
+  writeTestLog(file, meta, run.rc, body);
   const execution: FileExecution = {
     status: cases.skipped === cases.total && status !== "FAIL" ? "SKIP" : status,
     cases,
@@ -1525,6 +1335,7 @@ async function runIsolatedE2e(): Promise<void> {
         };
         writeMeta(name, {
           name, status: "FAIL", tests: outcome.cases.total,
+          skipped: outcome.cases.skipped,
           failed: Math.max(1, outcome.cases.failed), duration: String(outcome.wallTimeMs / 1000),
         });
       }
@@ -1563,7 +1374,7 @@ async function runIsolatedE2e(): Promise<void> {
       if (needsTui && task.file === preflight) return false;
       if (task.tui && !tuiReady) {
         const name = resultName(task.file);
-        writeMeta(name, { name, status: "SKIP", tests: 0, failed: 0, duration: "0" });
+        writeMeta(name, { name, status: "SKIP", tests: 0, skipped: 0, failed: 0, duration: "0" });
         Object.assign(records.get(task.file)!, { state: "SKIP", reason: "TUI capability gate failed" });
         process.stdout.write(`=== DONE ${basename(task.file)} (SKIP: TUI capability gate failed) ===\n`);
         return false;
@@ -1634,11 +1445,16 @@ function printSummary(): void {
   process.stdout.write("\n==============================\n");
   process.stdout.write("SUMMARY\n");
   process.stdout.write("==============================\n");
+  process.stdout.write(`${guardProfileDescription(args.guardProfile)}\n`);
   process.stdout.write(`Test files: ${totalFiles}\n`);
   process.stdout.write(`Failed files: ${failedFiles}\n`);
   process.stdout.write(`Total assertions: ${totalTests}\n`);
   process.stdout.write(`Failed assertions: ${totalFailed}\n`);
   process.stdout.write(`Coverage: ${coverageReport().complete ? "COMPLETE" : "INCOMPLETE"}\n`);
+  process.stdout.write(`Executed test cases: ${resultRows.reduce((n, row) => n + row.tests - row.skipped, 0)}\n`);
+  process.stdout.write(`Skipped test cases: ${resultRows.reduce((n, row) => n + row.skipped, 0)}\n`);
+  process.stdout.write(`Skipped files: ${resultRows.filter((row) => row.status === "SKIP").length}\n`);
+  for (const error of selectionErrors) process.stdout.write(`error: ${error}\n`);
   if (args.verbose && logDir) {
     process.stdout.write(`Log directory: ${displayLogDirPath(logDir)}\n`);
   }
@@ -1664,6 +1480,7 @@ function writeVerboseSummary(): void {
     "======================",
     `Timestamp: ${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}`,
     `Tiers: ${tiersRun}`,
+    guardProfileDescription(args.guardProfile),
   ];
   if (args.debug) lines.push("Mode: debug (streaming + driver traces)");
   lines.push("", "Per-file results:");
@@ -1673,6 +1490,7 @@ function writeVerboseSummary(): void {
     lines.push(
       `  ${row.name.padEnd(40)} ${row.status.padEnd(6)} ${String(row.tests).padStart(10)} ${String(row.failed).padStart(10)} ${`${row.duration}s`.padStart(10)}`,
     );
+    if (row.reason) lines.push(`    ${row.reason}`);
   }
   lines.push(
     "",
@@ -1682,11 +1500,15 @@ function writeVerboseSummary(): void {
     `  Total assertions: ${totalTests}`,
     `  Failed assertions: ${totalFailed}`,
     `  Coverage: ${coverage.complete ? "COMPLETE" : "INCOMPLETE"}`,
+    `  Executed test cases: ${resultRows.reduce((n, row) => n + row.tests - row.skipped, 0)}`,
+    `  Skipped test cases: ${resultRows.reduce((n, row) => n + row.skipped, 0)}`,
+    `  Skipped files: ${resultRows.filter((row) => row.status === "SKIP").length}`,
+    ...selectionErrors.map((error) => `  error: ${error}`),
     `  Result: ${runFailed() ? "FAIL" : "PASS"}`,
   );
   writeFileSync(join(logDir, "summary.txt"), `${lines.join("\n")}\n`, "utf8");
 
-  const failures: string[] = [];
+  const failures: string[] = selectionErrors.map((error) => `error: ${error}`);
   if (args.requireCoverage && !coverage.complete) {
     failures.push("INCOMPLETE: required selected coverage was not fully exercised");
     if (coverage.selectedFiles === 0) failures.push("  No test files selected");
@@ -1703,7 +1525,7 @@ function writeVerboseSummary(): void {
   if (failedFiles > 0) {
     for (const row of resultRows) {
       if (row.status !== "FAIL") continue;
-      failures.push(`FAIL: ${row.name} (${row.failed} failed assertions)`);
+      failures.push(`FAIL: ${row.name} (${row.reason ?? `${row.failed} failed assertions`})`);
       const logFile = join(logDir, `${row.name}.log`);
       if (existsSync(logFile) && statSync(logFile).isFile()) {
         // bun:test marks a failing case with a line that STARTS WITH `(fail)`
@@ -1769,7 +1591,7 @@ async function main(): Promise<number> {
   // anything. A filter must not hide an automatically executed capability gate.
   const requested = requestedTestFiles();
   requestedFilesAtStart = requested;
-  if (needsLlm && !args.filter) {
+  if (needsLlm && !args.filter && !args.noLlm) {
     const preflight = join(SCRIPT_DIR, "integration", "t19.test.ts");
     if (existsSync(preflight)) requiredPrerequisites.add(preflight);
   }
@@ -1805,6 +1627,7 @@ async function main(): Promise<number> {
   }
   process.stdout.write("AI-DLC Testing Harness\n");
   process.stdout.write("======================\n");
+  process.stdout.write(`${guardProfileDescription(args.guardProfile)}\n`);
 
   if (args.runSmoke) await runTier("smoke", "Smoke Tests (structural)");
   if (args.runSmoke && failedFiles > 0) {
@@ -1905,6 +1728,11 @@ async function main(): Promise<number> {
     }
   }
 
+  if (filterRegex && failedFiles === 0 && !resultRows.some((row) => row.tests > row.skipped)) {
+    selectionErrors.push(totalFiles === 0
+      ? `--filter ${JSON.stringify(args.filter)} matched no test files in the selected tiers/shard. Check the filename, tier and shard.`
+      : `--filter ${JSON.stringify(args.filter)} executed no test cases. --no-llm excludes Claude-dependent files; select deterministic tests or enable the requested live coverage.`);
+  }
   return runFailed() ? Math.max(1, failedFiles) : 0;
 }
 

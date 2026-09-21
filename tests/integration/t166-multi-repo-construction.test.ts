@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, function:resolveConstructionRepo, function:repoDir, function:intentRepos
+// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, function:resolveConstructionRepo, function:repoDir, function:intentRepos, function:delegatedWorktreeIntent
 // covers: function:redactProjectDirPrefix
 // covers: function:resolveAuditProjectPath
 // covers: function:resolveAuditWorktreePath
@@ -13,7 +13,7 @@
 // WHY cli + real git: the subject IS where `git worktree add` runs. The only way
 // to prove the worktree forked inside repo-a (and not repo-b, and not the
 // non-git workspace root) is to run the real tool against real sibling git repos
-// and inspect which repo's ref namespace gained the `bolt-<slug>` branch. An
+// and inspect which repo's ref namespace gained the intent-scoped branch. An
 // in-process twin would re-stage the cwd choice that is the whole point.
 //
 // FIXTURE: each scenario gets a FRESH workspace (createTestProject). The workspace
@@ -34,14 +34,28 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import { AIDLC_SRC, cleanupTestProject, createTestProject, fixtureIntentId8 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  boltName,
+  legacyBoltName,
+  legacyWorktreePath,
+  parkedRefPrefix,
+  worktreePath,
   latestMainWorkflowStageRunFloorForProject,
   readAllAuditShards,
   readUnitSourceManifest,
+  stateDigest,
   workspaceSourceFingerprint,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  codeGenerationRecordDir,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -285,14 +299,64 @@ function seedOneUnitDag(proj: string, unit: string, kind?: string): void {
     join(record, "runtime-graph.json"),
     `${JSON.stringify({ bolt_dag: { units: [{ name: unit, depends_on: [] }], batches: [[unit]] } })}\n`,
   );
+  // These legacy swarm fixtures record the main review after convergence/merge.
+  // Checkpoint-enabled batches require the native child review before convergence
+  // (covered by t343/t344); keep this source-binding compatibility path explicit.
   const state = join(record, "aidlc-state.md");
   writeFileSync(
     state,
     readFileSync(state, "utf-8")
       .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
       .replace(/^- \*\*Construction Autonomy Mode\*\*:.*$/m, "- **Construction Autonomy Mode**: autonomous")
+      .replace(/^- \*\*Construction Iteration\*\*:.*$/m, "- **Construction Iteration**: stage-major")
+      .replace(/^- \*\*Construction Checkpoints\*\*:.*$/m, "- **Construction Checkpoints**: disabled")
+      .replace(/^- \*\*Construction Execution\*\*:.*$/m, "- **Construction Execution**: swarm")
       .replace(/^- \[[^\]]\] code-generation.*$/m, "- [?] code-generation — EXECUTE"),
   );
+}
+
+function approvePlan(proj: string, unit: string): void {
+  writeActiveDirectiveMarker(proj, {
+    kind: "invoke-swarm", stage: "code-generation", units: [unit],
+    state_sha256: stateDigest(readFileSync(join(activeRecord(proj), "aidlc-state.md"), "utf-8")),
+  });
+  const contract = resolveTestingPosture(proj);
+  const authority = resolveCodeGenerationAuthority(proj, { unit });
+  const dir = codeGenerationRecordDir(proj, unit);
+  mkdirSync(dir, { recursive: true });
+  const body = `# Plan for ${unit}\n\n${renderTestingContract(contract)}\n## Steps\n- [ ] Update the sibling application source\n`;
+  const instructions = `# Tests for ${unit}\n\nVerify the reviewed source is retained through finalize and merge.\n`;
+  writeFileSync(join(dir, "code-generation-plan.md"), body);
+  writeFileSync(join(dir, "unit-test-instructions.md"), instructions);
+  const questions = join(dir, "code-generation-questions.md");
+  writeFileSync(questions, [
+    "## Plan Approval",
+    `[Approval Fingerprint]: ${approvalFingerprint(body, instructions, contract.contract_sha256, authority)}`,
+    `[Planned Source]: ${workspaceSourceFingerprint(proj)}`,
+    "A. Approve Plan", "B. Request Changes", "[Answer]:", "",
+  ].join("\n"));
+  const session = `t166-${unit}`;
+  appendAuditEntry("SESSION_STARTED", { Session: session, Source: "t166 fixture" }, proj);
+  const identity = [
+    "--project-dir", proj, "--stage", "code-generation", "--checkpoint", "plan-approval",
+    "--unit", unit, "--questions-file", questions, "--session", session,
+  ];
+  const decision = spawnSync(BUN, [LOG_TOOL, "decision", ...identity,
+    "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes"], {
+    encoding: "utf-8", cwd: proj,
+  });
+  if (decision.status !== 0) throw new Error(`${decision.stdout}${decision.stderr}`);
+  const human = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+    encoding: "utf-8", cwd: proj,
+    env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan" }),
+  });
+  if (human.status !== 0) throw new Error(`${human.stdout}${human.stderr}`);
+  writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
+  const answer = spawnSync(BUN, [LOG_TOOL, "answer", ...identity, "--details", "Approve Plan"], {
+    encoding: "utf-8", cwd: proj,
+  });
+  if (answer.status !== 0) throw new Error(`${answer.stdout}${answer.stderr}`);
 }
 
 function recordMainReview(
@@ -305,7 +369,7 @@ function recordMainReview(
   const dir = join(record, "construction", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md"]) {
-    writeFileSync(join(dir, name), `# ${name}\n`);
+    if (!existsSync(join(dir, name))) writeFileSync(join(dir, name), `# ${name}\n`);
   }
   writeFileSync(join(dir, "traceability.json"), "{}\n");
   writeFileSync(
@@ -356,7 +420,7 @@ function recordWorktreeReview(
   const dir = join(record, "construction", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md"]) {
-    writeFileSync(join(dir, name), `# ${name}\n`);
+    if (!existsSync(join(dir, name))) writeFileSync(join(dir, name), `# ${name}\n`);
   }
   writeFileSync(join(dir, "traceability.json"), "{}\n");
   writeFileSync(
@@ -412,6 +476,7 @@ function recordWorktreeReview(
 function uncommittedSiblingRootSourceScenario(
   rootName: "aidlc" | ".aidlc",
 ): {
+  checked: RunResult;
   finalized: RunResult;
   merged: RunResult;
   mainBytes: string;
@@ -435,6 +500,7 @@ function uncommittedSiblingRootSourceScenario(
   );
   if (created.status !== 0) throw new Error(created.out);
   seedOneUnitDag(proj, unit);
+  approvePlan(proj, unit);
   const prepared = runSwarm(
     proj,
     "prepare",
@@ -452,6 +518,7 @@ function uncommittedSiblingRootSourceScenario(
   writeFileSync(join(wt, sourcePath), "export const reviewed = 2;\n");
   const reviewed = recordWorktreeReview(wt, unit, sourcePath);
   if (reviewed.status !== 0) throw new Error(reviewed.out);
+  const checked = runSwarm(proj, "check", "--unit", unit, "--check-cmd", "true");
   const finalized = runSwarm(
     proj,
     "finalize",
@@ -495,6 +562,7 @@ function uncommittedSiblingRootSourceScenario(
         )
       : { status: -1, out: finalized.out, stdout: "" };
   return {
+    checked,
     finalized,
     merged,
     mainBytes:
@@ -532,6 +600,7 @@ function compositionScenario(
   if (created.status !== 0) throw new Error(created.out);
   const unit = `composition-${suffix}`;
   seedOneUnitDag(proj, unit, "service");
+  approvePlan(proj, unit);
   const prepared = runSwarm(
     proj,
     "prepare",
@@ -639,11 +708,12 @@ function compositionScenario(
 }
 
 const worktreeDir = (proj: string, slug: string): string =>
-  join(proj, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(proj, fixtureIntentId8(proj), slug);
 
-/** True iff branch `bolt-<slug>` exists in the repo at `<proj>/<name>`. */
-function hasBoltBranch(proj: string, repoName: string, slug: string): boolean {
-  return git(join(proj, repoName), "rev-parse", "--verify", `refs/heads/bolt-${slug}`).status === 0;
+/** Inspect the selected fixture intent's branch in the specified repository. */
+function hasBoltBranch(proj: string, repoName: string, slug: string, intent?: string): boolean {
+  const branch = boltName(fixtureIntentId8(proj, intent), slug);
+  return git(join(proj, repoName), "rev-parse", "--verify", `refs/heads/${branch}`).status === 0;
 }
 
 describe("t166 P7 multi-repo construction — --repo anchors the worktree to the sibling repo", () => {
@@ -1020,7 +1090,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       repoB,
       "fetch",
       repoA,
-      "bolt-wrong-repo:refs/heads/bolt-wrong-repo",
+      `${boltName(fixtureIntentId8(proj), "wrong-repo")}:refs/heads/${boltName(fixtureIntentId8(proj), "wrong-repo")}`,
     );
     const beforeA = git(repoA, "rev-parse", "main").out.trim();
     const beforeB = git(repoB, "rev-parse", "main").out.trim();
@@ -1059,8 +1129,8 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
   describe("multi-repo: discard is bound to the creating repository", () => {
     const proj = freshWorkspace();
-    makeSiblingRepo(proj, "repo-a");
-    makeSiblingRepo(proj, "repo-b");
+    const repoA = makeSiblingRepo(proj, "repo-a");
+    const repoB = makeSiblingRepo(proj, "repo-b");
     runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     runWorktree(
       proj,
@@ -1072,6 +1142,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--repo",
       "repo-a",
     );
+    writeFileSync(join(worktreeDir(proj, "discard-repo"), "recovery.txt"), "parked dirty source\n");
     const wrong = runWorktree(
       proj,
       "discard",
@@ -1086,6 +1157,26 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--slug",
       "discard-repo",
     );
+    const parked = JSON.parse(recovered.stdout) as { parked_ref: string; parked_commit: string };
+    const stamp = parked.parked_ref.split("/").at(-1);
+    const restoredPath = join(proj, ".aidlc", "restored", `${boltName(fixtureIntentId8(proj), "discard-repo")}-${stamp}`);
+    const conflictingRef = `${parked.parked_ref}/head`;
+    git(repoB, "update-ref", conflictingRef, "HEAD");
+    const ambiguousRestore = runWorktree(proj, "restore", "--slug", "discard-repo");
+    const ambiguousPurge = runWorktree(proj, "purge", "--slug", "discard-repo");
+    const retainedA = git(repoA, "rev-parse", "--verify", conflictingRef);
+    const retainedB = git(repoB, "rev-parse", "--verify", conflictingRef);
+    const ambiguousCheckoutExists = existsSync(restoredPath);
+    const explicitPurge = runWorktree(proj, "purge", "--slug", "discard-repo", "--repo", "repo-b");
+    const restored = runWorktree(proj, "restore", "--slug", "discard-repo");
+    const restoredSource = existsSync(join(restoredPath, "recovery.txt"))
+      ? readFileSync(join(restoredPath, "recovery.txt"), "utf-8")
+      : null;
+    const removed = git(repoA, "worktree", "remove", "--force", restoredPath);
+    const purged = runWorktree(proj, "purge", "--slug", "discard-repo");
+    const remainingRefs = git(repoA, "for-each-ref", "--format=%(refname)", parkedRefPrefix(fixtureIntentId8(proj), "discard-repo"));
+    const missingRestore = runWorktree(proj, "restore", "--slug", "discard-repo");
+    const missingPurge = runWorktree(proj, "purge", "--slug", "discard-repo");
 
     test("wrong selector refuses and selector-free retry uses the creating repo", () => {
       expect(wrong.status).not.toBe(0);
@@ -1093,6 +1184,39 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(recovered.status, recovered.out).toBe(0);
       expect(existsSync(worktreeDir(proj, "discard-repo"))).toBe(false);
       expect(hasBoltBranch(proj, "repo-a", "discard-repo")).toBe(false);
+    });
+
+    test("ambiguous parked repositories refuse recovery without deleting either attempt", () => {
+      for (const result of [ambiguousRestore, ambiguousPurge]) {
+        expect(result.status).not.toBe(0);
+        expect(emittedError(result)).toContain("parked attempts for slug discard-repo exist in several repositories");
+        expect(emittedError(result)).toContain('("repo-a", "repo-b"); pass --repo <name>');
+      }
+      expect(retainedA.status, retainedA.out).toBe(0);
+      expect(retainedA.out.trim()).toBe(parked.parked_commit);
+      expect(retainedB.status, retainedB.out).toBe(0);
+      expect(ambiguousCheckoutExists).toBe(false);
+      expect(explicitPurge.status, explicitPurge.out).toBe(0);
+      expect(JSON.parse(explicitPurge.stdout).purged).toBe(1);
+    });
+
+    test("selector-free restore recovers the creating repo's source under the project", () => {
+      expect(restored.status, restored.out).toBe(0);
+      expect(JSON.parse(restored.stdout).worktree_path).toBe(restoredPath);
+      expect(restoredSource).toBe("parked dirty source\n");
+      expect(removed.status, removed.out).toBe(0);
+    });
+
+    test("selector-free purge removes parked refs after the restore checkout is removed", () => {
+      expect(purged.status, purged.out).toBe(0);
+      // R4(d): a snapshot retains the original branch tip as well as its raw head and discriminator.
+      expect(JSON.parse(purged.stdout)).toEqual({ purged: 3, slug: "discard-repo", stamps: [stamp], skipped_unparseable: [] });
+      expect(remainingRefs.status, remainingRefs.out).toBe(0);
+      expect(remainingRefs.out).toBe("");
+      for (const result of [missingRestore, missingPurge]) {
+        expect(result.status).not.toBe(0);
+        expect(result.out).toContain("no parked attempt for slug discard-repo");
+      }
     });
   });
 
@@ -1161,7 +1285,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--repo",
       "repo-a",
     );
-    git(removedRepoB, "branch", "bolt-audit-removed");
+    git(removedRepoB, "branch", boltName(fixtureIntentId8(removedProj), "audit-removed"));
     rmSync(worktreeDir(removedProj, "audit-removed"), {
       recursive: true,
       force: true,
@@ -1227,7 +1351,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
           "repo-b",
         ),
       );
-      if (plantRepoB) git(repoB, "branch", `bolt-${slug}`);
+      if (plantRepoB) git(repoB, "branch", boltName(fixtureIntentId8(proj), slug));
       return { created, phantom, proj };
     }
 
@@ -1284,7 +1408,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "repo-a,repo-b",
     );
     const secondIntent = basename(activeRecord(movedProj));
-    git(movedRepoB, "branch", "bolt-moved-cursor");
+    git(movedRepoB, "branch", boltName(fixtureIntentId8(movedProj, firstIntent), "moved-cursor"));
     const movedWrong = runWorktree(
       movedProj,
       "discard",
@@ -1292,7 +1416,15 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "moved-cursor",
       "--repo",
       "repo-b",
+      "--intent",
+      firstIntent,
     );
+    // R4(e): restore the real checkout after the cleanup-only selector check; foreign-dir refusal needs a live owner.
+    const firstWorktree = worktreePath(movedProj, fixtureIntentId8(movedProj, firstIntent), "moved-cursor");
+    expect(git(join(movedProj, "repo-a"), "worktree", "prune").status).toBe(0);
+    expect(git(join(movedProj, "repo-a"), "worktree", "add", firstWorktree,
+      boltName(fixtureIntentId8(movedProj, firstIntent), "moved-cursor")).status).toBe(0);
+    const firstHead = git(firstWorktree, "rev-parse", "HEAD").out.trim();
     const foreignIntent = runWorktree(
       movedProj,
       "discard",
@@ -1424,7 +1556,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       recursive: true,
       force: true,
     });
-    git(migrationRepoB, "branch", "bolt-migration-ambiguous");
+    git(migrationRepoB, "branch", boltName(fixtureIntentId8(migrationAmbiguousProj), "migration-ambiguous"));
     stripCreationRepoField(migrationAmbiguousProj);
     const migrationWrongRepo = runWorktree(
       migrationAmbiguousProj,
@@ -1474,7 +1606,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       recursive: true,
       force: true,
     });
-    git(lostRepoB, "branch", "bolt-lost-corroboration");
+    git(lostRepoB, "branch", boltName(fixtureIntentId8(lostCorroborationProj), "lost-corroboration"));
     const legitimateDiscard = runWorktree(
       lostCorroborationProj,
       "discard",
@@ -1515,7 +1647,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       recursive: true,
       force: true,
     });
-    git(unreadableRepoB, "branch", "bolt-unreadable-authority");
+    git(unreadableRepoB, "branch", boltName(fixtureIntentId8(unreadableProj), "unreadable-authority"));
     const unreadableAuditDir = join(activeRecord(unreadableProj), "audit");
     const unreadableShards = readdirSync(unreadableAuditDir).map((file) =>
       join(unreadableAuditDir, file),
@@ -1566,15 +1698,18 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(firstIntent).not.toBe(secondIntent);
       expect(movedWrong.status).not.toBe(0);
       expect(movedWrong.out).toContain("does not match creating repository");
-      expect(foreignIntent.status).not.toBe(0);
-      expect(foreignIntent.out).toContain(
-        "does not match creating intent",
-      );
+      // R4(e): a foreign same-slug checkout must be refused, not reported as already discarded.
+      expect(foreignIntent.status, foreignIntent.out).not.toBe(0);
+      expect(foreignIntent.out).toContain(`no Bolt moved-cursor belongs to intent aidlc/spaces/default/intents/${secondIntent}`);
+      expect(foreignIntent.out).toContain(`this checkout holds ${boltName(fixtureIntentId8(movedProj, firstIntent), "moved-cursor")}`);
+      expect(foreignIntent.out).toContain("select that intent to discard it");
+      expect(existsSync(firstWorktree)).toBe(true);
+      expect(git(firstWorktree, "rev-parse", "HEAD").out.trim()).toBe(firstHead);
       expect(
-        hasBoltBranch(movedProj, "repo-a", "moved-cursor"),
+        hasBoltBranch(movedProj, "repo-a", "moved-cursor", firstIntent),
       ).toBe(true);
       expect(
-        hasBoltBranch(movedProj, "repo-b", "moved-cursor"),
+        hasBoltBranch(movedProj, "repo-b", "moved-cursor", firstIntent),
       ).toBe(true);
     });
 
@@ -1604,7 +1739,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
         expect(refusal.out).toContain("repo-a");
         expect(refusal.out).toContain("repo-b");
         expect(refusal.out).toContain(
-          "Delete the stray bolt-migration-ambiguous branch",
+          `Delete the stray ${boltName(fixtureIntentId8(migrationAmbiguousProj), "migration-ambiguous")} branch`,
         );
         expect(refusal.out).toContain(
           "retry with --repo <creating-repo>",
@@ -1644,7 +1779,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
         "otherwise inspect",
       );
       expect(lostCorroboration.out).toContain(
-        "bolt-lost-corroboration branch",
+        `${boltName(fixtureIntentId8(lostCorroborationProj), "lost-corroboration")} branch`,
       );
       expect(lostCorroboration.out).not.toContain("unreadable");
 
@@ -1863,7 +1998,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     });
   });
 
-  describe("merge without selectors recovers the worktree's creating intent after the active cursor moves", () => {
+  describe("merge after the active cursor moves requires the original intent selector", () => {
     const proj = freshWorkspace();
     const repoA = makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
@@ -1877,6 +2012,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--label",
       "original-intent",
     );
+    const originalIntent = basename(activeRecord(proj));
     const created = runWorktree(
       proj,
       "create",
@@ -1899,6 +2035,9 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--label",
       "second-intent",
     );
+    const unselected = runWorktree(
+      proj, "merge", "--slug", "cursor-stable", "--target", "main", "--strategy", "squash",
+    );
     const merged = runWorktree(
       proj,
       "merge",
@@ -1908,6 +2047,8 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "main",
       "--strategy",
       "squash",
+      "--intent",
+      originalIntent,
     );
 
     test("both intents and the original worktree are created", () => {
@@ -1915,7 +2056,8 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(created.status).toBe(0);
       expect(second.status).toBe(0);
     });
-    test("selector-free merge lands in the original intent's repo", () => {
+    test("only the explicit original intent merge lands in its creating repo", () => {
+      expect(unselected.status, unselected.out).not.toBe(0);
       expect(merged.status, merged.out).toBe(0);
       expect(existsSync(join(repoA, "cursor-stable.txt"))).toBe(true);
     });
@@ -1924,18 +2066,14 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
   describe("legacy absolute Worktree path rows remain readable", () => {
     const proj = freshWorkspace();
     runUtil(proj, "intent-create", "--scope", "feature");
-    const legacyPath = join(
-      proj,
-      ".aidlc",
-      "worktrees",
-      "bolt-legacy-audit-path",
-    );
+    // Deliberate pre-upgrade Bolt: info must preserve its absolute audit path.
+    const legacyPath = legacyWorktreePath(proj, "legacy-audit-path");
     appendAuditEntry(
       "WORKTREE_CREATED",
       {
         "Bolt slug": "legacy-audit-path",
         "Worktree path": legacyPath,
-        "Branch name": "bolt-legacy-audit-path",
+        "Branch name": legacyBoltName("legacy-audit-path"),
         "Base branch": "main",
       },
       proj,
@@ -2007,7 +2145,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     test("create WITHOUT --repo works (cwd = projectDir, back-compat)", () => {
       expect(created.status).toBe(0);
       // The bolt branch lives in the workspace-root repo.
-      expect(git(proj, "rev-parse", "--verify", "refs/heads/bolt-legacy").status).toBe(0);
+      expect(git(proj, "rev-parse", "--verify", `refs/heads/${boltName(fixtureIntentId8(proj), "legacy")}`).status).toBe(0);
       expect(existsSync(worktreeDir(proj, "legacy"))).toBe(true);
     });
   });
@@ -2064,6 +2202,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const dotAidlcRoot = uncommittedSiblingRootSourceScenario(".aidlc");
 
     test("uncommitted aidlc/ source is bound into Source Commit and merged", () => {
+      expect(aidlcRoot.checked.status, aidlcRoot.checked.out).toBe(0);
       expect(aidlcRoot.finalized.status, aidlcRoot.finalized.out).toBe(0);
       expect(aidlcRoot.merged.status, aidlcRoot.merged.out).toBe(0);
       expect(aidlcRoot.sourceCommitBytes).toBe("export const reviewed = 2;\n");
@@ -2071,6 +2210,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     });
 
     test("uncommitted .aidlc/ source is bound without retaining injected metadata", () => {
+      expect(dotAidlcRoot.checked.status, dotAidlcRoot.checked.out).toBe(0);
       expect(dotAidlcRoot.finalized.status, dotAidlcRoot.finalized.out).toBe(0);
       expect(dotAidlcRoot.merged.status, dotAidlcRoot.merged.out).toBe(0);
       expect(dotAidlcRoot.sourceCommitBytes).toBe("export const reviewed = 2;\n");
@@ -2082,7 +2222,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
   // M1 — the SWARM PREPARE path resolves the target sibling repo. `prepare` is
   // the conductor-facing seam the engine's invoke-swarm directive feeds: it forks
   // a worktree per unit via `aidlc-worktree create`, so the per-unit bolt branch
-  // is `bolt-<unit>` (verified: aidlc-swarm.ts:387 forwards `--slug <unit>` +
+  // is derived from the selected intent plus Unit slug (prepare forwards `--slug <unit>` +
   // `--repo <resolved>` to create). On a multi-repo intent, prepare WITHOUT --repo
   // dead-ends (resolveConstructionRepo throws "spans 2 repos") — proving --repo is
   // what resolves the dead-end M1 fixes the engine side of.
@@ -2100,9 +2240,14 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     git(repoA, "commit", "-q", "-m", "seed sibling aidlc application source");
     runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     seedOneUnitDag(proj, "swarmunit");
+    approvePlan(proj, "swarmunit");
+    const sourceBeforePrepare = workspaceSourceFingerprint(proj);
     const prepared = runSwarm(
       proj, "prepare", "--batch", "1", "--units", "swarmunit", "--base", "main", "--repo", "repo-a",
     );
+    if (prepared.status !== 0) throw new Error(prepared.out);
+    const sourceAfterPrepare = workspaceSourceFingerprint(proj);
+    const repoStatusAfterPrepare = git(repoA, "status", "--porcelain", "--untracked-files=all");
     const wt = worktreeDir(proj, "swarmunit");
     writeFileSync(
       join(wt, "aidlc", "application.ts"),
@@ -2168,6 +2313,9 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
     test("prepare --repo repo-a exits 0", () => {
       expect(prepared.status).toBe(0);
+      expect(sourceAfterPrepare).toBe(sourceBeforePrepare);
+      expect(repoStatusAfterPrepare.status, repoStatusAfterPrepare.out).toBe(0);
+      expect(repoStatusAfterPrepare.out).toBe("");
     });
     test("reviewed sibling aidlc/ source merges with authority and completes", () => {
       expect(merged.status, merged.out).toBe(0);
@@ -2188,12 +2336,10 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       const worktreePaths = audit
         .split(/\r?\n/)
         .filter((line) => line.startsWith("**Worktree path**:"));
-      expect(worktreePaths.length).toBeGreaterThan(0);
-      expect(
-        worktreePaths.every((line) =>
-          line.includes("**Worktree path**: .aidlc/worktrees/bolt-")
-        ),
-      ).toBe(true);
+      const expectedPaths = ["swarmunit", "audit-discard"].map((slug) =>
+        `**Worktree path**: .aidlc/worktrees/${boltName(fixtureIntentId8(proj), slug)}`
+      );
+      expect(new Set(worktreePaths)).toEqual(new Set(expectedPaths));
     });
   });
 
@@ -2203,6 +2349,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     makeSiblingRepo(proj, "repo-b");
     runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     seedOneUnitDag(proj, "orphanunit");
+    approvePlan(proj, "orphanunit");
     const prepared = runSwarm(proj, "prepare", "--batch", "1", "--units", "orphanunit", "--base", "main");
 
     test("exits non-zero with a 'spans 2 repos' message", () => {

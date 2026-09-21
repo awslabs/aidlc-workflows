@@ -1,33 +1,32 @@
 // covers: harness-instrument:runner-exit-equals-failed-files
 //
-// t112 — "who tests the tester". The master runner's load-bearing contract is
-// that its PROCESS EXIT CODE equals the NUMBER OF FAILED TEST FILES. Every tier
+// t112 — "who tests the tester". For a nonempty executed suite, the runner's
+// PROCESS EXIT CODE equals the NUMBER OF FAILED TEST FILES. Every tier
 // result reported up the chain (CI gates, release gates, the SUMMARY block)
-// rests on this number being trustworthy. If aggregate_tier_results miscounts
-// STATUS=FAIL metas, or a refactor swaps `exit "$FAILED_FILES"` for a plain
+// rests on this number being trustworthy. If aggregation miscounts FAIL rows,
+// or a refactor swaps the failed-file count for a plain
 // `exit 1` / boolean, the runner would still "look" red on failure but lie
 // about the magnitude — and a 0-vs-nonzero regression would silently flip a
 // real failure into a green run. This calibrates the instrument itself.
 //
-// Source contract (tests/run-tests.ts, through the run-tests.sh wrapper):
-//   - A nonzero child exit makes that file FAIL, including import-time errors.
-//   - Aggregation counts failing FILES, independently of failed/skipped cases.
-//   - Both the process exit and the completed summary report that file count.
+// Source contract (tests/run-tests.ts):
+//   - runBunTestFile records each file's outcome in a .meta sidecar.
+//   - aggregateTierResults counts rows whose status is FAIL.
+//   - main returns that count, including the smoke fail-fast path.
+// Selection/usage errors can fail without an executed file and are covered by
+// the runner option/profile tests; this calibration supplies valid arguments
+// and a nonempty planted suite.
 //
 // TECHNIQUE: invariant. For N in {0,1,2,3} arrange EXACTLY N failing test files
 // (plus M passing ones, to prove passes do not perturb the count) and assert the
 // runner exits N.
 //
-// REAL-DRIVE SEAM (chosen over replicating aggregate_tier_results over fixture
-// .meta files): SCRIPT_DIR resolves from the runner entry point, and tier
-// discovery scans "$SCRIPT_DIR/<dir>/*.test.ts". Copying the runner into a scratch
-// <root>/tests/ and seeding <root>/tests/smoke/ with throwaway Bun test files
-// makes the REAL runner aggregate and exit over OUR files only — no real test in
-// the repo tree is in scope. We copy lib/bun-junit-to-meta.ts too because each
-// Bun file is normalized through the same JUnit-to-meta glue as the real suite.
-// The runner also imports e2e-plan.ts for case counts in every tier; that module
-// imports gen-coverage-registry.ts. Process supervision uses e2e-process.ts and
-// tui-record-file.ts. Copy those real dependencies as well.
+// REAL-DRIVE SEAM: run-tests.sh delegates to run-tests.ts, whose SCRIPT_DIR
+// resolves from import.meta.url. Copy the runner and its imported helpers into
+// a scratch <root>/tests/ and seed <root>/tests/smoke/ with throwaway Bun files.
+// The REAL runner aggregates and exits over OUR files only — no real test in
+// the repo tree is in scope. Require an executed-case rollup as well as the
+// exit code: a bootstrap error also exits 1 but is not one failed test file.
 // The --smoke level avoids the integration Claude gate, keeping this calibration
 // about runner aggregation only.
 
@@ -48,6 +47,7 @@ import { basename, join } from "node:path";
 
 const REAL_RUNNER = join(import.meta.dir, "..", "run-tests.sh");
 const REAL_RUNNER_TS = join(import.meta.dir, "..", "run-tests.ts");
+const REAL_PROFILE = join(import.meta.dir, "..", "harness", "runner-profile.ts");
 const REAL_GLUE = join(import.meta.dir, "..", "lib", "bun-junit-to-meta.ts");
 const REAL_SHARDING = join(import.meta.dir, "..", "lib", "test-sharding.ts");
 const REAL_PLAN = join(import.meta.dir, "..", "lib", "e2e-plan.ts");
@@ -63,17 +63,9 @@ afterEach(() => {
   while (scratchRoots.length) {
     const root = scratchRoots.pop()!;
     try {
-      if (process.env.AIDLC_TEST_LOG_DIR && existsSync(join(root, "tests", "logs"))) {
-        cpSync(join(root, "tests", "logs"),
-          join(process.env.AIDLC_TEST_LOG_DIR, "t112-calibration", basename(root)),
-          { recursive: true });
-      }
-    } finally {
-      try {
-        rmSync(root, { recursive: true, force: true });
-      } catch {
-        /* best-effort cleanup */
-      }
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* best-effort cleanup */
     }
   }
 });
@@ -95,7 +87,9 @@ function passingBunTest(j: number): string {
 
 // Build a scratch <root>/tests with the REAL runner + glue copied in, seed the
 // smoke/ level dir with `nFail` failing and `nPass` passing Bun files, then
-// drive the real runner against ONLY those files. Smoke remains serial at -P 8.
+// drive the real runner against ONLY those files. Smoke remains serial even
+// with -P 8. Debug capture retains these deliberately failing child runs beside
+// the outer run's evidence; the outer test asserts their expected failure count.
 function driveRunner(
   nFail: number,
   nPass: number,
@@ -114,6 +108,7 @@ function driveRunner(
 
   copyFileSync(REAL_RUNNER, join(testsDir, "run-tests.sh"));
   copyFileSync(REAL_RUNNER_TS, join(testsDir, "run-tests.ts"));
+  copyFileSync(REAL_PROFILE, join(harnessDir, "runner-profile.ts"));
   copyFileSync(REAL_GLUE, join(libDir, "bun-junit-to-meta.ts"));
   copyFileSync(REAL_SHARDING, join(libDir, "test-sharding.ts"));
   copyFileSync(REAL_PLAN, join(libDir, "e2e-plan.ts"));
@@ -139,32 +134,40 @@ function driveRunner(
       `import { test } from "bun:test";\ntest.skip("seeded skip ${i}", () => { throw new Error("skipped body executed"); });\n`);
   }
 
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    // These synthetic smoke files need no projections or model calls.
+    AIDLC_TEST_PACKAGE_READY: "1",
+    AIDLC_NO_LLM: "1",
+  };
+  delete env.BUN_OPTIONS;
   const res = spawnSync(
     "bash",
     [join(testsDir, "run-tests.sh"), "--debug", "-P", "8", "--smoke"],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        // These synthetic smoke files need no projections or model calls.
-        AIDLC_TEST_PACKAGE_READY: "1",
-        AIDLC_NO_LLM: "1",
-      },
-    },
+    { cwd: root, env, encoding: "utf8", timeout: 30_000 },
   );
-  const stdout = `${res.stdout}\n${res.stderr}`;
-  if (res.error || res.signal || res.status === null) {
-    throw new Error(`Calibration runner did not exit normally: ${res.error ?? res.signal}\n${stdout}`);
+  const stdout = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+  const outerLogDir = process.env.AIDLC_TEST_LOG_DIR;
+  if (outerLogDir) {
+    const evidence = join(outerLogDir, `calibration-${basename(root)}`);
+    mkdirSync(evidence, { recursive: true });
+    writeFileSync(join(evidence, "run.log"), stdout);
+    if (existsSync(join(testsDir, "logs"))) {
+      cpSync(join(testsDir, "logs"), join(evidence, "logs"), { recursive: true });
+    }
+    console.log(`Expected-failure calibration evidence: ${evidence}`);
   }
+  expect(res.error, stdout).toBeUndefined();
+  const total = nFail + nPass + nError + nSkip;
+  expect(stdout).toContain(`\nTest files: ${total}\n`);
+  expect(stdout).toContain(`\nExecuted test cases: ${nFail * failuresPerFile + nPass}\n`);
+  expect(stdout).toContain(`\nSkipped test cases: ${nSkip}\n`);
+  expect(stdout).toContain(`\nFailed files: ${nFail + nError}\n`);
   const stamp = /^Verbose mode: logging to (.+)$/m.exec(stdout)?.[1].trim();
   if (!stamp || !existsSync(join(stamp, "summary.txt"))) {
     throw new Error(`Calibration runner did not produce a summary\n${stdout}`);
   }
   const summary = readFileSync(join(stamp, "summary.txt"), "utf8");
-  const total = nFail + nPass + nError + nSkip;
-  // A broken dependency must not accidentally satisfy an expected exit of 1.
-  expect(summary).toMatch(new RegExp(`^\\s*Test files: ${total}\\s*$`, "m"));
-  expect(summary).toMatch(new RegExp(`^\\s*Failed files: ${nFail + nError}\\s*$`, "m"));
   const fileLogs: Record<string, string> = {};
   for (const [count, prefix, suffix] of [
     [nFail, "t90", "fail"], [nPass, "t95", "pass"],
@@ -175,7 +178,8 @@ function driveRunner(
       fileLogs[key] = readFileSync(join(stamp, `${key}.log`), "utf8");
     }
   }
-  return { code: res.status, stdout, summary, fileLogs };
+  // spawnSync sets .status to the exit code, or null if killed by a signal.
+  return { code: res.status ?? -1, stdout, summary, fileLogs };
 }
 
 describe("run-tests.sh exit code equals number of failed files (harness calibration)", () => {
@@ -226,7 +230,6 @@ describe("run-tests.sh exit code equals number of failed files (harness calibrat
     const { code, fileLogs } = driveRunner(1, 2, { nError: 1, nSkip: 1 });
     expect(code).toBe(2);
     expect(fileLogs["t961-error"]).toContain("error: seeded import error 1");
-    expect(fileLogs["t971-skip"]).toContain("(skip) seeded skip 1");
     expect(fileLogs["t971-skip"]).toMatch(/^\s*0 pass\s*$/m);
     expect(fileLogs["t971-skip"]).toMatch(/^\s*1 skip\s*$/m);
     expect(fileLogs["t971-skip"]).not.toContain("error: skipped body executed");

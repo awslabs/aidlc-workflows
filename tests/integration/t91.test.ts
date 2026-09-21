@@ -32,7 +32,8 @@
 // with the tool modules and their dependencies (aidlc-runtime.ts, aidlc-lib.ts,
 // aidlc-settings.ts, aidlc-install-paths.ts, aidlc-distribution.ts,
 // aidlc-channel.ts, aidlc-version.ts,
-// aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-audit.ts),
+// aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-guard-operation.ts,
+// aidlc-audit.ts),
 // data/stage-graph.json, and the hook copied in, plus a minimal
 // aidlc-state.md ("- **Scope**: feature"). The COPY (not symlink) matters:
 // the hook spawns `<projectDir>/.claude/tools/aidlc-runtime.ts`, whose
@@ -152,6 +153,10 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-runtime-paths.ts"),
     join(proj, ".claude", "tools", "aidlc-runtime-paths.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-guard-operation.ts"),
+    join(proj, ".claude", "tools", "aidlc-guard-operation.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-audit.ts"),

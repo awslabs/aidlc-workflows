@@ -1994,6 +1994,35 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         ).code,
       ).toBe(0);
       expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+
+      // #1175: with approval valid, delegation must be allowed. Kiro IDE's
+      // `invoke_sub_agent` carries `name` + `prompt` and no file path, so the
+      // opaque-mutation test refused it as unattributable and never consulted
+      // approval — making `mode: subagent` Code Generation unrunnable on this
+      // harness. Both dispatch spellings must reach the core guard.
+      // The core guard requires the exact contract hash in the brief, so supply it:
+      // a refusal for a MISSING contract would pass this test for the wrong reason.
+      const dispatchContract = resolveTestingPosture(dir);
+      const dispatchPrompt = "AIDLC-STAGE: code-generation\n" +
+        `AIDLC-TESTING-CONTRACT: ${dispatchContract.contract_sha256}`;
+      for (const toolName of ["invoke_sub_agent", "subagent_aidlc-developer-agent"]) {
+        expect(
+          runIdeStdin(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              cwd: dir,
+              tool_name: toolName,
+              tool_input: {
+                name: "aidlc-developer-agent",
+                prompt: dispatchPrompt,
+              },
+            }),
+          ).code,
+          toolName,
+        ).toBe(0);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

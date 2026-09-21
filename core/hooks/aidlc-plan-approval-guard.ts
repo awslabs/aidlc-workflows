@@ -56,7 +56,14 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
+  guardOperationMatchesRemedy,
+  isGuardRecoveryEngineInvocation,
+  parseGuardRestartContinuationCommand,
+  sameGuardOperation,
+} from "../tools/aidlc-guard-operation.ts";
+import {
   acquireAuditLock,
+  type ActiveDirectiveMarker,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
@@ -64,16 +71,22 @@ import {
   docsRoot,
   errorMessage,
   getField,
+  GUARD_RECOVERY_ASK_TYPE,
   harnessDir,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  loadScopeMapping,
+  loadStageGraph,
+  parseCheckboxes,
+  parseStateStageSuffixes,
   readActiveDirectiveMarker,
   recordHookDrop,
   releaseAuditLock,
   resolveBoltDag,
   resolveProjectFlag,
   resolveProjectDirFromHook,
+  resolveWorkflowSelection,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -539,6 +552,7 @@ interface MutationIntent {
   targets: string[];
   opaqueShell: boolean;
   shellCommand: string | null;
+  swarmUnits?: string[];
 }
 
 function normalizedCommandName(name: string): string {
@@ -567,6 +581,13 @@ function isNativePlanApprovalPrerequisite(name: string, args: string[]): boolean
 
 function isPlanApprovalPrerequisite(args: string[]): boolean {
   if (args[0] !== "engine") return false;
+  // Direct log refusals can offer this abort without publishing a selection
+  // marker. Preserve the trusted source-tool recovery route in native installs:
+  // conductor-prose-obtained consent remains the trust boundary for abort.
+  // A mistaken abort --discard parks work for aidlc engine worktree restore
+  // --slug <slug>; a mechanical selection receipt remains a future candidate.
+  // isSelectedGuardRestartContinuation verifies the published restart choice.
+  if (isGuardRecoveryEngineInvocation(args)) return true;
 
   const noun = args[1];
   const verb = args[2];
@@ -583,6 +604,17 @@ function isPlanApprovalPrerequisite(args: string[]): boolean {
   ) {
     return true;
   }
+  // Checkpoint review owns its own audit/readiness/human authority. It must
+  // remain reachable after the engine replaces invoke-swarm with its gate
+  // successor, including when Request Changes retired the old Plan Approval.
+  // Verification executes a supplied command and still requires approval.
+  if (noun === "bolt" && (verb === "checkpoint" || verb === "swarm-checkpoint")) {
+    const routeArgs = args.slice(3);
+    const action = lastFlagValue(routeArgs, "--action");
+    return action === null
+      ? !routeArgs.includes("--action")
+      : ["status", "ask", "approve", "reject"].includes(action);
+  }
   if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
 
   const routeArgs = args.slice(3);
@@ -590,6 +622,61 @@ function isPlanApprovalPrerequisite(args: string[]): boolean {
     lastFlagValue(routeArgs, "--stage") === GUARDED_STAGE &&
     lastFlagValue(routeArgs, "--checkpoint") === "plan-approval"
   );
+}
+
+function isSelectedGuardRestartContinuation(
+  command: string,
+  state: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  const continuation = parseGuardRestartContinuationCommand(command);
+  if (
+    continuation === null ||
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.state_present !== true ||
+    marker.needs_rehydrate !== false ||
+    // An issued ask becomes consumed only when its human selection is recorded.
+    marker.delivery !== "consumed" ||
+    marker.guard_recovery_response?.status !== "ready" ||
+    marker.guard_recovery_response.feedback_sha256 !== undefined
+  ) return false;
+
+  const selected = marker.remedies?.filter(
+    (remedy) => remedy.op === marker.guard_recovery_response?.selected_op,
+  ) ?? [];
+  if (
+    selected.length !== 1 ||
+    selected[0].interaction !== "command" ||
+    !sameGuardOperation(selected[0].operation, continuation.operation) ||
+    !guardOperationMatchesRemedy(
+      continuation.operation, selected[0].op, marker.stage, marker.unit,
+    ) ||
+    continuation.scope !== getField(state, "Scope")
+  ) return false;
+
+  const scope = loadScopeMapping()[continuation.scope];
+  if (!scope) return false;
+  const graph = loadStageGraph();
+  const target = continuation.operation.stage;
+  const current = getField(state, "Current Stage");
+  const targetIndex = graph.findIndex((stage) => stage.slug === target);
+  const currentIndex = graph.findIndex((stage) => stage.slug === current);
+  if (
+    targetIndex < 0 || currentIndex < 0 || targetIndex > currentIndex ||
+    graph[targetIndex].phase === "initialization"
+  ) return false;
+  const checkboxes = parseCheckboxes(state);
+  if (
+    checkboxes.filter((entry) => entry.slug === target).length !== 1 ||
+    checkboxes.filter((entry) => entry.slug === current).length !== 1 ||
+    (parseStateStageSuffixes(state).get(target) ?? scope.stages[target]) !== "EXECUTE"
+  ) return false;
+
+  // Match aidlc-jump resolve's graph-order calculation, not the caller's
+  // claimed direction. A selection cannot turn a forward move into a reset.
+  return continuation.direction === (targetIndex === currentIndex ? "redo" : "backward");
 }
 
 function gitSubcommand(args: string[]): string | null {
@@ -797,33 +884,149 @@ function shellUsesDynamicEvaluation(command: string): boolean {
   return false;
 }
 
+function swarmCommandUnits(
+  projectDir: string,
+  cwd: string,
+  command: string,
+  invocations: Array<{
+    name: string; args: string[]; executable?: string; launchers?: string[];
+    dataDriven?: boolean; executableResolutionChanged?: boolean; ambiguous?: boolean;
+  }>,
+): string[] | null {
+  // A direct literal invocation keeps its project and targets inspectable.
+  // Assignments, wrappers and additional commands retain opaque-shell policy.
+  if (invocations.length !== 1 ||
+    !/^\s*(?:aidlc(?:\.exe)?|bun(?:\.exe)?)\s/i.test(command)) return null;
+  const invocation = invocations[0];
+  if (invocation.ambiguous || invocation.dataDriven || invocation.executableResolutionChanged ||
+    invocation.launchers?.length) return null;
+  const executable = (invocation.executable ?? invocation.name).toLowerCase();
+  let args = invocation.args;
+  if (executable === "bun" || executable === "bun.exe") {
+    const scriptIndex = args[0] === "run" ? 1 : 0;
+    const script = args[scriptIndex];
+    if (!script || script.startsWith("-")) return null;
+    const entry = resolve(cwd, script);
+    if (basename(entry) !== "aidlc.ts" ||
+      dirname(entry) !== resolve(projectDir, harnessDir(), "tools")) return null;
+    try {
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(resolve(projectDir), entry));
+      if (!lstatSync(entry).isFile() || lstatSync(entry).isSymbolicLink()) return null;
+    } catch {
+      return null;
+    }
+    args = args.slice(scriptIndex + 1);
+  } else if (executable !== "aidlc" && executable !== "aidlc.exe") {
+    return null;
+  }
+  if (args[0] !== "engine" || args[1] !== "swarm") return null;
+  const verb = args[2];
+  if (verb !== "prepare" && verb !== "check" && verb !== "finalize") return null;
+  const valueFlags = {
+    prepare: ["--project-dir", "--intent", "--space", "--repo", "--batch", "--units",
+      "--base", "--concurrency", "--degraded-from"],
+    check: ["--project-dir", "--unit", "--check-cmd", "--test-file"],
+    finalize: ["--project-dir", "--batch", "--units", "--claimed", "--check-cmd", "--test-file", "--reasons"],
+  }[verb];
+  const flags = new Map<string, string>();
+  const positional: string[] = [];
+  for (let index = 3; index < args.length; index++) {
+    const arg = args[index];
+    if (!arg.startsWith("--")) {
+      positional.push(arg);
+      continue;
+    }
+    const equal = arg.indexOf("=");
+    const key = equal < 0 ? arg : arg.slice(0, equal);
+    if (flags.has(key)) return [];
+    if (verb === "prepare" && key === "--resume-existing") {
+      if (equal >= 0 && arg.slice(equal + 1) !== "true") return [];
+      flags.set(key, "true");
+      continue;
+    }
+    if (!valueFlags.includes(key)) return [];
+    const value = equal >= 0 ? arg.slice(equal + 1) : args[++index];
+    if (value === undefined || value.startsWith("--") ||
+      (value === "" && key !== "--claimed" && key !== "--reasons")) return [];
+    flags.set(key, value);
+  }
+  try {
+    const pathKey = (path: string): string => {
+      const canonical = realpathSync(path).replaceAll("\\", "/");
+      return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+    };
+    const selectedProject = flags.get("--project-dir") ??
+      process.env.AIDLC_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? cwd;
+    if (pathKey(resolve(cwd, selectedProject)) !== pathKey(projectDir)) return [];
+    if (flags.has("--intent") || flags.has("--space")) {
+      const active = resolveWorkflowSelection(projectDir);
+      const selected = resolveWorkflowSelection(projectDir, {
+        intent: flags.get("--intent"), space: flags.get("--space"),
+      });
+      if (active.intent !== selected.intent || active.space !== selected.space) return [];
+    }
+  } catch {
+    return [];
+  }
+  const names = (value: string): string[] | null => {
+    const units = value.split(",").map((unit) => unit.trim());
+    return units.length > 0 && units.every(Boolean) && new Set(units).size === units.length ? units : null;
+  };
+  if (verb === "check") {
+    if (positional.length > 1 || (positional.length > 0 && flags.has("--unit"))) return [];
+    const unit = positional[0] ?? flags.get("--unit");
+    return unit && !unit.includes(",") ? [unit] : [];
+  }
+  if (positional.length > (verb === "finalize" && !flags.has("--batch") ? 1 : 0)) return [];
+  const units = names(flags.get("--units") ?? (verb === "finalize" ? flags.get("--claimed") ?? "" : ""));
+  if (!units) return [];
+  const claimedValue = flags.get("--claimed");
+  if (verb === "finalize" && claimedValue !== undefined) {
+    const claimed = claimedValue === "" ? [] : names(claimedValue);
+    if (!claimed?.every((unit) => units.includes(unit))) return [];
+  }
+  return units;
+}
+
 async function mutationIntent(
   projectDir: string,
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
   cwd: string,
+  state: string,
+  activeDirective: ActiveDirectiveMarker | null,
 ): Promise<MutationIntent> {
   let targets: string[] = [];
   let opaqueShell = false;
   let shellCommand: string | null = null;
+  let swarmUnits: string[] | null = null;
   if (toolName === "Bash") {
     const command = toolInput?.command;
     if (typeof command !== "string") {
       return { targets: [], opaqueShell: false, shellCommand: null };
     }
     shellCommand = command;
+    if (isSelectedGuardRestartContinuation(command, state, activeDirective)) {
+      return { targets: [], opaqueShell: false, shellCommand };
+    }
     const {
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
       shellWriteTargets,
     } = await import("./aidlc-review-freeze.ts");
     targets = shellWriteTargets(command, cwd);
-    opaqueShell =
+    const invocations = shellCommandInvocationDetails(command);
+    const dynamic =
       shellUsesDynamicEvaluation(command) ||
-      shellCommandAltersExecutableResolution(command) ||
-      shellCommandInvocationDetails(command).some((invocation) =>
+      shellCommandAltersExecutableResolution(command);
+    opaqueShell =
+      dynamic ||
+      invocations.some((invocation) =>
         shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0, command)
       );
+    if (!dynamic && targets.length === 0) {
+      swarmUnits = swarmCommandUnits(projectDir, cwd, command, invocations);
+    }
   } else if (WRITE_TOOLS.has(toolName)) {
     const input = toolInput ?? {};
     const add = (value: unknown) => {
@@ -840,6 +1043,7 @@ async function mutationIntent(
     ),
     opaqueShell,
     shellCommand,
+    ...(swarmUnits ? { swarmUnits } : {}),
   };
 }
 
@@ -965,10 +1169,10 @@ export async function run(input: string): Promise<number> {
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =
       toolName === "Bash" || WRITE_TOOLS.has(toolName);
-    const mutation = guardedDispatch
+    const mutation: MutationIntent = guardedDispatch
       ? { targets: [], opaqueShell: false, shellCommand: null }
       : knownMutationTool
-        ? await mutationIntent(projectDir, toolName, toolInput, cwd)
+        ? await mutationIntent(projectDir, toolName, toolInput, cwd, state, activeDirective)
         : {
             targets: [],
             opaqueShell: true,
@@ -993,6 +1197,22 @@ export async function run(input: string): Promise<number> {
           currentStage: activeDirective.stage,
           units,
         });
+      } else if (mutation.swarmUnits) {
+        const selected = mutation.swarmUnits;
+        const foreign = selected.filter((unit) =>
+          activeDirective.kind !== "invoke-swarm" || !activeDirective.units?.includes(unit));
+        verdict = {
+          block: selected.length === 0 || foreign.length > 0 || selected.some((unit) => {
+            const evidence = units.find((entry) => entry.unit === unit);
+            return !approvalEvidenceIsCurrent(evidence) || evidence?.reason !== undefined;
+          }),
+          mentioned: selected,
+        };
+        if (!selected.length) {
+          authorityFailure = "swarm command has an ambiguous or foreign Unit/project selection";
+        } else if (foreign.length) {
+          authorityFailure = `swarm command names Units outside the emitted batch: ${foreign.join(", ")}`;
+        }
       } else if (activeDirective.kind !== "run-stage") {
         authorityFailure =
           `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;

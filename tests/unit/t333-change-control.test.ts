@@ -261,6 +261,50 @@ describe("t333 (2) the grammar", () => {
     expect(structuredField("Methodology: tdd", "Mode")).toBeNull();
   });
 
+  test("a field value continues on indented lines and stops at the next item", () => {
+    const wrapped = [
+      "- **Ordering**: tests first,",
+      "  then implementation.",
+      "- **Coverage**: 80%",
+    ].join("\n");
+    expect(structuredField(wrapped, "Ordering")).toBe("tests first, then implementation.");
+    expect(structuredField(wrapped, "Coverage")).toBe("80%");
+    // A blank line, an unindented line, or a nested bullet ends the value.
+    expect(structuredField("Ordering: a first,\n\n  not the value", "Ordering")).toBe("a first,");
+    expect(structuredField("Ordering: a first,\nnext paragraph", "Ordering")).toBe("a first,");
+    expect(structuredField("- **Ordering**: a first,\n  - sub item", "Ordering")).toBe("a first,");
+    // An empty head with an indented continuation still yields the value.
+    expect(structuredField("Ordering:\n  tests first.", "Ordering")).toBe("tests first.");
+  });
+
+  // These layouts were already accepted before wrapped values were supported.
+  // Nested notes, sibling fields, and new blocks are not part of the field;
+  // only wrapped prose belongs to its value.
+  test("a field value ends at the next item of any marker, a sibling field, or a block", () => {
+    expect(structuredField("- **Ordering**: custom:\n  1. scenarios\n  2. implement", "Ordering")).toBe("custom:");
+    expect(structuredField("- **Ordering**: a\n  + sub", "Ordering")).toBe("a");
+    expect(structuredField("- **Ordering**: a\n  > quoted", "Ordering")).toBe("a");
+    expect(structuredField("- **Ordering**: a\n  | x | y |", "Ordering")).toBe("a");
+    expect(structuredField("- **Ordering**: a\n  ```\n  code\n  ```", "Ordering")).toBe("a");
+    const plain = "  Methodology: tdd\n  Ordering: tests first.";
+    expect(structuredField(plain, "Methodology")).toBe("tdd");
+    expect(structuredField(plain, "Ordering")).toBe("tests first.");
+    expect(structuredField("Methodology: tdd\n  Ordering: tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("  - **Ordering**: long\n    wrapped", "Ordering")).toBe("long wrapped");
+    expect(structuredField("- **Mode**: strict\n  1. Require reapproval when inputs move.", "Mode")).toBe("strict");
+    // A sibling head is one of the structured fields, with or without a space after its colon; any other word: is prose.
+    expect(structuredField("Methodology: tdd\n  Ordering:tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("Methodology: tdd\n  Ordering:tests first.", "Ordering")).toBe("tests first.");
+    expect(structuredField("- **Methodology**: tdd\n  **Ordering**:tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("- **Ordering**: a,\n  then run https://x.y/z first", "Ordering")).toBe("a, then run https://x.y/z first");
+    expect(structuredField("- **Ordering**: a,\n  then file://share/tests", "Ordering")).toBe("a, then file://share/tests");
+    expect(structuredField("- **Ordering**: run the suite from\n  C:\\tests before implementation", "Ordering")).toBe("run the suite from C:\\tests before implementation");
+    expect(structuredField("- **Ordering**: a,\n  use C:\\tests before implementation", "Ordering")).toBe("a, use C:\\tests before implementation");
+    expect(structuredField("- **Ordering**: a,\n  issue:ABC-123 next, then implement", "Ordering")).toBe("a, issue:ABC-123 next, then implement");
+    expect(structuredField("- **Ordering**: a,\n  at 10:00 run the suite", "Ordering")).toBe("a, at 10:00 run the suite");
+    expect(structuredField("- **Ordering**: a,\n  Note: run them twice", "Ordering")).toBe("a, Note: run them twice");
+  });
+
   test("the section body ignores commented headings and commented lines", () => {
     const content = [
       "# Team",
@@ -320,6 +364,15 @@ describe("t333 (3) resolution precedence", () => {
       expect(resolved.memoryStrict?.path).toBe(memoryFile(proj, layer));
       expect(resolved.intent?.value).toBe("relaxed");
     }
+  });
+
+  test("a Mode line followed by a nested list still declares its value", () => {
+    const { proj } = project("classic");
+    declareMemoryMode(proj, "team", "strict\n  + Strict here holds for every intent.");
+    expect(memoryChangeControlDeclarations(proj)).toEqual([
+      { layer: "team", path: memoryFile(proj, "team"), value: "strict" },
+    ]);
+    expect(resolveChangeControl(proj).value).toBe("strict");
   });
 
   test("memory relaxed and an absent section have no effect", () => {

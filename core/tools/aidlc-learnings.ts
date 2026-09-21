@@ -114,6 +114,7 @@ import {
   appendUnderHeading,
   errorMessage,
   findAllEvents,
+  findStageBySlug,
   getField,
   isoTimestamp,
   intentsDir,
@@ -121,6 +122,8 @@ import {
   parseMemoryEntries,
   readAllAuditShards,
   readStateFile,
+  relativeMemoryPath,
+  relativeRecordDir,
   resolveProjectDir,
   resolveWorkflowSelection,
   runtimeGraphPath,
@@ -130,11 +133,15 @@ import {
   writeFileAtomic,
   harnessDir,
 } from "./aidlc-lib.ts";
+import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 
 // --- Exit-code convention (plan §2) ---
 //   0 success
-//   1 missing/malformed state, missing memory.md, runtime-graph absent,
-//     slug mismatch, framework-tier sensor path, lock-acquire failure
+//   1 missing/malformed state, malformed runtime-graph, row without memory_path,
+//     unresolvable stage diary, slug mismatch, framework-tier sensor path,
+//     lock-acquire failure
+//     (an ABSENT runtime-graph is not a failure — surface recomputes the diary
+//     path it would have read; see resolveMemoryPath)
 //   2 unknown subcommand / argument validation
 function fail(message: string, code: 1 | 2): never {
   process.stderr.write(`${message}\n`);
@@ -244,16 +251,19 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object";
 }
 
+// Read the stage's row out of runtime-graph.json. Returns null when the graph
+// has nothing usable to offer — the file was never compiled, or it carries no
+// row for this slug — so the caller can recompute the one field it needs. A
+// MALFORMED graph still fails: absence is ordinary machine-local state,
+// corruption is not.
 function readRuntimeStageRow(
   projectDir: string,
   slug: string,
   intent?: string,
   space?: string
-): RuntimeStageRow {
+): RuntimeStageRow | null {
   const path = runtimeGraphPath(projectDir, intent, space);
-  if (!existsSync(path)) {
-    fail(`runtime-graph.json not found: ${path}`, 1);
-  }
+  if (!existsSync(path)) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, "utf-8"));
@@ -274,7 +284,62 @@ function readRuntimeStageRow(
       return { stage_slug: slug, memory_path: memoryPath };
     }
   }
-  fail(`stage "${slug}" not found in runtime-graph.json`, 1);
+  return null;
+}
+
+// The stage's diary path — taken from the runtime-graph row when one is
+// recorded, recomputed when it is not.
+//
+// runtime-graph.json is a DERIVED, gitignored, machine-local cache. Only the
+// rebuild-stage-graph hook ever writes it, and only on a transition-class
+// command (`state`/`jump`/`bolt`/`unit`/`utility`, or `orchestrate report` — see
+// classifyRuntimeCompileCommand). The §13 ritual runs BEFORE the first of those:
+// stage-protocol.md §2 Part 0 orders it between the completion message and the
+// `orchestrate report --result awaiting-approval` that emits
+// STAGE_AWAITING_APPROVAL. So on the FIRST gated stage of a fresh workflow the
+// graph has never been compiled, and hard-failing here stranded the mandatory
+// ritual behind a bare "not found". A fresh clone (the graph is gitignored) or a
+// dropped hook compile leaves the same hole at any stage.
+//
+// Recomputing is exact, not a guess: compile derives the row's memory_path
+// itself, as relativeMemoryPath(<the stage's phase>, <slug>, <record prefix>)
+// (aidlc-runtime.ts). A recorded row still wins so a graph that knows better
+// keeps winning (the legacy flat layout), and the fallback says so on stderr —
+// the same recompute-and-warn posture aidlc-orchestrate.ts takes for a missing
+// or stale bolt_dag. The record prefix is resolved against the space + intent
+// PINNED at surface time, not the live cursor compile happens to read.
+// A row that exists without a memory_path is corruption and still fails.
+function resolveMemoryPath(
+  projectDir: string,
+  slug: string,
+  intent?: string,
+  space?: string
+): string {
+  const row = readRuntimeStageRow(projectDir, slug, intent, space);
+  if (row !== null) {
+    if (row.memory_path) return row.memory_path;
+    fail(`stage "${slug}" has no memory_path in runtime-graph.json`, 1);
+  }
+
+  const stage = findStageBySlug(slug);
+  if (!stage) {
+    fail(
+      `stage "${slug}" is not in the stage graph and runtime-graph.json records no ` +
+        `memory_path for it — cannot resolve the stage diary`,
+      1
+    );
+  }
+  const derived = relativeMemoryPath(
+    stage.phase,
+    slug,
+    relativeRecordDir(projectDir, intent, space)
+  );
+  process.stderr.write(
+    `aidlc-learnings: no compiled memory_path for "${slug}"; derived ${derived} from the ` +
+      `stage graph. runtime-graph.json is machine-local and is compiled at the next ` +
+      `transition — \`${aidlcToolInvocation("runtime")} compile\` rebuilds it now.\n`
+  );
+  return derived;
 }
 
 // The §13 ritual runs while the just-completed stage is still the Active
@@ -319,11 +384,7 @@ function handleSurface(args: string[], projectDir: string): void {
 
   assertActiveStage(stateContent, slug);
 
-  const row = readRuntimeStageRow(projectDir, slug, pinnedIntent, space);
-  const memRel = row.memory_path;
-  if (!memRel) {
-    fail(`stage "${slug}" has no memory_path in runtime-graph.json`, 1);
-  }
+  const memRel = resolveMemoryPath(projectDir, slug, pinnedIntent, space);
   const memAbs = join(projectDir, memRel);
 
   // memory.md may be absent (the per-stage lifecycle owns deterministic
