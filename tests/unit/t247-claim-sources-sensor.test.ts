@@ -879,6 +879,44 @@ describe("t247 claim-sources sensor", () => {
     });
   }
 
+  for (const marker of ["+", "*", "1."]) {
+    test(`a marker-only list item line '${marker}' before an indented definition does not hide the definition`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\n${marker}\n  [Q1]: /url`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "## Problem Statement: claim block has no source tag",
+      );
+    });
+  }
+
+  test("a marker-only line under open prose is paragraph text, not a list item", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]\n+\n  [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
   // Definition detection has to agree with CommonMark's definition grammar in
   // both directions. A line that only looks like a definition is prose the
   // reader sees, and a real definition stays real inside a container. Getting

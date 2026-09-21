@@ -1236,6 +1236,14 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			open = false;
 			continue;
 		}
+		// CommonMark §5.2: a marker-only line starts an empty list item whose
+		// content begins on the next line. It opens a container, not a paragraph,
+		// and cannot interrupt an open paragraph (then it is continuation text).
+		if (
+			!open &&
+			content.column <= 3 &&
+			/^(?:[-*+]|\d{1,9}[.)])[ \t]*$/.test(rest)
+		) continue;
 		if (!open && content.column > 3) continue;
 		open = true;
 	}
