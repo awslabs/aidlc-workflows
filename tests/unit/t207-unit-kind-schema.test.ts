@@ -1,4 +1,4 @@
-// covers: function:parseBoltDag, function:parseStageFrontmatter, function:emitStageFrontmatter, function:validateStageFrontmatter, subcommand:aidlc-runtime:compile, subcommand:aidlc-sensor-required-sections
+// covers: function:parseBoltDag, function:parseStageFrontmatter, function:emitStageFrontmatter, function:validateStageFrontmatter, function:RECHECK_IF_VALUES, subcommand:aidlc-runtime:compile, subcommand:aidlc-sensor-required-sections
 //
 // t207 - unit-kind schema/parse/compile/sensor axis. The units-generation edge
 // block gains an optional `kind:` key per unit (UNIT_KINDS enum) and the four
@@ -306,6 +306,32 @@ describe("t207 unit-kind schema/parse/compile/sensor", () => {
     expect(r.valid).toBe(false);
     if (r.valid) return;
     expect(r.errors.some((e) => e.includes("non-empty"))).toBe(true);
+  });
+
+  test("validator: consumes[].recheck_if accepts every RECHECK_IF value", () => {
+    for (const value of ["edited", "files-added-or-removed", "changed"] as const) {
+      const r = validate({
+        consumes: [{ artifact: "requirements", required: true, recheck_if: value }],
+      });
+      expect(r.valid).toBe(true);
+    }
+  });
+
+  test("validator: an unknown consumes[].recheck_if value is rejected loudly", () => {
+    const r = validate({
+      consumes: [
+        {
+          artifact: "requirements",
+          required: true,
+          recheck_if: "sometimes",
+        } as unknown as { artifact: string; required: boolean },
+      ],
+    });
+    expect(r.valid).toBe(false);
+    if (r.valid) return;
+    expect(
+      r.errors.some((e) => e.includes("recheck_if") && e.includes("sometimes")),
+    ).toBe(true);
   });
 
   test("validator: absent produces_kinds still validates", () => {
