@@ -7618,7 +7618,10 @@ export async function main(
     // at the bytes the project was copied from. Re-copying alone would not make
     // a rerun succeed, so it is not offered as one.
     const copiedRefresh = copiedHarness
-      ? workspaceShellRefreshCommand(copiedHarness.harnessDir, copiedHarness.distribution)
+      ? workspaceShellRefreshCommand(
+        copiedHarness.harnessDir,
+        currentDistribution(copiedHarness.distribution),
+      )
       : null;
     const message = copiedRefreshWithoutSource && copiedRefresh
       ? `This copy-channel project already contains ${copiedHarness?.harnessDir}, but refreshing project files needs release source bytes. ` +
@@ -7634,7 +7637,14 @@ export async function main(
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness
-        ? `re-copy the complete runtime/${copiedHarness.distribution}/ root from aidlc-copy-runtime-X.Y.Z.tar.gz (or a checkout's dist/${copiedHarness.distribution}/ tree) over the project, or install the native aidlc command`
+        // Both paths name a directory inside a release, and a release only carries
+        // current rows -- so a retired stamp sent the user to a `runtime/kiro-ide/`
+        // that does not exist, with a `--harness kiro-ide` the dispatcher rejects.
+        ? `re-copy the complete runtime/${
+          currentDistribution(copiedHarness.distribution)
+        }/ root from aidlc-copy-runtime-X.Y.Z.tar.gz (or a checkout's dist/${
+          currentDistribution(copiedHarness.distribution)
+        }/ tree) over the project, or install the native aidlc command`
         : configCommand("--harness <name>"),
     ), options);
   } finally {

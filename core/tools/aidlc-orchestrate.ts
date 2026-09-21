@@ -285,6 +285,7 @@ import {
   aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
+  currentDistribution,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveHarnessRoot,
@@ -776,9 +777,15 @@ const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const IS_COMPILED = isCompiledExecutable();
 
 function isKiroRoutingHarness(): boolean {
+  // A project installed before the kiro-ide row was retired still records that name
+  // in its descriptor, and can still export it as AIDLC_HARNESS_NAME. Comparing raw
+  // silently withheld the Kiro-only new-work routing and intent-pick prompts from
+  // exactly the installs that predate the consolidation -- silently, because the
+  // caller simply falls through to the generic prompts.
+  const isKiro = (value: string | undefined | null): boolean =>
+    typeof value === "string" && currentDistribution(value.trim()) === "kiro";
   if (IS_COMPILED) {
-    const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
-    return explicit === "kiro";
+    return isKiro(process.env.AIDLC_HARNESS_NAME?.trim());
   }
   const invokedScript = (process.argv[1] ?? "").replaceAll("\\", "/");
   if (/(^|\/)\.kiro\/tools\/aidlc-orchestrate\.ts$/.test(invokedScript)) {
@@ -788,11 +795,10 @@ function isKiroRoutingHarness(): boolean {
     const parsed = JSON.parse(
       readFileSync(join(TOOLS_DIR, "data", "harness.json"), "utf-8"),
     ) as { name?: unknown };
-    return parsed.name === "kiro";
+    return isKiro(typeof parsed.name === "string" ? parsed.name : null);
   } catch {
     // Authored core and compiled binaries can lack generated metadata.
-    const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
-    return explicit === "kiro";
+    return isKiro(process.env.AIDLC_HARNESS_NAME?.trim());
   }
 }
 

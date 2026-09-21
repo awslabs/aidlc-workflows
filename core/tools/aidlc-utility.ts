@@ -3085,7 +3085,13 @@ export async function collectDoctorReport(
     } else {
       const distribution = (() => {
         try {
-          return JSON.parse(readFileSync(projectStamp, "utf-8")).distribution as string;
+          const stamped = JSON.parse(readFileSync(projectStamp, "utf-8")).distribution;
+          // inspectInstalledVersion asks whether an INSTALLED release carries this
+          // project's runtime, and a release only ever carries current rows. A project
+          // installed before a row was retired still carries the retired id, so asking
+          // raw made the pin row report `is not installed completely` against a runtime
+          // that was never going to be there under that name.
+          return typeof stamped === "string" ? currentDistribution(stamped) : null;
         } catch {
           return null;
         }

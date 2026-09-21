@@ -9,6 +9,7 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
+  currentDistribution,
   resolveHarnessPath,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
@@ -7106,6 +7107,17 @@ function exactCopilotMarker(
 }
 
 function installedHarnessNameForTarget(target: ActiveDirectiveTarget): string | null {
+  // The single consumer asks this to decide whether Kiro-specific legacy
+  // plan-approval choices apply, i.e. a current capability question. A project
+  // installed before the kiro-ide row was retired still records that name in its
+  // descriptor and can still export it as AIDLC_HARNESS_NAME, so answering raw
+  // silently dropped those choices for exactly the installs that predate the
+  // consolidation -- a Code Generation UX regression with no error to follow.
+  const stamped = stampedInstalledHarnessName(target);
+  return stamped === null ? null : currentDistribution(stamped);
+}
+
+function stampedInstalledHarnessName(target: ActiveDirectiveTarget): string | null {
   const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
   if (explicit && /^[a-z0-9][a-z0-9._-]*$/i.test(explicit)) return explicit;
   try {

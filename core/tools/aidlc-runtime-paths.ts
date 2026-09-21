@@ -256,6 +256,18 @@ export function runtimeHarnessName(
   projectDir = runtimeProjectDir(),
   harnessDir = runtimeHarnessDir(projectDir),
 ): string {
+  // Every consumer of this wants the CURRENT identity: it is exported as
+  // AIDLC_HARNESS_NAME into child processes, it resolves a distribution root PATH,
+  // and it is compared against current row names. A project installed before a row
+  // was retired still records the retired name in its harness descriptor, so
+  // answering raw exported a name that no current path and no current comparison
+  // matches. Callers that legitimately need the historical stamp -- descriptor
+  // equality, copied-stamp identity -- read the stamp directly rather than coming
+  // through here, so this accessor normalizes.
+  return currentDistribution(stampedHarnessName(projectDir, harnessDir));
+}
+
+function stampedHarnessName(projectDir: string, harnessDir: string): string {
   const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
   if (explicit) return explicit;
 
