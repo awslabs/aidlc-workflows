@@ -815,7 +815,11 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     "## Final Assessment",
     "",
-    "Scale: readiness 5 is strongest; risk 5 is highest.",
+    "Human decision aid only. These scores do not approve or merge the PR.",
+    "",
+    "Readiness: higher is better; **5/5 is best**.",
+    "",
+    "Risk: lower is better; **1/5 is best**.",
     "",
     `Readiness: **${review.assessment.readiness.score}/5** — ${
       markdownText(review.assessment.readiness.rationale)

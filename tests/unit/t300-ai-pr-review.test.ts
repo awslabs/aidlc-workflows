@@ -236,7 +236,11 @@ process.stdout.write(JSON.stringify(value));
     expect(payload.body).toStartWith(`<!-- ai-pr-review context=${CONTEXT_ID} -->`);
     expect(payload.body).toContain("Inspection: 1 changed file.");
     expect(payload.body).toContain("## Final Assessment");
-    expect(payload.body).toContain("Scale: readiness 5 is strongest; risk 5 is highest.");
+    expect(payload.body).toContain(
+      "Human decision aid only. These scores do not approve or merge the PR.",
+    );
+    expect(payload.body).toContain("Readiness: higher is better; **5/5 is best**.");
+    expect(payload.body).toContain("Risk: lower is better; **1/5 is best**.");
     expect(payload.body).toContain("Readiness: **2/5**");
     expect(payload.body).toContain("Risk: **4/5**");
     expect(payload.body).toContain("Findings: 1 blocking, 0 advisory.");
@@ -1093,6 +1097,8 @@ process.stdout.write(JSON.stringify(value));
     expect(judge).toContain('"risk"');
     expect(judge).toMatch(/integer score\s+from 1 through 5/);
     expect(judge).toContain("human merge decision");
+    expect(judge).toContain("Readiness 5/5 is the best readiness result");
+    expect(judge).toContain("risk 1/5 is the best risk result");
     expect(judge).not.toContain('"changedFiles"');
     expect(judge).toContain('"category": "contracts"');
     expect(judge).toContain("`direction`");

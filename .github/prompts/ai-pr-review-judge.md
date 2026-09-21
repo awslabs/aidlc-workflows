@@ -63,6 +63,9 @@ behind each score:
 
 Base the scores on the surviving findings, affected contracts and users,
 validation coverage, blast radius, reversibility, and residual uncertainty.
+The scales intentionally run in opposite directions: higher readiness is
+better, while lower risk is better. Readiness 5/5 is the best readiness result;
+risk 1/5 is the best risk result.
 These scores inform a human merge decision. They are not an approval, rejection,
 or merge instruction.
 
