@@ -1480,9 +1480,14 @@ function showDiagnosticSection(
       }
     } else {
       const credentials = data.credentials as ReturnType<typeof detectAwsCredentials>;
-      output += `  Provider: ${record?.provider ?? "shipped fallback"}\n`;
-      output += `  Region: ${record?.region ?? "shipped fallback"}\n`;
-      output += `  Profile: ${record?.profile ?? "default credential chain"}\n`;
+      output += `  Provider: ${record?.provider ?? "harness provider in use (not recorded)"}\n`;
+      if (record?.provider === "amazon-bedrock") {
+        output += `  Region: ${record.region}\n`;
+        output += `  Profile: ${record.profile ?? "default credential chain"}\n`;
+      } else {
+        output += "  Region: not managed by AI-DLC\n";
+        output += "  Profile: not managed by AI-DLC\n";
+      }
       output += `  Offline credentials: ${credentials.hasCredentials ? "found" : "not found"}\n`;
       for (const source of credentials.sources) output += `    source: ${source}\n`;
     }
@@ -7161,7 +7166,10 @@ export async function main(
     const actions: PlannedAction[] = [];
     const files: Record<string, string> = {};
     const rootContributions: Record<string, RootContribution> = {};
-    const retainBaseline = recordOnly && Boolean(selected.projectProjection);
+    // A manifest-less copy-channel projection has no baseline to retain.
+    // Record its current projection on the first record-only command so a
+    // later release refresh can distinguish owned bytes from local drift.
+    const retainBaseline = recordOnly && Boolean(selected.projectProjection) && prior !== null;
     planManagedFiles(
       projectDir,
       prepared.root,
@@ -7200,7 +7208,7 @@ export async function main(
       if (prior) Object.assign(rootContributions, prior.rootContributions);
       const presentRootIntegrations = descriptor.rootIntegrations.filter(
         (integration) =>
-          preparedRegenerated.has(integration.path) &&
+          (prior === null || preparedRegenerated.has(integration.path)) &&
           regularFile(join(preparedRoot, integration.path)),
       );
       if (presentRootIntegrations.length > 0) {

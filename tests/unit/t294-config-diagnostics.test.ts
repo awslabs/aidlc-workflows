@@ -49,7 +49,7 @@ const temporary: string[] = [];
 
 afterAll(() => {
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
-});
+}, 30_000);
 
 function temp(prefix: string): string {
   const path = mkdtempSync(join(tmpdir(), prefix));
@@ -2515,6 +2515,50 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 120_000);
 
+  test("record-only answers establish ownership for manifest-less copy-channel projections", () => {
+    for (const [harness, harnessDir] of [["claude", ".claude"], ["opencode", ".aidlc"]]) {
+      for (const env of [runtimeEnv(), runtimeEnv({ AIDLC_RUNTIME_ROOT: "" })]) {
+        const project = temp(`aidlc-t294-copy-baseline-${harness}-`);
+        mkdirSync(join(project, ".git"), { recursive: true });
+        cpSync(join(DIST, harness), project, { recursive: true });
+        const manifestPath = join(project, harnessDir, "tools", "data", "aidlc-manifest.json");
+        expect(existsSync(manifestPath)).toBe(false);
+
+        const recorded = run([
+          "config",
+          "providers",
+          "--project-dir",
+          project,
+          "--provider",
+          "current",
+          "--yes",
+        ], project, env);
+        expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+        expect(Object.keys(manifest.files).length).toBeGreaterThan(0);
+        if (harness === "opencode") {
+          expect(manifest.rootContributions["opencode.json"]).toBeDefined();
+        }
+
+        const refreshed = run([
+          "config",
+          "--project-dir",
+          project,
+          "--from",
+          join(DIST_RELEASE, harness),
+          "--harness",
+          harness,
+          "--yes",
+        ], project, env);
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+        expect(refreshed.stdout).not.toContain("locally modified or unowned");
+        expect(refreshed.stdout).not.toContain("unowned whole file");
+        rmSync(project, { recursive: true, force: true });
+      }
+    }
+  }, 180_000);
+
   test("provider answers preserve project fields and reject framework drift", () => {
     const env = runtimeEnv();
     const opencode = install("opencode");
@@ -2951,6 +2995,9 @@ describe("t294 config diagnostics CLI", () => {
       const configPath = join(project, ".codex", "config.toml");
       const shipped = readFileSync(configPath, "utf-8");
       const legacyBlock =
+        `# Model: these session defaults are what judgment-tier agent roles inherit\n` +
+        `# (their TOMLs omit model/model_reasoning_effort by design - see the tier\n` +
+        `# projection); balanced roles pin gpt-5.6-terra/medium, while templated roles inherit.\n` +
         `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
         `# unavailable there; the market-research stage degrades gracefully). For\n` +
         `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
@@ -3042,6 +3089,9 @@ describe("t294 config diagnostics CLI", () => {
     const configPath = join(project, ".codex", "config.toml");
     const shipped = readFileSync(configPath, "utf-8");
     const legacyBlock =
+      `# Model: these session defaults are what judgment-tier agent roles inherit\n` +
+        `# (their TOMLs omit model/model_reasoning_effort by design - see the tier\n` +
+        `# projection); balanced roles pin gpt-5.6-terra/medium, while templated roles inherit.\n` +
       `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
         `# unavailable there; the market-research stage degrades gracefully). For\n` +
         `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
@@ -3494,6 +3544,10 @@ describe("t294 config diagnostics CLI", () => {
     expect(show.stdout).toContain(
       "fix: Run aidlc config providers again to reapply the recorded answer",
     );
+    expect(show.stdout).toContain("Region: not managed by AI-DLC");
+    expect(show.stdout).toContain("Profile: not managed by AI-DLC");
+    expect(show.stdout).not.toContain("shipped fallback");
+    expect(show.stdout).not.toContain("default credential chain");
   }, 60_000);
 
   test("provider flags refuse builtin and harness-owned access without writing", () => {

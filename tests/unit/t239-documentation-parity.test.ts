@@ -153,6 +153,18 @@ const engineMain = sliceBetween(
 const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) => match[1]);
 
 describe("documentation parity derives current behavior from authored implementation", () => {
+  test("provider docs use the interactive keep-current label", () => {
+    const guides = [
+      read("docs", "guide", "01-getting-started.md"),
+      read("docs", "guide", "15-troubleshooting.md"),
+      read("docs", "guide", "18-install-and-lifecycle.md"),
+    ];
+    for (const guide of guides) {
+      expect(guide).toContain("keep current");
+      expect(guide).not.toContain("Keep current provider and model");
+    }
+  });
+
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
     expect(eventTypes.length).toBe(102);
 

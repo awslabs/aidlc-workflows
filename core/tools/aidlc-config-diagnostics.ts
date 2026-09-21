@@ -1245,7 +1245,7 @@ function clearClaudeProvider(
 }
 
 const LEGACY_CODEX_BEDROCK_COMMENT =
-  /^# D-9: Amazon Bedrock is the shipped default provider \(web_search is\r?\n# unavailable there; the market-research stage degrades gracefully\)\. For\r?\n# OpenAI-auth setups, comment out model_provider and the \[model_providers\]\r?\n# block\.\r?\n/m;
+  /^(?:# Model: these session defaults are what judgment-tier agent roles inherit\r?\n# \(their TOMLs omit model\/model_reasoning_effort by design - see the tier\r?\n# projection\); balanced roles pin gpt-5\.6-terra\/medium, while templated roles inherit\.\r?\n)?# D-9: Amazon Bedrock is the shipped default provider \(web_search is\r?\n# unavailable there; the market-research stage degrades gracefully\)\. For\r?\n# OpenAI-auth setups, comment out model_provider and the \[model_providers\]\r?\n# block\.\r?\n/m;
 
 const LEGACY_CODEX_MODEL_PROVIDER = /^(#[ \t]?)?model_provider\s*=\s*"amazon-bedrock"\s*$/m;
 
