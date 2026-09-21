@@ -1143,9 +1143,13 @@ and root-owned readable/executable tools. They cannot read the launcher process'
 procfs environment, runner home, original checkout or Actions command files.
 Windows creates a standard Users-only account and ACL-isolated work/home/tools
 under `C:\aidlc-live`; Task Scheduler launches each body with a Limited batch
-logon under that identity, avoiding the runner session's desktop ACL. Jobs have
-a six-hour limit, explicit safe environment and UTF-8 identity/cwd/output logs;
-tasks are unregistered after completion. Secondary-logon `Start-Process` is a
+logon under that identity, avoiding the runner session's desktop ACL. Preparation
+grants only `SeBatchLogonRight` while preserving existing principals, then verifies
+an actual batch-logon task. Jobs default to 30 minutes (Git/smoke: 10 minutes;
+live runs: 5h50m); tasks not started after 30 seconds fail with scheduler status
+and the last 20 operational events. Explicit safe environments and UTF-8
+identity/cwd/output logs remain, and tasks are unregistered after completion.
+Secondary-logon `Start-Process` is a
 reported fallback only if task registration itself fails. Batch sessions may
 use session 0: the proof requires correct user identity and access denied for
 launcher modules/`PROCESS_VM_READ`, runner directories and private credential state.

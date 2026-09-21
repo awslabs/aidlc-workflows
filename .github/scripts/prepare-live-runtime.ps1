@@ -285,8 +285,46 @@ foreach ($key in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
     return $path
 }
 
-function Invoke-Isolated([string]$Label, $Environment, [string]$Body) {
+function Grant-BatchLogonRight {
+    $policy = Join-Path $stateRoot 'batch-logon.inf'
+    $database = Join-Path $stateRoot 'batch-logon.sdb'
+    & secedit.exe /export /cfg $policy /areas USER_RIGHTS /quiet
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot export local user rights.' }
+    $lines = [Collections.Generic.List[string]]::new()
+    $lines.AddRange([IO.File]::ReadAllLines($policy))
+    $section = -1
+    $right = -1
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -match '^\s*\[Privilege Rights\]\s*$') { $section = $index; continue }
+        if ($section -ge 0 -and $lines[$index] -match '^\s*\[') { break }
+        if ($section -ge 0 -and $lines[$index] -match '^\s*SeBatchLogonRight\s*=') { $right = $index }
+    }
+    $entry = '*' + $sandboxSid.Value
+    if ($right -ge 0) {
+        $existing = @((($lines[$right] -split '=', 2)[1] -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if ($existing -notcontains $entry) { $existing += $entry }
+        $lines[$right] = 'SeBatchLogonRight = ' + ($existing -join ',')
+    } elseif ($section -ge 0) {
+        $lines.Insert($section + 1, 'SeBatchLogonRight = ' + $entry)
+    } else {
+        $lines.Add('[Privilege Rights]')
+        $lines.Add('SeBatchLogonRight = ' + $entry)
+    }
+    [IO.File]::WriteAllLines($policy, $lines, [Text.Encoding]::Unicode)
+    & secedit.exe /configure /db $database /cfg $policy /areas USER_RIGHTS /quiet
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot grant sandbox batch logon.' }
+    & secedit.exe /export /cfg $policy /areas USER_RIGHTS /quiet
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot verify sandbox batch logon.' }
+    $verified = @([IO.File]::ReadAllLines($policy) | Where-Object { $_ -match '^\s*SeBatchLogonRight\s*=' })
+    if ($verified.Count -ne 1) { throw 'Expected one batch logon policy entry.' }
+    $principals = @((($verified[0] -split '=', 2)[1] -split ',') | ForEach-Object { $_.Trim() })
+    if ($principals -notcontains $entry) { throw 'Sandbox batch logon right was not applied.' }
+    [Console]::WriteLine('Granted and verified SeBatchLogonRight for the sandbox identity; no service-logon right added.')
+}
+
+function Invoke-Isolated([string]$Label, $Environment, [string]$Body, [int]$TimeoutMinutes = 30) {
     $script:stage = $Label
+    if ($TimeoutMinutes -lt 1 -or $TimeoutMinutes -gt 350) { throw 'Invalid isolated task timeout.' }
     $bodyScript = New-LaunchScript $Environment $Body
     $id = $Label + '-' + [Guid]::NewGuid().ToString('N')
     $taskName = 'aidlc-live-' + $id
@@ -323,7 +361,7 @@ try {
     $registered = $false
     try {
         $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $work
-        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 6) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes $TimeoutMinutes) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
         $plainPassword = $credential.GetNetworkCredential().Password
         try {
             Register-ScheduledTask -TaskName $taskName -Action $action -User $credential.UserName -Password $plainPassword -RunLevel Limited -Settings $settings -ErrorAction Stop | Out-Null
@@ -334,8 +372,9 @@ try {
         } finally { $plainPassword = $null }
         if ($registered) {
             $previousRun = (Get-ScheduledTaskInfo -TaskName $taskName).LastRunTime
+            $startedAt = [DateTime]::UtcNow
             Start-ScheduledTask -TaskName $taskName
-            $deadline = [DateTime]::UtcNow.AddHours(6).AddMinutes(1)
+            $deadline = $startedAt.AddMinutes($TimeoutMinutes)
             do {
                 $task = Get-ScheduledTask -TaskName $taskName
                 $info = Get-ScheduledTaskInfo -TaskName $taskName
@@ -343,8 +382,15 @@ try {
                     $childExit = [long]$info.LastTaskResult
                     break
                 }
-                if ([DateTime]::UtcNow -ge $deadline) { throw 'Isolated scheduled task exceeded its deadline.' }
-                Start-Sleep -Milliseconds 200
+                if ($info.LastRunTime -le $previousRun -and [DateTime]::UtcNow -ge $startedAt.AddSeconds(30)) {
+                    $childExit = [long]$info.LastTaskResult
+                    throw ('Isolated scheduled task never started: state={0}, LastTaskResult=0x{1:X8}' -f $task.State, $childExit)
+                }
+                if ([DateTime]::UtcNow -ge $deadline) {
+                    $childExit = [long]$info.LastTaskResult
+                    throw ('Isolated scheduled task exceeded {0} minutes: state={1}, LastTaskResult=0x{2:X8}' -f $TimeoutMinutes, $task.State, $childExit)
+                }
+                Start-Sleep -Seconds 2
             } while ($true)
         } else {
             $process = Start-Process -FilePath $powershell -ArgumentList $arguments -Credential $credential `
@@ -357,18 +403,32 @@ try {
         if ($childExit -ne 0) { throw "Isolated $Label exited $childExit" }
         return $childExit
     } catch {
-        if ($childExit -eq -1) {
-            [IO.File]::AppendAllText($stderr, ($_.Exception.ToString() + "`r`n"))
+        [IO.File]::AppendAllText($stderr, ($_.Exception.ToString() + "`r`n"))
+        if ($registered) {
+            try {
+                $diagnostic = Get-ScheduledTaskInfo -TaskName $taskName | Format-List * | Out-String
+                [IO.File]::WriteAllText((Join-Path $logRoot 'task-info.log'), $diagnostic, [Text.UTF8Encoding]::new($true))
+            } catch { [Console]::Error.WriteLine('Task Scheduler information unavailable.') }
         }
+        try {
+            $events = Get-WinEvent -LogName 'Microsoft-Windows-TaskScheduler/Operational' -MaxEvents 20 -ErrorAction Stop |
+                Select-Object TimeCreated, Id, LevelDisplayName, Message | Format-List | Out-String
+            [IO.File]::WriteAllText((Join-Path $logRoot 'task-events.log'), $events, [Text.UTF8Encoding]::new($true))
+        } catch { [Console]::Error.WriteLine('Task Scheduler operational events unavailable.') }
         [Console]::Error.WriteLine(('Isolated {0} exit code: {1}' -f $Label, $childExit))
         & (Join-Path $tools 'bun.exe') (Join-Path $env:GITHUB_WORKSPACE 'scripts\ci-sanitize-logs.ts') $logRoot
         if ($LASTEXITCODE -eq 0) {
             $marker = 'aidlc-diagnostics-' + [Guid]::NewGuid().ToString('N')
             [Console]::WriteLine(('::stop-commands::{0}' -f $marker))
-            foreach ($log in @($stdout, $stderr)) {
-                [Console]::WriteLine(('--- last 40 lines: {0} ---' -f [IO.Path]::GetFileName($log)))
+            foreach ($log in @($stdout, $stderr, (Join-Path $logRoot 'task-info.log'), (Join-Path $logRoot 'task-events.log'))) {
+                $diagnosticLog = [IO.Path]::GetFileName($log) -like 'task-*.log'
+                [Console]::WriteLine(('--- {0}: {1} ---' -f $(if ($diagnosticLog) { 'diagnostic' } else { 'last 40 lines' }), [IO.Path]::GetFileName($log)))
                 if ([IO.File]::Exists($log)) {
-                    Get-Content -LiteralPath $log -Encoding UTF8 -Tail 40 | ForEach-Object { [Console]::WriteLine([string]$_) }
+                    if ($diagnosticLog) {
+                        Get-Content -LiteralPath $log -Encoding UTF8 | ForEach-Object { [Console]::WriteLine([string]$_) }
+                    } else {
+                        Get-Content -LiteralPath $log -Encoding UTF8 -Tail 40 | ForEach-Object { [Console]::WriteLine([string]$_) }
+                    }
                 } else { [Console]::WriteLine('No retained UTF-8 text output.') }
             }
             [Console]::WriteLine(('::{0}::' -f $marker))
@@ -555,6 +615,7 @@ try {
         [void][IO.Directory]::CreateDirectory((Join-Path $tools 'npm'))
         [void][IO.Directory]::CreateDirectory((Join-Path $tools 'git-template'))
         Start-Service seclogon
+        try { & wevtutil.exe sl 'Microsoft-Windows-TaskScheduler/Operational' /e:true 2>&1 | Out-Null } catch { }
         $stage = 'creating identity'
         $random = [byte[]]::new(48)
         $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -572,6 +633,8 @@ try {
                 throw 'The sandbox identity has unexpected local group membership.'
             }
         }
+        $stage = 'granting sandbox batch logon'
+        Grant-BatchLogonRight
         $credential = [Management.Automation.PSCredential]::new(($env:COMPUTERNAME + '\' + $userName), $password)
         $password = $null
         # Windows bypass-traverse rights make a private root alone insufficient.
@@ -596,6 +659,8 @@ try {
         }
         $state | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding UTF8
         $safe = Get-SafeEnvironment
+        $exitCode = Invoke-Isolated 'batch-logon' $safe "whoami /priv`nexit `$LASTEXITCODE" -TimeoutMinutes 2
+        if ($exitCode -ne 0) { throw 'Sandbox batch logon probe failed.' }
         # Fresh metadata cannot contain the original checkout's credential helpers.
         $gitBody = @'
 & 'C:\Program Files\Git\cmd\git.exe' -c safe.directory=C:/aidlc-live/work -c init.templateDir=C:/aidlc-live/tools/git-template init --quiet .
@@ -607,7 +672,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & 'C:\Program Files\Git\cmd\git.exe' -c safe.directory=C:/aidlc-live/work -c core.hooksPath=C:/aidlc-live/tools/git-template -c commit.gpgsign=false -c user.name=aidlc-live -c user.email=aidlc-live@localhost commit --quiet --allow-empty -m 'Isolated source snapshot'
 exit $LASTEXITCODE
 '@
-        $exitCode = Invoke-Isolated 'git-init' $safe $gitBody
+        $exitCode = Invoke-Isolated 'git-init' $safe $gitBody -TimeoutMinutes 10
         if ($exitCode -ne 0) { throw 'Isolated source snapshot failed.' }
         if ($package) {
             # Installer code runs without runner authority, even before AWS setup.
@@ -668,6 +733,9 @@ exit $LASTEXITCODE
         throw 'Invalid runtime credential record.'
     }
     $safe = Get-SafeEnvironment
+    $timeoutMinutes = 30
+    if ($Mode -eq 'smoke') { $timeoutMinutes = 10 }
+    if ($Mode -eq 'run') { $timeoutMinutes = 350 }
     switch ($Mode) {
         'prove' { $body = Get-ProofBody }
         'smoke' { $body = "& 'C:\aidlc-live\tools\bun.exe' tests/run-tests.ts --smoke --filter '^t01'`nexit `$LASTEXITCODE" }
@@ -677,7 +745,7 @@ exit $LASTEXITCODE
             $body = "& 'C:\aidlc-live\tools\bun.exe' scripts/ci-live-sandbox.ts " + (ConvertTo-PSLiteral $Family) + " win32`nexit `$LASTEXITCODE"
         }
     }
-    $exitCode = Invoke-Isolated $Mode $safe $body
+    $exitCode = Invoke-Isolated $Mode $safe $body -TimeoutMinutes $timeoutMinutes
     [Console]::WriteLine(('Windows isolated {0} exited {1}; collect preserves its logs.' -f $Mode, $exitCode))
     exit $exitCode
 } catch {
