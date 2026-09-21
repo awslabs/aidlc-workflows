@@ -433,7 +433,7 @@ from disk reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request | Deterministic gate | `ci.yml`: contract checks + smoke + unit shards + native-terminal units on Linux/macOS/Windows + production guards | GitHub Actions |
+| Pull request | Deterministic gate | `ci.yml`: contract checks + smoke + unit shards + native-terminal units + credential-free live OS-isolation proofs on Linux/macOS/Windows + production guards | GitHub Actions |
 | Nightly preview / manual preview dispatch | Enabled deep-tier matrix | `preview-release.yml` calls `full-suite.yml` for deterministic integration/e2e on Linux/macOS/Windows and enabled live families; disabled families are reported | GitHub Actions |
 | Stable tag | Exact-source evidence | `release.yml` requires a successful preview or main-branch full-suite dispatch artifact with the tag SHA and `passed: true`; exclusions are warned | GitHub Actions |
 
@@ -1104,8 +1104,7 @@ Provision these repository/environment settings before expecting a green run:
   not AWS OIDC.
 
 Claude Code and opencode npm versions are pinned in the workflow; update those
-pins deliberately after verifying the registry and compatibility. Cursor uses
-its official Unix/native-Windows installer. CLI/authentication preflights fail
+pins deliberately after verifying the registry and compatibility. CLI/authentication preflights fail
 loudly rather than letting absent substrates masquerade as passing live tests.
 
 #### Credential isolation and uploaded evidence
@@ -1138,14 +1137,30 @@ provider `endpoint` override routes its AI SDK requests through the proxy.
 Codex shell policy excludes provider/broker/API/GitHub/Actions variables, and the
 runner strips CI control-plane credentials before launching any live test.
 
-This is credential separation, not a hostile same-user OS sandbox. Agents can
-still spend through the allowlisted proxy until the job timeout, so constrain
-IAM model permissions, quotas and runner access. A compromised same-user process
-could inspect another process's memory on hosts that permit it (notably Windows);
-stronger adversarial isolation requires separate OS identities or an external
-broker. Cursor is not run because its CLI exposes the API key to agent tool
-shells. Kiro runs only on the dedicated CI-identity Windows host using its
-existing sign-in, without API keys injected by this workflow.
+Hosted Linux/macOS live agents run as the separate unprivileged `aidlc-live`
+user in a private checkout copy, using an explicit `sudo ... env -i` environment
+and root-owned readable/executable tools. They cannot read the launcher process's
+procfs environment, runner home, original checkout or Actions command files.
+Windows creates a standard Users-only account and ACL-isolated work/home/tools
+under `C:\aidlc-live`; `Start-Process -Credential -UseNewEnvironment` launches the
+same runner under that token. Its proof requires access denied for launcher
+modules/`PROCESS_VM_READ`, runner directories and private credential state.
+The broker stays under the runner identity; only nonsecret routes and model pins
+cross into the live user's environment. Failed isolation proofs block execution.
+
+Every PR runs `test_live_isolation` on all three OSes, using the same preparation
+and proof scripts plus `--smoke --filter '^t01'` under the sandbox identity,
+without provider credentials. Credential-free Windows release-contract units
+remain separately runnable. Hosted Windows live model coverage is real, not an
+opt-in stub or a same-user exception.
+
+Agents can still spend through the allowlisted proxy until the job timeout;
+constrain IAM model permissions, quotas and runner access. This boundary trusts
+the host kernel and administrators; OS privilege escalation is not in scope.
+Cursor remains excluded because its CLI exposes the API key to agent tool shells.
+Kiro uses only the dedicated CI-identity Windows host's existing sign-in, without
+workflow-injected API keys. Runner-owned collection copies completed logs back
+for sanitization before upload; it does not execute sandbox-authored code.
 
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and
 is blocked if sanitization fails. Driver NDJSON, `sdk-drive*`, `tui-drive*` and

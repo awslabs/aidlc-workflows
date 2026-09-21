@@ -224,45 +224,30 @@ jobs:
           - family: claude-sdk
             runner: macos-15
             platform: darwin
-          - family: claude-sdk
-            runner: windows-latest
-            platform: win32
           - family: claude-tui
             runner: ubuntu-latest
             platform: linux
           - family: claude-tui
             runner: macos-15
             platform: darwin
-          - family: claude-tui
-            runner: windows-latest
-            platform: win32
           - family: codex
             runner: ubuntu-latest
             platform: linux
           - family: codex
             runner: macos-15
             platform: darwin
-          - family: codex
-            runner: windows-latest
-            platform: win32
           - family: opencode
             runner: ubuntu-latest
             platform: linux
           - family: opencode
             runner: macos-15
             platform: darwin
-          - family: opencode
-            runner: windows-latest
-            platform: win32
           - family: release-contract
             runner: ubuntu-latest
             platform: linux
           - family: release-contract
             runner: macos-15
             platform: darwin
-          - family: release-contract
-            runner: windows-latest
-            platform: win32
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -284,6 +269,8 @@ jobs:
           case "${{ matrix.family }}" in
             opencode) npm install -g "opencode-ai@$OPENCODE_VERSION" ;;
           esac
+      - name: "Prepare separate-user live runtime"
+        run: bash .github/scripts/prepare-live-runtime.sh prepare ${{ matrix.family }}
       - name: "Assume nightly Bedrock role"
         id: aws
         if: "matrix.family != 'release-contract'"
@@ -308,6 +295,8 @@ jobs:
       - name: "Assert live runner has no AWS credentials"
         run: |
           bun -e 'for (const key of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]) { if (process.env[key] !== undefined) throw new Error(`Unexpected credential environment: ${key}`); }'
+      - name: "Prove isolation"
+        run: bash .github/scripts/prepare-live-runtime.sh prove
       - name: "Require authenticated live substrates"
         run: |
           case "${{ matrix.family }}" in
@@ -322,31 +311,34 @@ jobs:
         env:
           AIDLC_CLAUDE_SDK_LIVE: "1"
         run: |
-          bun scripts/ci-live-filter.ts claude-sdk --platform ${{ matrix.platform }} --run -- --debug -P 4
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-sdk ${{ matrix.platform }}
       - name: "Run claude-tui"
         if: "matrix.family == 'claude-tui'"
         env:
           AIDLC_TUI_LIVE: "1"
         run: |
-          bun scripts/ci-live-filter.ts claude-tui --platform ${{ matrix.platform }} --run -- --debug -P 4
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-tui ${{ matrix.platform }}
       - name: "Run codex"
         if: "matrix.family == 'codex'"
         env:
           AIDLC_CODEX_EXEC_LIVE: "1"
         run: |
-          bun scripts/ci-live-filter.ts codex --platform ${{ matrix.platform }} --run -- --debug -P 4
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" codex ${{ matrix.platform }}
       - name: "Run opencode"
         if: "matrix.family == 'opencode'"
         env:
           AIDLC_OPENCODE_RUN_LIVE: "1"
         run: |
-          bun scripts/ci-live-filter.ts opencode --platform ${{ matrix.platform }} --run -- --debug -P 4
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" opencode ${{ matrix.platform }}
       - name: "Run release-contract"
         if: "matrix.family == 'release-contract'"
         env:
           AIDLC_RELEASE_CONTRACT_LIVE: "1"
         run: |
-          bun scripts/ci-live-filter.ts release-contract --platform ${{ matrix.platform }} --run -- --debug -P 4
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TERM=xterm-256color /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" release-contract ${{ matrix.platform }}
+      - name: "Collect isolated live logs"
+        if: "${{ always() }}"
+        run: bash .github/scripts/prepare-live-runtime.sh collect
       - name: "Sanitize diagnostic logs"
         id: sanitize
         if: "${{ always() }}"
@@ -358,6 +350,125 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
+          path: tests/logs/
+          include-hidden-files: true
+  live_windows:
+    needs: plan
+    runs-on: windows-latest
+    environment: nightly-live
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: powershell
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [claude-sdk, claude-tui, codex, opencode]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - name: "Prepare separate-user live runtime"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode prepare -Family ${{ matrix.family }}
+      - name: "Assume nightly Bedrock role"
+        id: aws
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: "${{ secrets.AWS_NIGHTLY_TEST_ROLE_ARN }}"
+          role-session-name: "aidlc-nightly-${{ matrix.family }}-Windows"
+          role-duration-seconds: 21600
+          aws-region: "${{ env.AWS_REGION }}"
+          output-credentials: true
+          output-env-credentials: false
+      - name: "Start credential-isolated Bedrock broker"
+        env:
+          BROKER_ACCESS_KEY_ID: "${{ steps.aws.outputs.aws-access-key-id }}"
+          BROKER_SECRET_ACCESS_KEY: "${{ steps.aws.outputs.aws-secret-access-key }}"
+          BROKER_SESSION_TOKEN: "${{ steps.aws.outputs.aws-session-token }}"
+        run: bun scripts/ci-start-credential-broker.ts ${{ matrix.family }}
+      - name: "Assert live runner has no AWS credentials"
+        run: |
+          foreach ($key in @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN')) {
+            if (Test-Path "Env:$key") { throw "Unexpected credential environment: $key" }
+          }
+      - name: "Prove isolation"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode prove -Family ${{ matrix.family }}
+      - name: "Run claude-sdk"
+        if: "matrix.family == 'claude-sdk'"
+        env:
+          AIDLC_CLAUDE_SDK_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-sdk
+      - name: "Run claude-tui"
+        if: "matrix.family == 'claude-tui'"
+        env:
+          AIDLC_TUI_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-tui
+      - name: "Run codex"
+        if: "matrix.family == 'codex'"
+        env:
+          AIDLC_CODEX_EXEC_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family codex
+      - name: "Run opencode"
+        if: "matrix.family == 'opencode'"
+        env:
+          AIDLC_OPENCODE_RUN_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family opencode
+      - name: "Collect isolated live logs"
+        if: "${{ always() }}"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode collect -Family ${{ matrix.family }}
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-live-${{ matrix.family }}-Windows"
+          path: tests/logs/
+          include-hidden-files: true
+  release_contract_windows:
+    needs: plan
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        family: [release-contract]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - name: "Run release-contract"
+        env:
+          AIDLC_RELEASE_CONTRACT_LIVE: "1"
+        run: bun scripts/ci-live-filter.ts release-contract --platform win32 --run -- --debug -P 4
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-live-release-contract-Windows
           path: tests/logs/
           include-hidden-files: true
   live_kiro_windows:
@@ -452,7 +563,7 @@ jobs:
           include-hidden-files: true
   result:
     if: "${{ always() }}"
-    needs: [plan, native_terminal, native_reconcile, deterministic, live_hosted, live_kiro_windows]
+    needs: [plan, native_terminal, native_reconcile, deterministic, live_hosted, live_windows, release_contract_windows, live_kiro_windows]
     runs-on: ubuntu-latest
     steps:
       - name: "Reject unauthorized source without executing repository code"

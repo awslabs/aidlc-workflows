@@ -2447,5 +2447,11 @@ describe("t244 Windows and completion release surfaces", () => {
       expect(run, `${name} must invoke the test runner`).toBeGreaterThanOrEqual(0);
       expect(build, `${name} must build before running its tier`).toBeLessThan(run);
     }
+    const isolation = ci.jobs.test_live_isolation.steps;
+    const build = isolation.findIndex((step) => step.run === "bun scripts/package.ts");
+    expect(build).toBeGreaterThanOrEqual(0);
+    for (const [index, step] of isolation.entries()) {
+      if (step.run?.includes("prepare-live-runtime")) expect(build).toBeLessThan(index);
+    }
   });
 });

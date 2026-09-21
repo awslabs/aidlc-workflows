@@ -1,6 +1,6 @@
 export const FULL_SUITE_JOBS = [
   "plan", "native_terminal", "native_reconcile", "deterministic", "live_hosted",
-  "live_kiro_windows",
+  "live_windows", "release_contract_windows", "live_kiro_windows",
 ] as const;
 
 type JobResult = "success" | "failure" | "cancelled" | "skipped";

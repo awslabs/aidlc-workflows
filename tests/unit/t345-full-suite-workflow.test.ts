@@ -7,6 +7,7 @@ import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveRunnerA
 import { FULL_SUITE_JOBS, fullSuiteResult, type SuiteNeeds } from "../../scripts/ci-full-suite-result.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { brokerChildEnvironment } from "../../scripts/ci-start-credential-broker.ts";
+import { sandboxEnvironment } from "../../scripts/ci-live-sandbox.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { setupCodexProject } from "../harness/exec-drive.ts";
@@ -122,20 +123,37 @@ describe("t345 complete nightly coverage", () => {
   });
 
   test("Bedrock workflow hands credentials only to stdin broker startup, never a live step", () => {
-    const job = workflow.jobs.live_hosted;
-    const assume = job.steps.find((step) => step.name === "Assume nightly Bedrock role")!;
-    expect(assume.with).toMatchObject({ "output-credentials": true, "output-env-credentials": false });
-    const startup = job.steps.find((step) => step.name === "Start credential-isolated Bedrock broker")!;
-    expect(startup.run).toContain("ci-start-credential-broker.ts");
-    expect(startup.env?.BROKER_ACCESS_KEY_ID).toBe(`\${{ steps.aws.outputs.aws-access-key-id }}`);
-    expect(job.steps.find((step) => step.name === "Assert live runner has no AWS credentials")).toBeDefined();
+    for (const name of ["live_hosted", "live_windows"]) {
+      const job = workflow.jobs[name];
+      const assume = job.steps.find((step) => step.name === "Assume nightly Bedrock role")!;
+      expect(assume.with).toMatchObject({ "output-credentials": true, "output-env-credentials": false });
+      const startup = job.steps.find((step) => step.name === "Start credential-isolated Bedrock broker")!;
+      expect(startup.run).toContain("ci-start-credential-broker.ts");
+      expect(startup.env?.BROKER_ACCESS_KEY_ID).toBe(`\${{ steps.aws.outputs.aws-access-key-id }}`);
+      expect(job.steps.find((step) => step.name === "Assert live runner has no AWS credentials")).toBeDefined();
+    }
     for (const [name, live] of Object.entries(workflow.jobs)) {
       if (!name.startsWith("live_")) continue;
       for (const step of live.steps) {
         for (const key of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AIDLC_BROKER_TOKEN"]) expect(step.env?.[key]).toBeUndefined();
-        if (step !== startup) expect(JSON.stringify(step.env ?? {})).not.toContain("steps.aws.outputs.");
+        if (step.name !== "Start credential-isolated Bedrock broker") expect(JSON.stringify(step.env ?? {})).not.toContain("steps.aws.outputs.");
       }
     }
+  });
+
+  test("PR CI exercises the same OS identity boundary without provider credentials", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, { needs?: string[]; permissions?: Record<string, string>; strategy?: { matrix: { runner: string[] } }; steps: Step[] }>;
+    };
+    const job = ci.jobs.test_live_isolation;
+    expect(job.strategy?.matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
+    expect(job.permissions?.["id-token"]).toBeUndefined();
+    expect(ci.jobs.test.needs).toContain("test_live_isolation");
+    expect(job.steps.find((step) => step.name === "Prove POSIX isolation")?.run).toBe("bash .github/scripts/prepare-live-runtime.sh prove");
+    expect(job.steps.find((step) => step.name === "Prove Windows isolation")?.run).toBe(".github/scripts/prepare-live-runtime.ps1 -Mode prove");
+    expect(job.steps.find((step) => step.name === "Exercise POSIX isolated smoke command")?.run).toContain("prepare-live-runtime.sh smoke");
+    expect(job.steps.find((step) => step.name === "Exercise Windows isolated smoke command")?.run).toContain("prepare-live-runtime.ps1 -Mode smoke");
+    expect(JSON.stringify(job)).not.toContain("secrets.");
   });
 
   test("all tests/logs uploads require successful sanitization even after test failure", () => {
@@ -178,7 +196,7 @@ describe("t345 complete nightly coverage", () => {
   test("live families have every supported platform, opt-ins and strictness, without no-LLM", () => {
     const actual: string[] = [];
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
-      if (!jobName.startsWith("live_")) continue;
+      if (!jobName.startsWith("live_") && jobName !== "release_contract_windows") continue;
       for (const step of job.steps) {
         expect(step.run ?? "").not.toMatch(/--(?:no-llm|unit|integration|e2e|isolated-e2e|bedrock-parallel|kiro-parallel|ide-parallel|require-coverage)\b/);
         expect(step.run ?? "").not.toContain("mapfile");
@@ -188,16 +206,44 @@ describe("t345 complete nightly coverage", () => {
         const family = FAMILIES[row.family];
         expect(family, row.family).toBeDefined();
         actual.push(`${row.family}:${row.platform}`);
-        const run = job.steps.find((step) => step.run?.includes(`ci-live-filter.ts ${row.family} `));
+        const run = job.steps.find((step) => step.name === `Run ${row.family}`);
         expect(run, `${jobName}/${row.family} command`).toBeDefined();
         expect({ ...job.env, ...run!.env }).toMatchObject(family.env);
         const command = run!.run!.replaceAll(`\${{ matrix.platform }}`, row.platform).trim();
-        expect(command).toBe(`bun scripts/ci-live-filter.ts ${row.family} --platform ${row.platform} --run -- --debug -P 4`);
+        if (jobName === "live_hosted") {
+          expect(command).toContain("sudo -u aidlc-live -H env -i");
+          expect(command).toContain(`ci-live-sandbox.ts" ${row.family} ${row.platform}`);
+          const proof = job.steps.findIndex((step) => step.name === "Prove isolation");
+          expect(proof).toBeGreaterThanOrEqual(0);
+          expect(proof).toBeLessThan(job.steps.indexOf(run!));
+        } else if (jobName === "live_windows") {
+          expect(job.if).toBeUndefined();
+          expect(command).toBe(`.github/scripts/prepare-live-runtime.ps1 -Mode run -Family ${row.family}`);
+          const proof = job.steps.findIndex((step) => step.name === "Prove isolation");
+          expect(proof).toBeGreaterThanOrEqual(0);
+          expect(proof).toBeLessThan(job.steps.indexOf(run!));
+        } else {
+          expect(command).toBe(`bun scripts/ci-live-filter.ts ${row.family} --platform ${row.platform} --run -- --debug -P 4`);
+        }
         expect(job["runs-on"].includes("self-hosted")).toBe(family.hosting === "self-hosted");
       }
     }
     const expected = Object.entries(FAMILIES).flatMap(([family, spec]) => spec.platforms.map((platform) => `${family}:${platform}`));
     expect(actual.sort()).toEqual(expected.sort());
+  });
+
+  test("sandbox env is explicit and excludes runner control-plane and AWS secrets", () => {
+    const inherited = {
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "mint-token", AWS_ACCESS_KEY_ID: "secret-key", GITHUB_TOKEN: "github",
+      AIDLC_BROKER_URL: "http://127.0.0.1:1234", AIDLC_BROKER_IDENTITY: JSON.stringify({ account: "123456789012", arn: "arn:aws:sts::123456789012:assumed-role/ci/test" }),
+    };
+    for (const family of ["claude-sdk", "claude-tui", "codex", "opencode", "release-contract"] as const) {
+      const env = sandboxEnvironment(family, "/home/aidlc-live", "/usr/local/lib/aidlc-live/bin:/usr/bin:/bin", inherited);
+      expect(env.PATH).toBe("/usr/local/lib/aidlc-live/bin:/usr/bin:/bin");
+      expect(env.HOME).toBe("/home/aidlc-live");
+      expect(Object.keys(env).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key))).toEqual([]);
+      expect(env).toMatchObject(FAMILIES[family].env);
+    }
   });
 
   test("Kiro uses only the dedicated Windows host and Cursor cannot expose API keys", () => {

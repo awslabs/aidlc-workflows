@@ -187,14 +187,18 @@ Its steps never rely on `bash`: `C:\Windows\System32\bash.exe` is the WSL launch
 
 Set `AIDLC_NIGHTLY_KIRO_RUNNERS=1` for the dedicated Windows Kiro host.
 No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Disabled
-Kiro jobs
-are reported in `excluded` and never block publication. `passed` requires all
+Kiro jobs are reported in `excluded` and never block publication. `passed` requires all
 non-excluded legs to succeed; `complete` also requires no exclusions. Missing,
 failed, cancelled or enabled-but-skipped legs fail. `full-suite-result` retains
 the exact SHA and run/leg outcomes for 90 days; preview and stable publication
 require `passed: true` and warn about exclusions. Tag a passing nightly SHA, or
 dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired
 evidence even when an unchanged preview already exists.
+
+Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
+macOS and Windows, with no access to runner process memory or Actions credentials;
+the runner-owned signing proxy is their only inference capability. PR CI proves
+that boundary with the same setup scripts and a credential-free t01 smoke run.
 
 Bedrock families use an allowlisted signing proxy; no real AWS credentials reach
 their agent environments. Full-suite log uploads sanitize UTF-8 text, delete
