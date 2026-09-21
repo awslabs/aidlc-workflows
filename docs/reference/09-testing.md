@@ -434,10 +434,14 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request | Deterministic gate | `ci.yml`: contract checks + smoke + unit shards + native-terminal units on Linux/macOS/Windows + production guards | GitHub Actions |
-| Nightly preview / manual preview dispatch | Enabled matrix | `preview-release.yml` calls `full-suite.yml` before publishing; disabled families are reported | GitHub Actions |
+| Nightly preview / manual preview dispatch | Enabled deep-tier matrix | `preview-release.yml` calls `full-suite.yml` for deterministic integration/e2e on Linux/macOS/Windows and enabled live families; disabled families are reported | GitHub Actions |
 | Stable tag | Exact-source evidence | `release.yml` requires a successful preview's `full-suite-result` with the tag SHA and `passed: true`; exclusions are warned | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
+
+By maintainer decision on 2026-09-21, `main` is not production: PR CI remains the
+fast gate listed above, while deterministic and live deep tiers gate the preview
+stage in `full-suite.yml`, called by `preview-release.yml`.
 
 Tag the SHA of a green nightly for a stable release, or dispatch
 `preview-release.yml` on `main` first. A deterministic PR gate alone is not

@@ -2,9 +2,10 @@ name: CI
 
 # Deterministic PR gate for the main line: contract checks (generator
 # determinism, typecheck, lint), smoke, unit shards, native-terminal units,
-# and production-guard contracts. The integration/e2e tiers run in full-suite.yml
-# from preview-release.yml: deterministic coverage on Linux/macOS/Windows plus
-# the enabled live families. Stable releases consume that exact-source evidence.
+# and production-guard contracts. By maintainer decision on 2026-09-21, main is
+# not production: deterministic and live deep tiers gate the preview stage in
+# full-suite.yml, called by preview-release.yml. Stable releases consume that
+# exact-source evidence.
 # See docs/reference/09-testing.md for the tier map and publication policy.
 on:
   pull_request:

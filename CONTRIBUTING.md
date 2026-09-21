@@ -57,6 +57,11 @@ Before submitting a PR, verify:
 - Stale stage names, paths, or flags do not remain in examples, docs, or generated output (grep `docs/` and `README.md` when renaming anything).
 - If the change adds an input to any fingerprint, epoch, or receipt identity, the PR names the human-visible change that input detects (see the Authority Policy in [`docs/reference/11-contributing.md`](docs/reference/11-contributing.md#authority-policy)).
 
+By maintainer decision on 2026-09-21, `main` is not production: PR CI stays fast
+with contract checks, smoke, unit shards, native-terminal units and production
+guards; deterministic and live deep tiers gate previews in `full-suite.yml`
+called by `preview-release.yml`.
+
 ## Testing Changes
 
 Run the suite before submitting:
