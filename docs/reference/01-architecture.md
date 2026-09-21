@@ -316,8 +316,9 @@ under `tools/data/`:
 
 `aidlc config` validates the stamp and descriptor before planning. It writes a
 fourth file, `aidlc-manifest.json`, into the installed harness as the
-project-specific ownership baseline: upstream version, per-file hashes, root
-contributions, and the selected optional-integration mode. Refresh uses that
+project-specific baseline: upstream version, per-file hashes, shipped-entry
+hashes for Claude settings and Codex tables, root contributions, and the selected
+optional-integration mode. Refresh uses that
 baseline to update unchanged framework bytes, preserve local modifications,
 merge root integrations, and remove retired owned content. Copy-channel hashes
 recorded in the native descriptor allow an exact, unmodified legacy copy install

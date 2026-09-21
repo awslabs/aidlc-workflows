@@ -6,6 +6,8 @@ This schema is the contract between the tool (deterministic) and the LLM (prose 
 
 ## Bolt identity
 
+Committed audit shards are repository content, so `info` treats them as untrusted and validates Bolt identity before the protocol interpolates its output into a prompt ([#1281](https://github.com/awslabs/aidlc-workflows/issues/1281)).
+
 New Bolts are scoped to the selected intent's registry UUID. `<id8>` is its
 eight-character lowercase hex suffix (`idSuffix(uuid)`), the same identity used
 by Unit claims at `refs/heads/claim/<id8>/<unit>`. Unit names, `--slug`, audit
@@ -82,8 +84,17 @@ Intent record <relative record dir> has no registry identity (uuid); adopt or re
 Identity-resolving commands (`create`, `merge`, `discard`, `restore`, `purge`)
 also require a registry UUID before legacy lookup. Adopt or re-create an orphan
 intent before using those commands; do not infer its UUID from a directory name.
-`list` remains an inventory independent of the active intent; `verify` and
-`info` remain audit lookups that need no registry identity.
+`list` remains an inventory independent of the active intent, and `verify`
+remains an audit lookup; neither needs a registry identity. `info` needs a
+registry UUID only to accept an intent-scoped `bolt-<id8>_<slug>` row: the audited
+id8 must equal the selected intent's `idSuffix(uuid)`. A legacy `bolt-<slug>` row
+still needs none. The registry `intents.json` is the only trusted source of the
+selected intent's id8; without a UUID, an intent-scoped row fails closed, matching
+the identity-resolving commands:
+
+```text
+error: WORKTREE_CREATED block at <ts> names an intent-scoped Bolt, but intent <record> has no registry identity (uuid); adopt or re-create the intent before Construction
+```
 
 The `<id8>` is the whole of a Bolt's intent authority, so two registered intents
 whose uuids share their last eight hex characters (a 2^-32 event per pair) refuse
@@ -137,9 +148,18 @@ The slug is the kebab-case Bolt identifier threaded through every worktree comma
 | Exit | Meaning | stdout | stderr |
 |------|---------|--------|--------|
 | 0 | Hit — JSON emitted | JSON object (see below) | (empty) |
-| 1 | No `WORKTREE_CREATED` for slug (or audit absent), or malformed block | (empty) | one-line error message |
+| 1 | No `WORKTREE_CREATED` for slug (or audit absent), or malformed block, or the block's `Branch name`/`Worktree path` do not describe the canonical Bolt for the selected intent, or its `Timestamp` is not an ISO 8601 UTC instant | (empty) | one-line error message |
 
-The exit-code contract mirrors `verify`'s semantics: non-zero is the halt signal. The orchestrator's prose treats any non-zero exit as "no worktree to render" and falls back to the carve-out failure shape (verify-failed or dev-rejection). Surface an identity refusal rather than inventing a branch or path from the slug.
+Identity validation uses these stable refusals in check order (timestamp, branch name, registry identity, worktree path). `<owner>` renders as `intent <record>` or `the selected workspace`. Each refusal emits one line on stderr and leaves stdout empty; the rejected audit bytes never appear on either stream; `<ts>` in the later refusals is only ever a validated timestamp.
+
+```text
+error: malformed WORKTREE_CREATED block for Bolt <slug>: Timestamp is not an ISO 8601 UTC instant
+error: malformed WORKTREE_CREATED block at <ts>: Branch name does not name Bolt <slug> for <owner>
+error: WORKTREE_CREATED block at <ts> names an intent-scoped Bolt, but <owner> has no registry identity (uuid); adopt or re-create the intent before Construction
+error: malformed WORKTREE_CREATED block at <ts>: Worktree path is not the canonical directory <dir> of Bolt <name>
+```
+
+The exit-code contract mirrors `verify`'s semantics: non-zero is the halt signal. The orchestrator treats any non-zero exit as "no worktree to render": it presents the same Retry/Skip/Abort question with the "Worktree at [path] on branch [branch_name]." clause replaced by a two-sentence voice-contract translation (what could not be shown and why, then the next step) (see the construction protocol's halt-and-ask paragraph). Surface an identity refusal rather than inventing a branch or path from the slug.
 
 ## JSON output shape (exit 0)
 
@@ -157,10 +177,10 @@ The exit-code contract mirrors `verify`'s semantics: non-zero is the halt signal
 Field semantics:
 
 - **`slug`** — echoes the input `--slug` flag verbatim. The bare kebab-case identifier (e.g. `onboarding-wizard`) remains the human/audit identity; it is not the directory or branch name. See SKILL.md per-Bolt loop "Slug derivation" for the `name → slug` transformation. The orchestrator uses this field to confirm correlation, not to pick a different one.
-- **`path`** — absolute filesystem path at `<projectDir>/.aidlc/worktrees/bolt-<id8>_<slug>`. New `WORKTREE_CREATED` rows store `**Worktree path**:` project-relative; `info` resolves it against the project root. Legacy absolute rows and provenance-matched legacy Bolt paths remain accepted. The user `cd`s here to inspect a paused Bolt.
-- **`branch_name`** — actual git branch name, quoted verbatim from the audit's `**Branch name**:` field. New branches use `bolt-<id8>_<slug>`; pre-upgrade legacy branches retain `bolt-<slug>`. Never construct it from `slug`.
-- **`intent_id8`** — intent UUID suffix from the audited branch or metadata's `intentId8`; `null` for historical legacy Bolts without that identity.
-- **`audit_timestamp`** — ISO 8601 timestamp of the matching `WORKTREE_CREATED` block. Useful for the orchestrator to reason about freshness; not currently surfaced in the AUQ prompt.
+- **`path`** — canonical absolute location for the validated identity: `<projectDir>/.aidlc/worktrees/bolt-<id8>_<slug>` for an intent-scoped Bolt or `<projectDir>/.aidlc/worktrees/bolt-<slug>` for a legacy Bolt. `info` reconstructs this value, never echoes it. The audited `**Worktree path**:` (project-relative in new rows, absolute in legacy rows) must resolve to that location under canonical path comparison (realpath, separator-normalised), or `info` refuses with the worktree-path refusal above. The user `cd`s here to inspect a paused Bolt.
+- **`branch_name`** — canonical Bolt name for the validated identity, not free text. The audited `**Branch name**:` must parse with `parseBoltName`, its slug must equal `--slug`, and an intent-scoped name's id8 must equal the selected intent's registry id8; malformed names or identity mismatches refuse with the branch-name refusal above, and an intent-scoped name under an intent with no registry UUID fails closed. New branches use `bolt-<id8>_<slug>`; pre-upgrade legacy branches retain `bolt-<slug>`. Never construct it from `slug`: the tool reconstructs it, not the orchestrator.
+- **`intent_id8`** — the validated id8 of an intent-scoped name, else the canonical legacy directory's metadata `intentId8`, else `null`.
+- **`audit_timestamp`** — ISO 8601 UTC timestamp of the matching `WORKTREE_CREATED` block, validated before output (a row whose `**Timestamp**:` is not `YYYY-MM-DDTHH:MM:SS[.fff]Z` is refused). Useful for the orchestrator to reason about freshness; not currently surfaced in the AUQ prompt.
 - **`merge_held`** — boolean reflecting the `Merge-Held` field in the per-Bolt forked state at `<path>/<record>/aidlc-state.md` (`true` only if the file exists AND the field reads `true`; absence resolves to `false`). The orchestrator reads this on resume to decide whether dispatching `aidlc-bolt complete --merge --slug <slug>` is safe. The held state is set by `aidlc-bolt hold-merge --slug <slug>` before a multi-failure halt-and-ask sequence opens and cleared by `aidlc-bolt release-merge --slug <slug>` once all sibling AUQs resolve.
 
 ## Most-recent semantics
@@ -552,7 +572,7 @@ The third (malformed-block) case is the audit-of-intent reconciliation surface: 
 
 ## AUQ prompt rendering — long-path fallback
 
-The orchestrator interpolates `path` and `branch_name` into the structured question prompt body, which renders at full terminal width and wraps gracefully (multi-line wrap is supported on macOS Claude Code; verified manually before each release).
+Both `path` and `branch_name` are validated display values (see [Exit codes](#exit-codes) and field semantics), never raw audit text. The orchestrator interpolates them into the structured question prompt body, which renders at full terminal width and wraps gracefully (multi-line wrap is supported on macOS Claude Code; verified manually before each release).
 
 If a future surface (Windows PowerShell, mosh, narrow tmux pane) clips long paths in `question`, the documented fallback is to truncate with leading-ellipsis at directory boundaries while preserving the `bolt-<id8>_<slug>` tail:
 

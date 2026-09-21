@@ -24,6 +24,7 @@ import {
   BOLT_INTENT_ID8_REGEX,
   type BoltIdentity,
   BoltIdentityError,
+  boltName,
   boltSlugForUnit,
   currentSwarmSourceOpeningFingerprint,
   currentSwarmSourceMergeChain,
@@ -35,8 +36,12 @@ import {
   getField,
   legacyBoltIdentity,
   gitCommitSourceListing,
+  idSuffix,
+  intentUuidForSelection,
   isValidRepoName,
   latestMainWorkflowStageRunFloorForProject,
+  legacyBoltName,
+  legacyWorktreePath,
   maximalAttemptEvents,
   newBoltIdentity,
   parseParkedStampInstant,
@@ -68,6 +73,7 @@ import {
   workspaceSourceExclusionPathspecs,
   workspaceSourcePathIsExcluded,
   workspaceSourceState,
+  worktreePath,
   worktreesDir,
   worktreeStateFilePath,
   writeFileAtomic,
@@ -80,6 +86,8 @@ import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts
 // this regex across conceptual domains; a one-line constant beats a cross-
 // module import for a tool-local check.
 const SLUG_RE = /^[a-z][a-z0-9-]*$/;
+// The emitter uses isoTimestamp() (YYYY-MM-DDTHH:MM:SSZ); fixtures may carry fractional seconds.
+const AUDIT_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
 
 const VALID_STRATEGIES = new Set(["squash", "merge", "rebase"]);
 const WORKTREE_META_FILENAME = "worktree-meta.json";
@@ -3849,9 +3857,10 @@ function handleVerify(args: string[]): void {
 //
 // Usage: aidlc-worktree info --slug <slug>
 //
-// Reads the most-recent WORKTREE_CREATED audit block for `slug`, parses the
-// `Worktree path` and `Branch name` fields, emits JSON to stdout, exits 0.
-// On miss or malformed-block, prints an error to stderr and exits non-zero.
+// Reads the latest WORKTREE_CREATED audit block for `slug`. Its Branch name and
+// Worktree path are repository content, validated against the selected intent's
+// canonical Bolt identity before reading worktree files. JSON carries only the
+// canonical reconstruction, never raw field values. Misses/malformed rows fail.
 //
 // The halt-and-ask flow calls this to interpolate the worktree path and
 // branch name into the AskUserQuestion prompt body. Schema pinned in
@@ -3878,6 +3887,12 @@ function handleInfo(args: string[]): void {
     );
     process.exit(1);
   }
+  if (!AUDIT_TIMESTAMP_RE.test(match.timestamp)) {
+    process.stderr.write(
+      `error: malformed WORKTREE_CREATED block for Bolt ${slug}: Timestamp is not an ISO 8601 UTC instant\n`
+    );
+    process.exit(1);
+  }
 
   const pathMatch = match.block.match(/^\*\*Worktree path\*\*:\s*(.+?)\s*$/m);
   const branchMatch = match.block.match(/^\*\*Branch name\*\*:\s*(.+?)\s*$/m);
@@ -3888,25 +3903,60 @@ function handleInfo(args: string[]): void {
     process.exit(1);
   }
 
-  // Read the per-Bolt forked state file for the Merge-Held marker if present.
-  // Absence of the file or the field both resolve to merge_held=false — the
-  // resume-path check is "do not dispatch a merge that's actively held",
-  // not "every Bolt has had its hold state explicitly initialised".
-  // `info` is an audit query, so it must not require a registry identity: the
-  // intent id comes from the audited branch name, falling back to the recorded
-  // worktree's metadata for a pre-upgrade branch name, else null.
-  const resolvedWorktreePath = resolveAuditWorktreePath(pd, pathMatch[1]);
-  let intentId8 = parseBoltName(branchMatch[1])?.intentId8 ?? null;
+  const record = relativeRecordDirForSelection(selection);
+  const owner = record === null ? "the selected workspace" : `intent ${record}`;
+  const parsed = parseBoltName(branchMatch[1]);
+  if (parsed === null || parsed.slug !== slug) {
+    process.stderr.write(
+      `error: malformed WORKTREE_CREATED block at ${match.timestamp}: Branch name does not name Bolt ${slug} for ${owner}\n`
+    );
+    process.exit(1);
+  }
+
+  let name: string;
+  let dir: string;
+  let intentId8 = parsed.intentId8;
+  if (parsed.intentId8 !== null) {
+    const uuid = intentUuidForSelection(pd, selection);
+    if (uuid === null) {
+      process.stderr.write(
+        `error: WORKTREE_CREATED block at ${match.timestamp} names an intent-scoped Bolt, but ${owner} has no registry identity (uuid); adopt or re-create the intent before Construction\n`
+      );
+      process.exit(1);
+    }
+    if (idSuffix(uuid) !== parsed.intentId8) {
+      process.stderr.write(
+        `error: malformed WORKTREE_CREATED block at ${match.timestamp}: Branch name does not name Bolt ${slug} for ${owner}\n`
+      );
+      process.exit(1);
+    }
+    name = boltName(parsed.intentId8, slug);
+    dir = worktreePath(pd, parsed.intentId8, slug);
+  } else {
+    name = legacyBoltName(slug);
+    dir = legacyWorktreePath(pd, slug);
+  }
+  if (pathKey(resolveAuditWorktreePath(pd, pathMatch[1])) !== pathKey(dir)) {
+    process.stderr.write(
+      `error: malformed WORKTREE_CREATED block at ${match.timestamp}: Worktree path is not the canonical directory ${dir} of Bolt ${name}\n`
+    );
+    process.exit(1);
+  }
+
+  // `info` is an audit query: after identity validation, legacy names can recover
+  // the intent id from canonical-dir metadata without requiring registry identity.
   if (intentId8 === null) {
     try {
-      const meta = JSON.parse(readFileSync(join(resolvedWorktreePath, ".aidlc", WORKTREE_META_FILENAME), "utf-8")) as { intentId8?: unknown };
+      const meta = JSON.parse(readFileSync(join(dir, ".aidlc", WORKTREE_META_FILENAME), "utf-8")) as { intentId8?: unknown };
       if (typeof meta.intentId8 === "string" && BOLT_INTENT_ID8_REGEX.test(meta.intentId8)) intentId8 = meta.intentId8;
     } catch {
       // Pre-upgrade and already-removed worktrees may have no readable metadata.
     }
   }
+  // Read the per-Bolt forked state file for the Merge-Held marker if present.
+  // An absent file or field means false: only actively held merges are blocked.
   let mergeHeld = false;
-  const wtStatePath = worktreeStateFilePath(resolvedWorktreePath);
+  const wtStatePath = worktreeStateFilePath(dir);
   if (existsSync(wtStatePath)) {
     const wtContent = readFileSync(wtStatePath, "utf-8");
     mergeHeld = getField(wtContent, "Merge-Held") === "true";
@@ -3915,8 +3965,8 @@ function handleInfo(args: string[]): void {
   console.log(
     JSON.stringify({
       slug,
-      path: resolvedWorktreePath,
-      branch_name: branchMatch[1],
+      path: dir,
+      branch_name: name,
       intent_id8: intentId8,
       audit_timestamp: match.timestamp,
       merge_held: mergeHeld,

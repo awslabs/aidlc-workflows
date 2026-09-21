@@ -24,7 +24,7 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 
 ## Settings Overrides (`settings.local.json`)
 
-The shared `.claude/settings.json` ships with the framework and is committed to version control. To override settings for your local environment without affecting the team, create a personal overrides file:
+The shared `.claude/settings.json` ships with the framework and is committed to version control. AI-DLC preserves project-owned additions, but its `companyAnnouncements`, `permissions`, `statusLine`, and `hooks` entries remain baseline-owned. To override settings for your local environment without affecting the team, create a personal overrides file:
 
 ```bash
 cp .claude/settings.local.json.example .claude/settings.local.json
@@ -40,7 +40,7 @@ This file is listed in `.gitignore` so your personal changes are never committed
 
 ## Agent Models and Effort (Tiers)
 
-Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys. With no recorded model policy, judgment and templated agents inherit your session's model and effort; only the balanced reviewer tier pins a mid-size model at `medium` effort on Claude Code, Codex, and opencode. On Kiro, Cursor, and Copilot all tiers inherit the session model and effort. See [Agent System](../reference/05-agent-system.md) for the full shipped projection table.
+Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys. With no recorded model policy, judgment and templated agents inherit the session model and effort. Balanced reviewers use Sonnet at medium effort on Claude Code, while Codex and opencode inherit the session model and apply their medium reasoning setting. On Kiro, Cursor, and Copilot all tiers inherit the session model and effort. See [Agent System](../reference/05-agent-system.md) for the full projection table.
 
 The first-run wizard defaults to the `balanced` **preset**, which is distinct
 from the reviewer **tier**: it records medium effort for all three groups.
@@ -75,7 +75,8 @@ When every workflow in a project should start at the same scope, set `AWS_AIDLC_
 }
 ```
 
-> The shipped `env` block also contains Bedrock model IDs (`CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, etc.). Those are listed separately — the example above only shows the scope key for clarity.
+The shipped `env` block contains only the AI-DLC scope default. Provider and
+model settings remain owned by Claude Code and the user.
 
 With this set, implicit scope resolution uses `feature`. Alternatively, record a project default with `aidlc config flags --default-scope feature --project --yes` (or `--local` for this checkout). The real `AWS_AIDLC_DEFAULT_SCOPE` environment variable wins over the recorded flag; the shipped settings env entry therefore remains authoritative until you change or remove that entry. Once the intent's `aidlc-state.md` exists (under its record dir), its scope is authoritative and changes to the implicit default do not alter an in-flight workflow.
 
@@ -277,7 +278,7 @@ On **Claude Code**, this implementation displays a statusline in the terminal st
 
 This shows, in order: current phase, phase progress (as a bar and a ratio — both scoped to the current phase), stage display name, and lead agent. Context usage appears on the right (e.g., `ctx:15%`), color-coded as the remaining context drops. When the Claude usage ledger has data, `↑<in> ↓<out> $<usd>` follows for the active workflow and current transcript/session only; prior workflows and sessions are excluded. Setting `AIDLC_DISABLE_USAGE_TRACKING=1` turns usage tracking off entirely and removes this segment.
 
-The `$<usd>` value is a local estimate priced from **public list prices**, not a bill. The Claude harness ships with Bedrock enabled (`CLAUDE_CODE_USE_BEDROCK=1`), and what Bedrock actually charges depends on your inference profile, region, service tier, and any negotiated or subscription pricing, so the figure may not match your invoice. Most of the token volume in a long workflow is cache reads — billed, at the reduced cache-read rate — so the counts and the estimate grow steadily; that is real usage, not inflation. To price new usage at your own rates, point `AIDLC_MODEL_RATES` at a rates file (see [Rate table and overrides](../reference/06-hooks-and-tools.md#rate-table-and-overrides)); totals already recorded keep the rates they were priced at. If you'd rather not show the estimate — while presenting, screen-sharing, or recording — set `AIDLC_DISABLE_USAGE_TRACKING=1` (see [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns)).
+The `$<usd>` value is a local estimate priced from **public list prices**, not a bill. When Amazon Bedrock is the recorded provider (`CLAUDE_CODE_USE_BEDROCK=1`), what Bedrock actually charges depends on your inference profile, region, service tier, and any negotiated or subscription pricing, so the figure may not match your invoice. Most of the token volume in a long workflow is cache reads — billed, at the reduced cache-read rate — so the counts and the estimate grow steadily; that is real usage, not inflation. To price new usage at your own rates, point `AIDLC_MODEL_RATES` at a rates file (see [Rate table and overrides](../reference/06-hooks-and-tools.md#rate-table-and-overrides)); totals already recorded keep the rates they were priced at. If you'd rather not show the estimate — while presenting, screen-sharing, or recording — set `AIDLC_DISABLE_USAGE_TRACKING=1` (see [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns)).
 
 ### Configuration
 
@@ -296,7 +297,10 @@ Edit `.claude/hooks/aidlc-statusline.ts` directly. The output format is defined 
 
 ### Disabling the statusline
 
-Remove the `statusLine` block from `settings.json`. The terminal status bar reverts to Claude Code's default.
+Remove the `statusLine` block from `settings.json`. The terminal status bar
+reverts to Claude Code's default. Because `statusLine` is a shipped key, the
+next `aidlc config` release refresh reports a conflict; run
+`aidlc config --force` to restore the shipped entry.
 
 ---
 

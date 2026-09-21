@@ -50,6 +50,10 @@ interface RecordAuthority {
 const ASSUMPTIONS_HEADING = "Assumptions & Open Questions";
 const REVIEW_HEADING = "Review";
 const ACCEPT_ASSUMPTIONS_ANSWER = "A. Accept assumptions";
+// Lines the `## Assumption Confirmation` section owns as scaffolding rather
+// than assumption text: its two fixed option literals and the answer tag.
+const CONFIRMATION_SCAFFOLD_RE =
+	/^\s*(?:(?:[-*+]|\d{1,9}[.)])\s+)?(?:A\. Accept assumptions|B\. Convert to follow-up questions)\s*$|^\[Answer\]:/;
 const ACTIVE_MEMORY_FILES = new Set(["org.md", "team.md", "project.md"]);
 const NON_VISIBLE_HTML_ELEMENTS = new Set([
 	"code",
@@ -464,10 +468,21 @@ function parseSourceUniverse(
 		findings.push("duplicate [Answer]: entries for Assumption Confirmation");
 	}
 	const assumptionAnswer = assumptionAnswers[0] ?? "";
+	// The confirmation's own scaffolding (its option lines and answer tag) is
+	// not assumption text; blank it so the shared block splitter cannot fold it
+	// into an adjacent entry. Every other line stays visible text: a Markdown
+	// definition cannot interrupt a paragraph, so `[label]: url` directly under
+	// an entry is that entry's lazy continuation.
+	const confirmationEntries = confirmation.map((line) =>
+		CONFIRMATION_SCAFFOLD_RE.test(line) ? "" : line,
+	);
 	const acceptedAssumptions = new Set(
-		confirmation
-			.filter((line) => isListItem(line))
-			.filter((line) => sourceTags(line, labels).includes("assumption"))
+		claimBlocksFromLines(confirmationEntries)
+			.blocks.map((block) => block.text)
+			.filter(
+				(text) =>
+					isListItem(text) && sourceTags(text, labels).includes("assumption"),
+			)
 			.map(normalizedAssumption)
 			.filter((entry) => entry.length > 0),
 	);
@@ -510,9 +525,25 @@ function claimBlocks(
 	blocks: ClaimBlock[];
 	hasAssumptionsSection: boolean;
 } {
-	const lines = visibleMarkdownLines(body, { preserveIndentedCode: true }).map((line, index) =>
-		definitionLines.has(index) ? "" : line,
+	return claimBlocksFromLines(
+		visibleMarkdownLines(body, { preserveIndentedCode: true }).map((line, index) =>
+			definitionLines.has(index) ? "" : line,
+		),
 	);
+}
+
+/**
+ * Splits already-visible Markdown lines into claim blocks. Both sides of the
+ * assumption comparison must use this same splitter: the deliverable's
+ * `## Assumptions & Open Questions` entries and the questions file's
+ * `## Assumption Confirmation` entries are matched by normalized block text,
+ * so wrapped list items, thematic breaks, headings, tables, and HTML blocks
+ * have to fold and flush identically on both sides.
+ */
+function claimBlocksFromLines(lines: string[]): {
+	blocks: ClaimBlock[];
+	hasAssumptionsSection: boolean;
+} {
 	const tableHeaders = new Set<number>();
 	for (let index = 1; index < lines.length; index++) {
 		if (isTableSeparator(lines[index]) && isTableLine(lines[index - 1])) {

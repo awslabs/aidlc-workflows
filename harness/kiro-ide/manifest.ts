@@ -81,6 +81,7 @@ const manifest: HarnessManifest = {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
+      shared: "identical",
       legacySignatures: {
         wholeFileHashes: [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -99,6 +100,8 @@ const manifest: HarnessManifest = {
           "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
           // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
         ],
       },
     },
@@ -188,7 +191,7 @@ const manifest: HarnessManifest = {
     lines: personaFrontmatter(agent),
   })),
 
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 
   rulesRename: "steering",
 

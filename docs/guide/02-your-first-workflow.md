@@ -129,7 +129,7 @@ On Claude Code, the custom AI-DLC status line at the bottom of your terminal upd
 
 This shows: current phase, stage display name, phase progress bar, phase progress ratio, and lead agent. The bar and the ratio share the same scope — both count `[x]` stages within the current phase, so the bar advances every time the ratio does. Remaining context (`ctx:N%`) is always shown on the right, color-coded as it drops. On Claude Code, `↑<in> ↓<out> $<usd>` also appears after the first usage fold and covers only the active workflow and current transcript/session, not earlier workspace activity. Set `AIDLC_DISABLE_USAGE_TRACKING=1` to turn usage tracking (and this segment) off.
 
-> The `$<usd>` is a local estimate priced from public list prices, not a bill — under the shipped Bedrock default it may not match what you are actually charged. See [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns) to price it at your own rates or hide it.
+> The `$<usd>` is a local estimate priced from public list prices, not a bill — when Amazon Bedrock is your recorded provider it may not match what you are actually charged. See [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns) to price it at your own rates or hide it.
 
 The aidlc-product-agent asks you to choose an interaction mode:
 

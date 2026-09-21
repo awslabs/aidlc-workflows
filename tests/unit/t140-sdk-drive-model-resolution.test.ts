@@ -5,13 +5,19 @@
 // test-only harness default. Shipped settings still own the environment.
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveDriveSdkSettings } from "../harness/sdk-drive.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const HARNESS_DEFAULT_MODEL = "opus[1m]";
-const SHIPPED_OPUS = "global.anthropic.claude-opus-4-8[1m]";
 
 function withTempProject(assertions: (projectDir: string) => void): void {
   const projectDir = mkdtempSync(join(tmpdir(), "aidlc-sdk-model-"));
@@ -32,18 +38,24 @@ function writeProjectSettings(
 }
 
 describe("sdk-drive model resolution", () => {
-  test("bare project uses the harness default model and shipped env", () => {
+  test("bare project uses the harness default model without provider overrides", () => {
     withTempProject((projectDir) => {
       const resolved = resolveDriveSdkSettings(projectDir);
 
       expect(resolved.model).toBe(HARNESS_DEFAULT_MODEL);
       expect(resolved.modelSource).toBe("harness-default");
-      expect(resolved.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
-      expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(SHIPPED_OPUS);
+      const shipped = JSON.parse(
+        readFileSync(
+          join(REPO_ROOT, "harness", "claude", "settings.json"),
+          "utf-8",
+        ),
+      ) as { env?: Record<string, string> };
+      expect(shipped.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+      expect(shipped.env?.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
     });
   });
 
-  test("project settings model beats the harness default while shipped env still wins", () => {
+  test("project settings model and provider env beat the harness default", () => {
     withTempProject((projectDir) => {
       writeProjectSettings(projectDir, {
         model: "sonnet",
@@ -56,7 +68,8 @@ describe("sdk-drive model resolution", () => {
 
       expect(resolved.model).toBe("sonnet");
       expect(resolved.modelSource).toBe(join(projectDir, ".claude", "settings.json"));
-      expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(SHIPPED_OPUS);
+      expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL)
+        .toBe("project-opus-should-not-win");
     });
   });
 
