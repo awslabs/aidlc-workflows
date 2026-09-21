@@ -565,7 +565,7 @@ jobs:
             --output .ai-pr-review-final/review.json \
             --decision-output .ai-pr-review-final/decision.json)"
           echo "event=$event" >> "$GITHUB_OUTPUT"
-          decision="$(jq -r '\"\(.actor)/\(.action)\"' \
+          decision="$(jq -r '"\(.actor)/\(.action)"' \
             .ai-pr-review-final/decision.json)"
           echo "decision=$decision" >> "$GITHUB_OUTPUT"
 

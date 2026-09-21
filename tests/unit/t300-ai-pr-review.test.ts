@@ -1228,6 +1228,8 @@ process.stdout.write(JSON.stringify({
     expect(modelStep).toContain("structured_filter='select(type == \"object\")'");
     expect(modelStep).toContain("ai-pr-review-judge-schema.json");
     expect(modelStep).toContain("--decision-output .ai-pr-review-final/decision.json");
+    expect(modelStep).toContain(`jq -r '"\\(.actor)/\\(.action)"'`);
+    expect(modelStep).not.toContain(`jq -r '\\"\\(.actor)/\\(.action)\\"'`);
     expect(modelStep).toContain("sudo -u ai-pr-review -- perl -i -pe");
     expect(modelStep).toContain('sudo -u ai-pr-review test -r "$destination"');
     expect(modelStep.indexOf("sudo -u ai-pr-review -- perl -i -pe")).toBeLessThan(
