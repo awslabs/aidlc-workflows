@@ -79,16 +79,25 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 - A matched stock scope carries its own default (`guard_policy:` in the
   scope file; the shipped defaults are strict on enterprise, security-patch,
   and infra, relaxed everywhere else). Adopt it and say so.
+  No scope file is written for a matched proposal.
 - For a custom grid, read the entropy profile the same way the grid was read:
   high risk or verification entropy, regulated work, or several people sharing
   the approvals point to strict; a spike, a fix, or a solo run where every
   changed file would otherwise mean another approval points to relaxed.
+  Store the approved custom scope's value as `guard_policy: <value>` in its
+  frontmatter.
 - In-flight, the running intent's value stays as it is; the human flips it
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
   approving. A memory layer that declares strict wins over any proposal; the
   validator and the intent-create command both refuse a relaxed or off value
   under it.
+- Intent creation reads Guard Policy from the scope file; the conductor
+  passes `--guard-policy` only for `strict`. If the human flips a matched
+  scope to `relaxed` or `off` at the compose gate, create the intent from the
+  matched scope first, then tell the person to type
+  `/aidlc --guard-policy <value>` after the intent exists (Codex uses
+  `$aidlc --guard-policy <value>`).
 
 ## Rationale quality
 

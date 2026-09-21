@@ -1118,8 +1118,13 @@ by the policy word.
 Setting `guard-policy relaxed` or `guard-policy off` from chat requires the
 person's exact typed switch, such as `/aidlc --guard-policy relaxed` or the
 confirmation words `guard policy relaxed` (use `off` for that value). The
-human-turn hook records the key and value for this session and intent; the setter
-consumes that request once after a successful write or an already-set no-op.
+human-turn hook records the key and value for this session, space, and intent.
+The space comes from `--space <name>` in the same flags-first command, otherwise
+the session's selected space; the target is the intent UUID, or `bare-space`
+when none exists. The setter compares the exact session request, space,
+`intentId`, and key/value, then consumes the request once after a successful
+write or an already-set no-op. A later typed switch replaces the request;
+unrelated prompts retain it.
 An unrelated reply after an engine directive authorizes nothing, and
 `AIDLC_UNATTENDED=1` refuses lowering even if a typed request exists. Scope
 defaults are not gated. The machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`
@@ -1129,11 +1134,16 @@ fence lowered earlier, which `/aidlc --status` shows as
 `on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch
 takes precedence.
 
+A typed `config set` lowering request must contain exactly that key and value;
+use flags-first syntax for combined settings or `--space`. See
+[Customization](13-customization.md#the-five-fences) for the accepted grammar.
+Codex uses `$aidlc`, and its refusals name `$aidlc` instead of `/aidlc`.
+
 Without the typed request, setting `relaxed` is refused with:
 
 > Setting Guard Policy relaxed lowers fences and is the person's decision. It is accepted only when they typed `/aidlc --guard-policy relaxed` in this session. Ask them, and run this again after they do.
 
-The same requirement applies to explicit `scope change --guard-policy relaxed|off`
+The same requirement applies to direct `scope change --guard-policy relaxed|off`
 and `intent create --guard-policy relaxed|off`, including first-use slash
 commands before a workflow exists. The hook records the request before its
 state-file gate, and an unrelated composer approval does not withdraw it.
@@ -1142,8 +1152,18 @@ Without the request, creation with `relaxed` is refused with:
 > Creating this intent with Guard Policy relaxed lowers fences and is the person's decision. It is accepted only when they typed `/aidlc --guard-policy relaxed` in this session. Create it without the flag, or ask them and run this again after they do.
 
 The `off` refusals use `off` in place of `relaxed`; unattended runs also receive
-the driver guidance. A guard-recovery selection can lower its named fence, not
-the policy word.
+the driver guidance. A guard-recovery `lower-fence` choice is human-input guidance,
+not an operation or command: selecting it executes nothing and only tells the
+person to type `/aidlc config set guard.<fence> off` with that fence's name.
+
+Compose creation reads Guard Policy from the scope file. An approved custom
+scope contains `guard_policy: <value>`; a matched stock scope retains its own
+default and no scope file is written. The conductor passes `--guard-policy`
+only for `strict`. If you flip a matched scope to `relaxed` or `off` at the
+compose gate, the conductor creates the intent from the matched scope first,
+then tells you to type `/aidlc --guard-policy <value>` after the intent exists
+(`$aidlc --guard-policy <value>` on Codex). The composer never changes an
+in-flight intent's value.
 
 No value removes a gate: the conductor must still ask every approval question;
 a lowered fence does not enforce that prose obligation. A reviewer's verdict
@@ -1222,12 +1242,15 @@ switch, then per-work off unless memory holds strict, then per-work on, then the
 by default. Four of the five have a kill switch; `state-transition` has none,
 so the policy word and this switch are its only controls.
 
-Setting `guard.<fence> off` from chat requires the person's exact selection:
-either they typed `/aidlc config set guard.<fence> off` in this session, or they
-chose the `lower-fence` remedy for that fence from an engine-published
-guard-recovery question. The setter reads the recorded key and value or the
-recorded remedy selection, not merely the arrival of a human message. A typed
-request is consumed after a successful write or an already-set no-op.
+Setting `guard.<fence> off` from chat requires the person's exact typed request:
+they type `/aidlc config set guard.<fence> off` or the flags-first form
+`/aidlc --guard.<fence> off`. A `lower-fence` human-input choice executes nothing
+and only tells the person to type the exact setter command for that fence.
+The setter compares the recorded session request, space, intent UUID (or
+`bare-space` when none exists), and key/value. The space comes from `--space`
+in the same flags-first command, otherwise the session's selected space.
+A typed request is consumed once after a successful write or an already-set
+no-op. A later typed switch replaces it; unrelated prompts retain it.
 `AIDLC_UNATTENDED=1` refuses lowering even with a recorded request; the
 machine-wide human-presence bypass skips the key only for an attended run.
 Memory-held strict refuses first and overrides a fence lowered earlier, which
@@ -1235,9 +1258,9 @@ Memory-held strict refuses first and overrides a fence lowered earlier, which
 machine-wide kill switch takes precedence. Its persisted `Guards Off` entry
 remains and takes effect again only after the memory line no longer holds strict.
 
-Without either selection, the Plan Approval setter refuses with:
+Without the typed request, the Plan Approval setter refuses with:
 
-> Turning the plan-approval check off is the person's decision. It is accepted only when they typed `/aidlc config set guard.plan-approval off` in this session or chose that remedy from the guard-recovery question. Ask them, and run this again after they do.
+> Turning the plan-approval check off is the person's decision. It is accepted only when they typed `/aidlc config set guard.plan-approval off` in this session. Ask them, and run this again after they do.
 
 The other fence refusals substitute that fence's name; unattended runs also
 receive the driver guidance. This command controls the four switchable fences,

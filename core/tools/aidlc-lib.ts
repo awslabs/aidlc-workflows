@@ -9,10 +9,12 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
+  entrySkillInvocation,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
+export { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   guardOperationInvocation,
   guardOperationMatchesRemedy,
@@ -3402,12 +3404,11 @@ export interface GuardSwitchRequest {
   version: 1;
   session: string;
   intentId: string;
+  space: string;
   requestedAt: string;
   switches: GuardSwitch[];
 }
-export type GuardSwitchAuthority =
-  | { source: "recovery-selection" }
-  | { source: "typed-request"; session: string };
+export type GuardSwitchAuthority = { source: "typed-request"; session: string };
 
 export interface PlanApprovalRuntimeViolation {
   version: 1;
@@ -4006,24 +4007,30 @@ export function recordTypedGuardSwitchRequest(
   session: string,
   promptText: string,
 ): boolean {
-  const switches = parseTypedGuardSwitches(promptText);
-  if (switches.length === 0) return false;
+  const parsed = parseTypedGuardSwitchRequest(promptText);
+  if (parsed.switches.length === 0) return false;
   const path = guardSwitchRequestPath(projectDir, session);
   if (!path) throw new Error("Guard switch request requires a nonblank session");
+  let space: string;
   let intentId: string;
   try {
-    intentId = intentUuidForSelection(
-      projectDir, resolveWorkflowSelection(projectDir, { sessionId: session }),
-    ) ?? "bare-space";
+    const selection = resolveWorkflowSelection(projectDir, {
+      sessionId: session,
+      ...(parsed.space ? { space: parsed.space } : {}),
+    });
+    space = selection.space;
+    intentId = intentUuidForSelection(projectDir, selection) ?? "bare-space";
   } catch {
-    intentId = activeIntentUuid(projectDir) ?? "bare-space";
+    space = activeSpace(projectDir);
+    intentId = activeIntentUuid(projectDir, space) ?? "bare-space";
   }
   const request: GuardSwitchRequest = {
     version: 1,
     session,
     intentId,
+    space,
     requestedAt: isoTimestamp(),
-    switches,
+    switches: parsed.switches,
   };
   ensurePlanApprovalRuntimeDir(projectDir);
   writeFileAtomic(path, `${JSON.stringify(request, null, 2)}\n`);
@@ -4043,6 +4050,8 @@ export function readGuardSwitchRequest(
       value.session === session &&
       typeof value.intentId === "string" &&
       value.intentId.length > 0 &&
+      typeof value.space === "string" &&
+      value.space.length > 0 &&
       typeof value.requestedAt === "string" &&
       Number.isFinite(Date.parse(value.requestedAt)) &&
       Array.isArray(value.switches) &&
@@ -22939,16 +22948,16 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
 
 /**
  * "Turn this fence off for this piece of work": the in-band offer that makes the
- * key reachable at the moment it is needed. It requires a human (it is their
- * key), it is always executable, and it is recorded.
+ * key reachable at the moment it is needed. The person must type the command;
+ * selecting the remedy does not authorize a switch.
  */
 export function lowerFenceRemedy(fence: SwitchableGuardFence): GuardRemedy {
   return {
     op: "lower-fence",
     action:
-      `Turn the ${fence} check off for this piece of work and continue. It is ` +
-      "recorded in the audit trail and comes back on for the next piece of work.",
-    ...guardOperation({ kind: "lower-fence", fence }),
+      `Turn the ${fence} check off for this piece of work by typing ${entrySkillInvocation()} config set guard.${fence} off yourself; ` +
+      "it is recorded in the audit trail and comes back on for the next piece of work.",
+    interaction: "human-input",
     requiresHuman: true,
     executableNow: true,
   };
@@ -22958,7 +22967,7 @@ export function lowerFenceRemedy(fence: SwitchableGuardFence): GuardRemedy {
 export function lowerFenceSentence(fence: SwitchableGuardFence): string {
   return (
     `If you meant to do this now, turn the check off for this piece of work with ` +
-    `/aidlc config set ${guardFenceConfigKey(fence)} off. It is recorded, and it ` +
+    `${entrySkillInvocation()} config set ${guardFenceConfigKey(fence)} off. It is recorded, and it ` +
     "comes back on for the next piece of work."
   );
 }
@@ -30165,7 +30174,7 @@ export function resolveGuardPolicy(
     throw new Error(
       `Invalid Guard Policy "${rawStateValue}" in ${statePath} ` +
         `(field: ${stateField}). Expected one of: ${GUARD_POLICY_VALUES.join(", ")}. ` +
-        "Run /aidlc --guard-policy strict, relaxed, or off to repair it.",
+        `Run ${entrySkillInvocation()} --guard-policy strict, relaxed, or off to repair it.`,
     );
   }
   const stateValue = intent?.value ?? "strict";
@@ -30245,32 +30254,35 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
   return [];
 }
 
-// Only two affirmative forms count: an `/aidlc` or `aidlc` command with lowering
-// flags or `config set`, or exactly the confirmation words `guard policy relaxed`
-// (also hyphenated, `change control`, or `off`). Quoted, negated, or explanatory
-// mentions never count: the prompt must begin with the command or be exactly the
-// confirmation words. `strict` and `on` never switch; human presence has no switch.
-// Strip trailing prompt punctuation. One entry per key, last value wins.
-export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
+// Accept /aidlc, $aidlc, or bare aidlc followed by flags first or the exact
+// four-token config set form. A description or explanation after the flags is
+// never scanned. The whole prompt may instead be the confirmation words
+// guard policy relaxed (also hyphenated, change control, or off).
+// Strip trailing prompt punctuation and match case-insensitively. strict and
+// on never switch; human presence has no switch. Last value wins per key.
+export function parseTypedGuardSwitchRequest(prompt: string): { switches: GuardSwitch[]; space: string | null } {
   const text = prompt.trim().replace(/[.,;:!?]+$/, "").toLowerCase();
-  const command = text.match(/^\/?aidlc(?:\s+|$)/);
+  const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/);
   if (command === null) {
     const confirmation = text.match(/^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/);
-    return confirmation === null
-      ? []
-      : [{ key: "guard-policy", value: confirmation[1] as GuardSwitch["value"] }];
+    return {
+      switches: confirmation === null
+        ? []
+        : [{ key: "guard-policy", value: confirmation[1] as GuardSwitch["value"] }],
+      space: null,
+    };
   }
-  const tokens = text.slice(command[0].length).split(/\s+/);
+  const tokens = text.slice(command[0].length).trim().split(/\s+/);
+  const configForm = tokens.length === 4 && tokens[0] === "config" && tokens[1] === "set";
   const switches = new Map<GuardSwitchKey, GuardSwitch>();
-  for (let i = 0; i < tokens.length; i++) {
-    let configKey = tokens[i];
-    let value = tokens[i + 1];
-    if (configKey === "config" && value === "set") {
-      configKey = tokens[i + 2] ?? "";
-      value = tokens[i + 3];
-    } else if (configKey.startsWith("--")) {
-      configKey = configKey.slice(2);
-    } else {
+  let space: string | null = null;
+  for (let i = configForm ? 2 : 0; i < tokens.length;) {
+    const token = tokens[i++];
+    if (!configForm && !token.startsWith("--")) break;
+    const configKey = configForm ? token : token.slice(2);
+    const value = tokens[i] !== undefined && !tokens[i].startsWith("--") ? tokens[i++] : undefined;
+    if (!configForm && configKey === "space" && value !== undefined) {
+      space = value;
       continue;
     }
     let key: GuardSwitchKey;
@@ -30284,47 +30296,28 @@ export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
     }
     if (value === "relaxed" || value === "off") switches.set(key, { key, value });
   }
-  return [...switches.values()];
+  return { switches: [...switches.values()], space };
 }
 
-// Lowering needs the exact human selection: either the consumed guard-recovery
-// remedy for this fence or a typed request for this session, bound to the workflow
-// the setter mutates rather than the cursor. A fresh human turn alone says nothing
-// about which fence or policy the person chose.
+export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
+  return parseTypedGuardSwitchRequest(prompt).switches;
+}
+
+// Lowering needs an exact typed request bound to this session, the space and
+// the intent the setter mutates, not the cursor. The guard-recovery remedy tells
+// the person to type the command; selecting it is not authority. A fresh human
+// turn alone says nothing about which fence or policy the person chose.
 export function guardSwitchAuthority(
   projectDir: string,
-  stateContent: string | null,
   wanted: GuardSwitch,
   sessionId: string | null,
-  targetIntentId: string,
+  target: { space: string; intentId: string },
 ): GuardSwitchAuthority | null {
-  if (process.env.AIDLC_UNATTENDED === "1") return null;
-  if (wanted.key.startsWith("guard.") && wanted.value === "off" && stateContent !== null) {
-    const marker = readActiveDirectiveMarker(projectDir, stateContent);
-    if (
-      marker?.version === 2 &&
-      marker.kind === "ask" &&
-      marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
-      marker.delivery === "consumed" &&
-      marker.state_present === true &&
-      marker.needs_rehydrate === false &&
-      marker.guard_recovery_response?.status === "ready" &&
-      marker.guard_recovery_response.feedback_sha256 === undefined &&
-      marker.guard_recovery_response.selected_op === "lower-fence"
-    ) {
-      const selected = marker.remedies?.filter((remedy) => remedy.op === "lower-fence") ?? [];
-      if (
-        selected.length === 1 &&
-        selected[0].interaction === "command" &&
-        selected[0].operation?.kind === "lower-fence" &&
-        wanted.key === `guard.${selected[0].operation.fence}`
-      ) return { source: "recovery-selection" };
-    }
-  }
-  if (sessionId === null) return null;
+  if (process.env.AIDLC_UNATTENDED === "1" || sessionId === null) return null;
   const request = readGuardSwitchRequest(projectDir, sessionId);
   return request !== null &&
-      request.intentId === targetIntentId &&
+      request.space === target.space &&
+      request.intentId === target.intentId &&
       request.switches.some((entry) => entry.key === wanted.key && entry.value === wanted.value)
     ? { source: "typed-request", session: sessionId }
     : null;
@@ -30332,15 +30325,16 @@ export function guardSwitchAuthority(
 
 export function guardSwitchRefusal(wanted: GuardSwitch, context: "config" | "intent-create"): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
+  const entry = entrySkillInvocation();
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
-    return `Turning the ${fence} check off is the person's decision. It is accepted only when they typed \`/aidlc config set guard.${fence} off\` in this session or chose that remedy from the guard-recovery question. Ask them, and run this again after they do.${hint}`;
+    return `Turning the ${fence} check off is the person's decision. It is accepted only when they typed \`${entry} config set guard.${fence} off\` in this session. Ask them, and run this again after they do.${hint}`;
   }
   const value = wanted.value;
   if (context === "intent-create") {
-    return `Creating this intent with Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`/aidlc --guard-policy ${value}\` in this session. Create it without the flag, or ask them and run this again after they do.${hint}`;
+    return `Creating this intent with Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`${entry} --guard-policy ${value}\` in this session. Create it without the flag, or ask them and run this again after they do.${hint}`;
   }
-  return `Setting Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`/aidlc --guard-policy ${value}\` in this session. Ask them, and run this again after they do.${hint}`;
+  return `Setting Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`${entry} --guard-policy ${value}\` in this session. Ask them, and run this again after they do.${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {
@@ -30734,11 +30728,11 @@ export function decideGuard(
   // write before the plan was approved because the human had answered a
   // question earlier in the same turn.
   //
-  // The human still holds the key, and it still opens in one move: a held fence
-  // presents the guard-recovery ask carrying the lower-fence remedy, so choosing
-  // it writes the per-run switch and the work proceeds, recorded. That is a key
-  // the person turns deliberately rather than one that turns itself, and once
-  // turned nothing asks again for that piece of work.
+  // The human still holds the key: a held fence prints the lower-fence remedy,
+  // which tells them to type the command themselves. The typed request allows
+  // the setter to write the per-run switch, recorded. Selecting the remedy
+  // alone does not authorize it, and once turned off nothing asks again for
+  // that piece of work.
   return subject.lowered ? "stand-aside" : "hold";
 }
 

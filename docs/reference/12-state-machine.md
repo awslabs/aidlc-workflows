@@ -554,19 +554,27 @@ A same-value source change still counts as a change; `review adversarial`
 clears `Review Override` to an empty string.
 
 After the memory-strict check, every explicit fence or policy lowering in
-`config-change` or `scope-change` needs the person's exact recorded selection
-before any settings or scope changes are written. Policy lowering, including
+`config-change` or `scope-change` needs the person's exact typed request before
+any settings or scope changes are written. Policy lowering, including
 `intent create --guard-policy relaxed|off`, requires a typed switch such as
 `/aidlc --guard-policy relaxed` or `guard policy relaxed`, with the requested
-value. Fence lowering requires either `/aidlc config set guard.<fence> off`
-typed in that session or the matching recorded `lower-fence` recovery selection.
-The human-turn hook records a typed request before its state-file gate, bound
-to the session and active intent UUID or `bare-space`. A later typed switch
-replaces it; unrelated prompts, including composer approval, leave it intact.
-The successful setter, including an already-set no-op, consumes it once.
+value. Fence lowering requires a typed switch such as
+`/aidlc config set guard.<fence> off`. Codex uses `$aidlc` instead of `/aidlc`,
+including in the refusal's instruction to type the setter command.
+The human-turn hook records a version-1 `GuardSwitchRequest` before its state-file
+gate with `session`, `intentId`, `space`, `requestedAt`, and `switches`. It binds
+`space` to `--space <name>` in the same flags-first command, otherwise to the
+session's selected space, and `intentId` to the target intent UUID or `bare-space`
+when none exists. The setter requires that exact session request, space,
+`intentId`, and key/value to match its target. A later typed switch replaces it;
+unrelated prompts, including composer approval, leave it intact. The successful
+setter, including an already-set no-op, consumes it once. A `lower-fence` remedy
+is `human-input`, with no `operation` or `command`: selecting it only tells the
+person to type the exact setter command and authorizes or executes nothing.
 An unrelated human turn opens nothing, and `AIDLC_UNATTENDED=1` never accepts
 lowering even with a request on disk. Scope defaults do not need this key;
-`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` bypasses it for an attended run.
+`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` bypasses it for an attended run only after
+memory-strict and unattended refusal checks.
 
 The retired spellings resolve for one release and are never written: the scope
 key `change_control`, the state field `Change Control` (renamed in place by
@@ -1081,20 +1089,19 @@ closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
 remedy sentence; the directive contract refuses an unknown `op`. `lower-fence`
 is the one remedy a refusal adds LAST, and only when the refusal is a fence
-holding: it turns that single fence off for this piece of work through
-`config-change --guard.<fence> off`, so the way past a fence is printed beside
-the thing that stopped the human instead of living on a reference page.
+holding. It is a `human-input` choice carrying no `operation` or `command`.
+Selecting it executes nothing and only tells the person to type
+`/aidlc config set guard.<fence> off` (`$aidlc config set guard.<fence> off` on
+Codex), so the way past a fence is printed beside the thing that stopped the
+human instead of living on a reference page.
 
-The setter accepts that remedy only as the person's recorded exact selection,
-not because a human spoke after the last engine directive. `guardSwitchAuthority`
-requires the active marker to bind current state (`state_present: true`), have
-`kind: "ask"`, `ask_type: "guard-recovery"`, `delivery: "consumed"`, and
-`needs_rehydrate: false`. Its `guard_recovery_response` must be `ready`, have no
-`feedback_sha256`, and select `lower-fence`; exactly one remedy with that `op`
-must carry `{ kind: "lower-fence", fence }` for the requested fence. The state
-write retires the marker's digest binding. This selection cannot lower the
-policy word. A typed per-session switch is the other authority, and memory-held
-strict and unattended refusals apply to both.
+`guardSwitchAuthority` accepts only the exact typed request bound to the
+invoking session, target space, target intent UUID (or `bare-space`), and
+requested key/value. A recorded `lower-fence` selection supplies no authority
+and cannot lower a fence or the policy word. Memory-held strict refuses before
+any presence bypass, and unattended runs refuse even with a request on disk.
+A successful setter or already-set no-op consumes the request once; unrelated
+prompts retain it.
 
 **Operations and interaction.** Emitted remedies carry `interaction`, an
 `action` for presentation, `requiresHuman`, and `executableNow`. The conductor
@@ -1104,13 +1111,16 @@ the selected interaction:
 | `interaction` | Contract after selection |
 |---|---|
 | `command` | Execute the exact returned `command`, rendered from its structured `operation`. These reset operations require human selection; selection is sufficient to attempt the command. |
-| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; a Scope remedy needs the human's concrete Scope. |
+| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; a Scope remedy needs the human's concrete Scope. `lower-fence` only tells the person to type the exact setter command; selection authorizes and executes nothing. |
 | `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
 
 `aidlc-guard-operation.ts` defines five operations:
 `{kind: "restart-stage", stage}`, `{kind: "abort-bolt", unit, slug}`,
 `{kind: "lower-fence", fence}`, `{kind: "reapprove-plan", unit}` and
 `{kind: "show-plan-drift", unit}` (`unit` is `null` for a stage-level plan).
+The `lower-fence` operation remains for `PreToolUse` admission of the setter
+after the human's typed request; the `lower-fence` remedy itself carries neither
+that operation nor a command.
 
 A stage restart first resolves its destination and returns the exact
 `jump execute` continuation. During unapproved native Code Generation, that
@@ -1132,10 +1142,12 @@ install; abort renders `aidlc engine bolt abort --name <unit> --slug <slug>
 templates for documentation: emitted commands contain concrete targets and no
 unresolved placeholders.
 
-The fence switch renders `aidlc engine config set guard.<fence> off` in a native
-install and `bun <harness-dir>/tools/aidlc-utility.ts config-change
---guard.<fence> off` in a source install, because the native `config` route is a
-dispatcher translation onto `aidlc-utility.ts`. Approve-again renders
+For `PreToolUse` admission, the `lower-fence` operation models the typed request's
+setter as `aidlc engine config set guard.<fence> off` in a native install and
+`bun <harness-dir>/tools/aidlc-utility.ts config-change --guard.<fence> off` in a
+source install, because the native `config` route is a dispatcher translation
+onto `aidlc-utility.ts`. These are setter shapes, not commands emitted by the
+`lower-fence` remedy. Approve-again renders
 `testing-posture fingerprint --reapprove` (withdrawing the approval the drift
 invalidated so the first attempt succeeds) and show renders `testing-posture
 verify`, both with `--unit <unit>` or `--stage-level`, identically in both install
@@ -1145,11 +1157,11 @@ The conductor must obtain human consent before aborting a Bolt. This
 conductor-prose-obtained consent remains the abort trust boundary. The Plan
 Approval hook's exact abort and fence-switch exceptions preserve source/native
 trusted-tool parity; they do not themselves authenticate consent. The fence
-setter separately requires the exact typed switch or recorded recovery
-selection described above. A direct refusal without a published selection
-marker supplies no recovery-selection authority. A mistaken
-abort with the unchanged `--discard` argv now parks available files and review
-evidence rather than irretrievably deleting them. With a restorable descriptor, the
+setter separately requires the exact typed request described above; a recovery
+selection never supplies fence-switch authority, whether or not an ask was
+published. A mistaken abort with the unchanged `--discard` argv now parks
+available files and review evidence rather than irretrievably deleting them.
+With a restorable descriptor, the
 returned `restore_operation` selects the exact saved slug, stamp, and repository,
 then appends `--intent <record-dir-name> --space <space>` to bind recovery to the
 owning intent in a separate checkout, not the aborted lifecycle or its review
@@ -1212,9 +1224,10 @@ must be surfaced with its actual error; it is not a recovery directive or a
 successful operation. The refusal streak counts these guard states, not every
 tool failure.
 
-**The human's selection survives the re-ask.** A guard-recovery ask is published
-as an active-directive marker (`kind: "ask"`, `ask_type: "guard-recovery"`). The
-marker carries `remedies`, the offered `op`, `action`, `operation` (when present),
+**The human's selection survives the re-ask.** An engine-published guard-recovery
+ask is stored as an active-directive marker (`kind: "ask"`,
+`ask_type: "guard-recovery"`); a hook/tool-printed ask alone does not publish one.
+The marker carries `remedies`, the offered `op`, `action`, `operation` (when present),
 and `interaction` entries in display order. The human-turn hook records the
 selection with `delivery: consumed`, `selection_sha256`, and `selected_op`;
 `selected_op` is null when the selection is unmatched or ambiguous. Command and
@@ -1222,6 +1235,8 @@ external-work selections become `guard_recovery_response.status: ready`
 immediately, without a feedback hash. Human-input selections remain
 `awaiting-feedback` until a separate human answer supplies `feedback_sha256`
 and changes the status to `ready`. An unmatched selection authorizes no remedy.
+For `lower-fence`, neither the selection nor later recorded feedback authorizes
+the setter; only an exact typed switch request supplies that authority.
 A recorded command or external-work selection authorizes only until the next
 human response; a later prompt before the returned command runs replaces it,
 while an identical re-recorded response is idempotent. An unmatched answer

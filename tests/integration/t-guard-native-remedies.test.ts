@@ -855,7 +855,7 @@ describe("source and native guard remedies execute their owning operations", () 
       ]);
       const [reapprove, show, , lowerFence] = ask.remedies;
       const prefix = projection === "native" ? "aidlc engine " : `bun ${p.harness.dir}/tools/aidlc-`;
-      for (const remedy of [reapprove, show, lowerFence]) {
+      for (const remedy of [reapprove, show]) {
         expect(remedy.command, remedy.op).toStartWith(prefix);
         expect(remedy.interaction).toBe("command");
         // Each printed command is admitted by the hook that printed it, and
@@ -863,6 +863,12 @@ describe("source and native guard remedies execute their owning operations", () 
         succeeded(p.guard("Bash", { command: remedy.command }));
         expect(p.guard("Bash", { command: `${remedy.command}; printf code > src/unapproved.ts` }).status).toBe(2);
       }
+      expect(lowerFence).toMatchObject({
+        op: "lower-fence", interaction: "human-input", requiresHuman: true, executableNow: true,
+      });
+      expect(lowerFence.command).toBeUndefined();
+      expect(lowerFence.operation).toBeUndefined();
+      expect(lowerFence.action).toContain("typing /aidlc config set guard.plan-approval off yourself");
       expect(p.marker()).toMatchObject({ kind: "run-stage", stage: "code-generation" });
       // The one approval the fixture recorded before the drift is the only one
       // the ledger may ever hold: no remedy below mints another.
@@ -886,18 +892,23 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(readFileSync(questions, "utf-8")).toMatch(/\[Answer\]:[ \t]*$/m);
       expect(p.exact(show.command!).status).toBe(2);
 
-      // lower-fence: the switch lands in state and the ledger, then the same
-      // dispatch stands aside instead of being refused.
+      // lower-fence requires a typed request before the dispatcher may switch it
+      // off. Then the same dispatch stands aside instead of being refused.
       expect(p.state()).not.toContain("- **Guards Off**:");
+      const lowerFenceCommand = projection === "native"
+        ? "aidlc engine config set guard.plan-approval off"
+        : `bun ${p.harness.dir}/tools/aidlc.ts engine config set guard.plan-approval off`;
+      succeeded(p.guard("Bash", { command: lowerFenceCommand }));
+      expect(p.guard("Bash", { command: `${lowerFenceCommand}; printf code > src/unapproved.ts` }).status).toBe(2);
       markEngineTouch(p.project);
-      const unchosen = p.exact(lowerFence.command!);
+      const unchosen = p.exact(lowerFenceCommand);
       expect(unchosen.status).not.toBe(0);
       expect(unchosen.stderr).toContain("is the person's decision");
       expect(p.state()).not.toContain("- **Guards Off**:");
       succeeded(p.hook("record-human-turn", {
         hook_event_name: "UserPromptSubmit", prompt: "/aidlc config set guard.plan-approval off",
       }));
-      const lowered = p.exact(lowerFence.command!);
+      const lowered = p.exact(lowerFenceCommand);
       expect(lowered.status, lowered.stderr).toBe(0);
       expect(lowered.stdout).toContain("Fence plan-approval is off for this piece of work");
       expect(p.state()).toMatch(/^- \*\*Guards Off\*\*: plan-approval \(set by you\)$/m);

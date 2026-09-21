@@ -85,38 +85,64 @@ only a typed prompt: `hook_event_name === "UserPromptSubmit"`, no string
 `/aidlc --guard-policy relaxed build X` is recorded. The per-session file is
 `fence-switch-<session>.json` in the Plan Approval runtime directory above, with
 the session filename segment produced by `runtimeSessionSegment`. Its
-`GuardSwitchRequest` contains version 1, the session, `requestedAt`, the UUID of
-the intent the session is bound to (or `bare-space`), and the exact parsed
-`switches`. The setter compares that UUID with the intent it is about to mutate,
-the one selected by `--intent`/`--space` or the session binding, so a request
-recorded for one workflow cannot be spent on another.
+`GuardSwitchRequest` contains version 1, `session`, `intentId`, `space`,
+`requestedAt`, and the exact parsed `switches`. It records `space` from
+`--space <name>` in the same flags-first command, otherwise from the session's
+selected space, and `intentId` as the target intent UUID or `bare-space` when
+none exists. The setter compares the exact session request, space, `intentId`,
+and key/value with the intent it is about to mutate, selected by
+`--intent`/`--space` or the session binding, so a request cannot be spent on a
+different space or intent.
 
-`parseTypedGuardSwitches` reads only an affirmative, top-level form of the
-prompt (trimmed, one trailing run of `.,;:!?` ignored, case-insensitive). Either
-the prompt begins with `/aidlc` or `aidlc` and its remaining words carry
-`--guard-policy relaxed|off`, the retired `--change-control relaxed|off`,
-`--guard.<fence> off` for one of the four switchable fences, or the config form
-`config set guard-policy|change-control relaxed|off` / `config set guard.<fence>
-off`; or the whole prompt is the confirmation words `guard policy relaxed|off`
-(hyphen or space; `change control` still accepted). Anything else records
-nothing: a quoted, negated or explanatory mention of a switch is not a switch,
-and `strict`, `on`, and `guard.human-presence` never record a lowering. One
-entry per key, last value wins, keys ordered by first appearance. A later typed
+`parseTypedGuardSwitchRequest` returns `{switches,space}`;
+`parseTypedGuardSwitches` wraps its `.switches`. Parsing trims the prompt,
+removes one trailing run of `.,;:!?`, and is case-insensitive. The head
+must be the whole token `/aidlc`, `$aidlc`, or `aidlc`, followed by one of two
+forms:
+
+- Exactly `config set <key> <value>`, with no additional tokens. A lowering is
+  `guard-policy|change-control relaxed|off` or `guard.<fence> off` for one of
+  the four switchable fences.
+- A flags-first run. While a token starts with `--`, consume the next token as
+  its value only when present and not starting with `--`. Stop at the first
+  non-flag token and ignore the remaining description. Collect
+  `--guard-policy relaxed|off`, the retired `--change-control relaxed|off`,
+  `--guard.<fence> off` for a switchable fence, and `--space <name>`.
+  Example form:
+  `/aidlc --guard-policy relaxed|off [--guard.<fence> off] [--space <name>] <description>`.
+  Here `|` separates alternatives, square brackets mark optional flags, and
+  angle brackets mark values to replace; these notation characters are not
+  typed. On Codex, replace `/aidlc` with `$aidlc`.
+
+The whole confirmation prompt `guard[- ]policy relaxed|off` or
+`change[- ]control relaxed|off` is also accepted, where `[- ]` means a hyphen
+or a space. A question mentioning switches does not mint a request; quoted,
+negated, or explanatory mentions outside these forms record nothing.
+`strict`, `on`, and `guard.human-presence` never mint a lowering. One entry per
+key, last value wins, keys ordered by first appearance. Codex uses `$aidlc`
+instead of `/aidlc`, including in refusals that tell the person what to type.
+A later typed
 prompt containing switches replaces the request; an unrelated prompt leaves it
 untouched, including a later composer approval. The setter consumes the request
 once after a successful write or an already-set no-op, and refuses every
 lowering under `AIDLC_UNATTENDED=1` before it consults the presence bypass.
-Picked answers do not create typed requests; an engine-published guard-recovery
-question instead records its selected remedy on the directive.
+Picked answers do not create typed requests or authorize lowering. Selecting a
+`lower-fence` remedy executes nothing; its `human-input` guidance only tells the
+person to type the exact setter command. It carries no `operation` or `command`.
 
 #### Kiro IDE adapter
 
 When UserPromptSubmit carries an empty prompt, as measured on IDE 1.0.242, the
-adapter lets only that turn's first AIDLC shell command stand in for the typed
-lowering switch, using per-session `prompt-empty` and `first-aidlc-call` markers
-bound to the terminal turn counter.
-Non-empty prompts use the core human-turn hook instead; later AIDLC commands
-and unattended turns cannot mint a stand-in request.
+adapter refuses shell commands that would lower a fence or Guard Policy before
+they run (exit 2 with stderr). The per-session `prompt-empty` marker is bound to
+the terminal turn counter. No typed request is minted from a model command.
+The refusal is:
+
+> This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.
+
+Raising Guard Policy to `strict`, turning a fence `on`, and other commands use
+the existing adapter path. Newer builds that deliver a non-empty prompt use the
+core human-turn hook to record what the person typed, without this refusal.
 
 #### Copilot adapter
 
@@ -250,12 +276,11 @@ longer holds strict. Scope defaults are not gated. The key is bypassed by
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` for an attended run; `AIDLC_UNATTENDED=1`
 never accepts lowering, even when a request is on disk.
 
-The authority is either the exact key/value in the session's intent-bound typed
-request, or, for a fence only, a current consumed guard-recovery ask whose ready
-selection is the single `lower-fence` remedy with a matching
-`{ kind: "lower-fence", fence }` operation and no feedback hash. The marker must
-have current state and completed delivery, with no rehydration pending. The
-following state write retires that selection's state binding. Session lookup
+The only authority is the exact key/value in the typed request bound to the
+invoking session, target space, and target intent UUID (or `bare-space`). A
+recorded `lower-fence` selection supplies no authority and executes nothing;
+the remedy is `human-input` guidance to type the exact setter command, with no
+`operation` or `command`. Session lookup
 uses `resolveWorkflowSelection(...).sessionId` (environment override or process
 ancestry), falling back to `latestLedgerSession(projectDir)`; session-start
 records ancestry even before a workflow exists. Every lowering in a combined
@@ -302,11 +327,11 @@ MINT a grant for itself.
 | fence, key on | hold | hold | hold |
 | fence, lowered | stand aside | stand aside | stand aside |
 
-**The key is the person's exact switch selection.** The bottom two rows do not
+**The key is the person's exact typed request.** The bottom two rows do not
 read the conversational authority at all: a fence stands aside exactly when the
 policy word, per-run switch, or environment kill switch lowered it. The setter
-reads the switch the human typed or the matching remedy they selected, not a
-generic grant. A reply such as "write the code now" or "yes, option 2" to an
+reads only the exact typed request, not a selected remedy or generic grant.
+A reply such as "write the code now" or "yes, option 2" to an
 unrelated question is not a fence-switch request, even if it arrived after the
 engine's last directive.
 
@@ -317,13 +342,14 @@ review receipt, a reviewer writing outside its unit, a direct lifecycle command.
 The instruction covers the work it asks for, including the approval still pending
 inside it; it does not cover the loop skipping one of its own steps.
 
-For the four switchable fences, the human still holds the key, and it still opens
-in one move unless a memory layer holds Guard Policy strict. A fence that holds
-puts an available switch in front of the person who met it, in whichever shape
-that refusal has: `review-freeze` builds a typed refusal with `fence` set, so
-`evaluateGuardRefusal` appends `lowerFenceRemedy` (`op: "lower-fence"`) to the
-guard-recovery ask, and the setter reads the recorded selection before writing
-the per-run switch; the other three fences refuse from `PreToolUse` with exit 2.
+For the four switchable fences, the human still holds the key through an exact
+typed request, unless a memory layer holds Guard Policy strict. A fence that
+holds puts an available switch in front of the person who met it, in whichever
+shape that refusal has: `review-freeze` builds a typed refusal with `fence` set,
+so `evaluateGuardRefusal` appends `lowerFenceRemedy` (`op: "lower-fence"`) as a
+`human-input` choice with no `operation` or `command`. Selecting it only tells
+the person to type the exact setter command; it authorizes and executes nothing.
+The other three fences refuse from `PreToolUse` with exit 2.
 Main-session prose refusals use
 `fenceSwitchSentence`: it returns `lowerFenceSentence` when the switch is
 available, or names the memory file holding strict instead. Memory-held strict
@@ -388,7 +414,8 @@ ledger yet. On Kiro IDE
 against a project with no ledger, a stand-aside therefore leaves neither a line
 nor a row. `hold` refuses as before. Switchable-fence main-session refusals use
 `fenceSwitchSentence` to append `lowerFenceSentence`, naming
-`/aidlc config set guard.<fence> off`, only when memory does not hold strict.
+`/aidlc config set guard.<fence> off` (`$aidlc config set guard.<fence> off` on
+Codex), only when memory does not hold strict.
 Memory-held strict withholds the switch everywhere; the prose refusal names
 the memory file to edit instead. An unreadable policy also withholds the switch.
 Plan-approval and direct state-tool refusals withhold both sentences from
@@ -396,6 +423,9 @@ dispatched agents, keeping their redirect, as do delegated-agent and
 reviewer-scope refusals. When available, the typed refusal's remedy list carries
 `lowerFenceRemedy` (`op: "lower-fence"`) LAST, after the remedies that let the
 workflow finish the step on its own.
+This `human-input` remedy carries no `operation` or `command`; selecting it
+only tells the person to type the exact setter command and authorizes or
+executes nothing.
 
 **Security posture.** No policy value and no per-work switch removes an approval
 gate, alters a reviewer's verdict, deletes evidence, or lets an agent answer for
@@ -868,12 +898,17 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 **Recovery commands.** `aidlc-guard-operation.ts` supplies the structured
 `restart-stage`, `abort-bolt`, `lower-fence`, `reapprove-plan` and
-`show-plan-drift` operations and renders their native or source commands. The
-conductor waits for the required human selection, then executes the exact
-returned command. Plan Approval recognizes two native recoveries without a
-published selection marker: the fence switch in its emitted shape, `aidlc
-engine config set guard.<fence> off` for one of the four switchable fences, and
-the abort only in
+`show-plan-drift` operations and renders their native or source commands. For a
+command remedy, the conductor waits for the required human selection, then
+executes the exact returned command. `lower-fence` remains an operation only
+for `PreToolUse` admission of the typed request's setter; its remedy is
+`human-input` and carries no `operation` or `command`. Selecting it only tells
+the person to type `/aidlc config set guard.<fence> off` (Codex:
+`$aidlc config set guard.<fence> off`) and authorizes or executes nothing.
+Plan Approval recognizes two native recovery shapes without a published
+selection marker: the setter `aidlc engine config set guard.<fence> off` for
+one of the four switchable fences, whose write still requires the exact typed
+request, and the abort only in
 the emitted argument shape: `aidlc engine bolt abort --name <unit> --slug <slug>
 --reason 'stale review recovery exhausted' --discard`, with concrete identifiers
 and no extra arguments. This narrowly admits an attempt to recover; the Bolt
@@ -918,7 +953,7 @@ This is one of the framework's flow-altering hooks and `PreToolUse` controls. Th
 
 **Guard Policy: the drift half.** The workspace-source check is a governed Guard Policy read (`/aidlc --status` shows the intent's value). Under `strict` a source that moved after the plan was fingerprinted or approved refuses in the human's words (`N files changed since this plan was approved: <paths>. Look them over and approve the plan again to continue.`) and the way forward travels beside it. From this hook the refusal's LAST stderr line is a typed `guard-recovery` ask (the same shape the review-freeze hook emits, rendered by every harness skill as a question) carrying four remedies in recommendation order: `reapprove-plan` (reset the Plan Approval `[Answer]:`, re-run the `fingerprint` command it names, record both tags, re-present), `show-plan-drift` (the `verify` command, whose output names the files that moved), `stop-here` (leave the plan unapproved and end the turn), and `lower-fence` for `guard.plan-approval`. The `decision`, `answer`, and `begin` commands refuse in the same words with the conductor's remedy beside them on stderr. Under `relaxed` and `off` the decision, the answer, the receipt certification, this hook's generation start, and the `begin` command each accept the drift once: one `CHANGE_ACCEPTED` row, one `change_notices` line, and the recorded source re-baselined (the `[Planned Source]` tag before the challenge is minted, the receipt's certified source after), so the same change is never reported twice. The content members of the approval (plan, unit test instructions, Testing Contract) reopen approval under all three values; Plan Approval itself, the autonomous-mode plan stop, and every human gate are never relaxed.
 
-**Guard Policy: the fence half.** Once the predicate above has decided to block, the hook calls `decideFence(projectDir, "plan-approval", { hookInput })` before it refuses. A `stand-aside` (the fence lowered by `relaxed`, `off`, `config set guard.plan-approval off`, or `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) prints one line naming the dispatch or write target, writes one `GUARD_STOOD_ASIDE` row, and exits 0. Nothing a human types in the session lowers this fence: a `hold` refuses exactly as described above and appends the one sentence naming the switch, which is the deliberate move that opens it. The approval gate itself is untouched either way.
+**Guard Policy: the fence half.** Once the predicate above has decided to block, the hook calls `decideFence(projectDir, "plan-approval", { hookInput })` before it refuses. A `stand-aside` (the fence lowered by `relaxed`, `off`, `config set guard.plan-approval off`, or `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) prints one line naming the dispatch or write target, writes one `GUARD_STOOD_ASIDE` row, and exits 0. A generic human reply cannot lower this fence: a `hold` refuses exactly as described above and tells the person to type the exact setter command, which must be recorded as a typed request before the setter can lower it. The approval gate itself is untouched either way.
 
 ---
 
@@ -1172,7 +1207,7 @@ path for a framework command.
 | `version` | Print the framework version | — |
 | `status` | Read-only status check from `aidlc-state.md`. Surfaces `[?]` / `[R]` gate awareness; team mode appends the pure Team Construction snapshot. | — |
 | `doctor` | Health check: verify hooks, prerequisites, file structure, plus local-only team claim stamp/activity/orphan-ref reconciliation (never fetches or releases). | `HEALTH_CHECKED` |
-| `intent-create` | Create a new intent and run the three deterministic Initialization stages. `--space <name>` creates under an existing space and reads that space's memory; `--intent` is refused. Explicit `--guard-policy relaxed\|off` requires the session's exact typed policy request, including on first use before a workflow exists; scope defaults need no request. Memory-held strict refuses first, and unattended lowering is refused. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
+| `intent-create` | Create a new intent and run the three deterministic Initialization stages. `--space <name>` creates under an existing space and reads that space's memory; `--intent` is refused. Explicit `--guard-policy relaxed\|off` requires the exact typed policy request bound to the session, target space, and target intent UUID or `bare-space`, including on first use before a workflow exists; scope defaults need no request. Memory-held strict refuses first, and unattended lowering is refused. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
 | `init` | Transition error only in this release; start work by describing what to build so the engine routes to `intent-create`. | none |
 | `intent [name]` | List intents (`--json`; `--all` includes archived) or switch the active-intent cursor. Normally routed from `/aidlc intent [name]`. | — |
 | `intent archive <name> [--reason <text>]` | Retire an in-flight intent: registry row `archived`, state `Status: Archived`, record dir and audit shards preserved, default listing hides it. Normally routed from `/aidlc intent archive <name>`. | `WORKFLOW_ARCHIVED` |
@@ -1185,9 +1220,9 @@ path for a framework command.
 | `codekb-publish --repo <name> --staged <dir> --paths <csv> --expect-store <generation> --expect-source <fingerprint> [--json]` | Direct-only guarded publication of a complete nine-artifact CodeKB candidate. Refuses stale source or store generations. There is no `/aidlc codekb-publish` route. | — |
 | `codekb-scope-diff [--repo <name>] [--compare <timestamp.md> \| --mint --paths <csv>] [--json]` | Direct-only CodeKB status, scope comparison, and source-fingerprint minting query. There is no `/aidlc codekb-scope-diff` route. | — |
 | `select-plugins [names]` | Query/update behind `aidlc engine plugin select`; stages all selected surfaces and commits their diff through the transaction engine. | `PLUGIN_SELECTION_CHANGED` in set mode |
-| `scope-change` | Re-plan which stages execute and apply any of the eleven setting flags in one atomic update. A same-scope request still applies settings. Scope-owned Guard Policy/ceremony rows follow new defaults without a switch request; human overrides and absent legacy rows are preserved. Explicit fence or policy lowering needs the same exact selection as `config-change`. Memory-enforced strict still controls the effective value while the scope-owned Guard Policy row follows the new default. | `SCOPE_CHANGED` when scope changes, plus changed-setting events |
+| `scope-change` | Re-plan which stages execute and apply any of the eleven setting flags in one atomic update. A same-scope request still applies settings. Scope-owned Guard Policy/ceremony rows follow new defaults without a switch request; human overrides and absent legacy rows are preserved. Explicit fence or policy lowering needs the same exact session-, space-, and intent-bound typed request as `config-change`. Memory-enforced strict still controls the effective value while the scope-owned Guard Policy row follows the new default. | `SCOPE_CHANGED` when scope changes, plus changed-setting events |
 | `config-get`, `config-list` | Read all eleven workflow settings: `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, and the four switchable `guard.<fence>` keys. Guard Policy, fence, and ceremony values include effective sources; the retired key `change-control` resolves to `guard-policy`. `config-list --json` emits the structured shape. | none |
-| `config-change` | The single intent-settings setter. Accepts any combination of the eleven setting flags, plus `--intent`, `--space`, and `--project-dir`; requires at least one setting and refuses invalid values or unknown flags before mutation. Every explicit lowering needs the exact typed switch or, for a fence, its recorded `lower-fence` recovery selection; memory-held strict refuses first, and unattended lowering is refused. Typed requests are consumed after a successful write or already-set no-op. All `aidlc engine config set <key> <value>` routes and matching slash flags use it. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `GUARD_POLICY_SET`, `CEREMONY_SET` for changed settings, plus `GUARD_DISABLED` or `GUARD_RESTORED` per switched fence |
+| `config-change` | The single intent-settings setter. Accepts any combination of the eleven setting flags, plus `--intent`, `--space`, and `--project-dir`; requires at least one setting and refuses invalid values or unknown flags before mutation. Every explicit lowering needs the exact session-, space-, intent-, and key/value-bound typed request; a `lower-fence` recovery selection supplies no authority or executable command. Memory-held strict refuses first, and unattended lowering is refused. Typed requests are consumed after a successful write or already-set no-op. All `aidlc engine config set <key> <value>` routes and matching slash flags use it. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `GUARD_POLICY_SET`, `CEREMONY_SET` for changed settings, plus `GUARD_DISABLED` or `GUARD_RESTORED` per switched fence |
 | `plugin-list` | List installed plugins with enabled/disabled state; `--json` emits `plugins` plus `selectionActive`. | none |
 | `plugin-sync` | Compose installed plugin roots by running each plugin's `hooks/compose.ts`; no configured roots is a clean no-op, while configured roots without a compose hook fail and mixed sets warn for each skipped root. | none |
 | `set-status` | Low-level state-field sync (called by `sync-workflow-state.ts` hook on TaskUpdate) | — |
@@ -1279,6 +1314,11 @@ debugging. The shared helpers below support command rendering and invocation.
 and validator for the five concrete recovery operations. It dispatches no work:
 the conductor executes an offered command or follows its `human-input` or
 `external-work` action through the existing tools.
+The `lower-fence` operation models the typed request's
+`aidlc engine config set guard.<fence> off` setter for `PreToolUse` admission.
+The remedy itself is `human-input` with no `operation` or `command`; selection
+only tells the person to type the exact setter command and authorizes or
+executes nothing.
 
 `aidlcEngineCommand` in `aidlc-runtime-paths.ts` builds child-process argv for
 `orchestrate`, `log`, `state`, and `bolt`. It uses the resolved compiled

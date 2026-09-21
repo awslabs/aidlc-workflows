@@ -1618,7 +1618,13 @@ describe("AttemptView projections and refusal streaks", () => {
       expect(refusal.remedies[0].command).toContain(`fingerprint ${target} --reapprove`);
       expect(refusal.remedies[1].command).toContain(`verify ${target}`);
       expect(refusal.remedies[2].command).toBeUndefined();
-      expect(refusal.remedies[3].command).toContain("--guard.plan-approval off");
+      const lowerFence = refusal.remedies[3];
+      expect(lowerFence).toMatchObject({
+        op: "lower-fence", interaction: "human-input", requiresHuman: true, executableNow: true,
+      });
+      expect(lowerFence.command).toBeUndefined();
+      expect(lowerFence.operation).toBeUndefined();
+      expect(lowerFence.action).toContain("config set guard.plan-approval off");
       const ask = guardRecoveryAskForRefusal(refusal);
       expect(ask).not.toBeNull();
       const verdict = validateDirective(ask as unknown as Record<string, unknown>);

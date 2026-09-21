@@ -64,9 +64,16 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
-For the empty prompt captured on 1.0.242, the adapter's guard-switch stand-in
-can record a lowering switch from only that turn's first AIDLC shell command;
-non-empty prompts use the core human-turn hook instead.
+For the empty prompt captured on 1.0.242, the adapter refuses shell commands
+that would lower a fence or Guard Policy before they run (exit 2 with stderr).
+The per-turn `prompt-empty` marker tracks this limitation; a model command
+never mints a typed request. The refusal is:
+
+> This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.
+
+Raising Guard Policy to `strict`, turning a fence `on`, and other commands use
+the existing adapter path. Newer builds that deliver a non-empty prompt use the
+core human-turn hook to record what the person typed, without this refusal.
 
 ### Critical limitations
 
@@ -216,8 +223,9 @@ non-empty prompts use the core human-turn hook instead.
   plain-text relay; structured hook JSON and unrelated refusal paths are not
   rewritten. Modern turn/latch state is keyed by a hash of `session_id`, so
   concurrent chats cannot reuse one another's output; payloads without a
-  session identity use one explicit legacy bucket. The 0.12 camelCase fallback
-  reads the command from `toolArgs.command`.
+  session identity use the host-derived identity or the retained session, with
+  an explicit legacy bucket when neither is available. The 0.12 camelCase
+  fallback reads the command from `toolArgs.command`.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
   own post-create handoff receipts. Legacy agentStop and broken modern channels

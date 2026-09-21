@@ -51,9 +51,9 @@
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Missing session_id uses the host-derived or retained identity.
-//   - guard-switch stand-in: IDE 1.0.242 hides the typed prompt, so only an
-//     empty-prompt turn's first AIDLC shell command may record a lowering
-//     switch. Newer builds exposing the prompt record it through the core hook.
+//   - guard-switch refusal: IDE 1.0.242 hides the typed prompt, so an
+//     empty-prompt turn refuses lowering before a shell command runs. A model
+//     command cannot establish what the person typed; no request is minted.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +
@@ -91,13 +91,12 @@ import {
   hookDebug,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
-  humanTurnMintAllowed,
   isAutonomousMode,
+  isSwitchableGuardFence,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
   recordHookDrop,
-  recordTypedGuardSwitchRequest,
   readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
@@ -122,11 +121,10 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
-
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
 // stdin { tool_name, tool_input, tool_response } or 0.12 camelCase USER_PROMPT
 // { toolName, toolArgs, toolResult, toolSuccess }. PostToolUse write/shell
@@ -917,7 +915,6 @@ function bumpTurn(sessionId: string): number {
   try {
     mkdirSync(terminalSessionDir(sessionId), { recursive: true });
     writeFileSync(turnCounterPath(sessionId), `${turn}\n`, "utf-8");
-    rmSync(join(terminalSessionDir(sessionId), "first-aidlc-call"), { force: true });
   } catch {
     return 0;
   }
@@ -935,46 +932,65 @@ function recordPromptEmpty(sessionId: string, turn: number): void {
       "utf-8",
     );
   } catch {
-    // Missing prompt evidence cannot authorize the stand-in.
+    // Without prompt evidence, leave lowering to the core typed-request gate.
   }
 }
 
-function recordFirstGuardSwitch(
-  sessionId: string,
-  turn: number,
+function isLoweringGuardSwitch(key: string, value: string | undefined): boolean {
+  if (key === "guard-policy" || key === "change-control") {
+    return value === "relaxed" || value === "off";
+  }
+  return key.startsWith("guard.") &&
+    isSwitchableGuardFence(key.slice("guard.".length)) && value === "off";
+}
+
+function hasLoweringGuardFlags(args: string[], allowFences: boolean): boolean {
+  return args.some((arg, index) => {
+    const key = arg.toLowerCase();
+    if (!key.startsWith("--")) return false;
+    if (!allowFences && key !== "--guard-policy" && key !== "--change-control") return false;
+    return isLoweringGuardSwitch(key.slice(2), args[index + 1]?.toLowerCase());
+  });
+}
+
+function isLoweringGuardCommand(
   rawCommand: string,
   invocation: TerminalInvocation | null,
-): void {
-  if (turn <= 0) return;
-  const dir = terminalSessionDir(sessionId);
+): boolean {
+  if (invocation !== null) return hasLoweringGuardFlags(invocation.args, false);
+  const match = rawCommand.trim().match(
+    /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/](aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
+  );
+  if (match === null) return false;
+  const runner = match[1] ?? match[2] ?? match[3] ?? "";
+  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return false;
+  const args = splitKiroCommandArgs((match[5] ?? "").toLowerCase());
+  if (match[4].toLowerCase() === "aidlc-utility.ts") {
+    if (args[0] === "config-change" || args[0] === "scope-change") {
+      return hasLoweringGuardFlags(args.slice(1), true);
+    }
+    return args[0] === "intent-create" && hasLoweringGuardFlags(args.slice(1), false);
+  }
+  const start = args[0] === "engine" ? 1 : 0;
+  if (args[start] === "config" && args[start + 1] === "set") {
+    return isLoweringGuardSwitch(args[start + 2] ?? "", args[start + 3]);
+  }
+  if (args[start] === "scope" && args[start + 1] === "change") {
+    return hasLoweringGuardFlags(args.slice(start + 2), true);
+  }
+  return args[start] === "intent" && args[start + 1] === "create" &&
+    hasLoweringGuardFlags(args.slice(start + 2), false);
+}
+
+function promptWasEmpty(sessionId: string, turn: number): boolean {
+  if (turn <= 0) return false;
   try {
-    if (readFileSync(join(dir, "prompt-empty"), "utf-8").trim() !== String(turn)) return;
-    let slashForm: string | null = invocation === null ? null : `/aidlc ${invocation.raw}`;
-    if (invocation === null) {
-      const match = rawCommand.trim().match(
-        /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/](aidlc(?:-[\w-]+)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
-      );
-      if (match === null) return;
-      const runner = match[1] ?? match[2] ?? match[3] ?? "";
-      if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return;
-      const tool = match[4].toLowerCase();
-      const args = (match[5] ?? "").trim();
-      if (tool === "aidlc-utility.ts") {
-        const config = args.match(/^config-change(?:\s+([\s\S]*))?$/i);
-        if (config) slashForm = `/aidlc ${config[1] ?? ""}`;
-      } else if (tool === "aidlc.ts") {
-        const config = args.match(/^(?:engine\s+)?config\s+set(?:\s+([\s\S]*))?$/i);
-        if (config) slashForm = `/aidlc config set ${config[1] ?? ""}`;
-      }
-    }
-    // Claim even a non-lowering AIDLC call. Exclusive creation prevents two
-    // concurrent PreToolUse hooks from both spending this turn's stand-in.
-    writeFileSync(join(dir, "first-aidlc-call"), `${turn}\n`, { encoding: "utf-8", flag: "wx" });
-    if (slashForm !== null && humanTurnMintAllowed()) {
-      recordTypedGuardSwitchRequest(projectDir, sessionId, slashForm);
-    }
+    return readFileSync(
+      join(terminalSessionDir(sessionId), "prompt-empty"),
+      "utf-8",
+    ).trim() === String(turn);
   } catch {
-    // A prior claim or unreadable evidence cannot mint another request.
+    return false;
   }
 }
 
@@ -1074,7 +1090,12 @@ if (target === "terminal-command-guard") {
   const invocation = toolTerminalInvocation(rawCommand);
   const sessionId = terminalSessionId();
   const turn = readTurn(sessionId) || bumpTurn(sessionId);
-  recordFirstGuardSwitch(sessionId, turn, rawCommand, invocation);
+  if (promptWasEmpty(sessionId, turn) && isLoweringGuardCommand(rawCommand, invocation)) {
+    process.stderr.write(
+      "This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.\n",
+    );
+    return 2;
+  }
   const existing = readTerminalLatch(sessionId);
   if (
     existing?.turn === turn &&
@@ -1100,7 +1121,7 @@ if (target === "terminal-command-guard") {
 // records typed switches before its state-file gate, then records HUMAN_TURN
 // and the conversational Stop marker only when workflow state exists.
 // The adapter separately tracks empty prompts against the terminal turn so
-// the first shell call can stand in for prompt text hidden by IDE 1.0.242.
+// lowering is refused when IDE 1.0.242 hides what the person typed.
 // --- block: the preToolUse human-presence floor ---
 //
 // Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while

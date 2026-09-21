@@ -38,7 +38,6 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  clearGuardSwitchRequest,
   readAllAuditShards,
   readGuardSwitchRequest,
   readIntentRegistry,
@@ -319,6 +318,19 @@ function runIdeStdin(
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
   };
+}
+
+const KIRO_GUARD_SWITCH_REFUSAL = "This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.";
+
+function snapshotGuardSwitchState(dir: string): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {};
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    snapshot[entry.name] = entry.isDirectory()
+      ? snapshotGuardSwitchState(path)
+      : readFileSync(path, "base64");
+  }
+  return snapshot;
 }
 
 function submitGuardSwitchTurn(projectDir: string, sessionId: string, prompt: string): void {
@@ -1032,152 +1044,214 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("8d1: IDE 1.0.242 empty prompt records the first shell fence switch", () => {
+  test.each([
+    ["next policy", "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy relaxed build the service"],
+    ["next retired policy", ".kiro/tools/aidlc-orchestrate.ts next --change-control off build the service"],
+    ["next terminal dispatch", "bun .kiro/tools/aidlc-orchestrate.ts next --status --guard-policy off"],
+    ["utility policy", "BUN .KIRO/TOOLS/AIDLC-UTILITY.TS CONFIG-CHANGE --GUARD-POLICY OFF"],
+    ["utility retired policy", "bun .kiro/tools/aidlc-utility.ts config-change --change-control relaxed"],
+    ["utility plan approval", "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility review freeze", "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off"],
+    ["utility state transition", "bun .kiro/tools/aidlc-utility.ts config-change --guard.state-transition off"],
+    ["utility reviewer scope", "bun .kiro/tools/aidlc-utility.ts config-change --guard.reviewer-scope off"],
+    ["dispatcher policy", ".kiro/tools/aidlc.ts config set guard-policy relaxed"],
+    ["engine retired policy", String.raw`"C:\Program Files\bun.exe" .kiro\tools\aidlc.ts engine config set change-control off`],
+    ["dispatcher fence", "bun .kiro/tools/aidlc.ts config set guard.plan-approval off"],
+    ["engine fence", "bun .kiro/tools/aidlc.ts engine config set guard.reviewer-scope off"],
+    ["utility intent creation", "bun .kiro/tools/aidlc-utility.ts intent-create sample --guard-policy off"],
+    ["dispatcher intent creation", "bun .kiro/tools/aidlc.ts intent create sample --guard-policy relaxed"],
+    ["engine intent creation", "bun .kiro/tools/aidlc.ts engine intent create sample --guard-policy off"],
+    ["utility scope change", "bun .kiro/tools/aidlc-utility.ts scope-change --scope feature --guard-policy relaxed"],
+    ["dispatcher scope change", "bun .kiro/tools/aidlc.ts scope change --scope feature --guard.plan-approval off"],
+    ["engine scope change", "bun .kiro/tools/aidlc.ts engine scope change --scope feature --change-control off"],
+  ])("8d1: empty-prompt %s lowering is refused without writes", (_shape, command) => {
     const dir = scratchProject(true);
-    const session = "sess_first_fence_switch";
+    const session = "sess_empty_prompt_lowering";
     try {
-      const submitted = runIdeStdin(dir, "record-human-turn", JSON.stringify({
-        session_id: session,
-        hook_event_name: "UserPromptSubmit",
-        cwd: dir,
-        prompt: "",
-      }));
-      expect(submitted.code, submitted.stderr).toBe(0);
-      const result = preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off");
-      expect(result.code, result.stderr).toBe(0);
-      expect(readGuardSwitchRequest(dir, session)).toMatchObject({
-        session,
-        intentId: "00000000-0000-7000-8000-000000000001",
-        switches: [{ key: "guard.plan-approval", value: "off" }],
-      });
+      const countPath = installPlainTextUtility(dir);
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      expect(readGuardSwitchRequest(dir, session)).toBeNull();
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      expect(existsSync(countPath)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("8d2: later AIDLC calls cannot replace or recreate the turn's first switch", () => {
+  test("8d2: empty-prompt strict and fence-on commands pass through", () => {
     const dir = scratchProject(true);
-    const session = "sess_later_fence_switch";
+    const session = "sess_empty_prompt_raising";
     try {
       submitGuardSwitchTurn(dir, session, "");
-      preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off");
-      const first = readGuardSwitchRequest(dir, session);
-      expect(first?.switches).toEqual([{ key: "guard.plan-approval", value: "off" }]);
-      preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off");
-      expect(readGuardSwitchRequest(dir, session)).toEqual(first);
-      clearGuardSwitchRequest(dir, session);
-      preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off");
-      expect(readGuardSwitchRequest(dir, session)).toBeNull();
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      for (const command of [
+        "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy strict build the service",
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy strict",
+        "bun .kiro/tools/aidlc.ts engine config set guard.plan-approval on",
+      ]) {
+        const result = preGuardSwitchCommand(dir, session, command);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(readGuardSwitchRequest(dir, session)).toBeNull();
+        expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("8d3: a non-empty prompt clears the previous turn's stand-in eligibility", () => {
+  test.each([
+    ["record first", ["record-human-turn", "verb-intercept"]],
+    ["intercept first", ["verb-intercept", "record-human-turn"]],
+  ] as const)("8d3: a later non-empty prompt clears refusal with %s", (_order, targets) => {
     const dir = scratchProject(true);
     const session = "sess_visible_prompt_switch";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off";
     try {
       submitGuardSwitchTurn(dir, session, "");
+      const refused = preGuardSwitchCommand(dir, session, command);
+      expect(refused.code, refused.stderr).toBe(2);
+      expect(refused.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
       const payload = JSON.stringify({
         session_id: session,
         hook_event_name: "UserPromptSubmit",
         cwd: dir,
         prompt: "Explain what the plan-approval check does",
       });
-      // Exercise the opposite submit-hook order as well.
-      for (const target of ["verb-intercept", "record-human-turn"]) {
+      for (const target of targets) {
         const result = runIdeStdin(dir, target, payload);
         expect(result.code, result.stderr).toBe(0);
       }
-      preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off");
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
       expect(readGuardSwitchRequest(dir, session)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("8d4: a strict first command records nothing and exhausts the turn's stand-in", () => {
+  test("8d4: a visible typed switch reaches the core setter without adapter refusal", () => {
     const dir = scratchProject(true);
-    const session = "sess_strict_first_switch";
+    const session = "sess_visible_typed_switch";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off";
     try {
-      submitGuardSwitchTurn(dir, session, "");
-      preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy strict");
-      expect(readGuardSwitchRequest(dir, session)).toBeNull();
-      preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off");
+      submitGuardSwitchTurn(dir, session, "/aidlc --guard.plan-approval off");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      const setter = spawnSync("bun", [
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+        "config-change", "--guard.plan-approval", "off",
+      ], {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: dir,
+          AIDLC_SESSION_OVERRIDE: session,
+          AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+          AIDLC_UNATTENDED: undefined,
+          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+          AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+        },
+        timeout: 30_000,
+      });
+      expect(setter.status, setter.stderr).toBe(0);
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
+        "- **Guards Off**: plan-approval (set by you)",
+      );
+      expect(readAudit(dir)).toContain("GUARD_DISABLED");
       expect(readGuardSwitchRequest(dir, session)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("8d5: each new empty turn admits its first next or dispatcher config switch", () => {
-    const dir = scratchProject(true);
-    const session = "sess_new_turn_switch";
-    try {
-      for (const command of [
-        "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy relaxed build the service",
-        ".kiro/tools/aidlc.ts config set guard-policy relaxed",
-        '"C:\\Program Files\\bun.exe" .kiro\\tools\\aidlc.ts engine config set guard-policy relaxed',
-      ]) {
-        submitGuardSwitchTurn(dir, session, "");
-        const result = preGuardSwitchCommand(dir, session, command);
-        expect(result.code, result.stderr).toBe(0);
-        expect(readGuardSwitchRequest(dir, session)?.switches).toEqual([
-          { key: "guard-policy", value: "relaxed" },
-        ]);
-        clearGuardSwitchRequest(dir, session);
+  test.each(["record-human-turn", "verb-intercept"])(
+    "8d5: %s alone records the empty-prompt refusal for every lowering attempt",
+    (target) => {
+      const dir = scratchProject(true);
+      const session = "sess_single_hook_empty_prompt";
+      try {
+        const submitted = runIdeStdin(dir, target, JSON.stringify({
+          session_id: session,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }));
+        expect(submitted.code, submitted.stderr).toBe(0);
+        const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+        for (const command of [
+          "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+          "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy relaxed",
+        ]) {
+          const result = preGuardSwitchCommand(dir, session, command);
+          expect(result.code, result.stderr).toBe(2);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+          expect(readGuardSwitchRequest(dir, session)).toBeNull();
+          expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
-  test("8d6: non-AIDLC commands and invalid runners cannot mint a stand-in", () => {
+  test("8d6: non-AIDLC commands, invalid runners, and config reads pass through", () => {
     const dir = scratchProject(true);
-    const session = "sess_invalid_runner_switch";
+    const session = "sess_other_commands";
     try {
       submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
       for (const command of [
         "echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
         "node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "node .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "node .kiro/tools/aidlc.ts engine config set guard-policy off",
+        "bun .kiro/tools/aidlc-utility.ts config-get --guard-policy",
+        "bun .kiro/tools/aidlc.ts engine config get guard.plan-approval",
       ]) {
-        preGuardSwitchCommand(dir, session, command);
+        const result = preGuardSwitchCommand(dir, session, command);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
         expect(readGuardSwitchRequest(dir, session)).toBeNull();
+        expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
       }
-      preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy relaxed");
-      expect(readGuardSwitchRequest(dir, session)?.switches).toEqual([
-        { key: "guard-policy", value: "relaxed" },
-      ]);
-      clearGuardSwitchRequest(dir, session);
-      submitGuardSwitchTurn(dir, session, "");
-      preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-get --guard-policy");
-      preGuardSwitchCommand(dir, session,
-        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off");
-      expect(readGuardSwitchRequest(dir, session)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("8d7: missing prompt evidence and unattended turns cannot mint a stand-in", () => {
+  test("8d7: missing prompt evidence passes through but unattended empty prompts are refused", () => {
     const dir = scratchProject(true);
     const session = "sess_missing_prompt_switch";
     const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off";
     try {
-      preGuardSwitchCommand(dir, session, command);
+      const missing = preGuardSwitchCommand(dir, session, command);
+      expect(missing.code, missing.stderr).toBe(0);
+      expect(missing.stderr).toBe("");
       expect(readGuardSwitchRequest(dir, session)).toBeNull();
       submitGuardSwitchTurn(dir, session, "");
-      preGuardSwitchCommand(dir, session, command, { AIDLC_UNATTENDED: "1" });
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const unattended = preGuardSwitchCommand(dir, session, command, { AIDLC_UNATTENDED: "1" });
+      expect(unattended.code, unattended.stderr).toBe(2);
+      expect(unattended.stdout).toBe("");
+      expect(unattended.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
       expect(readGuardSwitchRequest(dir, session)).toBeNull();
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

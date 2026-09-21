@@ -673,9 +673,14 @@ return the running intent's current value unchanged (read `Guard Policy` from
 before the rename); the composer never flips it, the human does from chat.
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
 validator checks it with the grid. The conductor renders it as its own gate
-row so the human can flip it before approving; a custom scope file carries it
-as `guard_policy: <value>` in its frontmatter and intent creation receives it
-as `--guard-policy <value>`.
+row so the human can flip it before approving. Store the approved custom
+scope's value as `guard_policy: <value>` in its frontmatter; a matched stock
+scope keeps its own default and no scope file is written. Intent creation
+reads Guard Policy from that scope file; the conductor passes
+`--guard-policy` only for `strict`. If the human flips a matched scope to
+`relaxed` or `off` at the compose gate, create the intent from the matched
+scope first, then tell the person to type `/aidlc --guard-policy <value>`
+after the intent exists (Codex uses `$aidlc --guard-policy <value>`).
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.

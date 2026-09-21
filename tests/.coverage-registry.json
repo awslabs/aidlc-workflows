@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1125,
+    "total": 1126,
     "enumeratedByClass": {
-      "function": 802,
+      "function": 803,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -5734,6 +5734,13 @@
     {
       "unitClass": "function",
       "unitId": "function:parseTypedGuardSwitches",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseTypedGuardSwitchRequest",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -11741,10 +11748,6 @@
         },
         {
           "file": "tests/unit/t333-change-control.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/unit/t336-change-control-surfaces.test.ts",
           "mechanism": "cli"
         },
         {

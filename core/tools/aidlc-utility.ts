@@ -93,6 +93,7 @@ import {
   type FenceSetting,
   type GuardSwitch,
   clearGuardSwitchRequest,
+  entrySkillInvocation,
   guardSwitchAuthority,
   guardSwitchRefusal,
   guardFenceConfigKey,
@@ -699,8 +700,8 @@ Examples:
   /aidlc --depth minimal                       Change depth of active workflow
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
   /aidlc --review advisory                     Single-pass reviews, findings at the gate
-  /aidlc --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
-  /aidlc config set guard.plan-approval off    Let this piece of work write code before its plan is approved (logged)`;
+  ${entrySkillInvocation()} --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
+  ${entrySkillInvocation()} config set guard.plan-approval off    Let this piece of work write code before its plan is approved (logged)`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -6603,11 +6604,14 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
     if (!humanPresenceGuardDisabled()) {
       const authority = guardSwitchAuthority(
-        projectDir, null, wanted, initialSelection.sessionId ?? latestLedgerSession(projectDir),
-        intentUuidForSelection(projectDir, initialSelection) ?? "bare-space",
+        projectDir, wanted, initialSelection.sessionId ?? latestLedgerSession(projectDir),
+        {
+          space: initialSelection.space,
+          intentId: intentUuidForSelection(projectDir, initialSelection) ?? "bare-space",
+        },
       );
       if (authority === null) die(guardSwitchRefusal(wanted, "intent-create"));
-      if (authority.source === "typed-request") spentSwitchSession = authority.session;
+      spentSwitchSession = authority.session;
     }
   }
   // A flat aidlc-docs/ layout is migrated into the DEFAULT space by the first
@@ -8494,7 +8498,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // output describe the state before this transaction.
     const update = applyIntentSettings(projectDir, contentBefore, requested, {
       intent, space, sessionId: selection.sessionId ?? latestLedgerSession(projectDir),
-      targetIntentId: intentUuidForSelection(projectDir, selection) ?? "bare-space",
+      target: { space, intentId: intentUuidForSelection(projectDir, selection) ?? "bare-space" },
     });
     let content = update.content;
     const auditEntries = update.audit;
@@ -8957,8 +8961,8 @@ function applyIntentSettings(
   projectDir: string,
   content: string,
   requested: IntentSettingsRequest,
-  { sessionId = null, targetIntentId, ...selection }: {
-    intent?: string; space?: string; sessionId?: string | null; targetIntentId: string;
+  { sessionId = null, target, ...selection }: {
+    intent?: string; space?: string; sessionId?: string | null; target: { space: string; intentId: string };
   },
 ): { content: string; audit: AuditEntryInput[]; lines: string[]; spentSwitchSession: string | null } {
   const rawDepth = requested.depth?.value;
@@ -9043,9 +9047,9 @@ function applyIntentSettings(
   let spentSwitchSession: string | null = null;
   if (lowering.length > 0 && !humanPresenceGuardDisabled()) {
     for (const wanted of lowering) {
-      const authority = guardSwitchAuthority(projectDir, content, wanted, sessionId, targetIntentId);
+      const authority = guardSwitchAuthority(projectDir, wanted, sessionId, target);
       if (authority === null) die(guardSwitchRefusal(wanted, "config"));
-      if (authority.source === "typed-request") spentSwitchSession = authority.session;
+      spentSwitchSession = authority.session;
     }
   }
 
@@ -9182,7 +9186,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     const content = readConfigState(projectDir, { intent, space });
     const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), {
       intent, space, sessionId: selection.sessionId ?? latestLedgerSession(projectDir),
-      targetIntentId: intentUuidForSelection(projectDir, selection) ?? "bare-space",
+      target: { space, intentId: intentUuidForSelection(projectDir, selection) ?? "bare-space" },
     });
     if (update.content !== content) {
       if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();

@@ -39,7 +39,6 @@ import {
   auditBlockField,
   CHANGE_CONTROL_FIELD,
   CHANGE_CONTROL_VALUES,
-  consumeSharedDirectiveAsk,
   engineTouchMarkerPath,
   fencesLoweredByPolicy,
   fenceSwitchSentence,
@@ -55,7 +54,6 @@ import {
   GUARD_POLICY_RENAME_NOTICE,
   GUARD_POLICY_VALUES,
   GUARDS_OFF_FIELD,
-  GUARD_RECOVERY_ASK_TYPE,
   GUARDS_ON_FIELD,
   type GuardPolicyResolution,
   guardPolicyStateField,
@@ -1802,7 +1800,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(run(UTILITY, ["config-get", "guard.plan-approval"], proj, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
   });
 
-  const fenceRefusal = "Turning the plan-approval check off is the person's decision. It is accepted only when they typed `/aidlc config set guard.plan-approval off` in this session or chose that remedy from the guard-recovery question. Ask them, and run this again after they do.";
+  const fenceRefusal = "Turning the plan-approval check off is the person's decision. It is accepted only when they typed `/aidlc config set guard.plan-approval off` in this session. Ask them, and run this again after they do.";
   const policyRefusal = "Setting Guard Policy relaxed lowers fences and is the person's decision. It is accepted only when they typed `/aidlc --guard-policy relaxed` in this session. Ask them, and run this again after they do.";
   const createRefusal = "Creating this intent with Guard Policy relaxed lowers fences and is the person's decision. It is accepted only when they typed `/aidlc --guard-policy relaxed` in this session. Create it without the flag, or ask them and run this again after they do.";
 
@@ -1826,6 +1824,21 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   test.each<{ prompt: string; args: string[]; refusal: string }>([
     {
       prompt: "why was `guard.plan-approval off` suggested?",
+      args: ["config-change", "--guard.plan-approval", "off"],
+      refusal: fenceRefusal,
+    },
+    {
+      prompt: "/aidlc why was config set guard.plan-approval off suggested?",
+      args: ["config-change", "--guard.plan-approval", "off"],
+      refusal: fenceRefusal,
+    },
+    {
+      prompt: "/aidlc build the auth service --guard-policy relaxed",
+      args: ["config-change", "--guard-policy", "relaxed"],
+      refusal: policyRefusal,
+    },
+    {
+      prompt: "/aidlc config set guard.plan-approval off please",
       args: ["config-change", "--guard.plan-approval", "off"],
       refusal: fenceRefusal,
     },
@@ -1870,6 +1883,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   test.each([
     { prompt: "/aidlc --guard-policy relaxed build the auth service", value: "relaxed" },
+    { prompt: "$aidlc --guard-policy relaxed", value: "relaxed" },
     { prompt: "Guard policy off.", value: "off" },
   ])("an affirmative policy prompt authorizes its setter: $prompt", ({ prompt, value }) => {
     const { proj, state } = project("enterprise");
@@ -2111,45 +2125,53 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   });
 
   test.each([
-    { choice: "1", selected: "lower-fence", accepted: true },
-    { choice: "2", selected: "stop-here", accepted: false },
-  ])("a consumed guard-recovery $selected choice authorizes only its own remedy", ({ choice, accepted }) => {
-    const { proj, state } = project("enterprise");
-    const before = readFileSync(state, "utf-8");
-    writeActiveDirectiveMarker(proj, {
-      kind: "ask",
-      ask_type: GUARD_RECOVERY_ASK_TYPE,
-      stage: getField(before, "Current Stage")!,
-      state_sha256: stateDigest(before),
-      remedies: [
-        {
-          op: "lower-fence", action: "Turn off the plan-approval check",
-          interaction: "command", operation: { kind: "lower-fence", fence: "plan-approval" },
-        },
-        { op: "stop-here", action: "Stop here", interaction: "external-work" },
-      ],
-    });
-    expect(consumeSharedDirectiveAsk(proj, choice)).toBe(true);
-    const dispatcher = join(AIDLC_SRC, "tools", "aidlc.ts");
-    const args = ["engine", "config", "set", "guard.plan-approval", "off"];
-    const ledger = mutationRows(proj);
-    const result = run(dispatcher, args, proj, FENCE_ENV_CLEAR);
-    if (!accepted) {
-      expect(result.status).toBe(1);
-      expect(JSON.parse(result.stderr)).toEqual({ error: fenceRefusal });
-      expect(readFileSync(state, "utf-8")).toBe(before);
-      expect(mutationRows(proj)).toEqual(ledger);
-      return;
-    }
-    expect(result.status, result.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("plan-approval (set by you)");
-    expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
-    const restored = run(dispatcher, ["engine", "config", "set", "guard.plan-approval", "on"], proj, FENCE_ENV_CLEAR);
-    expect(restored.status, restored.stderr).toBe(0);
-    const repeated = run(dispatcher, args, proj, FENCE_ENV_CLEAR);
-    expect(repeated.status).toBe(1);
-    expect(JSON.parse(repeated.stderr)).toEqual({ error: fenceRefusal });
-    expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
+    {
+      selection: "explicit --space other",
+      prompt: "/aidlc --space other --guard-policy relaxed build X",
+      space: "other",
+      refusedSpace: "default",
+      acceptedArgs: ["--space", "other"],
+      refusedArgs: [],
+    },
+    {
+      selection: "implicit default space",
+      prompt: "/aidlc --guard-policy relaxed build X",
+      space: "default",
+      refusedSpace: "other",
+      acceptedArgs: [],
+      refusedArgs: ["--space", "other"],
+    },
+  ])("a pre-intent $selection request authorizes only creation in its selected space", ({ prompt, space, refusedSpace, acceptedArgs, refusedArgs }) => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    removeWorkspaceRecord(proj);
+    const createdSpace = run(UTILITY, ["space-create", "other"], proj, FENCE_ENV_CLEAR);
+    expect(createdSpace.status, createdSpace.stderr).toBe(0);
+    const refusedIntents = join(proj, "aidlc", "spaces", refusedSpace, "intents");
+    const beforeRefused = existsSync(refusedIntents) ? readdirSync(refusedIntents).sort() : null;
+    const args = [
+      "intent-create", "--scope", "enterprise", "--arguments", "build X",
+      "--label", "selected-space", "--guard-policy", "relaxed",
+    ];
+
+    recordHumanPrompt(proj, prompt);
+    const request = readGuardSwitchRequest(proj, FENCE_SESSION);
+    expect(request).toMatchObject({ space, intentId: "bare-space" });
+    const refused = run(UTILITY, [...args, ...refusedArgs], proj, FENCE_ENV_CLEAR);
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({ error: createRefusal });
+    expect(existsSync(refusedIntents) ? readdirSync(refusedIntents).sort() : null).toEqual(beforeRefused);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toEqual(request);
+
+    const created = run(UTILITY, [...args, ...acceptedArgs], proj, FENCE_ENV_CLEAR);
+    expect(created.status, created.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", space, "intents");
+    const active = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const state = readFileSync(join(intents, active, "aidlc-state.md"), "utf-8");
+    expect(getField(state, GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
+    expect(existsSync(refusedIntents) ? readdirSync(refusedIntents).sort() : null).toEqual(beforeRefused);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
   });
 
   test("scope-change requires every lowering choice and accepts combined switches without a slash", () => {

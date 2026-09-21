@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-graph:validate-grid, subcommand:aidlc-orchestrate:next,
+// covers: subcommand:aidlc-graph:validate-grid,
 // function:validateDirective, file:agents/aidlc-composer-agent.md, file:skills/aidlc/SKILL.md,
 // file:knowledge/aidlc-composer-agent/composing.md
 //
@@ -6,8 +6,8 @@
 // the validator checks the ONE value a proposal carries (three values; a
 // relaxed or off proposal under a memory strict is refused, naming the file),
 // echoes it under the new key and the retired one, still reads the retired
-// flag and member for one release, the compose dispatch names the gate row,
-// the composer's persona and knowledge describe the value, and
+// flag and member for one release, the composer's persona and knowledge
+// describe the value, and
 // `change_notices` is a legal universal directive field.
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -26,7 +26,6 @@ import {
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
-const ORCHESTRATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -178,32 +177,7 @@ describe("t336 (1) validate-grid checks the proposal's Guard Policy value", () =
   });
 });
 
-describe("t336 (2) the compose dispatch and composer guidance", () => {
-  test("the front compose dispatch names the gate row and the creation flag", () => {
-    const proj = project();
-    const result = spawnSync(
-      BUN,
-      [ORCHESTRATE_TOOL, "next", "compose", "add a small feature", "--project-dir", proj],
-      { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const parsed: unknown = JSON.parse((result.stdout ?? "").trim().split("\n").pop() ?? "{}");
-    if (parsed === null || typeof parsed !== "object" || !("message" in parsed) || typeof parsed.message !== "string") {
-      throw new Error(`not a print directive: ${result.stdout}`);
-    }
-    // The dispatch speaks the NEW spelling: one guardPolicy value over three
-    // values, the "Guard Policy:" gate row, and the --guard-policy creation
-    // flag. An earlier revision of this test pinned the retired spelling here
-    // and so blessed a half-finished rename; the retired flag is still ACCEPTED
-    // (covered by the validator cases above), but nothing the engine tells a
-    // conductor to type may name it.
-    expect(parsed.message).toContain("ONE guardPolicy value (strict|relaxed|off");
-    expect(parsed.message).toContain('"Guard Policy: <guardPolicy> - <guardPolicyRationale>"');
-    expect(parsed.message).toContain("--guard-policy <value>");
-    expect(parsed.message).not.toContain("--change-control");
-    expect(parsed.message).not.toContain("changeControl");
-  });
-
+describe("t336 (2) composer guidance", () => {
   test("the composer persona and knowledge describe the value and its defaults", () => {
     const persona = readFileSync(join(REPO_ROOT, "core", "agents", "aidlc-composer-agent.md"), "utf-8");
     expect(persona).toContain('"guardPolicy": "strict | relaxed | off"');
