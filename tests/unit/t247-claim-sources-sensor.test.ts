@@ -710,7 +710,7 @@ describe("t247 claim-sources sensor", () => {
     ],
     [
       "Markdown reference metadata",
-      'The initiative provides a local command that echoes supplied text. [documentation][evidence]\n[evidence]: https://example.invalid\n"hidden [desc] [Q1]"',
+      'The initiative provides a local command that echoes supplied text. [documentation][evidence]\n\n[evidence]: https://example.invalid\n"hidden [desc] [Q1]"',
     ],
     [
       "HTML attributes",
@@ -810,6 +810,50 @@ describe("t247 claim-sources sensor", () => {
       );
     });
   }
+
+  test("a definition-shaped line directly under a list item's text is visible prose, not a definition", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "- This is an unsupported assertion unless Q1 grounds it. [Q1]\n[Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("a definition-shaped line directly under top-level prose is visible prose", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion unless Q1 grounds it. [Q1]\n[Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("consecutive definitions after a heading are all definitions", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "## Heading\n[desc]: /a\n[Q1]: /b\n\nThis is an unsupported assertion. [desc]\n\nThis is another unsupported assertion. [Q1]",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(
+      result.findings.filter((finding) => finding.includes("claim block has no source tag")),
+    ).toHaveLength(2);
+  });
 
   // Definition detection has to agree with CommonMark's definition grammar in
   // both directions. A line that only looks like a definition is prose the

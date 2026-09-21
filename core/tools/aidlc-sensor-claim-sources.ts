@@ -1020,6 +1020,14 @@ function interruptsReferenceContinuation(text: string): boolean {
 	);
 }
 
+function continuesContext(lineContext: string, context: string): boolean {
+	return (
+		lineContext === context ||
+		(lineContext === "" && context !== "") ||
+		(lineContext !== "" && context.startsWith(`${lineContext}/`))
+	);
+}
+
 function canContinueReference(
 	lines: ContainerLine[],
 	index: number,
@@ -1027,12 +1035,8 @@ function canContinueReference(
 ): boolean {
 	const line = lines[index];
 	if (!line) return false;
-	const sameOrLazilyElidedContext =
-		line.context === context ||
-			(line.context === "" && context !== "") ||
-			(line.context !== "" && context.startsWith(`${line.context}/`));
 	return (
-		sameOrLazilyElidedContext &&
+		continuesContext(line.context, context) &&
 		!interruptsReferenceContinuation(line.text)
 	);
 }
@@ -1188,15 +1192,47 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 	const lines = documentContainerLines(visibleLines);
 	const labels = new Set<string>();
 	const definitionLines = new Set<number>();
+	let open = false;
+	let previousContext = "";
 
+	// CommonMark §4.7: a link reference definition cannot interrupt a paragraph.
+	// A definition-shaped line directly under prose is visible lazy continuation.
 	for (let index = 0; index < lines.length; index++) {
-		const definition = referenceDefinitionAt(lines, index);
-		if (!definition) continue;
-		labels.add(normalizedReferenceLabel(definition.label));
-		for (let line = index; line <= definition.endLine; line++) {
-			definitionLines.add(line);
+		const line = lines[index];
+		const content = firstContent(line.text);
+		if (content === null) {
+			open = false;
+			previousContext = line.context;
+			continue;
 		}
-		index = definition.endLine;
+		if (!continuesContext(line.context, previousContext)) open = false;
+		previousContext = line.context;
+
+		if (!open) {
+			const definition = referenceDefinitionAt(lines, index);
+			if (definition) {
+				labels.add(normalizedReferenceLabel(definition.label));
+				for (let line = index; line <= definition.endLine; line++) {
+					definitionLines.add(line);
+				}
+				index = definition.endLine;
+				previousContext = lines[index].context;
+				continue;
+			}
+		}
+
+		const rest = line.text.slice(content.index);
+		if (
+			content.column <= 3 &&
+			(/^#{1,6}(?:[ \t]+|$)/.test(rest) ||
+				isThematicBreak(line.text) ||
+				(open && /^(?:=+|-+)[ \t]*$/.test(rest)))
+		) {
+			open = false;
+			continue;
+		}
+		if (!open && content.column > 3) continue;
+		open = true;
 	}
 
 	return { labels, definitionLines };
