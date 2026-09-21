@@ -215,6 +215,14 @@ function humanReport(
     kiro: "Kiro",
     opencode: "opencode",
   };
+  // A project installed before a row was retired still carries the retired id in its
+  // stamp, and this map is keyed by the CURRENT row -- so index it with the successor.
+  // The fallback resolves to the successor too, because the point of this label is to
+  // name the product the user has; printing a retired id at them names nothing.
+  const productLabel = (distribution: string): string => {
+    const current = currentDistribution(distribution);
+    return productNames[current] ?? current;
+  };
   const frameworkPattern =
     /^(?:Agent filename|Scope filename|Cycle detection|Orphan stage|Uncompiled stage|Enabled stage compile coverage|Scope validation|Schema validation|Graph references|Keyword overlap|Rule drift|Paired sensor coverage|Stage graph|Scope grid|Sensor |Required sections|Upstream coverage|Traceability|Linter|Type check)/i;
   const machinePattern =
@@ -277,7 +285,7 @@ function humanReport(
   output += renderSection(machine);
   output += `\n${heading(`Project${
     harness
-      ? ` (${harness.harnessDir}, ${productNames[harness.distribution] ?? harness.distribution})`
+      ? ` (${harness.harnessDir}, ${productLabel(harness.distribution)})`
       : ""
   }`, out)}\n`;
   output += renderSection(project, findingRows);

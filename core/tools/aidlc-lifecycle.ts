@@ -104,6 +104,7 @@ import {
 } from "./aidlc-windows-uninstall.ts";
 import {
   compiledExecutable,
+  currentDistribution,
   discoverProjectHarnesses,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
@@ -898,8 +899,17 @@ function assertVersionsRemainPrunable(versions: readonly string[]): void {
 
 function projectDistribution(projectDir: string): string | null {
   const harnessDir = runtimeHarnessDir(projectDir);
-  return discoverProjectHarnesses(projectDir)
+  const stamped = discoverProjectHarnesses(projectDir)
     .find((candidate) => candidate.harnessDir === harnessDir)?.distribution ?? null;
+  // Every caller asks this in order to decide whether a RELEASE carries the runtime
+  // this project needs, and a release only ever carries current rows. A project
+  // installed before a row was retired still carries the retired id in its stamp, so
+  // answering raw made the pin paths reject the very row that needed upgrading:
+  // `<version> does not contain this project's kiro-ide runtime` at command time.
+  // This resolves a current runtime identity, so normalizing is correct here --
+  // unlike a check on a historical projection's internal consistency, which must
+  // keep the raw stamp.
+  return stamped === null ? null : currentDistribution(stamped);
 }
 
 function activateReserved(version: string, options: { failAfter?: number } = {}): void {

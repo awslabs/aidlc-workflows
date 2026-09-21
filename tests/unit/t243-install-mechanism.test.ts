@@ -5244,6 +5244,14 @@ describe("t243 projection channel", () => {
       const doc = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
       if (doc.distribution !== "kiro") return null;
       doc.distribution = "kiro-ide";
+      // A real install of the retired row also recorded `name: "kiro-ide"` in its
+      // harness descriptor, and that field -- not `distribution` -- is what
+      // runtimeHarnessName() (aidlc-runtime-paths.ts), installedHarnessNameForTarget()
+      // (aidlc-lib.ts) and isKiroRoutingHarness() (aidlc-orchestrate.ts) read.
+      // Retiring only `distribution` left the name still saying "kiro", so those
+      // three paths never ran against a retired identity at all: the fixture
+      // reported a healthy migration while they were broken. Retire both.
+      if (doc.name === "kiro") doc.name = "kiro-ide";
       writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
       return path;
     };
@@ -5270,6 +5278,52 @@ describe("t243 projection channel", () => {
     const diagnosed = run(DISPATCHER, ["doctor", "--project-dir", project], project);
     expect(diagnosed.stdout + diagnosed.stderr).not.toContain("TypeError");
     expect(diagnosed.stdout + diagnosed.stderr).toMatch(/problems?,/);
+    // The doctor header renders a product name from its own map keyed by the stamped
+    // distribution, and that map no longer carries the retired id -- so a retired
+    // stamp fell through to printing the raw `kiro-ide` at the user.
+    expect(diagnosed.stdout).toContain("Project (.kiro, Kiro)");
+
+    // The pin path validates the release against the project's stamped distribution,
+    // and no release carries a kiro-ide runtime any more (dist-release/ holds claude,
+    // codex, copilot, cursor, kiro, opencode). So a retired stamp failed at COMMAND
+    // TIME -- `does not contain this project's kiro-ide runtime`, EXIT.usage -- before
+    // a single file was touched. The row that most needed upgrading was the one row
+    // that could not be pinned.
+    //
+    // The machine root, the version and the release all have to be hermetic or this
+    // proves nothing. With the ambient install root, `completeVersion(AIDLC_VERSION)`
+    // is true and the check reads the ALREADY-INSTALLED distribution list, which on a
+    // machine installed before the retirement still contains kiro-ide -- so a first
+    // cut of this assertion passed while the defect was live. An unwritten version
+    // plus an empty machine root forces the `--from` plan, and the shared
+    // `fixtureRelease` helper cannot be reused because it hardcodes
+    // `distributions: ["claude"]`, which no Kiro project could ever match.
+    const pinMachine = temp("aidlc-t243-retired-pin-machine-");
+    const pinRelease = temp("aidlc-t243-retired-pin-release-");
+    writeReleaseFixture({
+      root: pinRelease,
+      repoRoot: REPO_ROOT,
+      version: NEXT_VERSION,
+      reportedVersion: NEXT_VERSION,
+      binary: "bytes",
+      distributions: ["kiro"],
+    });
+    const pinned = run(INIT, [
+      "config",
+      "--pin",
+      NEXT_VERSION,
+      "--from",
+      pinRelease,
+      "--dry-run",
+      "--json",
+      "--project-dir",
+      project,
+    ], project, {
+      AIDLC_INSTALL_ROOT: pinMachine,
+      AIDLC_BIN_DIR: join(pinMachine, "bin"),
+    });
+    expect(pinned.stdout + pinned.stderr).not.toContain("kiro-ide runtime");
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
 
     const migrated = run(INIT, [
       "config",
