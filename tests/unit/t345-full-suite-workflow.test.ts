@@ -212,6 +212,7 @@ describe("t345 complete nightly coverage", () => {
         const command = run!.run!.replaceAll(`\${{ matrix.platform }}`, row.platform).trim();
         if (jobName === "live_hosted") {
           expect(command).toContain("sudo -u aidlc-live -H env -i");
+          expect(command).toContain('cd "$AIDLC_LIVE_ROOT" && exec "$@"');
           expect(command).toContain(`ci-live-sandbox.ts" ${row.family} ${row.platform}`);
           const proof = job.steps.findIndex((step) => step.name === "Prove isolation");
           expect(proof).toBeGreaterThanOrEqual(0);

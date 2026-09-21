@@ -389,6 +389,10 @@ if ($errorCode -ne 5) { throw 'Process-memory probe did not prove access denial.
 if (-not [IO.File]::Exists('C:\aidlc-live\work\scripts\ci-live-sandbox.ts')) { throw 'Isolated source is missing.' }
 & 'C:\aidlc-live\tools\bun.exe' --version
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& 'C:\Program Files\Git\cmd\git.exe' -C 'C:\aidlc-live\work' rev-parse --is-inside-work-tree
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$configProbe = [IO.File]::Open((Join-Path $env:HOME '.gitconfig'), 'Open', 'ReadWrite', 'Read')
+$configProbe.Dispose()
 [Console]::WriteLine('Separate-user Windows isolation verified: identity, environment, files, modules, PROCESS_VM_READ.')
 exit 0
 '@
@@ -494,7 +498,10 @@ try {
         Set-RuntimeAcl $tools $sandboxSid 'ReadAndExecute' -Tree
         Set-RuntimeAcl $work $sandboxSid 'Modify' -Tree
         Set-RuntimeAcl $sandboxHome $sandboxSid 'Modify' -Tree
-        # A copied worktree is runner-owned; explicitly trust only this path.
+        $stage = 'transferring sandbox worktree ownership'
+        & icacls.exe $work /setowner ($env:COMPUTERNAME + '\' + $userName) /T /C /Q
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot transfer sandbox worktree ownership.' }
+        # The sandbox owns its worktree; keep an explicit path-only Git trust record.
         [IO.File]::WriteAllText((Join-Path $sandboxHome '.gitconfig'), "[safe]`n`tdirectory = C:/aidlc-live/work`n")
         $credential | Export-Clixml -LiteralPath $credentialFile
         Set-RuntimeAcl $credentialFile $null 'ReadAndExecute'
@@ -507,6 +514,8 @@ try {
         # Fresh metadata cannot contain the original checkout's credential helpers.
         $gitBody = @'
 & 'C:\Program Files\Git\cmd\git.exe' -c init.templateDir=C:/aidlc-live/tools/git-template init --quiet .
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& 'C:\Program Files\Git\cmd\git.exe' -C 'C:\aidlc-live\work' rev-parse --is-inside-work-tree
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & 'C:\Program Files\Git\cmd\git.exe' -c core.hooksPath=NUL add --all -- .
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

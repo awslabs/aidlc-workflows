@@ -18,6 +18,12 @@ if [[ -z "${GITHUB_WORKSPACE:-}" || ! -d "$GITHUB_WORKSPACE" ]]; then
   exit 1
 fi
 
+run_live() {
+  sudo -u "$live_user" -H env -i PATH="$live_path" HOME="$live_home" \
+    TMPDIR="$live_home/tmp" BUN_INSTALL="$live_home/.bun" XDG_CACHE_HOME="$live_home/.cache" \
+    AIDLC_LIVE_ROOT="$live_root" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live "$@"
+}
+
 if [[ "$mode" == prepare ]]; then
   case "$family" in claude-sdk|claude-tui|codex|opencode|release-contract|isolation) ;; *) exit 2 ;; esac
   if id "$live_user" >/dev/null 2>&1; then
@@ -41,7 +47,7 @@ if [[ "$mode" == prepare ]]; then
   node_bin="$(node -p 'process.execPath')"
   sudo install -m 755 "$bun_bin" "$live_tools/bin/bun"
   sudo install -m 755 "$node_bin" "$live_tools/bin/node"
-  sudo -u "$live_user" -H env -i PATH="$live_path" HOME="$live_home" TMPDIR="$live_home/tmp" BUN_INSTALL="$live_home/.bun" XDG_CACHE_HOME="$live_home/.cache" "$live_tools/bin/bun" -e 'const fs=require("fs"),p=require("path");function walk(path){const s=fs.lstatSync(path);if(s.isSymbolicLink())return;fs.chmodSync(path,s.isDirectory()?0o700:(s.mode&0o777)|0o600);if(s.isDirectory())for(const name of fs.readdirSync(path))walk(p.join(path,name));}walk(process.argv[1])' "$live_root"
+  run_live "$live_tools/bin/bun" -e 'const fs=require("fs"),p=require("path");function walk(path){const s=fs.lstatSync(path);if(s.isSymbolicLink())return;fs.chmodSync(path,s.isDirectory()?0o700:(s.mode&0o777)|0o600);if(s.isDirectory())for(const name of fs.readdirSync(path))walk(p.join(path,name));}walk(process.argv[1])' "$live_root"
   npm_root="$(npm root -g)"
   if [[ -d "$npm_root" ]]; then sudo cp -a "$npm_root/." "$live_tools/node_modules/"; fi
   sudo chmod -R a+rX,go-w "$live_tools"
@@ -54,7 +60,7 @@ if [[ "$mode" == prepare ]]; then
   if [[ -n "$cli" ]]; then
     target="$(node -e 'const fs=require("fs"),p=require("path");const target=fs.realpathSync(process.argv[1]);const root=fs.realpathSync(process.argv[2]);const rel=p.relative(root,target);if(rel.startsWith("..")||p.isAbsolute(rel))process.exit(1);console.log(rel)' "$(command -v "$cli")" "$npm_root")"
     sudo ln -s "$live_tools/node_modules/$target" "$live_tools/bin/$cli"
-    sudo -u "$live_user" -H env -i PATH="$live_path" HOME="$live_home" TMPDIR="$live_home/tmp" BUN_INSTALL="$live_home/.bun" XDG_CACHE_HOME="$live_home/.cache" "$cli" --version
+    run_live "$cli" --version
   fi
   # Protect the runner's token-bearing files, temp scripts and original checkout.
   # Never grant the sandbox access to runner-owned Actions command files.
@@ -67,41 +73,43 @@ if [[ "$mode" == prepare ]]; then
 fi
 
 if [[ "$mode" == prepare || "$mode" == prove ]]; then
-  sudo -u "$live_user" -H env -i PATH="$live_path" HOME="$live_home" TMPDIR="$live_home/tmp" BUN_INSTALL="$live_home/.bun" XDG_CACHE_HOME="$live_home/.cache" bun --version
-  sudo -u "$live_user" -H env -i PATH="$live_path" HOME="$live_home" TMPDIR="$live_home/tmp" BUN_INSTALL="$live_home/.bun" XDG_CACHE_HOME="$live_home/.cache" bun -e 'const fs=require("node:fs"),os=require("node:os");const dir=fs.mkdtempSync(os.tmpdir()+"/probe-");fs.rmdirSync(dir);console.log("Sandbox temporary directory verified");'
-  sudo -u "$live_user" test -r "$live_root/scripts/ci-live-filter.ts"
-  if sudo -u "$live_user" test -r "$GITHUB_WORKSPACE/scripts/ci-start-credential-broker.ts"; then
+  run_live bun --version
+  run_live bun -e 'const fs=require("node:fs"),os=require("node:os");const dir=fs.mkdtempSync(os.tmpdir()+"/probe-");fs.rmdirSync(dir);console.log("Sandbox temporary directory verified");'
+  sandbox_pwd="$(run_live pwd -P)"
+  if [[ "$sandbox_pwd" != "$live_root" ]]; then echo 'Sandbox cwd does not match its private checkout' >&2; exit 1; fi
+  run_live test -r "$live_root/scripts/ci-live-filter.ts"
+  if run_live test -r "$GITHUB_WORKSPACE/scripts/ci-start-credential-broker.ts"; then
     echo 'Live identity can read the trusted original checkout' >&2
     exit 1
   fi
   if [[ "$(uname -s)" == Linux ]]; then
-    if sudo -u "$live_user" cat "/proc/$PPID/environ" >/dev/null 2>&1; then
+    if run_live cat "/proc/$PPID/environ" >/dev/null 2>&1; then
       echo 'Live identity can read launcher credentials through procfs' >&2
       exit 1
     fi
   else
-    if sudo -u "$live_user" /bin/ls "$HOME" >/dev/null 2>&1; then
+    if run_live /bin/ls "$HOME" >/dev/null 2>&1; then
       echo 'Live identity can read the runner home' >&2
       exit 1
     fi
   fi
-  if sudo -u "$live_user" test -r "$GITHUB_ENV"; then
+  if run_live test -r "$GITHUB_ENV"; then
     echo 'Live identity can read the Actions environment file' >&2
     exit 1
   fi
-  sandbox_env="$(sudo -u "$live_user" -H env -i PATH="$live_path" HOME="$live_home" TMPDIR="$live_home/tmp" BUN_INSTALL="$live_home/.bun" XDG_CACHE_HOME="$live_home/.cache" env)"
+  sandbox_env="$(run_live env)"
   if printf '%s\n' "$sandbox_env" | grep -Eq '^(ACTIONS_|AWS_|GITHUB_TOKEN=|GH_TOKEN=)'; then
     echo 'Live identity inherited control-plane credentials' >&2
     exit 1
   fi
-  if sudo -u "$live_user" sudo -n true >/dev/null 2>&1; then
+  if run_live sudo -n true >/dev/null 2>&1; then
     echo 'Live identity unexpectedly has sudo authority' >&2
     exit 1
   fi
   echo 'Separate-user live runtime isolation verified'
 elif [[ "$mode" == smoke ]]; then
-  sudo -u "$live_user" -H env -i PATH="$live_path" HOME="$live_home" TMPDIR="$live_home/tmp" BUN_INSTALL="$live_home/.bun" XDG_CACHE_HOME="$live_home/.cache" TERM=xterm-256color AIDLC_TEST_PACKAGE_READY=1 \
-    "$live_tools/bin/bun" --cwd "$live_root" tests/run-tests.ts --smoke --filter '^t01'
+  run_live env TERM=xterm-256color AIDLC_TEST_PACKAGE_READY=1 \
+    "$live_tools/bin/bun" tests/run-tests.ts --smoke --filter '^t01'
 elif [[ "$mode" == collect ]]; then
   # Read only the live user's completed evidence; do not execute its authored files.
   # Only the dedicated account's processes are owned by this job. Drain them
