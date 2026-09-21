@@ -276,11 +276,13 @@ jobs:
             local prompt="$6"
             local output_dir
             local output_file
+            local error_file
             local status
             local size
 
             output_dir="$(sudo -u ai-pr-review mktemp -d -t aidlc-review.XXXXXX)"
             output_file="$output_dir/output"
+            error_file="$output_dir/error"
             echo "Running $name..."
             set +e
             if [ "$runtime" = "sol" ]; then
@@ -317,9 +319,10 @@ jobs:
                 CLAUDE_CONFIG_DIR=/home/ai-pr-review/.claude-review \
                 HOME=/home/ai-pr-review \
                 /bin/bash -c \
-                'output_file="$1"; shift; exec "$@" >"$output_file" 2>/dev/null' \
+                'output_file="$1"; error_file="$2"; shift 2; exec "$@" >"$output_file" 2>"$error_file"' \
                 bash \
                 "$output_file" \
+                "$error_file" \
                 "$claude_bin" \
                 --bare \
                 --restricted \
@@ -341,6 +344,25 @@ jobs:
             set -e
 
             if [ "$status" -ne 0 ]; then
+              if [ "$runtime" = "fable" ]; then
+                if sudo -u ai-pr-review grep -Eiq \
+                  'aws_review|data[ -]?retention|data sharing' "$error_file"; then
+                  echo "::error::$name failed because Fable 5.1 data retention is not enabled for this AWS account"
+                elif sudo -u ai-pr-review grep -Eiq \
+                  'accessdenied|not authorized|not permitted|permission' "$error_file"; then
+                  echo "::error::$name failed because the Bedrock review role cannot access the Fable inference profile"
+                elif sudo -u ai-pr-review grep -Eiq \
+                  'invalid.*model|model.*invalid|inference profile.*(not found|unsupported)|resource.*not found' \
+                  "$error_file"; then
+                  echo "::error::$name failed because Bedrock did not accept inference profile $FABLE_MODEL from $AWS_REGION"
+                elif sudo -u ai-pr-review grep -Eiq \
+                  'credential|security token|expiredtoken|unrecognizedclient' "$error_file"; then
+                  echo "::error::$name failed because Claude Code could not use the assumed AWS credentials"
+                elif sudo -u ai-pr-review grep -Fq \
+                  'Input must be provided either through stdin or as a prompt argument' "$error_file"; then
+                  echo "::error::$name failed because Claude Code did not receive the review prompt"
+                fi
+              fi
               echo "::error::$name failed with exit code $status; model transcript was suppressed"
               sudo find "$output_dir" -depth -delete
               return "$status"

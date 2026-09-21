@@ -893,6 +893,10 @@ process.stdout.write(JSON.stringify(value));
       WORKFLOW.indexOf('--tools "Read,Glob,Grep"'),
     );
     expect(WORKFLOW).not.toContain('--tools "Read,Glob,Grep" \\\n                "$prompt"');
+    expect(WORKFLOW).toContain('error_file="$output_dir/error"');
+    expect(WORKFLOW).toContain('aws_review|data[ -]?retention|data sharing');
+    expect(WORKFLOW).toContain("model transcript was suppressed");
+    expect(WORKFLOW).not.toContain('cat "$error_file"');
     expect(WORKFLOW).toContain("--no-session-persistence");
     expect(WORKFLOW).toContain("--disable-slash-commands");
     expect(WORKFLOW).toContain("--strict-mcp-config");
