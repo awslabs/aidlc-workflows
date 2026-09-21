@@ -87,10 +87,14 @@ rule. The review evaluates the current issue and conversation for intent,
 project direction, user experience, scope, feasibility, dependencies, and open
 decisions. For a bug report, it may run up to five relevant existing tests in
 an isolated, network-disabled test process and reports the bounded result as
-evidence. Rapid authorized updates replace an in-progress run, while unrelated
-external comments on an unlabeled maintainer-owned issue do not invalidate its
-publication. It updates one advisory comment; it does not prioritize, approve,
-reject, label, assign, close, or implement the issue.
+evidence. Removing `ai-review` cancels an in-progress external-issue review.
+Any human conversation change also invalidates publication until an authorized
+review covers the complete updated conversation. Rapid authorized updates
+replace an in-progress run. Other human comments do not start a replacement
+run without authorization, but they prevent an older review from publishing
+until a maintainer retriggers it. The workflow updates one advisory comment; it
+does not prioritize, approve, reject, label, assign, close, or implement the
+issue.
 
 ## Contributing via Pull Requests
 

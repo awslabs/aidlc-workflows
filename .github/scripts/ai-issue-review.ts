@@ -63,6 +63,14 @@ export interface IssueConversation {
   comments: IssueConversationEntry[];
 }
 
+export interface IssueAuthorization {
+  version: 1;
+  issue: number;
+  authorAssociation: string;
+  basis: "maintainer-owned" | "ai-review-label" | "none";
+  authorized: boolean;
+}
+
 export interface CurrentAidaReview {
   id: number;
   body: string;
@@ -73,8 +81,8 @@ export interface IssueContext {
   base: string;
   issue: IssueMetadata;
   catalog: IssueCatalogEntry[];
+  authorization: IssueAuthorization;
   conversation: IssueConversation;
-  publicationConversation: IssueConversation;
   currentAidaReview: CurrentAidaReview | null;
   contextId: string;
   reviewId: string;
@@ -301,18 +309,6 @@ export function canonicalConversation(
   return canonicalConversationWithFilter(value, issue, () => true);
 }
 
-export function canonicalPublicationConversation(
-  value: unknown,
-  issue: number,
-  includeExternal: boolean,
-): IssueConversation {
-  return canonicalConversationWithFilter(
-    value,
-    issue,
-    entry => includeExternal || entry.actor.maintainer,
-  );
-}
-
 export function issueHasReviewOptIn(value: unknown): boolean {
   const candidate = record(value, "issue");
   if (!Array.isArray(candidate.labels)) return false;
@@ -320,6 +316,25 @@ export function issueHasReviewOptIn(value: unknown): boolean {
     if (typeof label === "string") return label === "ai-review";
     return text(record(label, `issue.labels[${index}]`).name) === "ai-review";
   });
+}
+
+export function canonicalIssueAuthorization(value: unknown): IssueAuthorization {
+  const candidate = record(value, "issue");
+  const issue = positiveInteger(candidate.number, "issue.number");
+  const authorAssociation = text(candidate.author_association).toUpperCase();
+  const maintainerOwned = ["OWNER", "MEMBER", "COLLABORATOR"].includes(authorAssociation);
+  const reviewOptIn = issueHasReviewOptIn(candidate);
+  return {
+    version: 1,
+    issue,
+    authorAssociation,
+    basis: maintainerOwned
+      ? "maintainer-owned"
+      : reviewOptIn
+      ? "ai-review-label"
+      : "none",
+    authorized: maintainerOwned || reviewOptIn,
+  };
 }
 
 export function canonicalCurrentAidaReview(
@@ -356,6 +371,7 @@ function contextDigest(
   base: string,
   issue: IssueMetadata,
   catalog: IssueCatalogEntry[],
+  authorization: IssueAuthorization,
   conversation: IssueConversation,
 ): string {
   const hash = createHash("sha256");
@@ -363,6 +379,7 @@ function contextDigest(
     ["base", base],
     ["issue", JSON.stringify(issue)],
     ["catalog", JSON.stringify(catalog)],
+    ["authorization", JSON.stringify(authorization)],
     ["conversation", JSON.stringify(conversation)],
   ]) {
     hash.update(name);
@@ -375,12 +392,14 @@ function contextDigest(
 
 function reviewDigest(
   issue: IssueMetadata,
-  publicationConversation: IssueConversation,
+  authorization: IssueAuthorization,
+  conversation: IssueConversation,
 ): string {
   const hash = createHash("sha256");
   for (const [name, value] of [
     ["issue", JSON.stringify(issue)],
-    ["publication-conversation", JSON.stringify(publicationConversation)],
+    ["authorization", JSON.stringify(authorization)],
+    ["conversation", JSON.stringify(conversation)],
   ]) {
     hash.update(name);
     hash.update("\0");
@@ -400,25 +419,21 @@ export function buildImmutableContext(
   assertSha(base, "base");
   const issue = canonicalIssue(issueRaw);
   const catalog = canonicalCatalog(catalogRaw, issue.number);
+  const authorization = canonicalIssueAuthorization(issueRaw);
   const conversation = canonicalConversation(commentsRaw, issue.number);
-  const publicationConversation = canonicalPublicationConversation(
-    commentsRaw,
-    issue.number,
-    issueHasReviewOptIn(issueRaw),
-  );
   const currentAidaReview = canonicalCurrentAidaReview(commentsRaw, issue.number);
-  const contextId = contextDigest(base, issue, catalog, conversation);
-  const reviewId = reviewDigest(issue, publicationConversation);
+  const contextId = contextDigest(base, issue, catalog, authorization, conversation);
+  const reviewId = reviewDigest(issue, authorization, conversation);
   mkdirSync(outputDir, { recursive: true });
   writeFileSync(resolve(outputDir, "issue.json"), `${JSON.stringify(issue, null, 2)}\n`);
   writeFileSync(resolve(outputDir, "issue-catalog.json"), `${JSON.stringify(catalog, null, 2)}\n`);
   writeFileSync(
-    resolve(outputDir, "conversation.json"),
-    `${JSON.stringify(conversation, null, 2)}\n`,
+    resolve(outputDir, "authorization.json"),
+    `${JSON.stringify(authorization, null, 2)}\n`,
   );
   writeFileSync(
-    resolve(outputDir, "publication-conversation.json"),
-    `${JSON.stringify(publicationConversation, null, 2)}\n`,
+    resolve(outputDir, "conversation.json"),
+    `${JSON.stringify(conversation, null, 2)}\n`,
   );
   writeFileSync(
     resolve(outputDir, "current-aida-review.json"),
@@ -431,8 +446,8 @@ export function buildImmutableContext(
     base,
     issue,
     catalog,
+    authorization,
     conversation,
-    publicationConversation,
     currentAidaReview,
     contextId,
     reviewId,
@@ -809,11 +824,15 @@ export function validateStructuredIssueReview(
   };
 }
 
-function markdownText(value: string): string {
+function htmlText(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
+    .replaceAll(">", "&gt;");
+}
+
+function markdownText(value: string): string {
+  return htmlText(value)
     .replace(/([\\`*_[\]()#!|])/g, "\\$1");
 }
 
@@ -918,7 +937,7 @@ export function renderIssueReview(
         "",
         `Diagnostic (exit ${bugVerification.exitCode ?? "unknown"}):`,
         "",
-        `<pre>${markdownText(diagnostic)}</pre>`,
+        `<pre>${htmlText(diagnostic)}</pre>`,
       );
     }
   }
@@ -997,20 +1016,11 @@ function main(): void {
     );
     return;
   }
-  if (command === "canonicalize-publication-conversation") {
+  if (command === "canonicalize-authorization") {
     const input = JSON.parse(readFileSync(argValue(args, "--input"), "utf8"));
-    const issue = JSON.parse(readFileSync(argValue(args, "--metadata"), "utf8"));
     writeFileSync(
       argValue(args, "--output"),
-      `${JSON.stringify(
-        canonicalPublicationConversation(
-          input,
-          Number(argValue(args, "--issue")),
-          issueHasReviewOptIn(issue),
-        ),
-        null,
-        2,
-      )}\n`,
+      `${JSON.stringify(canonicalIssueAuthorization(input), null, 2)}\n`,
     );
     return;
   }
@@ -1087,7 +1097,7 @@ function main(): void {
     return;
   }
   throw new Error(
-    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|canonicalize-publication-conversation|build-context|validate-triage|validate",
+    "usage: ai-issue-review.ts canonicalize|canonicalize-authorization|canonicalize-conversation|build-context|validate-triage|validate",
   );
 }
 

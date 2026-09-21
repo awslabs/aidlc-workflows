@@ -5,6 +5,7 @@ on:
     types:
       - opened
       - labeled
+      - unlabeled
       - edited
   issue_comment:
     types:
@@ -27,6 +28,21 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
+  revoke:
+    name: Cancel issue review after opt-in removal
+    if: >-
+      github.event_name == 'issues'
+      && github.event.action == 'unlabeled'
+      && github.event.label.name == 'ai-review'
+    concurrency:
+      group: ai-issue-review-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Record authorization revocation
+        run: echo "::notice::Canceled the in-progress review because ai-review was removed"
+
   authorize:
     name: Authorize issue-review trigger
     if: >-
@@ -173,6 +189,13 @@ jobs:
             --comments /tmp/issue-comments.json \
             --base "$base" \
             --output .ai-issue-review-context
+
+          if ! jq -e '.authorized == true' \
+            .ai-issue-review-context/authorization.json >/dev/null; then
+            echo "::notice::Issue review authorization changed before context capture"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           context_id="$(cat .ai-issue-review-context/context-id.txt)"
           review_id="$(cat .ai-issue-review-context/review-id.txt)"
@@ -605,17 +628,26 @@ jobs:
             echo "::error::Issue title, body, state, or identity changed during review"
             exit 1
           fi
+          bun .github/scripts/ai-issue-review.ts canonicalize-authorization \
+            --input /tmp/current-issue-raw.json \
+            --output /tmp/current-authorization.json
+          if ! jq -e '.authorized == true' /tmp/current-authorization.json >/dev/null \
+            || ! cmp -s \
+              .ai-issue-review-context/authorization.json \
+              /tmp/current-authorization.json; then
+            echo "::error::Issue review authorization changed or was withdrawn during review"
+            exit 1
+          fi
           gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" --paginate --slurp \
             | jq 'add' > /tmp/current-issue-comments.json
-          bun .github/scripts/ai-issue-review.ts canonicalize-publication-conversation \
+          bun .github/scripts/ai-issue-review.ts canonicalize-conversation \
             --input /tmp/current-issue-comments.json \
-            --metadata /tmp/current-issue-raw.json \
             --issue "$ISSUE_NUMBER" \
-            --output /tmp/current-publication-conversation.json
+            --output /tmp/current-conversation.json
           if ! cmp -s \
-            .ai-issue-review-context/publication-conversation.json \
-            /tmp/current-publication-conversation.json; then
-            echo "::error::Review-triggering issue conversation changed during review"
+            .ai-issue-review-context/conversation.json \
+            /tmp/current-conversation.json; then
+            echo "::error::Model-consumed issue conversation changed during review"
             exit 1
           fi
 
@@ -651,23 +683,38 @@ jobs:
             echo "::error::Issue changed during publication; restored the previous comment"
             exit 1
           fi
-          gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" --paginate --slurp \
-            | jq 'add' > /tmp/latest-issue-comments.json
-          bun .github/scripts/ai-issue-review.ts canonicalize-publication-conversation \
-            --input /tmp/latest-issue-comments.json \
-            --metadata /tmp/latest-issue-raw.json \
-            --issue "$ISSUE_NUMBER" \
-            --output /tmp/latest-publication-conversation.json
-          if ! cmp -s \
-            .ai-issue-review-context/publication-conversation.json \
-            /tmp/latest-publication-conversation.json; then
+          bun .github/scripts/ai-issue-review.ts canonicalize-authorization \
+            --input /tmp/latest-issue-raw.json \
+            --output /tmp/latest-authorization.json
+          if ! jq -e '.authorized == true' /tmp/latest-authorization.json >/dev/null \
+            || ! cmp -s \
+              .ai-issue-review-context/authorization.json \
+              /tmp/latest-authorization.json; then
             if [ "$created" = "true" ]; then
               gh api --method DELETE "repos/$REPO/issues/comments/$existing_id"
             else
               gh api --method PATCH "repos/$REPO/issues/comments/$existing_id" \
                 --input /tmp/restore-comment.json >/dev/null
             fi
-            echo "::error::Review-triggering conversation changed during publication; restored the previous comment"
+            echo "::error::Authorization changed during publication; restored the previous comment"
+            exit 1
+          fi
+          gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" --paginate --slurp \
+            | jq 'add' > /tmp/latest-issue-comments.json
+          bun .github/scripts/ai-issue-review.ts canonicalize-conversation \
+            --input /tmp/latest-issue-comments.json \
+            --issue "$ISSUE_NUMBER" \
+            --output /tmp/latest-conversation.json
+          if ! cmp -s \
+            .ai-issue-review-context/conversation.json \
+            /tmp/latest-conversation.json; then
+            if [ "$created" = "true" ]; then
+              gh api --method DELETE "repos/$REPO/issues/comments/$existing_id"
+            else
+              gh api --method PATCH "repos/$REPO/issues/comments/$existing_id" \
+                --input /tmp/restore-comment.json >/dev/null
+            fi
+            echo "::error::Model-consumed conversation changed during publication; restored the previous comment"
             exit 1
           fi
 
