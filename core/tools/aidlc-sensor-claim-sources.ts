@@ -1210,7 +1210,17 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			previousContext = line.context;
 			continue;
 		}
-		if (!continuesContext(line.context, previousContext)) open = false;
+		if (open && !continuesContext(line.context, previousContext)) {
+			const raw = visibleLines[index].replace(/^(?: {0,3}> ?)+/, "");
+			const ordered = /^ {0,3}(\d{1,9})[.)](?:\t| {1,4}(?! ))/.exec(raw);
+			// CommonMark §5.3: only bullet lists or lists starting at 1 interrupt
+			// paragraphs. Our flat containers treat markers after in-list prose
+			// as sibling items instead.
+			open =
+				ordered !== null &&
+				ordered[1] !== "1" &&
+				!contextParts(previousContext).some((part) => part.startsWith("list#"));
+		}
 		previousContext = line.context;
 
 		if (!open) {
