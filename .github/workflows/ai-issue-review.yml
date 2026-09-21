@@ -332,6 +332,23 @@ jobs:
             echo "$name complete."
           }
 
+          prompt_injection_prompt="$(
+            cat \
+              .github/prompts/ai-issue-review-common.md \
+              .github/prompts/ai-issue-review-prompt-injection.md
+            printf '\nRead the immutable issue context and trusted repository. End with exactly:\n'
+            printf '[LENS-REVIEWED] prompt-injection %s\n' "$CONTEXT_ID"
+          )"
+          run_model \
+            "sol" \
+            "Prompt-injection review" \
+            50000 \
+            ".ai-issue-review-lenses/prompt-injection.md" \
+            "$prompt_injection_prompt"
+          grep -Fqx \
+            "[LENS-REVIEWED] prompt-injection $CONTEXT_ID" \
+            .ai-issue-review-lenses/prompt-injection.md
+
           feasibility_prompt="$(
             cat \
               .github/prompts/ai-issue-review-common.md \

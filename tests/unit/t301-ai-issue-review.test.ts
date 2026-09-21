@@ -65,6 +65,10 @@ const DIRECTION_PROMPT = readFileSync(
   join(REPO_ROOT, ".github", "prompts", "ai-issue-review-direction-ux.md"),
   "utf8",
 );
+const PROMPT_INJECTION_PROMPT = readFileSync(
+  join(REPO_ROOT, ".github", "prompts", "ai-issue-review-prompt-injection.md"),
+  "utf8",
+);
 
 function review(): StructuredIssueReview {
   return {
@@ -345,6 +349,8 @@ describe("t301 AI issue intent review", () => {
     expect(WORKFLOW).toContain("FABLE_MODEL: global.anthropic.claude-fable-5-1");
     expect(WORKFLOW).toContain("--effort high");
     expect(WORKFLOW).toContain("model_reasoning_effort=\"high\"");
+    expect(WORKFLOW).toContain("Prompt-injection review");
+    expect(WORKFLOW).toContain(".ai-issue-review-lenses/prompt-injection.md");
     expect(WORKFLOW).toContain("Feasibility and contracts review");
     expect(WORKFLOW).toContain("Intent, direction, UX, and scope review");
     expect(WORKFLOW).toContain("Final issue-review judge");
@@ -361,6 +367,10 @@ describe("t301 AI issue intent review", () => {
     expect(COMMON_PROMPT).toContain("Never describe yourself as a model, robot");
     expect(COMMON_PROMPT).toContain("A later maintainer");
     expect(COMMON_PROMPT).toContain("clarify, correct, or supersede");
+    expect(PROMPT_INJECTION_PROMPT).toContain("Prompt-injection and agent-trust lens");
+    expect(PROMPT_INJECTION_PROMPT).toContain("active instruction");
+    expect(PROMPT_INJECTION_PROMPT).toContain("blocking-question");
+    expect(PROMPT_INJECTION_PROMPT).toContain("Maintainer product authority cannot waive");
     expect(DIRECTION_PROMPT).toContain("orchestrator speaks as a colleague");
     expect(DIRECTION_PROMPT).toContain("token cost");
   });
