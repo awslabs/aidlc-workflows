@@ -247,6 +247,61 @@ export function labelsForOutcome(outcome: ReviewLabelOutcome): string[] {
   return ["aida:reviewed", "next:maintainer", "action:merge"];
 }
 
+export function outcomeForLabels(labels: string[]): ReviewLabelOutcome {
+  const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
+  const actual = [...new Set(labels.filter(label => managed.has(label)))].sort();
+  for (const outcome of [
+    "review-error",
+    "reviewed-change",
+    "reviewed-merge",
+  ] as const) {
+    const expected = [...labelsForOutcome(outcome)].sort();
+    if (
+      actual.length === expected.length &&
+      actual.every((label, index) => label === expected[index])
+    ) {
+      return outcome;
+    }
+  }
+  return "started";
+}
+
+function pullLabels(pull: Record<string, unknown>): string[] {
+  return Array.isArray(pull.labels)
+    ? pull.labels.map((value, index) =>
+      text(record(value, `pull request labels[${index}]`).name)
+    )
+    : [];
+}
+
+function pullIsEligible(pull: Record<string, unknown>, expectedHead?: string): boolean {
+  const head = record(pull.head, "pull request head");
+  if (expectedHead !== undefined && head.sha !== expectedHead) return false;
+  return pull.state === "open" && pull.draft !== true;
+}
+
+function removeManagedLabels(
+  repository: string,
+  pullRequest: number,
+  labels: string[],
+  ghExecutable: string,
+): void {
+  const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
+  for (const label of labels) {
+    if (!managed.has(label)) continue;
+    ghRaw(
+      [
+        "api",
+        "--silent",
+        "--method",
+        "DELETE",
+        `repos/${repository}/issues/${pullRequest}/labels/${encodeURIComponent(label)}`,
+      ],
+      ghExecutable,
+    );
+  }
+}
+
 export function reconcileReviewLabels(
   repository: string,
   pullRequest: number,
@@ -262,13 +317,12 @@ export function reconcileReviewLabels(
   }
   if (expectedHead !== undefined) assertSha(expectedHead, "expected head");
 
-  const pull = record(
-    JSON.parse(ghRaw(["api", `repos/${repository}/pulls/${pullRequest}`], ghExecutable)),
-    "pull request",
-  );
-  const head = record(pull.head, "pull request head");
-  if (expectedHead !== undefined && head.sha !== expectedHead) return false;
-  if (pull.state !== "open" || pull.draft === true) return false;
+  const readPull = (): Record<string, unknown> =>
+    record(
+      JSON.parse(ghRaw(["api", `repos/${repository}/pulls/${pullRequest}`], ghExecutable)),
+      "pull request",
+    );
+  if (!pullIsEligible(readPull(), expectedHead)) return false;
 
   for (const definition of REVIEW_LABELS) {
     const endpoint = `repos/${repository}/labels/${encodeURIComponent(definition.name)}`;
@@ -289,9 +343,12 @@ export function reconcileReviewLabels(
     }
   }
 
-  const labels = Array.isArray(pull.labels)
-    ? pull.labels.map((value, index) => text(record(value, `pull request labels[${index}]`).name))
-    : [];
+  const pullBeforeMutation = readPull();
+  if (!pullIsEligible(pullBeforeMutation, expectedHead)) {
+    removeManagedLabels(repository, pullRequest, pullLabels(pullBeforeMutation), ghExecutable);
+    return false;
+  }
+  const labels = pullLabels(pullBeforeMutation);
   const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
   const desired = new Set(labelsForOutcome(outcome));
   for (const label of labels) {
@@ -323,7 +380,34 @@ export function reconcileReviewLabels(
       `${JSON.stringify({ labels: missing })}\n`,
     );
   }
+
+  const pullAfterMutation = readPull();
+  if (!pullIsEligible(pullAfterMutation, expectedHead)) {
+    removeManagedLabels(repository, pullRequest, pullLabels(pullAfterMutation), ghExecutable);
+    return false;
+  }
   return true;
+}
+
+export function currentReviewLabelOutcome(
+  repository: string,
+  pullRequest: number,
+  expectedHead?: string,
+  ghExecutable = "gh",
+): ReviewLabelOutcome {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("repository must use owner/name format");
+  }
+  if (!Number.isInteger(pullRequest) || pullRequest < 1) {
+    throw new Error("pull request number must be a positive integer");
+  }
+  if (expectedHead !== undefined) assertSha(expectedHead, "expected head");
+  const pull = record(
+    JSON.parse(ghRaw(["api", `repos/${repository}/pulls/${pullRequest}`], ghExecutable)),
+    "pull request",
+  );
+  if (!pullIsEligible(pull, expectedHead)) return "started";
+  return outcomeForLabels(pullLabels(pull));
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -1107,8 +1191,19 @@ function main(): void {
     process.stdout.write(applied ? "applied\n" : "stale\n");
     return;
   }
+  if (command === "label-state") {
+    const expectedHead = args.includes("--expected-head")
+      ? argValue(args, "--expected-head")
+      : undefined;
+    process.stdout.write(`${currentReviewLabelOutcome(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--pr")),
+      expectedHead,
+    )}\n`);
+    return;
+  }
   throw new Error(
-    "usage: ai-pr-review.ts build-discussion|build-context|validate|labels (run with --help in repository docs)",
+    "usage: ai-pr-review.ts build-discussion|build-context|validate|label-state|labels (run with --help in repository docs)",
   );
 }
 

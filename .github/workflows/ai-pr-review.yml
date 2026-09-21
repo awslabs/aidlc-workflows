@@ -183,7 +183,7 @@ jobs:
 
           context_id="$(cat .ai-review-context/context-id.txt)"
           existing_record="$(gh api "repos/$REPO/pulls/$REQUESTED_PR/reviews" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=$context_id -->\"))) | [.id, .state, (try ((.body // \"\") | capture(\"<!-- ai-pr-review decision=(?<decision>author/change|maintainer/merge) -->\").decision) catch \"\")] | @tsv" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=$context_id -->\")) and (.state == \"CHANGES_REQUESTED\" or ((.body // \"\") | test(\"<!-- ai-pr-review decision=(author/change|maintainer/merge) -->\")))) | [.id, .state, (try ((.body // \"\") | capture(\"<!-- ai-pr-review decision=(?<decision>author/change|maintainer/merge) -->\").decision) catch \"\")] | @tsv" \
             | head -n1 || true)"
           existing_review=""
           existing_state=""
@@ -215,17 +215,25 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Start AIDA review label state
+        id: label_start
         if: >-
           steps.context.outputs.skip != 'true'
           && steps.context.outputs.already_reviewed != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          bun .ai-review-controls/scripts/ai-pr-review.ts labels
-          --repo "${{ github.repository }}"
-          --pr "${{ steps.context.outputs.pr }}"
-          --expected-head "${{ steps.context.outputs.head }}"
-          --outcome started
+        run: |
+          set -euo pipefail
+          review_script=".ai-review-controls/scripts/ai-pr-review.ts"
+          previous_outcome="$(bun "$review_script" label-state \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.context.outputs.pr }}" \
+            --expected-head "${{ steps.context.outputs.head }}")"
+          echo "previous_outcome=$previous_outcome" >> "$GITHUB_OUTPUT"
+          bun "$review_script" labels \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.context.outputs.pr }}" \
+            --expected-head "${{ steps.context.outputs.head }}" \
+            --outcome started
 
       - name: Finalize existing SHA-bound review
         if: >-
@@ -289,6 +297,7 @@ jobs:
       - name: Run review passes sequentially
         id: model
         if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        timeout-minutes: 95
         env:
           BASE_SHA: ${{ steps.context.outputs.base }}
           HEAD_SHA: ${{ steps.context.outputs.head }}
@@ -673,11 +682,13 @@ jobs:
       - name: Reconcile AIDA review labels
         if: >-
           always()
-          && !cancelled()
           && steps.context.outputs.skip != 'true'
           && steps.context.outputs.already_reviewed != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          LABEL_START_CONCLUSION: ${{ steps.label_start.conclusion }}
+          PREVIOUS_OUTCOME: ${{ steps.label_start.outputs.previous_outcome }}
+          RUN_CANCELLED: ${{ cancelled() }}
           TRIGGER_HEAD: ${{ github.event.pull_request.head.sha }}
           TRIGGER_PR: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: |
@@ -701,7 +712,21 @@ jobs:
           fi
 
           outcome="review-error"
-          if [ -f .ai-pr-review-final/published ]; then
+          if [ "$RUN_CANCELLED" = "true" ]; then
+            if [ "$LABEL_START_CONCLUSION" != "success" ]; then
+              echo "::notice::Canceled before AIDA changed the review label state"
+              exit 0
+            fi
+            case "$PREVIOUS_OUTCOME" in
+              started|reviewed-change|reviewed-merge|review-error)
+                outcome="$PREVIOUS_OUTCOME"
+                ;;
+              *)
+                echo "::error::Canceled AIDA review has no restorable label state"
+                exit 1
+                ;;
+            esac
+          elif [ -f .ai-pr-review-final/published ]; then
             decision="$(jq -r '"\(.actor)/\(.action)"' \
               .ai-pr-review-final/decision.json)"
             case "$decision" in

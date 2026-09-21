@@ -18,6 +18,7 @@ import {
   authoritativeDiscussion,
   labelsForOutcome,
   normalizeDiscussion,
+  outcomeForLabels,
   reconcileReviewLabels,
   type ChangedFileManifest,
   type ReviewMetadata,
@@ -346,6 +347,14 @@ process.stdout.write(JSON.stringify(value));
       "next:maintainer",
       "action:merge",
     ]);
+    expect(outcomeForLabels([
+      "unrelated",
+      "action:change",
+      "aida:reviewed",
+      "next:author",
+    ])).toBe("reviewed-change");
+    expect(outcomeForLabels(["aida:review-error"])).toBe("review-error");
+    expect(outcomeForLabels(["aida:reviewed", "next:author"])).toBe("started");
 
     const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-labels-"));
     try {
@@ -431,6 +440,132 @@ process.stdout.write(JSON.stringify({
         staleGh,
       )).toBe(false);
       expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
+
+      for (const [name, state, draft] of [
+        ["draft", "open", true],
+        ["closed", "closed", false],
+      ] as const) {
+        writeFileSync(log, "");
+        const ineligibleGh = join(root, `${name}-gh`);
+        const response = {
+          head: { sha: HEAD },
+          state,
+          draft,
+          labels: [{ name: "aida:reviewed" }],
+        };
+        writeFileSync(ineligibleGh, `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.stdout.write(${JSON.stringify(JSON.stringify(response))});
+`);
+        chmodSync(ineligibleGh, 0o755);
+        expect(reconcileReviewLabels(
+          "acme/repo",
+          42,
+          "review-error",
+          HEAD,
+          ineligibleGh,
+        )).toBe(false);
+        expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
+      }
+
+      writeFileSync(log, "");
+      const transitionGh = join(root, "transition-gh");
+      writeFileSync(transitionGh, `#!/usr/bin/env bun
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const input = await Bun.stdin.text();
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input }) + "\\n");
+const stateFile = ${JSON.stringify(join(root, "transition-count"))};
+if (args.some(value => value === "repos/acme/repo/pulls/42")) {
+  const count = existsSync(stateFile) ? Number(readFileSync(stateFile, "utf8")) : 0;
+  writeFileSync(stateFile, String(count + 1));
+  process.stdout.write(JSON.stringify({
+    head: { sha: count === 0 ? "${HEAD}" : "${BASE}" },
+    state: "open",
+    draft: false,
+    labels: [
+      { name: "aida:reviewed" },
+      { name: "next:maintainer" },
+      { name: "action:merge" },
+      { name: "unrelated" }
+    ]
+  }));
+} else {
+  process.stdout.write("{}");
+}
+`);
+      chmodSync(transitionGh, 0o755);
+      expect(reconcileReviewLabels(
+        "acme/repo",
+        42,
+        "reviewed-change",
+        HEAD,
+        transitionGh,
+      )).toBe(false);
+      const transitionCalls = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+      expect(
+        transitionCalls
+          .filter(call => call.args.includes("DELETE"))
+          .map(call => call.args.at(-1)),
+      ).toEqual([
+        "repos/acme/repo/issues/42/labels/aida%3Areviewed",
+        "repos/acme/repo/issues/42/labels/next%3Amaintainer",
+        "repos/acme/repo/issues/42/labels/action%3Amerge",
+      ]);
+
+      writeFileSync(log, "");
+      const postTransitionGh = join(root, "post-transition-gh");
+      writeFileSync(postTransitionGh, `#!/usr/bin/env bun
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const input = await Bun.stdin.text();
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input }) + "\\n");
+const stateFile = ${JSON.stringify(join(root, "post-transition-count"))};
+if (args.some(value => value === "repos/acme/repo/pulls/42")) {
+  const count = existsSync(stateFile) ? Number(readFileSync(stateFile, "utf8")) : 0;
+  writeFileSync(stateFile, String(count + 1));
+  process.stdout.write(JSON.stringify({
+    head: { sha: count < 2 ? "${HEAD}" : "${BASE}" },
+    state: "open",
+    draft: false,
+    labels: count < 2
+      ? [{ name: "aida:review-error" }]
+      : [
+        { name: "aida:reviewed" },
+        { name: "next:author" },
+        { name: "action:change" }
+      ]
+  }));
+} else {
+  process.stdout.write("{}");
+}
+`);
+      chmodSync(postTransitionGh, 0o755);
+      expect(reconcileReviewLabels(
+        "acme/repo",
+        42,
+        "reviewed-change",
+        HEAD,
+        postTransitionGh,
+      )).toBe(false);
+      const postTransitionCalls = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+      expect(
+        postTransitionCalls
+          .filter(call => call.args.includes("DELETE"))
+          .map(call => call.args.at(-1)),
+      ).toEqual([
+        "repos/acme/repo/issues/42/labels/aida%3Areview-error",
+        "repos/acme/repo/issues/42/labels/aida%3Areviewed",
+        "repos/acme/repo/issues/42/labels/next%3Aauthor",
+        "repos/acme/repo/issues/42/labels/action%3Achange",
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1157,8 +1292,12 @@ process.stdout.write(JSON.stringify({
     expect(WORKFLOW).not.toContain('git diff --name-only "$base" "$head"');
     expect(WORKFLOW).toContain("Finalize existing SHA-bound review");
     expect(WORKFLOW).toContain('if [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]');
+    expect(WORKFLOW).toContain(
+      '.state == \\"CHANGES_REQUESTED\\" or ((.body // \\"\\") | test(\\"<!-- ai-pr-review decision=(author/change|maintainer/merge) -->\\"))',
+    );
     expect(WORKFLOW).toContain("Superseded by AI review of $HEAD_SHA");
     expect(WORKFLOW).toContain("timeout-minutes: 100");
+    expect(WORKFLOW).toContain("        timeout-minutes: 95");
     expect(WORKFLOW).toContain("              15m \\");
     expect(WORKFLOW).not.toContain("              35m \\");
     expect(WORKFLOW).toContain("      - edited");
@@ -1243,11 +1382,16 @@ process.stdout.write(JSON.stringify({
       publishStep.indexOf("mapfile -t stale_reviews"),
     );
     expect(WORKFLOW).toContain("Start AIDA review label state");
+    expect(WORKFLOW).toContain("previous_outcome=");
+    expect(WORKFLOW).toContain("label-state");
+    expect(WORKFLOW).toContain("RUN_CANCELLED: $" + "{{ cancelled() }}");
+    expect(WORKFLOW).toContain('outcome="$PREVIOUS_OUTCOME"');
+    expect(WORKFLOW).toContain("Canceled before AIDA changed the review label state");
     expect(WORKFLOW).toContain("Reconcile AIDA review labels");
     expect(WORKFLOW).toContain("reviewed-change");
     expect(WORKFLOW).toContain("reviewed-merge");
     expect(WORKFLOW).toContain("review-error");
-    expect(WORKFLOW).toContain("!cancelled()");
+    expect(WORKFLOW).not.toContain("!cancelled()");
     expect(WORKFLOW).toContain("issues: write");
   });
 
