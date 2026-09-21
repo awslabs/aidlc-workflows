@@ -10,6 +10,8 @@ import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 interface Step {
+  name?: string;
+  shell?: string;
   uses?: string;
   if?: string;
   run?: string;
@@ -22,6 +24,7 @@ interface Job {
   uses?: string;
   "runs-on": string | string[];
   env?: Record<string, string>;
+  defaults?: { run?: { shell?: string } };
   strategy?: { matrix: { include?: Array<Record<string, string>>; family?: LiveFamily[] } };
   steps: Step[];
 }
@@ -107,6 +110,15 @@ describe("t345 complete nightly coverage", () => {
     }
     const expected = Object.entries(FAMILIES).flatMap(([family, spec]) => spec.platforms.map((platform) => `${family}:${platform}`));
     expect(actual.sort()).toEqual(expected.sort());
+  });
+
+  test("self-hosted Windows inventories its desktop and uses native PowerShell for every command", () => {
+    const job = workflow.jobs.live_kiro_windows;
+    expect(job.steps[0]).toMatchObject({ name: "Inventory self-hosted Windows host", shell: "pwsh" });
+    for (const step of job.steps) {
+      if (!step.run) continue;
+      expect(step.shell ?? job.defaults?.run?.shell).toBe("pwsh");
+    }
   });
 
   for (const [family, spec] of Object.entries(FAMILIES)) {

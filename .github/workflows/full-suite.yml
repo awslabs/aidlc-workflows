@@ -409,11 +409,40 @@ jobs:
     if: "vars.AIDLC_NIGHTLY_KIRO_RUNNERS == '1'"
     runs-on: [self-hosted, Windows, kiro]
     timeout-minutes: 720
+    defaults:
+      run:
+        shell: pwsh
     strategy:
       fail-fast: false
       matrix:
         family: [kiro-acp, kiro-tui, kiro-ide]
     steps:
+      - name: "Inventory self-hosted Windows host"
+        shell: pwsh
+        env:
+          KIRO_FAMILY: "${{ matrix.family }}"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List
+          $sessions = & query user 2>&1
+          Write-Host ($sessions -join "`n")
+          if ($LASTEXITCODE -ne 0) { throw 'query user failed; an interactive user session is required' }
+          $userPattern = '^\s*>?\s*' + [regex]::Escape($env:USERNAME) + '\s+'
+          if (-not ($sessions | Where-Object { "$_" -match $userPattern })) {
+            throw "No interactive session listed for current user $env:USERNAME; run the agent as a logged-on-session scheduled task"
+          }
+          foreach ($tool in @('bun', 'node', 'git', 'kiro-cli')) {
+            $command = Get-Command $tool -ErrorAction Stop | Select-Object -First 1
+            Write-Host "$tool path: $($command.Source)"
+            & $command.Source --version
+            if ($LASTEXITCODE -ne 0) { throw "$tool --version failed" }
+          }
+          $kiroIde = "$env:LOCALAPPDATA\Programs\Kiro\Kiro.exe"
+          $idePresent = Test-Path $kiroIde
+          Write-Host "Kiro IDE path: $kiroIde; present: $idePresent"
+          if ($env:KIRO_FAMILY -eq 'kiro-ide' -and -not $idePresent) {
+            throw "Kiro IDE executable missing: $kiroIde"
+          }
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: "${{ needs.plan.outputs.sha }}"
