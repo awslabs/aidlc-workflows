@@ -75,49 +75,6 @@ describe("native private namespace", () => {
     expect(() => publishTuiRecord(f.file, f.record, f.identity)).toThrow("directory identity mismatch");
   });
 
-  test.skipIf(process.platform === "win32")("publication refuses a directory replaced after opening its temporary record", () => {
-    const f = fixture();
-    const open = fs.openSync;
-    let swapped = false;
-    const hook = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
-      const fd = open(...args);
-      if (String(args[0]).endsWith(".tmp") && !swapped) {
-        swapped = true;
-        fs.renameSync(f.directory, `${f.directory}-old`);
-        ensurePrivateRoot(f.directory);
-      }
-      return fd;
-    }) as typeof fs.openSync);
-    try {
-      expect(() => publishTuiRecord(f.file, { ...f.record, token: "new" }, f.identity)).toThrow("directory identity mismatch");
-      expect(fs.existsSync(f.file)).toBe(false);
-      expect(JSON.parse(fs.readFileSync(join(`${f.directory}-old`, "session.json"), "utf8"))).toEqual(f.record);
-    } finally { hook.mockRestore(); }
-  });
-
-  test.skipIf(process.platform !== "win32")("Windows blocks directory replacement while the publication handle is open", () => {
-    const f = fixture();
-    const open = fs.openSync;
-    let attempted = false;
-    let replacementError: unknown;
-    const hook = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
-      const fd = open(...args);
-      if (String(args[0]).endsWith(".tmp") && !attempted) {
-        attempted = true;
-        try { fs.renameSync(f.directory, `${f.directory}-old`); }
-        catch (error) { replacementError = error; }
-      }
-      return fd;
-    }) as typeof fs.openSync);
-    try {
-      const next = { ...f.record, token: "new" };
-      publishTuiRecord(f.file, next, f.identity);
-      expect(replacementError).toMatchObject({ code: "EPERM" });
-      expect(fs.existsSync(`${f.directory}-old`)).toBe(false);
-      expect(readPrivateRecord(f.directory, f.file)).toEqual(next);
-    } finally { hook.mockRestore(); }
-  });
-
   test("publication refuses a directory replaced before opening its temporary record", () => {
     const f = fixture();
     const open = fs.openSync;
@@ -136,27 +93,6 @@ describe("native private namespace", () => {
       expect(fs.existsSync(f.file)).toBe(false);
       expect(JSON.parse(fs.readFileSync(join(`${f.directory}-old`, "session.json"), "utf8"))).toEqual(f.record);
     } finally { hook.mockRestore(); }
-  });
-
-  test.skipIf(process.platform === "win32")("unsafe roots and records are rejected, never chmod-repaired", () => {
-    const f = fixture();
-    fs.chmodSync(f.root, 0o777);
-    expect(() => ensurePrivateRoot(f.root)).toThrow("group/other permission bits");
-    expect(fs.statSync(f.root).mode & 0o777).toBe(0o777);
-    fs.chmodSync(f.root, 0o700);
-    fs.chmodSync(f.file, 0o644);
-    expect(() => readPrivateRecord(f.directory, f.file)).toThrow("group/other permission bits");
-    fs.chmodSync(f.file, 0o600);
-    fs.renameSync(f.file, `${f.file}-original`);
-    fs.symlinkSync(`${f.file}-original`, f.file);
-    expect(() => readPrivateRecord(f.directory, f.file)).toThrow("symlink/reparse");
-  });
-
-  test.skipIf(process.platform !== "win32")("Windows refuses public allow ACEs on an otherwise owned root", () => {
-    const f = fixture();
-    const result = spawnSync("icacls.exe", [f.root, "/grant", "*S-1-1-0:(R)"], { encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(() => ensurePrivateRoot(f.root)).toThrow("public allow ACE");
   });
 
   test("Node can load the record helper and validate its private root without bun:ffi", () => {

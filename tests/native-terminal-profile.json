@@ -18,6 +18,27 @@
           ]
         },
         {
+          "path": "tests/integration/t-tui-bun-backend-posix.test.ts",
+          "cases": [
+            {
+              "classname": "native launch namespace security",
+              "name": "client commands refuse unsafe records instead of using their RPC credentials"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "default world-writable root is refused before any lock/session publication"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "explicit world-writable root is refused before any lock/session publication"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "untrusted daemon directories receive no error record or supervisor"
+            }
+          ]
+        },
+        {
           "path": "tests/integration/t-tui-bun-backend.test.ts",
           "cases": [
             {
@@ -59,6 +80,18 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "wrap-spanning wait patterns keep logical compatibility and both views share one snapshot"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "an explicit root symlink/junction is refused without touching its target"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced parent before PTY/supervisor creation"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced session before PTY/supervisor creation"
             }
           ]
         },
@@ -127,6 +160,26 @@
               "name": "verified ancestry owns descendants without tokens but rejects incomplete and reused ancestors"
             },
             {
+              "classname": "native supervisor identity checks",
+              "name": "owns descendants and reparented orphans, excludes unrelated processes and self"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "PID equality alone does not establish process identity"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "proc stat parses comm containing parentheses/newlines and preserves 64-bit ticks"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "refuses incomplete, cyclic and reused ancestry"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "Win64 extended job limit buffer matches the Windows ABI, without breakaway flags"
+            },
+            {
               "classname": "Windows job member termination races",
               "name": "a deadline consumed by earlier operations cannot be restarted after access denied"
             },
@@ -153,26 +206,6 @@
             {
               "classname": "Windows job member termination races",
               "name": "persistent denial remains an error after one finite wait, with PID and wait evidence"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "PID equality alone does not establish process identity"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "Win64 extended job limit buffer matches the Windows ABI, without breakaway flags"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "owns descendants and reparented orphans, excludes unrelated processes and self"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "proc stat parses comm containing parentheses/newlines and preserves 64-bit ticks"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "refuses incomplete, cyclic and reused ancestry"
             }
           ]
         },
@@ -251,6 +284,52 @@
           ]
         },
         {
+          "path": "tests/unit/t-tui-native-private-root-posix.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced after opening its temporary record"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "unsafe roots and records are rejected, never chmod-repaired"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-private-root.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "a copied record cannot authorize a replaced session or parent directory"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "identity checks preserve 64-bit values and refuse unpinned records"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "Node can load the record helper and validate its private root without bun:ffi"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "POSIX validator rejects foreign owners, public modes and links"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "private roots with missing parents work and private records round-trip"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced before opening its temporary record"
+            }
+          ]
+        },
+        {
           "path": "tests/unit/t-tui-onboarding.test.ts",
           "cases": [
             {
@@ -323,6 +402,26 @@
               "name": "zombies and dead states are gone; sleeping/stopped tasks remain live"
             },
             {
+              "classname": "native process identity input validation",
+              "name": "invalid PIDs are rejected before accessing the operating system"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "a child that has exited no longer has an identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "an absent Bun override is an error, never a gone process"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "self has a repeatable creation identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "the bounded Bun entrypoint returns the same identity for a Node caller"
+            },
+            {
               "classname": "OS-owned native locks",
               "name": "a child owner's exit releases its lock automatically"
             },
@@ -365,26 +464,6 @@
             {
               "classname": "Windows native process identity",
               "name": "wait/time read failures always close the handle and throw"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "a child that has exited no longer has an identity"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "an absent Bun override is an error, never a gone process"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "self has a repeatable creation identity"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "the bounded Bun entrypoint returns the same identity for a Node caller"
-            },
-            {
-              "classname": "native process identity input validation",
-              "name": "invalid PIDs are rejected before accessing the operating system"
             }
           ]
         },
@@ -406,18 +485,6 @@
           "cases": [
             {
               "classname": "atomic native terminal records",
-              "name": "EACCES retries only on native Windows"
-            },
-            {
-              "classname": "atomic native terminal records",
-              "name": "EBUSY retries only on native Windows"
-            },
-            {
-              "classname": "atomic native terminal records",
-              "name": "EPERM retries only on native Windows"
-            },
-            {
-              "classname": "atomic native terminal records",
               "name": "a partial EACCES write failure closes and removes only the unpublished file"
             },
             {
@@ -431,6 +498,18 @@
             {
               "classname": "atomic native terminal records",
               "name": "creates and replaces complete JSON through distinct private files"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EACCES retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EBUSY retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EPERM retries only on native Windows"
             },
             {
               "classname": "atomic native terminal records",
@@ -450,6 +529,10 @@
           "path": "tests/unit/t-tui-runtime.test.ts",
           "cases": [
             {
+              "classname": "native driver Node handoff",
+              "name": "a Node override fails after one handoff; a real Bun override executes the command"
+            },
+            {
               "classname": "TUI backend selection",
               "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
             },
@@ -463,15 +546,15 @@
             },
             {
               "classname": "TUI driver runtime resolution",
-              "name": "Bun and tmux use the current Bun executable without probing Node"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
               "name": "a Bun override wins over the current executable, including paths with spaces"
             },
             {
               "classname": "TUI driver runtime resolution",
               "name": "a non-Bun parent launches PATH bun instead of its own executable"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "Bun and tmux use the current Bun executable without probing Node"
             },
             {
               "classname": "TUI driver runtime resolution",
@@ -520,10 +603,6 @@
             {
               "classname": "TUI substrate prerequisites",
               "name": "tmux requires Bun and tmux, but not the native API or renderer dependencies"
-            },
-            {
-              "classname": "native driver Node handoff",
-              "name": "a Node override fails after one handoff; a real Bun override executes the command"
             }
           ]
         },
@@ -804,6 +883,18 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "wrap-spanning wait patterns keep logical compatibility and both views share one snapshot"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "an explicit root symlink/junction is refused without touching its target"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced parent before PTY/supervisor creation"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced session before PTY/supervisor creation"
             }
           ]
         },
@@ -864,6 +955,26 @@
               "name": "verified ancestry owns descendants without tokens but rejects incomplete and reused ancestors"
             },
             {
+              "classname": "native supervisor identity checks",
+              "name": "owns descendants and reparented orphans, excludes unrelated processes and self"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "PID equality alone does not establish process identity"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "proc stat parses comm containing parentheses/newlines and preserves 64-bit ticks"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "refuses incomplete, cyclic and reused ancestry"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "Win64 extended job limit buffer matches the Windows ABI, without breakaway flags"
+            },
+            {
               "classname": "Windows job member termination races",
               "name": "a deadline consumed by earlier operations cannot be restarted after access denied"
             },
@@ -890,26 +1001,6 @@
             {
               "classname": "Windows job member termination races",
               "name": "persistent denial remains an error after one finite wait, with PID and wait evidence"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "PID equality alone does not establish process identity"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "Win64 extended job limit buffer matches the Windows ABI, without breakaway flags"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "owns descendants and reparented orphans, excludes unrelated processes and self"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "proc stat parses comm containing parentheses/newlines and preserves 64-bit ticks"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "refuses incomplete, cyclic and reused ancestry"
             }
           ]
         },
@@ -988,6 +1079,52 @@
           ]
         },
         {
+          "path": "tests/unit/t-tui-native-private-root-windows.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "Windows blocks directory replacement while the publication handle is open"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "Windows refuses public allow ACEs on an otherwise owned root"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-private-root.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "a copied record cannot authorize a replaced session or parent directory"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "identity checks preserve 64-bit values and refuse unpinned records"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "Node can load the record helper and validate its private root without bun:ffi"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "POSIX validator rejects foreign owners, public modes and links"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "private roots with missing parents work and private records round-trip"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced before opening its temporary record"
+            }
+          ]
+        },
+        {
           "path": "tests/unit/t-tui-onboarding.test.ts",
           "cases": [
             {
@@ -1060,6 +1197,26 @@
               "name": "zombies and dead states are gone; sleeping/stopped tasks remain live"
             },
             {
+              "classname": "native process identity input validation",
+              "name": "invalid PIDs are rejected before accessing the operating system"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "a child that has exited no longer has an identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "an absent Bun override is an error, never a gone process"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "self has a repeatable creation identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "the bounded Bun entrypoint returns the same identity for a Node caller"
+            },
+            {
               "classname": "OS-owned native locks",
               "name": "a child owner's exit releases its lock automatically"
             },
@@ -1102,26 +1259,6 @@
             {
               "classname": "Windows native process identity",
               "name": "wait/time read failures always close the handle and throw"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "a child that has exited no longer has an identity"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "an absent Bun override is an error, never a gone process"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "self has a repeatable creation identity"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "the bounded Bun entrypoint returns the same identity for a Node caller"
-            },
-            {
-              "classname": "native process identity input validation",
-              "name": "invalid PIDs are rejected before accessing the operating system"
             }
           ]
         },
@@ -1151,18 +1288,6 @@
           "cases": [
             {
               "classname": "atomic native terminal records",
-              "name": "EACCES retries only on native Windows"
-            },
-            {
-              "classname": "atomic native terminal records",
-              "name": "EBUSY retries only on native Windows"
-            },
-            {
-              "classname": "atomic native terminal records",
-              "name": "EPERM retries only on native Windows"
-            },
-            {
-              "classname": "atomic native terminal records",
               "name": "a partial EACCES write failure closes and removes only the unpublished file"
             },
             {
@@ -1176,6 +1301,18 @@
             {
               "classname": "atomic native terminal records",
               "name": "creates and replaces complete JSON through distinct private files"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EACCES retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EBUSY retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EPERM retries only on native Windows"
             },
             {
               "classname": "atomic native terminal records",
@@ -1195,6 +1332,10 @@
           "path": "tests/unit/t-tui-runtime.test.ts",
           "cases": [
             {
+              "classname": "native driver Node handoff",
+              "name": "a Node override fails after one handoff; a real Bun override executes the command"
+            },
+            {
               "classname": "TUI backend selection",
               "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
             },
@@ -1208,15 +1349,15 @@
             },
             {
               "classname": "TUI driver runtime resolution",
-              "name": "Bun and tmux use the current Bun executable without probing Node"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
               "name": "a Bun override wins over the current executable, including paths with spaces"
             },
             {
               "classname": "TUI driver runtime resolution",
               "name": "a non-Bun parent launches PATH bun instead of its own executable"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "Bun and tmux use the current Bun executable without probing Node"
             },
             {
               "classname": "TUI driver runtime resolution",
@@ -1265,10 +1406,6 @@
             {
               "classname": "TUI substrate prerequisites",
               "name": "tmux requires Bun and tmux, but not the native API or renderer dependencies"
-            },
-            {
-              "classname": "native driver Node handoff",
-              "name": "a Node override fails after one handoff; a real Bun override executes the command"
             }
           ]
         },
@@ -1508,6 +1645,27 @@
           ]
         },
         {
+          "path": "tests/integration/t-tui-bun-backend-posix.test.ts",
+          "cases": [
+            {
+              "classname": "native launch namespace security",
+              "name": "client commands refuse unsafe records instead of using their RPC credentials"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "default world-writable root is refused before any lock/session publication"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "explicit world-writable root is refused before any lock/session publication"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "untrusted daemon directories receive no error record or supervisor"
+            }
+          ]
+        },
+        {
           "path": "tests/integration/t-tui-bun-backend.test.ts",
           "cases": [
             {
@@ -1549,6 +1707,18 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "wrap-spanning wait patterns keep logical compatibility and both views share one snapshot"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "an explicit root symlink/junction is refused without touching its target"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced parent before PTY/supervisor creation"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced session before PTY/supervisor creation"
             }
           ]
         },
@@ -1617,6 +1787,26 @@
               "name": "verified ancestry owns descendants without tokens but rejects incomplete and reused ancestors"
             },
             {
+              "classname": "native supervisor identity checks",
+              "name": "owns descendants and reparented orphans, excludes unrelated processes and self"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "PID equality alone does not establish process identity"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "proc stat parses comm containing parentheses/newlines and preserves 64-bit ticks"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "refuses incomplete, cyclic and reused ancestry"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "Win64 extended job limit buffer matches the Windows ABI, without breakaway flags"
+            },
+            {
               "classname": "Windows job member termination races",
               "name": "a deadline consumed by earlier operations cannot be restarted after access denied"
             },
@@ -1643,26 +1833,6 @@
             {
               "classname": "Windows job member termination races",
               "name": "persistent denial remains an error after one finite wait, with PID and wait evidence"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "PID equality alone does not establish process identity"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "Win64 extended job limit buffer matches the Windows ABI, without breakaway flags"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "owns descendants and reparented orphans, excludes unrelated processes and self"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "proc stat parses comm containing parentheses/newlines and preserves 64-bit ticks"
-            },
-            {
-              "classname": "native supervisor identity checks",
-              "name": "refuses incomplete, cyclic and reused ancestry"
             }
           ]
         },
@@ -1741,6 +1911,52 @@
           ]
         },
         {
+          "path": "tests/unit/t-tui-native-private-root-posix.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced after opening its temporary record"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "unsafe roots and records are rejected, never chmod-repaired"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-private-root.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "a copied record cannot authorize a replaced session or parent directory"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "identity checks preserve 64-bit values and refuse unpinned records"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "Node can load the record helper and validate its private root without bun:ffi"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "POSIX validator rejects foreign owners, public modes and links"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "private roots with missing parents work and private records round-trip"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced before opening its temporary record"
+            }
+          ]
+        },
+        {
           "path": "tests/unit/t-tui-onboarding.test.ts",
           "cases": [
             {
@@ -1813,6 +2029,26 @@
               "name": "zombies and dead states are gone; sleeping/stopped tasks remain live"
             },
             {
+              "classname": "native process identity input validation",
+              "name": "invalid PIDs are rejected before accessing the operating system"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "a child that has exited no longer has an identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "an absent Bun override is an error, never a gone process"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "self has a repeatable creation identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "the bounded Bun entrypoint returns the same identity for a Node caller"
+            },
+            {
               "classname": "OS-owned native locks",
               "name": "a child owner's exit releases its lock automatically"
             },
@@ -1855,44 +2091,12 @@
             {
               "classname": "Windows native process identity",
               "name": "wait/time read failures always close the handle and throw"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "a child that has exited no longer has an identity"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "an absent Bun override is an error, never a gone process"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "self has a repeatable creation identity"
-            },
-            {
-              "classname": "native process identity OS reads",
-              "name": "the bounded Bun entrypoint returns the same identity for a Node caller"
-            },
-            {
-              "classname": "native process identity input validation",
-              "name": "invalid PIDs are rejected before accessing the operating system"
             }
           ]
         },
         {
           "path": "tests/unit/t-tui-record-file.test.ts",
           "cases": [
-            {
-              "classname": "atomic native terminal records",
-              "name": "EACCES retries only on native Windows"
-            },
-            {
-              "classname": "atomic native terminal records",
-              "name": "EBUSY retries only on native Windows"
-            },
-            {
-              "classname": "atomic native terminal records",
-              "name": "EPERM retries only on native Windows"
-            },
             {
               "classname": "atomic native terminal records",
               "name": "a partial EACCES write failure closes and removes only the unpublished file"
@@ -1908,6 +2112,18 @@
             {
               "classname": "atomic native terminal records",
               "name": "creates and replaces complete JSON through distinct private files"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EACCES retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EBUSY retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EPERM retries only on native Windows"
             },
             {
               "classname": "atomic native terminal records",
@@ -1927,6 +2143,10 @@
           "path": "tests/unit/t-tui-runtime.test.ts",
           "cases": [
             {
+              "classname": "native driver Node handoff",
+              "name": "a Node override fails after one handoff; a real Bun override executes the command"
+            },
+            {
               "classname": "TUI backend selection",
               "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
             },
@@ -1940,15 +2160,15 @@
             },
             {
               "classname": "TUI driver runtime resolution",
-              "name": "Bun and tmux use the current Bun executable without probing Node"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
               "name": "a Bun override wins over the current executable, including paths with spaces"
             },
             {
               "classname": "TUI driver runtime resolution",
               "name": "a non-Bun parent launches PATH bun instead of its own executable"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "Bun and tmux use the current Bun executable without probing Node"
             },
             {
               "classname": "TUI driver runtime resolution",
@@ -1997,10 +2217,6 @@
             {
               "classname": "TUI substrate prerequisites",
               "name": "tmux requires Bun and tmux, but not the native API or renderer dependencies"
-            },
-            {
-              "classname": "native driver Node handoff",
-              "name": "a Node override fails after one handoff; a real Bun override executes the command"
             }
           ]
         },
