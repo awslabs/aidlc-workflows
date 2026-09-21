@@ -78,11 +78,11 @@ Include:
 - Expected vs actual behavior
 - The platform, harness, and model you tested with
 
-AIDA's pre-implementation review starts when a maintainer opens, updates,
-comments on, or deletes a human comment from a maintainer-owned issue. A
-maintainer can apply the `ai-review`
-label to opt an external issue conversation into review; applying the label and
-later human comments then start new reviews. Maintainers can also dispatch the
+AIDA's pre-implementation review starts when a maintainer opens, updates, or
+comments on a maintainer-owned issue, and when an authorized actor deletes a
+human comment. A maintainer can apply the `ai-review` label to opt an external
+issue conversation into review; applying the label and later human comments
+then start new reviews. Maintainers can also dispatch the
 **AI Issue Intent Review** workflow with an issue number under the same opt-in
 rule. The review evaluates the current issue and conversation for intent,
 project direction, user experience, scope, feasibility, dependencies, and open
@@ -90,34 +90,47 @@ decisions. For a bug report, it may run up to five relevant existing tests in
 an isolated, network-disabled test process and reports the bounded result as
 evidence. Any human conversation change invalidates publication until an
 authorized review covers the complete updated conversation. Publication
-identity hashes every human comment and excludes bot comments; the bounded
-model context contains up to the 50 most recently updated comments, so editing
-older discussion brings it back into review. Reviews for one issue run serially
-so publication cannot be interrupted after it writes the advisory comment;
-rapid updates retain the latest pending review while the active review finishes
-its freshness checks.
+identity and model context include every human comment and exclude bot comments.
+Conversation capture fails before model execution if the complete human
+discussion exceeds the documented 1,000,000-byte review bound. Reviews for one
+issue run serially so publication cannot be interrupted after it writes the
+advisory comment; rapid updates retain the latest pending review while the
+active review finishes its freshness checks.
 A pre-model freshness check exits successfully when setup has already been
 superseded. Removing `ai-review` prevents an external-issue review from
 publishing, while removing it from a maintainer-owned issue keeps the review
 authorized. Human comments that resemble AIDA output still trigger review
 because loop prevention trusts the comment author's bot identity rather than
-comment text. Deleted human comments trigger a replacement review so a
-published assessment cannot remain bound to removed conversation. Other human
-comments do not start a replacement run without
-authorization, but they prevent an older review from publishing until a
-maintainer retriggers it. The workflow updates one advisory comment; it does
-not prioritize, approve, reject, label, assign, close, or implement the issue.
+comment text. Deleted human comments trigger a replacement review when the
+actor is authorized: any human on an opted-in issue, and maintainers on an
+unlabeled maintainer-owned issue. Other human comments do not start a
+replacement run without authorization, but they prevent an older review from
+publishing until a maintainer retriggers it. The workflow updates one advisory
+comment; it does not prioritize, approve, reject, label, assign, close, or
+implement the issue.
 
 Both PR and issue final judges run without command, network, browser, or file
-tools. They receive a deterministic immutable evidence bundle capped at
-2,000,000 bytes, with individual text files capped at 400,000 bytes. The bundle
-contains changed PR evidence or issue context, prior AIDA continuity, trusted
-base contracts, and tracked base files cited by specialist passes. Binary
-content is represented by its byte length and SHA-256 digest. Oversized
-unchanged files use bounded excerpts around cited lines; citations without a
-valid line supply metadata only and cannot support a finding. Evidence creation
-fails explicitly when required changed text or aggregate evidence exceeds a
+tools. They receive a deterministic JSON evidence envelope capped at 2,000,000
+bytes. Each record carries provenance, encoding, byte length, and SHA-256;
+arbitrary content is JSON-escaped and cannot create sibling evidence records.
+The bundle contains changed PR evidence or issue context, prior AIDA
+continuity, trusted base contracts, and tracked base files cited by specialist
+passes. Context text is split into records capped at 400,000 bytes. Binary
+content uses authenticated metadata. Oversized changed or unchanged files use
+bounded excerpts around changed or cited lines; files without a valid line
+supply metadata only and cannot support a finding. PR and issue preflights run
+before model execution and fail explicitly if aggregate evidence exceeds its
 limit.
+
+The PR reviewer runs its privileged entrypoint from the default branch through
+`pull_request_target`, rejects fork heads, and never checks out executable code
+from the PR. Prompts, validators, and runtime setup always come from the trusted
+default-branch revision. When a PR introduces the evidence builder before that
+file exists on the default branch, one bootstrap preflight runs the proposed
+builder as a disposable user with an empty environment, a read-only workspace,
+an isolated network namespace, a two-minute timeout, and no provider or
+publication credentials. The validated JSON result is reused after credentials
+are assumed; the proposed builder does not execute again.
 
 ## Contributing via Pull Requests
 

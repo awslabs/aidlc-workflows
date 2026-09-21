@@ -6,8 +6,7 @@ import { resolve } from "node:path";
 const MAX_REVIEW_BYTES = 100_000;
 const MAX_COMMENT_BYTES = 65_536;
 const MAX_CATALOG_ENTRIES = 200;
-const MAX_CONVERSATION_ENTRIES = 50;
-const MAX_CONVERSATION_BODY_CHARACTERS = 8_000;
+const MAX_CONVERSATION_BYTES = 1_000_000;
 const MAX_AIDA_REVIEW_CHARACTERS = 40_000;
 const MAX_BUG_TEST_FILES = 5;
 const AI_ISSUE_REVIEW_MARKER = "<!-- ai-issue-review issue=";
@@ -269,13 +268,6 @@ export function canonicalCatalog(value: unknown, currentIssue: number): IssueCat
   return catalog.sort((left, right) => left.number - right.number);
 }
 
-function boundedConversationBody(value: unknown): string {
-  const body = text(value);
-  if (body.length <= MAX_CONVERSATION_BODY_CHARACTERS) return body;
-  const half = Math.floor(MAX_CONVERSATION_BODY_CHARACTERS / 2);
-  return `${body.slice(0, half)}\n...[comment truncated]...\n${body.slice(-half)}`;
-}
-
 function canonicalConversationWithFilter(
   value: unknown,
   issue: number,
@@ -291,7 +283,7 @@ function canonicalConversationWithFilter(
         : {};
       const login = text(user.login) || "[deleted]";
       if (text(user.type) === "Bot") return null;
-      const body = boundedConversationBody(candidate.body);
+      const body = text(candidate.body);
       const association = text(candidate.author_association).toUpperCase();
       return {
         id: positiveInteger(candidate.id, `issue conversation[${index}].id`),
@@ -312,11 +304,17 @@ function canonicalConversationWithFilter(
       left.createdAt.localeCompare(right.createdAt) ||
       left.id - right.id
     )
-    .slice(-MAX_CONVERSATION_ENTRIES)
     .sort((left, right) =>
       left.createdAt.localeCompare(right.createdAt) || left.id - right.id
     );
-  return { version: 1, issue, comments };
+  const conversation: IssueConversation = { version: 1, issue, comments };
+  const bytes = Buffer.byteLength(JSON.stringify(conversation));
+  if (bytes > MAX_CONVERSATION_BYTES) {
+    throw new Error(
+      `human conversation is ${bytes} bytes; review limit is ${MAX_CONVERSATION_BYTES}`,
+    );
+  }
+  return conversation;
 }
 
 export function canonicalConversation(
