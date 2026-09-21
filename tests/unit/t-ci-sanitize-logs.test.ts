@@ -36,7 +36,7 @@ function traceFixture(root: string): string[] {
     "e2e-artifacts/traces/raw.txt",
     "nested/e2e-artifacts/run/harness/traces/raw.bin",
   ];
-  for (const path of paths) put(root, path, "Bearer trace-token\n");
+  for (const path of paths) put(root, path, "Bearer fixture-trace\n");
   put(root, "nested/traces/summary.txt", "safe transcript summary\n");
   put(root, "nested/e2e-artifacts/run/summary.json", '{"status":"passed"}\n');
   return paths;
@@ -58,17 +58,17 @@ describe("CI log credential redaction", () => {
 
   test("redacts assignments, quoted credentials, and broker authentication while retaining structure", () => {
     const text = [
-      "export AWS_SECRET_ACCESS_KEY=secret/with+padding==",
-      "aws_session_token = 'session with spaces/+=' # comment",
-      'AwS_AcCeSs_KeY_Id: "nonstandard-key"',
-      'ANTHROPIC_API_KEY="anthropic-token"',
-      "CURSOR_API_KEY=vendor-token",
-      "KIRO_API_KEY=arbitrary-key-format",
-      "AIDLC_BROKER_TOKEN=broker-token",
-      "X-AIDLC-Broker-Token: header-token",
-      "Authorization: bEaReR authorization.token/+==",
-      '{"X-AIDLC-Broker-Token":"json-broker","Authorization":"Bearer json-token"}',
-      '{"accessKeyId":"json-id","secretAccessKey":"escaped\\"secret","sessionToken":"json-session","region":"us-east-1"}',
+      "export AWS_SECRET_ACCESS_KEY=fixture/value+pad==",
+      "aws_session_token = 'fixture session/+=' # comment",
+      'AwS_AcCeSs_KeY_Id: "fixture-key"',
+      'ANTHROPIC_API_KEY="fixture-anthropic"',
+      "CURSOR_API_KEY=fixture-cursor",
+      "KIRO_API_KEY=fixture-kiro",
+      "AIDLC_BROKER_TOKEN=fixture-broker",
+      "X-AIDLC-Broker-Token: fixture-header",
+      "Authorization: bEaReR fixture-bearer_123/+=",
+      '{"X-AIDLC-Broker-Token":"fixture-broker","Authorization":"Bearer fixture-json"}',
+      '{"accessKeyId":"fixture-id","secretAccessKey":"fixture\\"secret","sessionToken":"fixture-session","region":"us-east-1"}',
       "status=passed",
     ].join("\r\n");
     const expected = [
@@ -96,13 +96,13 @@ describe("CI log credential redaction", () => {
     const mode = fs.statSync(secret).mode;
     const clean = put(root, "clean.txt", "same bytes\r\n\tno credentials\n");
     const cleanBytes = fs.readFileSync(clean);
-    const nulBytes = Buffer.from(`binary\0AWS_SECRET_ACCESS_KEY=binary-secret ${accessKey}`);
-    const invalidUtf8 = Buffer.concat([Buffer.from([0xff, 0x80]), Buffer.from(`Bearer binary-token ${sessionKey}`)]);
+    const nulBytes = Buffer.from(`binary\0AWS_SECRET_ACCESS_KEY=fixture-binary ${accessKey}`);
+    const invalidUtf8 = Buffer.concat([Buffer.from([0xff, 0x80]), Buffer.from(`Bearer fixture-binary ${sessionKey}`)]);
     const binary = put(root, "nested/image.bin", nulBytes);
     const invalid = put(root, "encoded.dat", invalidUtf8);
-    const utf8 = put(root, "bom.log", Buffer.from(`\ufeffBearer utf8-token\r\n`));
-    const utf16le = put(root, "windows.log", Buffer.from("\ufeffANTHROPIC_API_KEY=windows-token\r\n", "utf16le"));
-    const utf16be = put(root, "big-endian.log", Buffer.from("\ufeffAIDLC_BROKER_TOKEN=big-endian-token\n", "utf16le").swap16());
+    const utf8 = put(root, "bom.log", Buffer.from(`\ufeffBearer fixture-utf8\r\n`));
+    const utf16le = put(root, "windows.log", Buffer.from("\ufeffANTHROPIC_API_KEY=fixture-windows\r\n", "utf16le"));
+    const utf16be = put(root, "big-endian.log", Buffer.from("\ufeffAIDLC_BROKER_TOKEN=fixture-big-endian\n", "utf16le").swap16());
 
     await sanitizeLogs(root);
 
@@ -126,7 +126,7 @@ describe("CI log credential redaction", () => {
   test("deletes nested driver traces by default, not unrelated trace summaries", async () => {
     const root = fixture();
     const traces = traceFixture(root);
-    put(root, "nested/output.log", "Bearer retained-log-token\n");
+    put(root, "nested/output.log", "Bearer fixture-retained\n");
 
     await sanitizeLogs(root);
 
@@ -171,7 +171,7 @@ describe("CI log credential redaction", () => {
   test.each([false, true])("removes directory links without touching outside data (keepTraces=%s)", async (keepTraces) => {
     const root = fixture();
     const outside = fixture();
-    const body = "Bearer outside-token\n";
+    const body = "Bearer fixture-outside\n";
     put(outside, "outside.log", body);
     put(outside, "outside.ndjson", body);
     const link = join(root, "outside-link");
@@ -191,7 +191,7 @@ describe("CI log credential redaction", () => {
   test.skipIf(process.platform === "win32")("removes file and dangling symlinks without writing targets", async () => {
     const root = fixture();
     const outside = fixture();
-    const target = put(outside, "credentials.txt", "AWS_SECRET_ACCESS_KEY=outside-secret\n");
+    const target = put(outside, "credentials.txt", "AWS_SECRET_ACCESS_KEY=fixture-outside\n");
     const fileLink = join(root, "credentials.log");
     const dangling = join(root, "missing.log");
     fs.symlinkSync(target, fileLink);
@@ -201,13 +201,13 @@ describe("CI log credential redaction", () => {
 
     expect(() => fs.lstatSync(fileLink)).toThrow();
     expect(() => fs.lstatSync(dangling)).toThrow();
-    expect(fs.readFileSync(target, "utf8")).toBe("AWS_SECRET_ACCESS_KEY=outside-secret\n");
+    expect(fs.readFileSync(target, "utf8")).toBe("AWS_SECRET_ACCESS_KEY=fixture-outside\n");
   });
 
   test("removes a linked root but refuses a linked ancestor without traversing it", async () => {
     const outer = fixture();
     const outside = fixture();
-    const body = "Bearer outside-root-token\n";
+    const body = "Bearer fixture-outside-root\n";
     put(outside, "nested/output.log", body);
     const rootLink = join(outer, "logs-link");
     fs.symlinkSync(outside, rootLink, process.platform === "win32" ? "junction" : "dir");
@@ -221,8 +221,8 @@ describe("CI log credential redaction", () => {
 
   test("CLI sanitizes artifacts and honors only the exact trace retention opt-in", () => {
     const root = fixture();
-    const trace = put(root, "nested/sdk-drive.ndjson", "Bearer cli-trace-token\n");
-    const log = put(root, "output.log", "ANTHROPIC_API_KEY=cli-log-token\n");
+    const trace = put(root, "nested/sdk-drive.ndjson", "Bearer fixture-cli-trace\n");
+    const log = put(root, "output.log", "ANTHROPIC_API_KEY=fixture-cli-log\n");
     const retained = Bun.spawnSync([process.execPath, cli, root], {
       env: { ...process.env, AIDLC_NIGHTLY_UPLOAD_TRACES: "1" },
       stdout: "pipe", stderr: "pipe", timeout: 10_000,
@@ -243,13 +243,13 @@ describe("CI log credential redaction", () => {
 
   test("CLI fails without leaking an unsafe path into diagnostic output", () => {
     const root = fixture();
-    const unsafe = put(root, "ANTHROPIC_API_KEY=do-not-log-me", "not a directory");
+    const unsafe = put(root, "ANTHROPIC_API_KEY=fixture-not-for-logs", "not a directory");
     const result = Bun.spawnSync([process.execPath, cli, unsafe], {
       stdout: "pipe", stderr: "pipe", timeout: 10_000,
     });
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("");
-    expect(result.stderr.toString()).not.toContain("do-not-log-me");
+    expect(result.stderr.toString()).not.toContain("fixture-not-for-logs");
     expect(result.stderr.toString()).not.toContain(unsafe);
     expect(fs.readFileSync(unsafe, "utf8")).toBe("not a directory");
   });

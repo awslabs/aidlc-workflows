@@ -1,0 +1,2 @@
+# gitleaks fingerprints: commit:file:rule:line — historical redaction fixtures, see .gitleaks.toml allowlist
+f0dde775a107f7cec89ce7e43c5ec0b762f813ed:tests/unit/t-ci-sanitize-logs.test.ts:generic-api-key:61
