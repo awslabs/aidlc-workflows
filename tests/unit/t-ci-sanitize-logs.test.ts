@@ -89,7 +89,7 @@ describe("CI log credential redaction", () => {
     expect(redactSecrets(expected)).toBe(expected);
   });
 
-  test("sanitizes recursively without changing modes, BOMs, or binary data", async () => {
+  test("retains sanitized UTF-8 but removes and reports binary or unknown-encoding files", async () => {
     const root = fixture();
     const secret = put(root, "nested/output.log", `café 日本語\r\n${sessionKey}\r\n`);
     if (process.platform !== "win32") fs.chmodSync(secret, 0o640);
@@ -109,11 +109,18 @@ describe("CI log credential redaction", () => {
     expect(fs.readFileSync(secret, "utf8")).toBe("café 日本語\r\n[REDACTED]\r\n");
     expect(fs.statSync(secret).mode).toBe(mode);
     expect(fs.readFileSync(clean)).toEqual(cleanBytes);
-    expect(fs.readFileSync(binary)).toEqual(nulBytes);
-    expect(fs.readFileSync(invalid)).toEqual(invalidUtf8);
+    expect(fs.existsSync(binary)).toBe(false);
+    expect(fs.existsSync(invalid)).toBe(false);
     expect(fs.readFileSync(utf8)).toEqual(Buffer.from("\ufeffBearer [REDACTED]\r\n"));
-    expect(fs.readFileSync(utf16le)).toEqual(Buffer.from("\ufeffANTHROPIC_API_KEY=[REDACTED]\r\n", "utf16le"));
-    expect(fs.readFileSync(utf16be)).toEqual(Buffer.from("\ufeffAIDLC_BROKER_TOKEN=[REDACTED]\n", "utf16le").swap16());
+    expect(fs.existsSync(utf16le)).toBe(false);
+    expect(fs.existsSync(utf16be)).toBe(false);
+    const report = JSON.parse(fs.readFileSync(join(root, "sanitizer-report.json"), "utf8"));
+    expect(report.removed.sort((a: { path: string }, b: { path: string }) => a.path.localeCompare(b.path))).toEqual([
+      { path: "big-endian.log", reason: "invalid-utf8" },
+      { path: "encoded.dat", reason: "invalid-utf8" },
+      { path: "nested/image.bin", reason: "nul-byte" },
+      { path: "windows.log", reason: "invalid-utf8" },
+    ]);
   });
 
   test("deletes nested driver traces by default, not unrelated trace summaries", async () => {

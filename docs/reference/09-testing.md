@@ -1027,11 +1027,11 @@ The declared coverage is:
   supplies Node; Bun installs the pinned dependencies and native addon.
 - Claude SDK, Claude TUI, Codex, opencode and release-endpoint contracts on
   hosted Linux/macOS/Windows, including Claude plugin invocation in the strict SDK leg.
-- Kiro ACP and TUI on hosted Linux/macOS/Windows through `KIRO_API_KEY`, without
-  AWS OIDC. Kiro IDE remains on a dedicated, logged-in self-hosted Windows desktop;
-  API-key authentication is CLI-only. No macOS Kiro IDE host exists.
-- Cursor on hosted Linux/macOS/Windows when enabled. Copilot is excluded by
-  account policy, not reported as successful coverage.
+- Kiro ACP, TUI and IDE on the dedicated, logged-in self-hosted Windows desktop.
+  Linux/macOS Kiro jobs are not declared; no hosted job receives a vendor API key.
+- Cursor is excluded: no credential separation is available because its vendor
+  CLI reads the API key from the agent environment. Copilot remains excluded by
+  account policy; neither exclusion is reported as successful coverage.
 
 `scripts/ci-live-filter.ts --list` prints the discovered family partition.
 `bun scripts/ci-live-filter.ts claude-tui --platform linux` prints an anchored
@@ -1068,23 +1068,14 @@ stamp directories and JUnit), `full-suite-native-result`,
 `runAttempt`, `passed`, `complete`, every job's result in `legs`, and repository-
 variable-disabled jobs in `excluded`. `passed` means every non-excluded leg
 succeeded; `complete` additionally requires no exclusions. Disabled-and-skipped
-Kiro API, Kiro IDE or Cursor jobs are reported as exclusions and never block
+Kiro host jobs are reported as exclusions and never block
 preview/stable publication. A missing, failed or cancelled leg still fails, as
 does a skipped leg whose enabling variable is on. Exclusions are not coverage.
 
 Provision these repository/environment settings before expecting a green run:
 
-- Repository variable `AIDLC_NIGHTLY_KIRO_API=1` enables hosted Kiro ACP/TUI on
-  all three operating systems. Set secret `KIRO_API_KEY` in `nightly-live` to a
-  `ksk_…` key generated in app.kiro.dev. API keys require a Pro, Pro+, Pro Max or
-  Power subscription; admin-managed subscriptions must enable API-key
-  authentication first. Fresh hosted runners have no browser login to override
-  the key; `kiro-cli whoami` must succeed and reports the active authentication.
-  The official Unix/Windows installers distribute only the latest CLI, with no
-  published older-version pin. Each run logs the installed version and disables
-  background auto-updates for its duration.
-- Repository variable `AIDLC_NIGHTLY_KIRO_RUNNERS=1` enables only the Kiro IDE
-  job on `[self-hosted, Windows, kiro]`. The host supplies signed-in `kiro-cli`
+- Repository variable `AIDLC_NIGHTLY_KIRO_RUNNERS=1` enables Kiro ACP/TUI/IDE
+  on `[self-hosted, Windows, kiro]`. The host supplies signed-in `kiro-cli`
   and Kiro IDE. It must be a dedicated CI host using a CI-only Kiro/IdC identity,
   **never a personal or development machine**. Register it in an organization runner
   group restricted to selected workflows, pinned to
@@ -1099,13 +1090,8 @@ Provision these repository/environment settings before expecting a green run:
   Its shell requirements are Windows PowerShell 5.1 and Git for Windows; PowerShell
   7 (`pwsh`) is not required. These Windows steps never rely on `bash`, because
   `C:\Windows\System32\bash.exe` is the WSL launcher, not Git Bash.
-- Repository variable `AIDLC_NIGHTLY_CURSOR=1` enables the three Cursor legs;
-  set secret `CURSOR_API_KEY` for its authenticated `agent` CLI. Disabled Kiro
-  API, Kiro IDE or Cursor legs remain excluded/incomplete but do not block releases.
-- Environment `nightly-live` holds secret `AWS_NIGHTLY_TEST_ROLE_ARN` (required)
-  and optional `KIRO_API_KEY` and `CURSOR_API_KEY` for their enabled families.
-  Kiro/Cursor API keys enter only authenticated preflight and test-run steps,
-  never job-level environments or dependency/CLI installer steps.
+- Environment `nightly-live` holds secret `AWS_NIGHTLY_TEST_ROLE_ARN` (required).
+  No Kiro/Cursor API-key workflow secret or hosted vendor-key leg is supported.
   The AWS role's OIDC trust must be scoped to
   this repository's `environment:nightly-live` subject. Set `MaxSessionDuration`
   to at least six hours; each assumption requests 21,600 seconds.
@@ -1157,18 +1143,20 @@ still spend through the allowlisted proxy until the job timeout, so constrain
 IAM model permissions, quotas and runner access. A compromised same-user process
 could inspect another process's memory on hosts that permit it (notably Windows);
 stronger adversarial isolation requires separate OS identities or an external
-broker. Kiro and Cursor expose their API keys through environment variables by
-vendor design: enabling those variable-gated legs explicitly accepts exposure
-to the agent's own tool shells. They receive no AWS credentials.
+broker. Cursor is not run because its CLI exposes the API key to agent tool
+shells. Kiro runs only on the dedicated CI-identity Windows host using its
+existing sign-in, without API keys injected by this workflow.
 
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and
 is blocked if sanitization fails. Driver NDJSON, `sdk-drive*`, `tui-drive*` and
 `e2e-artifacts/**/traces` are deleted by default; setting repository variable
-`AIDLC_NIGHTLY_UPLOAD_TRACES=1` explicitly retains them. Remaining text is
-redacted for AWS key/credential assignments, Kiro keys, bearer tokens, broker-token
-labels and Anthropic keys; links are removed without following their targets.
-Redaction is defense in depth, not proof against encoded secrets or screenshots;
-retaining raw traces increases that residual risk.
+`AIDLC_NIGHTLY_UPLOAD_TRACES=1` explicitly retains eligible text traces. Invalid
+UTF-8, UTF-16, NUL-containing and other non-text files are always deleted, with
+their relative paths and reasons recorded in `sanitizer-report.json`; there is
+no binary/screenshot allowlist. Remaining UTF-8 text is redacted for AWS
+credentials, vendor keys, bearer tokens and Anthropic keys; links are removed
+without following targets. Redaction remains defense in depth, not proof against
+encoded secrets; retaining raw text traces increases that residual risk.
 
 ## Kiro prompt-hook transport controls
 

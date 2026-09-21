@@ -170,10 +170,10 @@ not use strict coverage; live provider families require executed coverage.
 Nightly `preview-release.yml` calls the reusable `full-suite.yml`: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
 hosted Claude/Codex/opencode/release-contract suites,
-hosted Kiro ACP/TUI on Linux/macOS/Windows using `KIRO_API_KEY`, a dedicated
-self-hosted Windows Kiro IDE, plus opt-in Cursor legs. Copilot is excluded by
-account policy; there is no macOS Kiro IDE runner.
-Only source already on `main` passes the plan's ancestry gate. Self-hosted Kiro IDE
+Kiro ACP/TUI/IDE on the dedicated self-hosted Windows desktop. Linux/macOS Kiro
+jobs are not declared. Cursor is excluded because its CLI exposes vendor API
+keys to agent environments; Copilot is excluded by account policy.
+Only source already on `main` passes the plan's ancestry gate. Self-hosted Kiro
 runners must be dedicated CI hosts with a CI-only Kiro/IdC identity, never personal
 or development machines. Register them in an organization runner group restricted
 to selected workflows, pinned to
@@ -185,11 +185,9 @@ The self-hosted Windows runner needs only Windows PowerShell 5.1 and Git for
 Windows for its shell environment, alongside the documented Bun/Node/Kiro tools.
 Its steps never rely on `bash`: `C:\Windows\System32\bash.exe` is the WSL launcher.
 
-Set `AIDLC_NIGHTLY_KIRO_API=1` with secret `KIRO_API_KEY` for hosted ACP/TUI;
-API keys require Pro, Pro+, Pro Max or Power subscriptions, and admin-managed
-subscriptions must enable API-key authentication. Set
-`AIDLC_NIGHTLY_KIRO_RUNNERS=1` for the dedicated Windows IDE host and
-`AIDLC_NIGHTLY_CURSOR=1` with `CURSOR_API_KEY` for Cursor. Variable-disabled legs
+Set `AIDLC_NIGHTLY_KIRO_RUNNERS=1` for the dedicated Windows Kiro host.
+No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Disabled
+Kiro jobs
 are reported in `excluded` and never block publication. `passed` requires all
 non-excluded legs to succeed; `complete` also requires no exclusions. Missing,
 failed, cancelled or enabled-but-skipped legs fail. `full-suite-result` retains
@@ -198,11 +196,11 @@ require `passed: true` and warn about exclusions. Tag a passing nightly SHA, or
 dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired
 evidence even when an unchanged preview already exists.
 
-Enabling Kiro/Cursor accepts their vendor API keys being visible to agent tool
-shells. Bedrock families instead use an allowlisted signing proxy; no real AWS
-credentials reach their agent environments. Full-suite log uploads sanitize text
-and drop raw driver traces by default (`AIDLC_NIGHTLY_UPLOAD_TRACES=1` opts in to
-retention, with residual disclosure risk).
+Bedrock families use an allowlisted signing proxy; no real AWS credentials reach
+their agent environments. Full-suite log uploads sanitize UTF-8 text, delete
+all invalid UTF-8/NUL/binary files with reasons in `sanitizer-report.json`, and
+drop raw driver traces by default (`AIDLC_NIGHTLY_UPLOAD_TRACES=1` retains only
+eligible text, with residual disclosure risk).
 
 `bun scripts/ci-live-filter.ts --list` shows the
 discovered partition; append `--platform linux|darwin|win32` to a family query

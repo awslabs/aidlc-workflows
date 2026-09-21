@@ -10,17 +10,18 @@ interface Family {
   hosting: "hosted" | "self-hosted" | "excluded";
   requireCoverage: boolean;
   resources: "bedrock" | "kiro";
+  reason?: string;
 }
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const hostedPlatforms = ["linux", "darwin", "win32"] as const;
 export const FAMILIES = {
   "kiro-ide": { env: { AIDLC_KIRO_IDE_LIVE: "1" }, platforms: ["win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
-  "kiro-tui": { env: { AIDLC_KIRO_TUI_LIVE: "1", AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "kiro" },
-  "kiro-acp": { env: { AIDLC_KIRO_ACP_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "kiro" },
+  "kiro-tui": { env: { AIDLC_KIRO_TUI_LIVE: "1", AIDLC_TUI_LIVE: "1" }, platforms: ["win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
+  "kiro-acp": { env: { AIDLC_KIRO_ACP_LIVE: "1" }, platforms: ["win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
   codex: { env: { AIDLC_CODEX_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
   opencode: { env: { AIDLC_OPENCODE_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
-  cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
+  cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, resources: "bedrock", reason: "no credential separation: vendor CLI reads the API key from the agent environment" },
   copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, resources: "bedrock" },
   "claude-tui": { env: { AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
   "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
@@ -120,7 +121,7 @@ export function liveRunnerEnvironment(source: NodeJS.ProcessEnv): NodeJS.Process
   const env = { ...source };
   if (env.GITHUB_ACTIONS !== "true") return env;
   for (const key of Object.keys(env)) {
-    if (/^(?:BROKER_|ACTIONS_|GH_TOKEN$|GITHUB_TOKEN$|AWS_ACCESS_KEY_ID$|AWS_SECRET_ACCESS_KEY$|AWS_SESSION_TOKEN$|AWS_WEB_IDENTITY_TOKEN_FILE$|AWS_CONTAINER_CREDENTIALS_|AWS_BEARER_TOKEN_|ANTHROPIC_API_KEY$|ANTHROPIC_AUTH_TOKEN$)/i.test(key)) delete env[key];
+    if (/^(?:BROKER_|ACTIONS_|GH_TOKEN$|GITHUB_TOKEN$|KIRO_API_KEY$|CURSOR_API_KEY$|AWS_ACCESS_KEY_ID$|AWS_SECRET_ACCESS_KEY$|AWS_SESSION_TOKEN$|AWS_WEB_IDENTITY_TOKEN_FILE$|AWS_CONTAINER_CREDENTIALS_|AWS_BEARER_TOKEN_|ANTHROPIC_API_KEY$|ANTHROPIC_AUTH_TOKEN$)/i.test(key)) delete env[key];
   }
   return env;
 }

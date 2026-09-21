@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { basename, join, parse, resolve, sep } from "node:path";
+import { basename, join, parse, relative, resolve, sep } from "node:path";
 
 const REDACTED = "[REDACTED]";
 const SECRET_VALUE = String.raw`(?:\[REDACTED\]|"(?:\\[^\r\n]|[^"\\\r\n])*"?|'(?:\\[^\r\n]|[^'\\\r\n])*'?|[^\s"',;}\]]+)`;
@@ -23,11 +23,7 @@ export function redactSecrets(text: string): string {
     .replace(/ksk_[A-Za-z0-9_-]+/g, REDACTED);
 }
 
-const decoders = {
-  utf8: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }),
-  utf16le: new TextDecoder("utf-16le", { fatal: true, ignoreBOM: true }),
-  utf16be: new TextDecoder("utf-16be", { fatal: true, ignoreBOM: true }),
-};
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 function statIfPresent(path: string): fs.Stats | undefined {
   try { return fs.lstatSync(path); }
@@ -62,7 +58,7 @@ function checkFile(fd: number, expected: fs.Stats): void {
   }
 }
 
-function sanitizeFile(path: string, stat: fs.Stats): void {
+function sanitizeFile(path: string, stat: fs.Stats): string | undefined {
   const noFollow = process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW;
   let bytes: Buffer;
   const reader = fs.openSync(path, fs.constants.O_RDONLY | noFollow);
@@ -71,25 +67,25 @@ function sanitizeFile(path: string, stat: fs.Stats): void {
     bytes = fs.readFileSync(reader);
   } finally { fs.closeSync(reader); }
 
-  // BOM-marked UTF-16 covers Windows transcript output. Invalid UTF-8 and
-  // binary control data must survive byte-for-byte, not a lossy decode.
-  const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf16le"
-    : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf16be" : "utf8";
+  // Unknown encodings and binary payloads cannot be proven redacted: drop them.
   let text: string;
-  try { text = decoders[encoding].decode(bytes); }
-  catch { return; }
+  try { text = decoder.decode(bytes); }
+  catch { fs.unlinkSync(path); return "invalid-utf8"; }
+  if (text.includes("\0")) { fs.unlinkSync(path); return "nul-byte"; }
   for (let index = 0; index < text.length; index++) {
     const code = text.charCodeAt(index);
     // Keep ordinary whitespace, terminal bell/backspace, and ANSI escape codes.
-    if (code < 7 || (code > 13 && code < 27) || (code > 27 && code < 32)) return;
+    if (code < 7 || (code > 13 && code < 27) || (code > 27 && code < 32)) {
+      fs.unlinkSync(path);
+      return "non-text-control-byte";
+    }
   }
   const sanitized = redactSecrets(text);
   if (sanitized === text) return;
-  const output = Buffer.from(sanitized, encoding === "utf16be" ? "utf16le" : encoding);
-  if (encoding === "utf16be") output.swap16();
+  const output = Buffer.from(sanitized, "utf8");
 
   // Update the existing inode without truncating until its identity is checked;
-  // file permissions remain unchanged and binary/clean files are never written.
+  // file permissions remain unchanged and clean text files are never written.
   const writer = fs.openSync(path, fs.constants.O_WRONLY | noFollow);
   try {
     checkFile(writer, stat);
@@ -105,6 +101,13 @@ export async function sanitizeLogs(
   const root = resolve(directory);
   if (!safeRoot(root)) return;
   const withinArtifacts = root.split(sep).some((part) => part.toLowerCase() === "e2e-artifacts");
+  const removed: Array<{ path: string; reason: string }> = [];
+  const report = join(root, "sanitizer-report.json");
+  const oldReport = statIfPresent(report);
+  if (oldReport) {
+    if (!oldReport.isFile() && !oldReport.isSymbolicLink()) throw new Error("Invalid sanitizer report entry");
+    fs.unlinkSync(report);
+  }
 
   function walk(path: string, inArtifacts: boolean, prune: boolean): void {
     const stat = statIfPresent(path);
@@ -113,6 +116,7 @@ export async function sanitizeLogs(
     // upload entry itself, never the external target (even with keepTraces).
     if (stat.isSymbolicLink()) {
       fs.unlinkSync(path);
+      removed.push({ path: redactSecrets(relative(root, path).split(sep).join("/")), reason: "link" });
       return;
     }
     const name = basename(path).toLowerCase();
@@ -121,13 +125,17 @@ export async function sanitizeLogs(
       (stat.isDirectory() && inArtifacts && name === "traces")
     )) {
       fs.rmSync(path, { recursive: true, force: true });
+      removed.push({ path: redactSecrets(relative(root, path).split(sep).join("/")), reason: "driver-trace" });
       return;
     }
     if (stat.isDirectory()) {
       const artifacts = inArtifacts || name === "e2e-artifacts";
       for (const entry of fs.readdirSync(path)) walk(join(path, entry), artifacts, prune);
     } else if (stat.isFile()) {
-      if (!prune) sanitizeFile(path, stat);
+      if (!prune) {
+        const reason = sanitizeFile(path, stat);
+        if (reason) removed.push({ path: redactSecrets(relative(root, path).split(sep).join("/")), reason });
+      }
     } else {
       throw new Error("Log tree contains a non-regular file");
     }
@@ -136,6 +144,7 @@ export async function sanitizeLogs(
   // Finish deleting all driver traces before reading any remaining log content.
   walk(root, withinArtifacts, true);
   walk(root, withinArtifacts, false);
+  fs.writeFileSync(report, `${JSON.stringify({ removed }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
 }
 
 if (import.meta.main) {

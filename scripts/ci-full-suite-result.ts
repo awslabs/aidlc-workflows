@@ -1,6 +1,6 @@
 export const FULL_SUITE_JOBS = [
   "plan", "native_terminal", "native_reconcile", "deterministic", "live_hosted",
-  "live_kiro_api", "live_kiro_windows", "live_cursor",
+  "live_kiro_windows",
 ] as const;
 
 type JobResult = "success" | "failure" | "cancelled" | "skipped";
@@ -12,8 +12,6 @@ export interface SuiteIdentity {
 }
 export interface SuiteVariables {
   kiro?: string;
-  kiroApi?: string;
-  cursor?: string;
 }
 export interface FullSuiteResult extends SuiteIdentity {
   passed: boolean;
@@ -31,9 +29,7 @@ export function fullSuiteResult(
   const legs = Object.fromEntries([...new Set([...FULL_SUITE_JOBS, ...Object.keys(needs)])]
     .map((job) => [job, needs[job]?.result ?? "missing"]));
   const disabled: Record<string, boolean> = {
-    live_kiro_api: variables.kiroApi !== "1",
     live_kiro_windows: variables.kiro !== "1",
-    live_cursor: variables.cursor !== "1",
   };
   const excluded = Object.keys(legs).filter((job) => legs[job] === "skipped" && disabled[job]);
   const passed = /^[a-f0-9]{40}$/.test(identity.sha) && Object.entries(legs)
@@ -54,8 +50,6 @@ if (import.meta.main) {
     runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "",
   }, {
     kiro: process.env.AIDLC_NIGHTLY_KIRO_RUNNERS,
-    kiroApi: process.env.AIDLC_NIGHTLY_KIRO_API,
-    cursor: process.env.AIDLC_NIGHTLY_CURSOR,
   });
   await Bun.write(process.argv[2] ?? "full-suite-result.json", `${JSON.stringify(result, null, 2)}\n`);
   if (result.excluded.length) {

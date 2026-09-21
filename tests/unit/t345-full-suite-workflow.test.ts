@@ -116,8 +116,8 @@ describe("t345 complete nightly coverage", () => {
     for (const key of ["BROKER_ACCESS_KEY_ID", "BROKER_SECRET_ACCESS_KEY", "BROKER_SESSION_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY"]) {
       expect(agent[key]).toBeUndefined();
     }
-    expect(agent.KIRO_API_KEY).toBe("kiro");
-    expect(agent.CURSOR_API_KEY).toBe("cursor");
+    expect(agent.KIRO_API_KEY).toBeUndefined();
+    expect(agent.CURSOR_API_KEY).toBeUndefined();
     expect(agent.AIDLC_BROKER_URL).toBe(source.AIDLC_BROKER_URL);
   });
 
@@ -200,49 +200,24 @@ describe("t345 complete nightly coverage", () => {
     expect(actual.sort()).toEqual(expected.sort());
   });
 
-  test("Kiro CLI uses hosted API-key authentication while only IDE remains self-hosted", () => {
-    const job = workflow.jobs.live_kiro_api;
+  test("Kiro uses only the dedicated Windows host and Cursor cannot expose API keys", () => {
+    expect(workflow.jobs.live_kiro_api).toBeUndefined();
     expect(workflow.jobs.live_kiro_linux).toBeUndefined();
-    expect(job.environment).toBe("nightly-live");
-    expect(job.if).toBe("vars.AIDLC_NIGHTLY_KIRO_API == '1'");
-    for (const step of job.steps.filter((step) => step.name === "Require Kiro API authentication" || step.name?.startsWith("Run kiro-"))) {
-      expect(step.env?.KIRO_API_KEY).toBe(`\${{ secrets.KIRO_API_KEY }}`);
-    }
-    expect(workflow.on.workflow_call.secrets.KIRO_API_KEY.required).toBe(false);
-    expect(job.permissions?.["id-token"]).not.toBe("write");
-    expect(job.steps.some((step) => step.uses?.startsWith("aws-actions/"))).toBe(false);
-    const preflight = job.steps.find((step) => step.name === "Require Kiro API authentication")!;
-    expect(preflight.run).toContain('test -n "$KIRO_API_KEY"');
-    expect(preflight.run).toContain("kiro-cli whoami");
-    expect(workflow.jobs.live_kiro_windows.strategy?.matrix.family).toEqual(["kiro-ide"]);
+    expect(workflow.jobs.live_cursor).toBeUndefined();
+    expect(workflow.on.workflow_call.secrets.KIRO_API_KEY).toBeUndefined();
+    expect(workflow.on.workflow_call.secrets.CURSOR_API_KEY).toBeUndefined();
+    expect(workflow.jobs.live_kiro_windows.strategy?.matrix.family).toEqual(["kiro-acp", "kiro-tui", "kiro-ide"]);
+    expect(FAMILIES.cursor).toMatchObject({ hosting: "excluded", platforms: [], reason: "no credential separation: vendor CLI reads the API key from the agent environment" });
   });
 
-  test("third-party API secrets are restricted to authenticated preflights and test execution", () => {
-    const exposed: string[] = [];
-    for (const [name, job] of Object.entries(workflow.jobs)) {
-      for (const value of Object.values(job.env ?? {})) expect(value, `${name} job env`).not.toContain("secrets.");
+  test("no workflow step or job exposes vendor API keys", () => {
+    for (const job of Object.values(workflow.jobs)) {
+      for (const value of Object.values(job.env ?? {})) expect(value).not.toContain("secrets.");
       for (const step of job.steps) {
-        const referenced = /\b(?:KIRO_API_KEY|CURSOR_API_KEY)\b/.test(JSON.stringify(step));
-        if (referenced) {
-          expect(step.name, `${name} secret-bearing step`).toMatch(/^(?:Require |Run )/);
-          exposed.push(`${name}/${step.name}`);
-        }
-        if (/install/i.test(step.name ?? "") || /\b(?:bun|npm) install\b|\bcurl\b|\birm\b/.test(step.run ?? "")) {
-          expect(step.env?.KIRO_API_KEY).toBeUndefined();
-          expect(step.env?.CURSOR_API_KEY).toBeUndefined();
-          expect(JSON.stringify(step.env ?? {})).not.toMatch(/secrets\.(?:KIRO_API_KEY|CURSOR_API_KEY)/);
-        }
+        expect(step.env?.KIRO_API_KEY).toBeUndefined();
+        expect(step.env?.CURSOR_API_KEY).toBeUndefined();
+        expect(JSON.stringify(step)).not.toMatch(/secrets\.(?:KIRO_API_KEY|CURSOR_API_KEY)/);
       }
-    }
-    expect(exposed.sort()).toEqual([
-      "live_kiro_api/Require Kiro API authentication",
-      "live_kiro_api/Run kiro-acp",
-      "live_kiro_api/Run kiro-tui",
-      "live_cursor/Require Cursor credentials and executable",
-      "live_cursor/Run cursor",
-    ].sort());
-    for (const step of workflow.jobs.live_cursor.steps.filter((step) => step.name?.startsWith("Require ") || step.name === "Run cursor")) {
-      expect(step.env?.CURSOR_API_KEY).toBe(`\${{ secrets.CURSOR_API_KEY }}`);
     }
   });
 
@@ -430,7 +405,7 @@ describe("t345 complete nightly coverage", () => {
     expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" })).toMatchObject({ passed: false, complete: false });
   });
 
-  for (const [job, variable] of [["live_cursor", "cursor"], ["live_kiro_api", "kiroApi"], ["live_kiro_windows", "kiro"]] as const) {
+  for (const [job, variable] of [["live_kiro_windows", "kiro"]] as const) {
     test(`${job} is non-blocking only when explicitly disabled and skipped`, () => {
       const needs: SuiteNeeds = { ...allSuccess(), [job]: { result: "skipped" } };
       expect(fullSuiteResult(needs, identity)).toMatchObject({ passed: true, complete: false, excluded: [job] });
@@ -448,11 +423,11 @@ describe("t345 complete nightly coverage", () => {
     const root = mkdtempSync(join(tmpdir(), "full-suite-result-"));
     try {
       const needs: SuiteNeeds = {
-        ...allSuccess(), live_cursor: { result: "skipped" }, live_kiro_api: { result: "skipped" }, live_kiro_windows: { result: "skipped" },
+        ...allSuccess(), live_kiro_windows: { result: "skipped" },
       };
       const env = {
         ...process.env, FULL_SUITE_NEEDS: JSON.stringify(needs), FULL_SUITE_SHA: identity.sha,
-        AIDLC_NIGHTLY_CURSOR: "0", AIDLC_NIGHTLY_KIRO_API: "0", AIDLC_NIGHTLY_KIRO_RUNNERS: "0",
+        AIDLC_NIGHTLY_KIRO_RUNNERS: "0",
       };
       const output = join(root, "result.json");
       const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
@@ -461,8 +436,8 @@ describe("t345 complete nightly coverage", () => {
       expect(result.stderr).toContain("::warning::");
       const report = JSON.parse(readFileSync(output, "utf8"));
       expect(report).toMatchObject({ passed: true, complete: false });
-      expect(report.excluded.sort()).toEqual(["live_cursor", "live_kiro_api", "live_kiro_windows"]);
-      const enabledSkip = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, AIDLC_NIGHTLY_KIRO_API: "1" } });
+      expect(report.excluded).toEqual(["live_kiro_windows"]);
+      const enabledSkip = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, AIDLC_NIGHTLY_KIRO_RUNNERS: "1" } });
       expect(enabledSkip.status).toBe(1);
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ passed: false, complete: false });
     } finally {
