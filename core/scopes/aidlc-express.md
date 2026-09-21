@@ -20,7 +20,7 @@ summary_confirmation: off
 straight line from requirements to code, test, and deploy without a design
 pass or reviewer dispatch.
 
-Guard Policy defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
 
 ## Why these stages, why skip those
 

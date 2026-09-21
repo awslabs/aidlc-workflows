@@ -352,14 +352,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     },
   );
 
-  // --- Scenario H: the human's own switch stands the key aside, OUT LOUD -----
-  //
-  // `/aidlc config set guard.human-presence off` writes a `Guards Off` state
-  // line for one piece of work. With that line present and NO HUMAN_TURN at all,
-  // approve COMMITS (the person chose this), and the pass is never silent: one
-  // line on stderr and one GUARD_STOOD_ASIDE row. Once per PROCESS, because a
-  // single approve reads the key several times while standing aside only once.
-  test("H: the Guards Off state line commits an unattended approve and announces it once", () => {
+  // --- Scenario H: persisted per-work switches cannot lower the key holder ---
+  test("H: a persisted human-presence Guards Off entry is ignored", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     const sf = seededStateFile(proj);
     writeFileSync(
@@ -370,13 +364,31 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]); // ledger non-empty, still no HUMAN_TURN
     const rowsBefore = eventCount(proj, "GUARD_STOOD_ASIDE");
+    const before = readFileSync(sf, "utf-8");
     const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
-    expect(r.rc, r.out).toBe(0);
-    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
-    const line =
-      "Continuing past the human-presence check because it is off for this piece of work.";
-    expect(r.out.split(line).length - 1, r.out).toBe(1);
-    expect(eventCount(proj, "GUARD_STOOD_ASIDE") - rowsBefore).toBe(1);
+    expect(r.rc, r.out).not.toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(r.out).toContain("This needs a fresh human turn");
+    expect(r.out).not.toContain("guard.human-presence");
+    expect(r.out).not.toContain("Continuing past the human-presence check");
+    expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(rowsBefore);
+    expect(readFileSync(sf, "utf-8")).toBe(before);
+  });
+
+  test("H: the human-presence config switch refuses without changing state or fences", () => {
+    const beforeState = readFileSync(seededStateFile(proj), "utf-8");
+    const r = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
+      "config-change", "--guard.human-presence", "off", "--project-dir", proj,
+    ], { encoding: "utf-8", env: process.env });
+    expect(r.status, r.stderr).toBe(1);
+    expect(JSON.parse(r.stderr)).toEqual({
+      error: "guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.",
+    });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(beforeState);
+    expect(eventCount(proj, "GUARD_DISABLED")).toBe(0);
+    expect(eventCount(proj, "GUARD_RESTORED")).toBe(0);
+    expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(0);
   });
 
   // --- Scenario I: the machine-wide variable is the SILENT layer ------------

@@ -536,8 +536,8 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const refused = p.reviewVerdict(pending);
     expect(refused.code).not.toBe(0);
     const failure = JSON.parse(refused.stderr.trim().split("\n").at(-1)!) as Json;
-    expect(failure.change_notices).toEqual([expect.stringContaining("Change Control: relaxed")]);
-    expect(String(failure.error)).toContain("Change Control: relaxed");
+    expect(failure.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
+    expect(String(failure.error)).toContain("Guard Policy: relaxed");
     expect(p.events("CHANGE_ACCEPTED", STAGE)).toHaveLength(1);
     expect(p.events("REVIEW_COMPLETED", STAGE)).toHaveLength(0);
     p.writeReview(pending);
@@ -560,7 +560,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("CHANGE_ACCEPTED")).toHaveLength(0);
     const completed = json(p.reviewVerdict(pending));
     expect(completed.emitted).toBe("REVIEW_COMPLETED");
-    expect(completed.change_notices).toEqual([expect.stringContaining("Change Control: relaxed")]);
+    expect(completed.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
     const accepted = p.events("CHANGE_ACCEPTED", STAGE);
     expect(accepted).toHaveLength(1);
     expect(auditBlockField(accepted[0].block, "Checkpoint")).toBe("summary-confirmation");
@@ -587,7 +587,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("CHANGE_ACCEPTED")).toHaveLength(0);
     const completed = json(p.reviewVerdict(pending));
     expect(completed.emitted).toBe("REVIEW_COMPLETED");
-    expect(completed.change_notices).toEqual([expect.stringContaining("Change Control: relaxed")]);
+    expect(completed.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
     expect(p.events("CHANGE_ACCEPTED", STAGE)).toHaveLength(1);
   }, 180000);
 
@@ -600,9 +600,9 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     p.writeReview(pending);
     const memory = join(p.dir, "aidlc", "spaces", "default", "memory", "project.md");
     const body = readFileSync(memory, "utf8");
-    expect(body).toContain("## Change Control");
-    p.write(memory, body.replace("## Change Control", "## Change Control\n\nMode: sometimes"));
-    p.deniedVerdict(pending, 'Invalid Change Control Mode');
+    expect(body).toContain("## Guard Policy");
+    p.write(memory, body.replace("## Guard Policy", "## Guard Policy\n\nMode: sometimes"));
+    p.deniedVerdict(pending, 'Invalid Guard Policy Mode');
     expect(p.events("CHANGE_ACCEPTED")).toHaveLength(0);
   }, 180000);
 

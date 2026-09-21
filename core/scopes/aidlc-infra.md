@@ -21,7 +21,7 @@ application-code construction stages, and instead runs practices-discovery,
 the NFR design pass, infrastructure-design, the CI pipeline, and the full
 deployment + observability set in operation.
 
-Guard Policy defaults to strict: provisioning and deployment inputs that move after approval are approved again.
+Guard Policy defaults to strict: provisioning and deployment inputs that move after approval are approved again, and no fences are lowered.
 
 ## Why these stages, why skip those
 

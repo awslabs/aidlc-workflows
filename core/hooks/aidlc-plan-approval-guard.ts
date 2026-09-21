@@ -99,6 +99,7 @@ import {
   resolveProjectDirFromHook,
   resolveWorkflowSelection,
   stateFilePath,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import {
   beginCodeGeneration,
@@ -1329,9 +1330,7 @@ export async function run(input: string): Promise<number> {
       const detail = guardedDispatch
         ? `dispatch of ${subagentType}`
         : blockedMutation?.target ?? toolName;
-      process.stdout.write(
-        `${guardStoodAsideLine("plan-approval", detail)}\n`,
-      );
+      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail));
       recordGuardStoodAside(projectDir, {
         fence: "plan-approval",
         authority: gate.authority,

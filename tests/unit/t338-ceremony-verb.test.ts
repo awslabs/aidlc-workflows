@@ -422,7 +422,6 @@ describe("t338 atomic per-intent settings", () => {
       learnings: "off (set by you)", "summary-confirmation": "on (set by you)",
       "guard.plan-approval": "on (default)", "guard.review-freeze": "on (default)",
       "guard.state-transition": "on (default)", "guard.reviewer-scope": "on (default)",
-      "guard.human-presence": "on (default)",
     });
     expect(settingRows(proj)).toHaveLength(7);
   });

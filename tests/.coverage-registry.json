@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1115,
+    "total": 1116,
     "enumeratedByClass": {
-      "function": 792,
+      "function": 793,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -360,6 +360,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3362,6 +3366,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:formatGuardsOnLine",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:formatReceivedReply",
       "minMechanism": "none",
       "coveredBy": [
@@ -3508,13 +3519,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:GUARD_FENCE_CONFIG_PREFIX",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:GUARD_FENCE_ENV",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3523,13 +3527,6 @@
     {
       "unitClass": "function",
       "unitId": "function:GUARD_FENCE_LABELS",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:GUARD_FENCES",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3601,20 +3598,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:guardFenceConfigKey",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:guardFenceFromConfigKey",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3747,6 +3730,13 @@
     {
       "unitClass": "function",
       "unitId": "function:GUARDS_OFF_FIELD",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GUARDS_ON_FIELD",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -5508,6 +5498,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseGuardsOnLine",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -7815,6 +7812,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:setGuardsOnLine",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:setOrInsertField",
       "minMechanism": "none",
       "coveredBy": [],
@@ -9346,6 +9350,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeGuardStoodAside",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writePlanApprovalChallenge",
       "minMechanism": "none",
       "coveredBy": [],
@@ -9709,6 +9720,10 @@
         },
         {
           "file": "tests/unit/t265-plan-approval-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         },
         {

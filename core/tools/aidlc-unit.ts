@@ -1927,7 +1927,7 @@ function requireMergeDispatchDecision(
   if (!terminal) {
     fail(`Unit "${transaction.unit}" merge dispatch has no terminal result.`);
   }
-  if (!humanPresenceGuardDisabled(projectDir)) {
+  if (!humanPresenceGuardDisabled()) {
     const terminalIndex = all.indexOf(terminal);
     const previousGate = [...all]
       .reverse()
@@ -2077,18 +2077,16 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       "Usage: aidlc-unit gate <unit> --decision <approve|reject> --user-input <text>",
     );
   }
-  // Resolved before the human-presence checks below, because the per-run switch
-  // that lowers them is read from this workflow's state.
   const pd = resolveProjectDir(projectDir);
   if (
-    !humanPresenceGuardDisabled(pd) &&
+    !humanPresenceGuardDisabled() &&
     isNonAnswer(userInput)
   ) {
     fail(
       `Refusing Unit "${unit}" merge approval: --user-input "${userInput}" is cancellation boilerplate, not a human decision.`,
     );
   }
-  const approvalAuthorship = humanPresenceGuardDisabled(pd)
+  const approvalAuthorship = humanPresenceGuardDisabled()
     ? null
     : selfAttributedDecisionMarker(userInput, "approval");
   if (approvalAuthorship) {
@@ -2776,12 +2774,12 @@ function validateMergeRiskAcknowledgment(
       `Unit "${unit}" released-attempt recovery requires --user-input <human acknowledgment>.`,
     );
   }
-  if (!humanPresenceGuardDisabled(projectDir) && isNonAnswer(answer)) {
+  if (!humanPresenceGuardDisabled() && isNonAnswer(answer)) {
     fail(
       `Refusing Unit "${unit}" released-attempt recovery: --user-input "${answer}" is cancellation boilerplate.`,
     );
   }
-  const authorship = humanPresenceGuardDisabled(projectDir)
+  const authorship = humanPresenceGuardDisabled()
     ? null
     : selfAttributedDecisionMarker(answer, "approval");
   if (authorship) {
@@ -2790,7 +2788,7 @@ function validateMergeRiskAcknowledgment(
         `(${authorship.category}) in --user-input: "${authorship.phrase}".`,
     );
   }
-  if (!humanPresenceGuardDisabled(projectDir)) {
+  if (!humanPresenceGuardDisabled()) {
     const all = mainAuthorityAuditRows(projectDir);
     const floor = all.findLastIndex(
       (row) =>

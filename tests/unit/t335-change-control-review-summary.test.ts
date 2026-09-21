@@ -17,7 +17,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -32,6 +32,11 @@ import {
   readAllAuditShards,
   setField,
   setGuardPolicyLine,
+  markEngineTouch,
+  engineTouchMarkerPath,
+  humanTurnMarkerPath,
+  markHumanTurn,
+  setGuardsOffLine,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -82,10 +87,15 @@ function run(tool: string, args: string[], project: string, env: Record<string, 
   };
 }
 
-function runHook(hook: string, project: string, payload: Record<string, unknown>) {
+function runHook(
+  hook: string,
+  project: string,
+  payload: Record<string, unknown>,
+  env: Record<string, string> = {},
+) {
   const result = spawnSync(BUN, [hook], {
     input: JSON.stringify(payload),
-    env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...TEST_ENV },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...TEST_ENV, ...env },
     encoding: "utf-8",
   });
   return { code: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -318,7 +328,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
       });
       expect(passed.code, mode).toBe(0);
       expect(passed.stdout, mode).toContain(
-        "Continuing past the review-freeze check because it is off for this piece of work. Recorded in the audit trail",
+        `Continuing past the review-freeze check because it is off for this piece of work (guard policy ${mode} (set by you)). Recorded in the audit trail`,
       );
       const rows = stoodAside(proj);
       expect(rows, mode).toHaveLength(1);
@@ -328,6 +338,99 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
       expect(reviewCompletedRows(proj)).toHaveLength(1);
       expect(auditBlockField(reviewCompletedRows(proj)[0].block, "Verdict")).toBe("READY");
     }
+  });
+
+  test("the review-freeze stand-aside line names the scope policy or per-work switch that lowered it", () => {
+    const proj = project("relaxed");
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      setGuardPolicyLine(
+        setField(readFileSync(statePath, "utf-8"), "Scope", "classic"),
+        "relaxed (from scope classic)",
+      ),
+    );
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    const payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: artifact(proj) },
+    };
+    const scopePolicy = runHook(FREEZE_HOOK, proj, payload);
+    expect(scopePolicy.code, scopePolicy.stderr).toBe(0);
+    expect(scopePolicy.stdout).toContain("(guard policy relaxed (from scope classic))");
+
+    writeFileSync(statePath, setGuardsOffLine(readFileSync(statePath, "utf-8"), ["review-freeze"]));
+    const perWork = runHook(FREEZE_HOOK, proj, payload);
+    expect(perWork.code, perWork.stderr).toBe(0);
+    expect(perWork.stdout).toContain("off for this piece of work (set by you)");
+    expect(perWork.stdout).not.toContain("guard policy relaxed");
+  });
+
+  test("stand-aside delivery uses a Claude systemMessage and a plain Codex line", () => {
+    const proj = project("relaxed");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    const payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: artifact(proj) },
+    };
+    const claude = runHook(FREEZE_HOOK, proj, payload, { AIDLC_HARNESS_NAME: "claude" });
+    expect(claude.code, claude.stderr).toBe(0);
+    expect(claude.stdout.trim().split("\n")).toHaveLength(1);
+    const message = JSON.parse(claude.stdout);
+    expect(message).toEqual({
+      systemMessage: expect.stringMatching(/^Continuing past the review-freeze check/),
+    });
+
+    const codex = runHook(FREEZE_HOOK, proj, payload, { AIDLC_HARNESS_NAME: "codex" });
+    expect(codex.code, codex.stderr).toBe(0);
+    expect(codex.stdout).toBe(`${message.systemMessage}\n`);
+  });
+
+  test("a lowered review-freeze records the matching session's dispatch grant for a subagent", () => {
+    const proj = project("relaxed");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    const sessionId = "dispatch-grant-session";
+
+    markEngineTouch(proj);
+    markHumanTurn(proj);
+    const base = Math.floor(Date.now() / 1000) - 120;
+    utimesSync(engineTouchMarkerPath(proj), base, base);
+    utimesSync(humanTurnMarkerPath(proj), base + 60, base + 60);
+    const dispatched = runHook(join(HOOKS, "aidlc-deliver-stage-rules.ts"), proj, {
+      hook_event_name: "PreToolUse",
+      session_id: sessionId,
+      tool_name: "Task",
+      tool_input: {
+        subagent_type: "general-purpose",
+        prompt: "Revise the reviewed requirements.",
+        run_in_background: true,
+      },
+    });
+    expect(dispatched.code, dispatched.stderr).toBe(0);
+
+    // The dispatch stamp survives the engine resuming after the human's turn.
+    utimesSync(engineTouchMarkerPath(proj), base + 90, base + 90);
+    const passed = runHook(FREEZE_HOOK, proj, {
+      hook_event_name: "PreToolUse",
+      session_id: sessionId,
+      agent_type: "general-purpose",
+      tool_name: "Write",
+      tool_input: { file_path: artifact(proj) },
+    });
+    expect(passed.code, passed.stderr).toBe(0);
+    const rows = readAuditShardEvents(proj).filter((entry) =>
+      entry.event === "GUARD_STOOD_ASIDE" &&
+      auditBlockField(entry.block, "Guard") === "review-freeze"
+    );
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Authority")).toBe("grant");
+    expect(auditBlockField(rows[0].block, "Grant")).toBe("dispatch-stamp");
+    expect(auditBlockField(rows[0].block, "Actor")).toBe("subagent");
   });
 
   test("an acceptance that cannot be recorded refuses the transition instead of continuing", () => {
@@ -849,7 +952,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
       const passed = dispatch(project(mode));
       expect(passed.code, mode).toBe(0);
       expect(passed.stdout, mode).toContain(
-        "Continuing past the plan-approval check because it is off for this piece of work. Recorded in the audit trail: dispatch of aidlc-developer-agent",
+        `Continuing past the plan-approval check because it is off for this piece of work (guard policy ${mode} (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent`,
       );
     }
   });

@@ -631,6 +631,7 @@ describe("t334 (5) strict drift at the dispatch guard is a typed ask, not a wall
       argv.map((v) => v === "off" ? "on" : v),
       argv.map((v) => v === "guard.plan-approval" ? "guard.../x" : v),
       ["engine", "config", "list"],
+      ["engine", "config", "set", "guard.human-presence", "off"],
     ]) {
       expect(isGuardRecoveryEngineInvocation(changed), changed.join(" ")).toBe(false);
     }

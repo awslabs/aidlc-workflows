@@ -122,6 +122,7 @@ import {
   boltSlugForUnit,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxState,
+  CHANGE_CONTROL_FIELD,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
   type CeremonyPolicy,
@@ -148,6 +149,7 @@ import {
   guardAttemptState,
   type GuardAttemptState,
   guardRecoveryAskFromRefusalText,
+  guardPolicyStateField,
   guardRefusalStreakView,
   type GuardRemedy,
   humanAuthorityState,
@@ -181,6 +183,8 @@ import {
   nextInScopeStage,
   parseCheckboxes,
   parseGuardPolicy,
+  resolveGuardPolicy,
+  type GuardPolicy,
   noteGuardPolicyRename,
   humanPresenceGuardDisabled,
   engineDir,
@@ -357,6 +361,7 @@ interface PreparedLegacyPlanApproval {
 
 let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
+let activeRetiredGuardPolicyNotice: string | null = null;
 let engineProjectDir: string | undefined;
 
 function projectStageValidityAdvisory(
@@ -462,6 +467,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
     directive.kind === "run-stage" && route && !isRouteCheckProbe()
       ? transportRunStage(directive, route)
       : directive;
+  if (activeRetiredGuardPolicyNotice !== null) {
+    transported = withChangeNotices(transported, [
+      activeRetiredGuardPolicyNotice,
+      ...(transported.change_notices ?? []),
+    ]);
+  }
   if (activeStageValidityAdvisory) {
     transported = {
       ...transported,
@@ -4405,6 +4416,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 // workflow pointer.
 function routeNext(args: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
+  activeRetiredGuardPolicyNotice = null;
   const flags = parseNextFlags(args);
 
   // Turn-shape marker: a `next` that ASKS FOR THE NEXT MOVE is engagement with
@@ -4702,6 +4714,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
 
   const pd = resolveProjectDir(projectDir);
   const stateContent = loadStateFileIfPresent(pd);
+  activeRetiredGuardPolicyNotice = stateContent === null ? null : retiredGuardPolicyNotice(pd, stateContent);
   // Runtime state-version guard (see staleStateVersionError): refuse to advance
   // a pre-v8 state up front rather than silently routing until it hits the
   // renamed/missing Inception rows. Fires after the workspace/plugin/compose
@@ -8173,6 +8186,31 @@ function withChangeNotices<T extends Directive>(directive: T, notices: string[])
   return notices.length > 0 ? { ...directive, change_notices: notices } : directive;
 }
 
+// A retired relaxed or off line needs confirmation before its notice stops. The
+// notice speaks about the EFFECTIVE policy: a memory layer holding strict wins
+// over the retired line, lowers nothing, and would refuse the relaxed setting
+// the notice recommends, so in that case there is nothing to announce. An
+// unreadable policy is the strictest policy and announces nothing either.
+function retiredGuardPolicyNotice(projectDir: string, stateContent: string): string | null {
+  if (guardPolicyStateField(stateContent) !== CHANGE_CONTROL_FIELD) return null;
+  let value: GuardPolicy;
+  try {
+    const resolution = resolveGuardPolicy(projectDir, stateContent, { tolerateInvalidState: true });
+    if (resolution.memoryStrict !== null) return null;
+    value = resolution.value;
+  } catch {
+    return null;
+  }
+  if (value === "strict") return null;
+  const fences = value === "relaxed"
+    ? "plan-approval and review-freeze fences"
+    : "plan-approval, review-freeze, state-transition and reviewer-scope fences";
+  return `Guard Policy: ${value} was carried over from this piece of work's retired Change Control line. ` +
+    `Under Guard Policy, ${value} also lowers the ${fences} for work nobody directed, ` +
+    "and every pass is recorded in the audit trail. " +
+    `Say 'guard policy ${value}' to confirm it, or 'guard policy strict' to keep them up; this notice repeats until you choose.`;
+}
+
 // The guard-recovery ask an enforcing tool carried on the last line of its
 // refusal, validated as a directive so the router emits exactly what the tool
 // would have shown. Null when the refusal is prose only.
@@ -9189,7 +9227,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const status = unitGateStatus(pd, slug, unit, gateScope);
       const protectedTeamHumanGate =
         stageCheckbox.state !== "completed" &&
-        !humanPresenceGuardDisabled(pd, stateContent);
+        !humanPresenceGuardDisabled();
       const sequence: string[][] = [];
       if (flags.result === "awaiting-approval") {
         if (status === "awaiting-approval") {
@@ -9218,7 +9256,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         sequence.push(["revise", slug, "--unit", unit]);
       } else {
         if (
-          !humanPresenceGuardDisabled(pd, stateContent) &&
+          !humanPresenceGuardDisabled() &&
           !flags.userInput?.trim()
         ) {
           emit(errorDirective(
@@ -9304,7 +9342,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       (flags.result === "rejected" && checkpointPolicyEnabled(stateContent)) ||
       !isAutonomousConstructionGate(stateContent, node, pd)
     ) &&
-    !humanPresenceGuardDisabled(pd, stateContent);
+    !humanPresenceGuardDisabled();
 
   if (flags.overrideBlockingSensors) {
     if (
@@ -9874,6 +9912,8 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     payload.a && liveState !== null
       ? projectStageValidityAdvisory(pd, liveState)
       : undefined;
+  activeRetiredGuardPolicyNotice =
+    payload.a && liveState !== null ? retiredGuardPolicyNotice(pd, liveState) : null;
   const cursor = inspectContinuationCursor(pd, liveState);
 
   const directive = buildRunStageDirective(
@@ -10221,6 +10261,7 @@ export function main(argv: string[]): void {
     }
   } finally {
     engineInvocation = null;
+    activeRetiredGuardPolicyNotice = null;
     engineProjectDir = undefined;
     engineSessionId = undefined;
     engineSelections.clear();

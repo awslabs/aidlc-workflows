@@ -531,6 +531,7 @@ function scratchProject(): string {
     "aidlc-channel.ts",
     "aidlc-version.ts",
     "aidlc-runtime-paths.ts",
+    "aidlc-guard-fences.ts",
     "aidlc-guard-operation.ts",
     "aidlc-audit.ts",
   ]) {

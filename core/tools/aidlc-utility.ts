@@ -86,14 +86,19 @@ import {
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
   GUARD_FENCES,
+  SWITCHABLE_GUARD_FENCES,
   GUARDS_OFF_FIELD,
-  type GuardFence,
+  GUARDS_ON_FIELD,
+  type SwitchableGuardFence,
   type FenceSetting,
   guardFenceConfigKey,
   guardFenceFromConfigKey,
   guardPolicyStateField,
   parseGuardsOffLine,
+  parseGuardsOnLine,
   setGuardsOffLine,
+  setGuardsOnLine,
+  fencesLoweredByPolicy,
   setGuardPolicyLine,
   resolveFences,
   formatFence,
@@ -315,8 +320,8 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
 };
 
 // The per-run fence switches read as config keys: `guard.plan-approval` and so on.
-const GUARD_FENCE_CONFIG_KEYS = GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
-  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope", "guard.human-presence"];
+const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
+  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
 const CONFIG_KEYS = [
   "depth",
   "test-strategy",
@@ -327,6 +332,7 @@ const CONFIG_KEYS = [
   "summary-confirmation",
   ...GUARD_FENCE_CONFIG_KEYS,
 ] as const;
+const CONFIG_READ_KEYS = [...CONFIG_KEYS, "guard.human-presence"] as const;
 type ConfigKey = (typeof CONFIG_KEYS)[number];
 // Retired key spellings, accepted for one release and read as their new name.
 const RETIRED_CONFIG_KEYS: Record<string, ConfigKey> = { "change-control": "guard-policy" };
@@ -445,6 +451,9 @@ function validateIntentSettingsArgs(
     if (arg === "--") break;
     if (!arg.startsWith("--")) continue;
     const name = arg.slice(2).split("=", 1)[0];
+    if (name === "guard.human-presence") {
+      die("guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.");
+    }
     if (!allowed.has(name)) die(`${command} does not accept --${name}.`);
   }
   for (const name of allowed) {
@@ -1765,10 +1774,7 @@ To get started:
     });
     guardPolicyDisplay = formatGuardPolicy(resolution.value, resolution.source);
     const fences = resolveFences(resolution, content);
-    fencesDisplay = GUARD_FENCES.map((fence) => {
-      const state = fences[fence];
-      return state.source === "default" ? `${fence} ${state.value}` : `${fence} ${formatFence(state)}`;
-    }).join(", ");
+    fencesDisplay = GUARD_FENCES.map((fence) => `${fence} ${formatFence(fences[fence])}`).join(", ");
   } catch (error) {
     guardPolicyDisplay = `unavailable (${errorMessage(error)})`;
     fencesDisplay = "unavailable";
@@ -8865,9 +8871,9 @@ function configFieldForKey(key: string): string | null {
     noteGuardPolicyRename();
     return configFieldForKey(RETIRED_CONFIG_KEYS[key]);
   }
-  // A fence switch is read from the `Guards Off` line and the policy together;
+  // Fence values combine the per-work lines, policy, and environment switches;
   // its "field" is the config key itself so readConfigField can tell them apart.
-  if (guardFenceFromConfigKey(key) !== null) return key;
+  if (key === "guard.human-presence" || guardFenceFromConfigKey(key) !== null) return key;
   const ceremonyKey = CEREMONY_KEYS.find((candidate) => CEREMONY_FLAGS[candidate].slice(2) === key);
   return ceremonyKey === undefined ? null : CEREMONY_FIELDS[ceremonyKey];
 }
@@ -8888,7 +8894,7 @@ function readConfigField(
     const resolution = resolveGuardPolicy(projectDir, content, { selection });
     return formatGuardPolicy(resolution.value, resolution.source);
   }
-  const fence = guardFenceFromConfigKey(field);
+  const fence = field === "guard.human-presence" ? "human-presence" : guardFenceFromConfigKey(field);
   if (fence !== null) {
     const resolution = resolveGuardPolicy(projectDir, content, { selection });
     return formatFence(resolveFences(resolution, content)[fence]);
@@ -8904,7 +8910,7 @@ function readConfigField(
 function handleConfigGet(projectDir: string, positional: string[], flags: Record<string, string>): void {
   const key = positional[1] ?? "";
   const field = configFieldForKey(key);
-  if (!field) die(`Unknown config key: "${key}". Valid keys: ${CONFIG_KEYS.join(", ")}.`);
+  if (!field) die(`Unknown config key: "${key}". Valid keys: ${CONFIG_READ_KEYS.join(", ")}.`);
   process.stdout.write(`${readConfigField(projectDir, readConfigState(projectDir, flags), field, flags)}\n`);
 }
 
@@ -8950,8 +8956,8 @@ function applyIntentSettings(
   if (rawChangeControl !== undefined && changeControl === null) {
     die(`Unknown Guard Policy value: "${rawChangeControl}". Valid: ${GUARD_POLICY_VALUES.join(", ")}.`);
   }
-  const fenceRequests: Array<{ fence: GuardFence; value: FenceSetting; source: string }> = [];
-  for (const fence of GUARD_FENCES) {
+  const fenceRequests: Array<{ fence: SwitchableGuardFence; value: FenceSetting; source: string }> = [];
+  for (const fence of SWITCHABLE_GUARD_FENCES) {
     const request = requested[guardFenceConfigKey(fence) as ConfigKey];
     if (request === undefined) continue;
     const word = request.value.toLowerCase().trim();
@@ -9045,37 +9051,44 @@ function applyIntentSettings(
       }
     }
   }
-  // Per-run fence switches: the `Guards Off` line names every fence lowered for
-  // this piece of work. Lowering is a GUARD_DISABLED row (the same event the
-  // environment kill switch writes); restoring is GUARD_RESTORED.
+  // Per-work switches can lower a fence or raise it above the policy word.
+  // Record only an effective change: environment kill switches still win.
   if (fenceRequests.length > 0) {
     const scopeName = getField(content, "Scope") ?? "";
-    const lowered = parseGuardsOffLine(getField(content, GUARDS_OFF_FIELD));
-    const next = [...lowered];
+    const policy = resolveGuardPolicy(projectDir, content, { selection });
+    const byPolicy = fencesLoweredByPolicy(policy.value);
     for (const request of fenceRequests) {
-      const isOff = next.includes(request.fence);
-      if (request.value === "off" ? isOff : !isOff) {
-        lines.push(`Fence ${request.fence} is already ${request.value}`);
+      const before = resolveFences(policy, content)[request.fence];
+      const lowered = parseGuardsOffLine(getField(content, GUARDS_OFF_FIELD));
+      const raised = parseGuardsOnLine(getField(content, GUARDS_ON_FIELD));
+      const nextOff = lowered.filter((fence) => fence !== request.fence);
+      const nextOn = raised.filter((fence) => fence !== request.fence);
+      if (request.value === "off") nextOff.push(request.fence);
+      else if (byPolicy.includes(request.fence)) nextOn.push(request.fence);
+      let updated = content;
+      if (nextOff.length !== lowered.length) updated = setGuardsOffLine(updated, nextOff);
+      if (nextOn.length !== raised.length) updated = setGuardsOnLine(updated, nextOn);
+      const after = resolveFences(policy, updated)[request.fence];
+      if (before.value === after.value) {
+        lines.push(`Fence ${request.fence} is already ${after.value}`);
         continue;
       }
-      if (request.value === "off") next.push(request.fence);
-      else next.splice(next.indexOf(request.fence), 1);
+      content = updated;
       // Each event named literally at its own call, not through a ternary on
       // eventType: the emitter drift guard reads these call sites as text, and a
       // computed event name is invisible to it.
       const fenceFields = { Guard: request.fence, Scope: scopeName, Source: request.source };
       audit.push(
-        request.value === "off"
+        after.value === "off"
           ? { eventType: "GUARD_DISABLED", fields: fenceFields }
           : { eventType: "GUARD_RESTORED", fields: fenceFields },
       );
       lines.push(
-        request.value === "off"
+        after.value === "off"
           ? `Fence ${request.fence} is off for this piece of work (logged; back on for the next one)`
           : `Fence ${request.fence} is back on for this piece of work`,
       );
     }
-    if (next.length !== lowered.length) content = setGuardsOffLine(content, next);
   }
   for (const key of CEREMONY_KEYS) {
     const value = ceremonies[key];
@@ -9108,7 +9121,9 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), { intent, space });
     if (update.content !== content) {
       if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
-      appendAuditEntries(update.audit, projectDir, intent, space);
+      // A retired-field rename with an unchanged value rewrites the line and
+      // records nothing: the value did not move, so there is no row to append.
+      if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
       writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
     }
     process.stdout.write(`${update.lines.join("\n")}\n`);

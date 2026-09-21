@@ -1,3 +1,4 @@
+import { isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
 import { aidlcInvocation, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
 
 // These are domain operations, not shell programs. Owning commands retain their
@@ -7,11 +8,9 @@ import { aidlcInvocation, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
 export type GuardRecoveryOperation =
   | { kind: "restart-stage"; stage: string }
   | { kind: "abort-bolt"; unit: string; slug: string }
-  // fence names a GUARD_FENCES entry in aidlc-lib.ts. Only its identifier shape
-  // is validated here: that module imports this one, so importing the list back
-  // would create a cycle. The dispatcher and config-change reject unknown keys
-  // at execution. unit is null for a stage-level plan (--stage-level).
-  | { kind: "lower-fence"; fence: string }
+  // The switchable set is the source of truth for fence recovery operations.
+  // unit is null for a stage-level plan (--stage-level).
+  | { kind: "lower-fence"; fence: SwitchableGuardFence }
   | { kind: "reapprove-plan"; unit: string | null }
   | { kind: "show-plan-drift"; unit: string | null };
 
@@ -62,7 +61,7 @@ export function isGuardRecoveryOperation(value: unknown): value is GuardRecovery
       identifier(operation.unit) && identifier(operation.slug);
   }
   if (operation.kind === "lower-fence") {
-    return Object.keys(operation).length === 2 && identifier(operation.fence);
+    return Object.keys(operation).length === 2 && isSwitchableGuardFence(operation.fence);
   }
   if (operation.kind === "reapprove-plan" || operation.kind === "show-plan-drift") {
     return Object.keys(operation).length === 2 &&
@@ -86,7 +85,7 @@ export function guardOperationInvocation(operation: GuardRecoveryOperation): Gua
       };
     case "lower-fence": {
       // The guard. prefix is the config-key spelling owned by guardFenceConfigKey
-      // in aidlc-lib.ts, which is not importable here (see the union comment).
+      // in aidlc-guard-fences.ts; recovery operations never import aidlc-lib.ts.
       const key = `guard.${operation.fence}`;
       return {
         route: "config",
@@ -262,7 +261,9 @@ export function isGuardRecoveryEngineInvocation(args: readonly string[]): boolea
     args[1] === "config" && args.length === 5 &&
     typeof args[3] === "string" && args[3].startsWith("guard.")
   ) {
-    operation = { kind: "lower-fence", fence: args[3].slice("guard.".length) };
+    const fence = args[3].slice("guard.".length);
+    if (!isSwitchableGuardFence(fence)) return false;
+    operation = { kind: "lower-fence", fence };
   } else {
     return false;
   }

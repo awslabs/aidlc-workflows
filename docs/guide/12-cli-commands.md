@@ -65,9 +65,9 @@ diagnostic and lifecycle routes.
 | `/aidlc --learnings <on\|off>` | Set the learning diary and learning-gate ceremony for this intent |
 | `/aidlc --summary-confirmation <on\|off>` | Set the consolidated-summary confirmation checkpoint for this intent |
 | `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `guard.<fence>`) |
-| `/aidlc config set <key> <value> [--key value ...]` | Change one or more of the twelve settings in one transaction |
-| `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on (plan-approval, review-freeze, state-transition, reviewer-scope, human-presence) |
-| `/aidlc config list` | List all twelve active workflow settings (`--json` for structured output) |
+| `/aidlc config set <key> <value> [--key value ...]` | Change one or more of the eleven settings in one transaction |
+| `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (plan-approval, review-freeze, state-transition, reviewer-scope) |
+| `/aidlc config list` | List all eleven active workflow settings (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
@@ -447,7 +447,7 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Fences:` line naming all five fences with each effective setting and its source (`plan-approval on, review-freeze off (set by you), state-transition on, reviewer-scope on, human-presence on`), and the stage progress list. An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Fences:` line naming all five fences with each effective setting and its source (`plan-approval on (set by you), review-freeze off (set by you), state-transition on (default), reviewer-scope on (default), human-presence on (default)`), and the stage progress list. An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
 rows with each effective value and its source, for example `Sensors: on (from
@@ -1003,7 +1003,7 @@ request at the next ordinal.
 
 ### Workflow configuration — one atomic setter
 
-All twelve intent settings share one setter, `config-change`. Slash flags remain
+All eleven intent settings share one setter, `config-change`. Slash flags remain
 available, and flags from different settings can be combined in **one command
 and one transaction**; do not split a combined request into successive setters.
 This is active-intent configuration, distinct from native project configuration
@@ -1018,11 +1018,10 @@ through `aidlc config flags`.
 | `sensors` / `--sensors` | `on`, `off` | Sensors |
 | `learnings` / `--learnings` | `on`, `off` | Learnings |
 | `summary-confirmation` / `--summary-confirmation` | `on`, `off` | Summary Confirmation |
-| `guard.plan-approval` / `--guard.plan-approval` | `on`, `off` | Guards Off |
-| `guard.review-freeze` / `--guard.review-freeze` | `on`, `off` | Guards Off |
-| `guard.state-transition` / `--guard.state-transition` | `on`, `off` | Guards Off |
-| `guard.reviewer-scope` / `--guard.reviewer-scope` | `on`, `off` | Guards Off |
-| `guard.human-presence` / `--guard.human-presence` | `on`, `off` | Guards Off |
+| `guard.plan-approval` / `--guard.plan-approval` | `on`, `off` | Guards Off / Guards On |
+| `guard.review-freeze` / `--guard.review-freeze` | `on`, `off` | Guards Off / Guards On |
+| `guard.state-transition` / `--guard.state-transition` | `on`, `off` | Guards Off / Guards On |
+| `guard.reviewer-scope` / `--guard.reviewer-scope` | `on`, `off` | Guards Off / Guards On |
 
 The retired key `change-control` and the retired flag `--change-control` still
 resolve to `guard-policy` for one release and print one deprecation line. Naming
@@ -1046,7 +1045,7 @@ aidlc engine config set guard-policy relaxed --sensors off --intent login-fix --
 bun .claude/tools/aidlc-utility.ts config-change --depth minimal --review none --guard-policy relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
 ```
 
-`config-change` accepts only the twelve setting flags and the `--intent`,
+`config-change` accepts only the eleven setting flags and the `--intent`,
 `--space`, and `--project-dir` selectors. At least one setting is required.
 Selectors pin the state file, memory policy, and audit shard to the same target;
 omitted intent/space selectors use the active workflow selection. They do not
@@ -1066,7 +1065,7 @@ Updated` changes only when stored state changes. Repeating an already stored
 choice is a no-op, but changing a scope-sourced value to an explicit human
 override records that provenance even if the value is the same.
 
-`config get` accepts every key in the table, and `config list` returns all twelve
+`config get` accepts every key in the table, and `config list` returns all eleven
 in that order. Guard Policy, fence, and ceremony reads include effective values
 and sources, just like status:
 
@@ -1077,6 +1076,10 @@ and sources, just like status:
 /aidlc config list
 /aidlc config list --json
 ```
+
+The additional read-only `guard.human-presence` lookup reports `on (default)` or
+`off (env AIDLC_SKIP_HUMAN_PRESENCE_GUARD)`; it is not a per-work setting and is
+not included in `config list`.
 
 Native read equivalents are `aidlc engine config get <key>` and
 `aidlc engine config list`. The following sections explain the Guard Policy,
@@ -1107,15 +1110,21 @@ you in one line, and continue. On the fences, `strict` leaves all five up,
 plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
 by the policy word.
 
-No value removes a gate: every approval question is still asked, a reviewer's
-verdict is never changed, no evidence is deleted, and an agent can never answer
-for a human. A lowered fence prints one line and writes one `GUARD_STOOD_ASIDE`
-row every time it lets something through.
+No value removes a gate: the conductor must still ask every approval question;
+a lowered fence does not enforce that prose obligation. A reviewer's verdict
+is never changed, no evidence is deleted, and an agent can never answer for a
+human. Each pass through a lowered fence writes one `GUARD_STOOD_ASIDE` row;
+delivery of its one-line notice depends on the harness, as described in
+[Customization](13-customization.md#what-you-see-when-a-guard-decides).
 
 The shared `config-change --guard-policy <value>` setter rewrites the `Guard
 Policy` line in `aidlc-state.md` as `<value> (set by you)` and adds a
 `GUARD_POLICY_SET` row to the command's audit batch. A record still carrying the
-retired `Change Control` line has it renamed in place on that write. The value is
+retired `Change Control` line has it renamed in place on that write. Until then,
+every `/aidlc` run announces a carried-over relaxed or off value; re-affirm with
+`/aidlc config set guard-policy relaxed` to keep it or
+`/aidlc config set guard-policy strict` to raise the fences and stop the notice.
+`next` writes nothing, and a retired strict line gets no notice. The value is
 committed with the intent, survives sessions, and is visible to teammates. The
 same setter repairs an invalid line and records the old text. A plain-chat request
 ("stop asking me to re-approve when files change") uses the same route.
@@ -1149,9 +1158,9 @@ their values differ, and accepted when they agree.
 #### `/aidlc config set guard.<fence> <on|off>` - one fence, one piece of work
 
 Turn a single fence off for the work in front of you without touching the policy
-word, and turn it back on when you are done. The five fences are
-`plan-approval`, `review-freeze`, `state-transition`, `reviewer-scope`, and
-`human-presence`.
+word, and turn it back on even when that word lowers it. The four per-work
+switches are `plan-approval`, `review-freeze`, `state-transition`, and
+`reviewer-scope`. Human presence is the key holder and has no per-work switch.
 
 **Syntax:**
 
@@ -1162,22 +1171,30 @@ word, and turn it back on when you are done. The five fences are
 
 **Behavior:** switching a fence off writes `- **Guards Off**: <comma list> (set
 by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row carrying
-`Guard`, `Scope`, and `Source`; switching it back on removes it from the list and
-writes `GUARD_RESTORED`. Repeating a setting already in force is a no-op that
-says so. `/aidlc --status` prints a `Fences:` line with all five and where each
-setting came from, so nothing is lowered invisibly. For one fence the order of
-precedence is its environment kill switch, then this per-work switch, then the
-Guard Policy word, then on. Four of the five have a kill switch;
-`state-transition` has none, so the policy word and this switch are its only
-controls.
+`Guard`, `Scope`, and `Source`; switching it back on removes it from that list and
+writes `GUARD_RESTORED`. Setting `on` raises a policy-lowered fence, records it in
+`- **Guards On**: <comma list> (set by you)`, and writes `GUARD_RESTORED` with the
+same fields. Repeating a setting already in force is a no-op that says so;
+setting `on` for a policy-lowered fence is not a no-op. Neither state line accepts
+human presence, and a persisted human-presence entry is ignored.
+`/aidlc --status` prints a `Fences:` line with all five and where each setting
+came from, so nothing is lowered invisibly. Precedence is the environment kill
+switch, then per-work off, then per-work on, then the Guard Policy word, then on
+by default. Four of the five have a kill switch; `state-transition` has none,
+so the policy word and this switch are its only controls.
 
 A switch is the only thing that lowers a fence. Saying so in chat does not: the
 framework can tell that you spoke, not what you asked for, so a fence that opened
-on a keystroke would not be a fence. That makes this command the way through for
-`human-presence` (with its kill switch, since no Guard Policy value touches it),
-for `reviewer-scope` (with `guard_policy: off`), and for any fence a policy word
-leaves up. When a fence holds, the refusal names this command in one sentence, so
-the way through is printed beside the thing that stopped you.
+on a keystroke would not be a fence. This command controls the four switchable
+fences, including any the policy word leaves up. A switchable fence's
+main-session refusal names the command; a human-presence refusal names no switch
+and says: `This needs a fresh human turn: wait for the person to reply, then record it again.`
+
+Only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence.
+`AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower
+the fence. Any attempt to set `guard.human-presence` refuses the whole update
+with a non-zero exit and this message:
+`guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.`
 
 **Valid values:** `on`, `off`.
 

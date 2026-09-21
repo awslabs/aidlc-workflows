@@ -162,16 +162,16 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", "test-strategy"], project).stdout).toBe("Standard\n");
   });
 
-  test("one config-change exposes all twelve settings through get and both list formats", () => {
+  test("one config-change exposes all eleven settings through get and both list formats", () => {
     const project = stateProject();
     const changed = utility([
       "config-change", "--depth", "minimal", "--test-strategy", "comprehensive",
       "--review", "advisory", "--guard-policy", "relaxed", "--sensors", "off",
-      "--learnings", "off", "--summary-confirmation", "off", "--guard.human-presence", "off",
+      "--learnings", "off", "--summary-confirmation", "off", "--guard.state-transition", "off",
     ], project, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
     expect(renameNotices(changed.stderr)).toBe(0);
-    // The seven settings the human names plus the five per-run fence switches,
+    // The seven settings the human names plus the four per-run fence switches,
     // in the order config list prints them. relaxed lowers two fences by
     // itself; the switch lowered a third; the rest read their default.
     const expected = {
@@ -184,9 +184,8 @@ describe("t231 config get/list/set handlers", () => {
       "summary-confirmation": "off (set by you)",
       "guard.plan-approval": "off (guard policy relaxed (set by you))",
       "guard.review-freeze": "off (guard policy relaxed (set by you))",
-      "guard.state-transition": "on (default)",
+      "guard.state-transition": "off (set by you)",
       "guard.reviewer-scope": "on (default)",
-      "guard.human-presence": "off (set by you)",
     };
     for (const [key, value] of Object.entries(expected)) {
       const read = utility(["config-get", key], project, FENCE_ENV_CLEAR);
@@ -268,7 +267,7 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", key], project).stdout).toBe(`${expected}\n`);
   });
 
-  test.each(["plan-approval", "review-freeze", "state-transition", "reviewer-scope", "human-presence"])(
+  test.each(["plan-approval", "review-freeze", "state-transition", "reviewer-scope"])(
     "engine config set accepts guard.%s as the leading setting and config get reads the switch",
     (fence) => {
       const project = stateProject();
@@ -283,6 +282,18 @@ describe("t231 config get/list/set handlers", () => {
       expect(utility(["config-get", key], project, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
     },
   );
+
+  test("the key holder has no per-work switch: config set guard.human-presence is refused and config get still reads it", () => {
+    const project = stateProject();
+    const refused = dispatcher(["engine", "config", "set", "guard.human-presence", "off"], project, FENCE_ENV_CLEAR);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("set guard.human-presence");
+    expect(stateField(project, "Guards Off")).toBe("");
+    const direct = utility(["config-change", "--guard.human-presence", "off"], project, FENCE_ENV_CLEAR);
+    expect(direct.status).not.toBe(0);
+    expect(direct.stderr).toContain("guard.human-presence has no per-work switch");
+    expect(utility(["config-get", "guard.human-presence"], project, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
+  });
 });
 
 describe("t231 plugin list and sync handlers", () => {

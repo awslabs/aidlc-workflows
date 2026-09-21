@@ -1225,7 +1225,7 @@ function handleSetAutonomy(args: string[]): void {
     // AUTONOMY_MODE_SET row. De-escalation restores gates without presence.
     if (
       flags.mode === "autonomous" &&
-      !humanPresenceGuardDisabled(pd) &&
+      !humanPresenceGuardDisabled() &&
       !humanActedSinceGate(pd)
     ) {
       error(

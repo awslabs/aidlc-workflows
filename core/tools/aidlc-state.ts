@@ -5546,7 +5546,7 @@ function verifyApprovalDecision(
     !forceHuman && isAutonomousConstructionGate(content, stage, pd);
   const approvalInput = userInput?.trim();
   const approvalAuthorship =
-    autonomousDecision || humanPresenceGuardDisabled(pd)
+    autonomousDecision || humanPresenceGuardDisabled()
       ? null
       : selfAttributedDecisionMarker(approvalInput, "approval");
   if (approvalAuthorship) {
@@ -5559,7 +5559,7 @@ function verifyApprovalDecision(
         "project terms instead of recording their decision.",
     );
   }
-  if (!autonomousDecision && !humanPresenceGuardDisabled(pd)) {
+  if (!autonomousDecision && !humanPresenceGuardDisabled()) {
     const rawRevisionCount = getField(content, "Revision Count");
     const parsedRevisionCount = rawRevisionCount
       ? parseInt(rawRevisionCount, 10)
@@ -5585,7 +5585,7 @@ function verifyApprovalDecision(
   }
   if (
     !autonomousDecision &&
-    !humanPresenceGuardDisabled(pd) &&
+    !humanPresenceGuardDisabled() &&
     !humanActedSinceGate(pd)
   ) {
     error(
@@ -5698,7 +5698,7 @@ function handleApprove(args: string[]): void {
       );
     }
     if (
-      !humanPresenceGuardDisabled(pd) &&
+      !humanPresenceGuardDisabled() &&
       !humanActedSinceGate(pd)
     ) {
       error(
@@ -6022,7 +6022,7 @@ function handleReject(args: string[]): void {
   if (
     !autonomousDecision &&
     feedbackStatus === "not-applicable" &&
-    !humanPresenceGuardDisabled(pd) &&
+    !humanPresenceGuardDisabled() &&
     !isRequestChangesChoice(decision)
   ) {
     const cancellation = isNonAnswer(decision)
@@ -6062,7 +6062,7 @@ function handleReject(args: string[]): void {
     reviewRecoverySpentInCurrentAttempt(pd, content, stage);
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&
-    !humanPresenceGuardDisabled(pd) &&
+    !humanPresenceGuardDisabled() &&
     !humanActedSinceGate(pd)
   ) {
     if (recoveryResetNeedsHuman) {
@@ -6088,7 +6088,7 @@ function handleReject(args: string[]): void {
   // rejection here rather than laundering it into the trail as the human's.
   // Autonomous Construction is exempt (the conductor owns the decision there).
   const rejectionAuthorship =
-    autonomousDecision || humanPresenceGuardDisabled(pd)
+    autonomousDecision || humanPresenceGuardDisabled()
       ? null
       : selfAttributedDecisionMarker(feedback, "rejection");
   if (rejectionAuthorship) {

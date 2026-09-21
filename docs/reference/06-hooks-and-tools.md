@@ -169,22 +169,30 @@ instruction covers. The decision to refuse is not each hook's own; it is made in
 one place, `aidlc-lib.ts`, from one matrix, so no hook can grow its own ladder.
 
 **The fences.** `GUARD_FENCES` names five: `plan-approval`, `review-freeze`,
-`state-transition`, `reviewer-scope`, and `human-presence`. Each has a config key
-`guard.<fence>` (`guardFenceConfigKey`) and, except `state-transition`, an
-environment kill switch (`GUARD_FENCE_ENV`). `resolveFences` returns the effective
-setting of all five for a state, in precedence order: the environment kill switch,
-then the per-run `Guards Off` state line, then the fences the policy word lowers
-(`fencesLoweredByPolicy`: nothing under `strict`, `plan-approval` and
-`review-freeze` under `relaxed`, those two plus `state-transition` and
-`reviewer-scope` under `off`), then on. `human-presence` is never lowered by the
-policy word: `humanPresenceGuardDisabled` reads only its environment variable and
-the `Guards Off` line, because "a real person is behind this approval" is the one
-thing an agent must not decide for itself.
+`state-transition`, `reviewer-scope`, and `human-presence`.
+`SWITCHABLE_GUARD_FENCES` contains only the first four; `guardFenceConfigKey`
+accepts one of those four and returns its `guard.<fence>` config key. These
+definitions live in `aidlc-guard-fences.ts` and are re-exported by `aidlc-lib.ts`.
+Each fence except `state-transition` has an environment kill switch
+(`GUARD_FENCE_ENV`). `resolveFences` returns the effective setting of all five
+for a state, in precedence order: the environment kill switch, then the per-work
+`Guards Off` state line, then the per-work `Guards On` state line, then the fences
+the policy word lowers (`fencesLoweredByPolicy`: nothing under `strict`,
+`plan-approval` and `review-freeze` under `relaxed`, those two plus
+`state-transition` and `reviewer-scope` under `off`), then on by default.
+`humanPresenceGuardDisabled` reads only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`:
+human presence is the key holder and has no per-work switch. A persisted
+human-presence entry on either state line is ignored. `AIDLC_UNATTENDED=1`
+separately withholds human-turn minting; it does not lower the fence.
 
-`config-change --guard.<fence> off|on` writes the `Guards Off` line
-(`setGuardsOffLine`, canonical order, `<comma list> (set by you)` or `none`) and
-one `GUARD_DISABLED` or `GUARD_RESTORED` row. `/aidlc --status` renders all five
-through `formatFence` on its `Fences:` line.
+For the four switchable fences, `config-change --guard.<fence> off|on` writes
+the `Guards Off` or `Guards On` line in canonical order as
+`<comma list> (set by you)` or `none`, and one `GUARD_DISABLED` or
+`GUARD_RESTORED` row. Setting `on` can raise a policy-lowered fence and records
+that override in `Guards On` with `GUARD_RESTORED`. `/aidlc --status` renders all
+five through `formatFence` on its `Fences:` line: `on (default)`,
+`on (set by you)`, `off (set by you)`, `off (env <VAR>)`, or
+`off (guard policy relaxed (from scope classic))`, as appropriate.
 
 **The chain of authority.** `authorityFor(projectDir, options)` answers one
 question before any fence refuses: is this action covered by the human's `grant`,
@@ -242,14 +250,18 @@ review receipt, a reviewer writing outside its unit, a direct lifecycle command.
 The instruction covers the work it asks for, including the approval still pending
 inside it; it does not cover the loop skipping one of its own steps.
 
-The human still holds the key, and it still opens in one move. A fence that holds
-puts the switch in front of the person who met it, in whichever shape that
-refusal has: `review-freeze` builds a typed refusal with `fence` set, so
+For the four switchable fences, the human still holds the key, and it still opens
+in one move. A fence that holds puts the switch in front of the person who met
+it, in whichever shape that refusal has: `review-freeze` builds a typed refusal with `fence` set, so
 `evaluateGuardRefusal` appends `lowerFenceRemedy` (`op: "lower-fence"`) to the
 guard-recovery ask and choosing it writes the per-run switch; the other three
-fences refuse from `PreToolUse` with exit 2 and carry `lowerFenceSentence` on
-stderr instead. Either way it is a key the person turns deliberately rather than
-one that turns itself, and once turned nothing asks again for that piece of work.
+fences refuse from `PreToolUse` with exit 2. Main-session refusals carry
+`lowerFenceSentence` on stderr; delegated-agent and reviewer-scope refusals keep
+their redirect without advertising a switch those agents cannot run. Either way
+it is a key the person turns deliberately rather than one that turns itself,
+and once turned nothing asks again for that piece of work.
+Human-presence refusals instead say `This needs a fresh human turn: wait for the person to reply, then record it again.`
+They never advertise a switch.
 
 **Strict drift asks in every column.** The check that finds drift runs at the
 boundary where the work would start (the plan-approval hook at generation start,
@@ -263,28 +275,34 @@ Authority is therefore consumed by the evidence trail alone: no row of the table
 reads it, and every `GUARD_STOOD_ASIDE` row still carries the `Authority`,
 `Grant`, and `Actor` in force, so a reader can see who was at the keyboard when a
 lowered fence let something through. Whether a human recently typed changes what
-is RECORDED, never what a guard DOES; the deliberate switch and the policy word
-are the only keys.
+is RECORDED, never what a guard DOES; only a fence's supported per-work switch,
+policy word, or environment kill switch can lower it.
 
 `decideFence(projectDir, fence, options)` is the whole ladder in one call:
 resolve the policy (`resolveGuardPolicy`, and an unreadable policy resolves to
 `strict`, so the fence stays up), resolve the fence setting, read the authority,
 decide. All four fence hooks call it before they refuse.
 
-**What a decision emits.** `stand-aside` prints one line
-(`guardStoodAsideLine(fence, detail)`: `Continuing past the <fence> check because
-it is off for this piece of work. Recorded in the audit trail: <detail>`) and
-writes one `GUARD_STOOD_ASIDE` row
+**What a decision emits.** `stand-aside` formats one line with
+`guardStoodAsideLine(fence, source, detail?)`:
+`Continuing past the <fence> check because it is off for this piece of work (<source>). Recorded in the audit trail: <detail>`.
+The source is the text `formatFence` prints inside its parentheses, such as
+`set by you`, `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, or
+`guard policy relaxed (from scope classic)`. Without detail, the final sentence
+is `Recorded in the audit trail.` It writes one `GUARD_STOOD_ASIDE` row
 (`recordGuardStoodAside`, carrying `Guard`, `Authority`, `Grant`, `Actor`, and
-optional `Stage`, `Tool`, `Details`). It never asks "are you sure": the switch is
-already off. The line takes no authority argument, because a fence stands aside
-only when it was lowered; the authority in force still reaches the ledger on the
-row.
+optional `Stage`, `Tool`, `Details`). It never asks "are you sure": the fence is
+already off. The line names what lowered the fence, not the authority; the
+authority in force still reaches the ledger on the row.
 
 **Delivery of that line is per harness, and the row is the fallback.** All four
-fence hooks write it to their own stdout. Claude Code, Codex, opencode, and Kiro
-CLI consume hook output, so the human sees it there. Kiro IDE 1.x does not:
-measured live, it forwards hook stdout only for `SessionStart` and
+fence hooks use `writeGuardStoodAside(line)` from `aidlc-lib.ts`. When
+`runtimeHarnessName()` is `"claude"`, it writes one JSON line to stdout:
+`{"systemMessage":"<line>"}`. Claude Code shows this as a hook message to the
+human, not to the model; exit-0 plain stdout is not delivered, and the
+`GUARD_STOOD_ASIDE` row is the record. Codex, opencode, and Kiro CLI receive
+the plain hook line. Kiro IDE 1.x does not show it: measured live, it forwards
+hook stdout only for `SessionStart` and
 `UserPromptSubmit` (see the Stop hook's per-host table earlier in this chapter),
 so on that harness a stand-aside is silent and the `GUARD_STOOD_ASIDE` row is the
 only record that the fence let something through. That limitation is pre-existing
@@ -296,16 +314,19 @@ of what that decision let through rather than the decision itself. And
 `recordGuardStoodAside` appends nothing at all when the intent has no audit
 ledger yet. On Kiro IDE
 against a project with no ledger, a stand-aside therefore leaves neither a line
-nor a row. `hold` refuses as before
-and appends `lowerFenceSentence`, one sentence naming
-`/aidlc config set guard.<fence> off`; the typed refusal's remedy list carries
-`lowerFenceRemedy` (`op: "lower-fence"`) LAST, after the remedies that let the
-workflow finish the step on its own.
+nor a row. `hold` refuses as before. Switchable-fence main-session refusals append
+`lowerFenceSentence`, one sentence naming `/aidlc config set guard.<fence> off`;
+delegated-agent and reviewer-scope refusals keep their redirect instead, without
+the switch sentence. The typed refusal's remedy list carries `lowerFenceRemedy`
+(`op: "lower-fence"`) LAST, after the remedies that let the workflow finish the
+step on its own.
 
-**Security posture.** No policy value and no switch removes an approval gate,
-alters a reviewer's verdict, deletes evidence, or lets an agent answer for a
-human. What a lowered fence changes is that the human is TOLD rather than stopped,
-and the telling is durable: a stand-aside always leaves a row.
+**Security posture.** No policy value and no per-work switch removes an approval
+gate, alters a reviewer's verdict, deletes evidence, or lets an agent answer for
+a human. The conductor still asks every approval question; a lowered fence does
+not enforce that prose obligation. It lets undirected work through, with a
+`GUARD_STOOD_ASIDE` row when the intent has an audit ledger and a notice on the
+harnesses that deliver it.
 
 ### Audit Event Flow
 
@@ -447,15 +468,20 @@ stored payload, and atomically replaces the cursor with the prepared successor
 (the next part, or the run-stage) before writing stdout. Two processes racing the
 same receipt therefore have exactly one winner.
 
-Every other `continue` is answered exactly as a bare `next` would answer it,
-never as an error: a mistyped receipt, a receipt already consumed, a receipt
+Outside a tracked Copilot attempt, every other `continue` is answered exactly as
+a bare `next` would answer it, never as an error: a mistyped receipt, a receipt
+already consumed, a receipt
 presented after the run-stage, a race loser, a workflow state or route that moved
 underneath. In a stateful workflow that is the current issued step: the retained
 run-stage (byte-identical to `next`), or part one again, since the part-one rule
 above makes a conductor that holds parts 1..k-1 indistinguishable from a
 compacted context. On a stateless route the marker's payload supplies the scope
-and stage. The one remaining `continue` error is lock contention, which asks for
-the same command again.
+and stage. Lock contention returns a `continue` error that asks for the same
+command again.
+
+A receipt replayed under a tracked Copilot attempt instead returns an error
+directive (stale or superseded) and marks the attempt failed. The conductor
+recovers with a fresh `next`.
 
 Fresh `next` uses the same lock and must publish its first work directive before
 stdout on all harnesses. It is an explicit reset. A `next` whose answer is the
@@ -749,9 +775,13 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 **Planning commands.** Before approval, the guard permits `aidlc engine orchestrate next` and `aidlc engine orchestrate continue <receipt>` so the conductor can resume on a human turn and finish loading the stage rules. It also permits the Testing Contract's `testing-posture resolve|render|fingerprint|verify` commands and `log decision|answer` for the exact `code-generation` / `plan-approval` checkpoint. The same routes are available through `bun <harness-dir>/tools/aidlc.ts engine ...` (including `bun run`) when the entry point is a real installed file under the current harness's tools directory, with no symlink in its path. Invoke Bun directly: wrappers such as `env` or `sudo` are not exempt because they can change the directory or context in which the script executes. These exceptions do not grant approval or exempt source writes, output redirection into source files, commands that change executable resolution, preloaded code, or additional mutation commands in the same shell call. Descriptor redirection such as `2>&1` remains available.
 
 **Recovery commands.** `aidlc-guard-operation.ts` supplies the structured
-`restart-stage` and `abort-bolt` operations and renders their native or source
-commands. The conductor waits for the required human selection, then executes
-the exact returned command. Plan Approval recognizes the native abort only in
+`restart-stage`, `abort-bolt`, `lower-fence`, `reapprove-plan` and
+`show-plan-drift` operations and renders their native or source commands. The
+conductor waits for the required human selection, then executes the exact
+returned command. Plan Approval recognizes two native recoveries without a
+published selection marker: the fence switch in its emitted shape, `aidlc
+engine config set guard.<fence> off` for one of the four switchable fences, and
+the abort only in
 the emitted argument shape: `aidlc engine bolt abort --name <unit> --slug <slug>
 --reason 'stale review recovery exhausted' --discard`, with concrete identifiers
 and no extra arguments. This narrowly admits an attempt to recover; the Bolt
@@ -933,7 +963,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-create` |
 | **Interaction** | 9 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts` |
 | **Navigation** | 7 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `PLUGIN_SELECTION_CHANGED` | `aidlc-utility.ts` |
-| **Guard Policy** | 5 | `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET` (its retired name, read only), `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE` | `aidlc-utility.ts` builds `GUARD_POLICY_SET` batches for `config-change` / `scope-change` and the `GUARD_RESTORED` row for a fence switched back on; `aidlc-lib.ts` observes effective memory changes through `appendGuardPolicySetRow`, records accepted changes at the three governed checkpoints, and writes `GUARD_STOOD_ASIDE` from `recordGuardStoodAside` when a fence stands aside |
+| **Guard Policy** | 5 | `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET` (its retired name, read only), `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE` | `aidlc-utility.ts` builds `GUARD_POLICY_SET` batches for `config-change` / `scope-change` and the `GUARD_RESTORED` row for a fence switched back on, including an override above the policy word; `aidlc-lib.ts` observes effective memory changes through `appendGuardPolicySetRow`, records accepted changes at the three governed checkpoints, and writes `GUARD_STOOD_ASIDE` from `recordGuardStoodAside` when a fence stands aside |
 | **Ceremony** | 1 | `CEREMONY_SET` | `aidlc-utility.ts` builds changed-setting rows for `config-change` / `scope-change`, appended together through `appendAuditEntries` before the state write |
 | **Unit configuration/lifecycle** | 7 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED` | `aidlc-state.ts`, `aidlc-unit.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact` |
@@ -1063,9 +1093,9 @@ path for a framework command.
 | `codekb-publish --repo <name> --staged <dir> --paths <csv> --expect-store <generation> --expect-source <fingerprint> [--json]` | Direct-only guarded publication of a complete nine-artifact CodeKB candidate. Refuses stale source or store generations. There is no `/aidlc codekb-publish` route. | — |
 | `codekb-scope-diff [--repo <name>] [--compare <timestamp.md> \| --mint --paths <csv>] [--json]` | Direct-only CodeKB status, scope comparison, and source-fingerprint minting query. There is no `/aidlc codekb-scope-diff` route. | — |
 | `select-plugins [names]` | Query/update behind `aidlc engine plugin select`; stages all selected surfaces and commits their diff through the transaction engine. | `PLUGIN_SELECTION_CHANGED` in set mode |
-| `scope-change` | Re-plan which stages execute and apply any of the twelve setting flags in one atomic update. A same-scope request still applies settings. Scope-owned Guard Policy/ceremony rows follow new defaults; human overrides and absent legacy rows are preserved. Memory-enforced strict still controls the effective value while the scope-owned Guard Policy row follows the new default. | `SCOPE_CHANGED` when scope changes, plus changed-setting events |
-| `config-get`, `config-list` | Read all twelve workflow settings: `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, and the five `guard.<fence>` keys. Guard Policy, fence, and ceremony values include effective sources; the retired key `change-control` resolves to `guard-policy`. `config-list --json` emits the structured shape. | none |
-| `config-change` | The single intent-settings setter. Accepts any combination of the twelve setting flags, plus `--intent`, `--space`, and `--project-dir`; requires at least one setting and refuses invalid values or unknown flags before mutation. All `aidlc engine config set <key> <value>` routes and matching slash flags use it. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `GUARD_POLICY_SET`, `CEREMONY_SET` for changed settings, plus `GUARD_DISABLED` or `GUARD_RESTORED` per switched fence |
+| `scope-change` | Re-plan which stages execute and apply any of the eleven setting flags in one atomic update. A same-scope request still applies settings. Scope-owned Guard Policy/ceremony rows follow new defaults; human overrides and absent legacy rows are preserved. Memory-enforced strict still controls the effective value while the scope-owned Guard Policy row follows the new default. | `SCOPE_CHANGED` when scope changes, plus changed-setting events |
+| `config-get`, `config-list` | Read all eleven workflow settings: `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, and the four switchable `guard.<fence>` keys. Guard Policy, fence, and ceremony values include effective sources; the retired key `change-control` resolves to `guard-policy`. `config-list --json` emits the structured shape. | none |
+| `config-change` | The single intent-settings setter. Accepts any combination of the eleven setting flags, plus `--intent`, `--space`, and `--project-dir`; requires at least one setting and refuses invalid values or unknown flags before mutation. All `aidlc engine config set <key> <value>` routes and matching slash flags use it. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `GUARD_POLICY_SET`, `CEREMONY_SET` for changed settings, plus `GUARD_DISABLED` or `GUARD_RESTORED` per switched fence |
 | `plugin-list` | List installed plugins with enabled/disabled state; `--json` emits `plugins` plus `selectionActive`. | none |
 | `plugin-sync` | Compose installed plugin roots by running each plugin's `hooks/compose.ts`; no configured roots is a clean no-op, while configured roots without a compose hook fail and mixed sets warn for each skipped root. | none |
 | `set-status` | Low-level state-field sync (called by `sync-workflow-state.ts` hook on TaskUpdate) | — |
@@ -1108,7 +1138,8 @@ A memory layer's `Mode: strict` refuses an explicit `--guard-policy relaxed` or
 scope change, and names the memory file. Explicit strict and unrelated settings
 remain allowed. `review adversarial` stores an empty `Review Override`; explicit
 Guard Policy and ceremony choices store `<value> (set by you)`, and a fence switch
-stores the `Guards Off` line through `setGuardsOffLine`. Scope defaults retain their
+stores the `Guards Off` or `Guards On` line. An `on` override can raise a
+policy-lowered fence and records `GUARD_RESTORED`. Scope defaults retain their
 scope source, and a same-value change of source is still a recorded change.
 Environment kill switches override effective ceremony values without changing
 the saved choice. `intent-create` accepts the same setting flags when creating
@@ -1153,7 +1184,7 @@ debugging. The shared helpers below support command rendering and invocation.
 ### Recovery operations and runtime invocation
 
 `aidlc-guard-operation.ts` is the shared operation definition, command renderer,
-and validator for the two concrete recovery operations. It dispatches no work:
+and validator for the five concrete recovery operations. It dispatches no work:
 the conductor executes an offered command or follows its `human-input` or
 `external-work` action through the existing tools.
 

@@ -86,6 +86,7 @@ import {
   resolveProjectDirFromHook,
   teamUnitGateStatus,
   type StageEntry,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 export {
@@ -309,9 +310,7 @@ export async function run(input: string): Promise<number> {
     }
     if (gate?.decision === "stand-aside") {
       const detail = verdict.target ?? "";
-      process.stdout.write(
-        `${guardStoodAsideLine("review-freeze", detail)}\n`,
-      );
+      writeGuardStoodAside(guardStoodAsideLine("review-freeze", gate.source, detail));
       recordGuardStoodAside(projectDir, {
         fence: "review-freeze",
         authority: gate.authority,

@@ -218,7 +218,7 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 | Section | Contents |
 |---------|----------|
 | Project Information | Project description, type (greenfield/brownfield), scope, start date, lifecycle phase, active agent, worktree path, Bolt refs, practices affirmed timestamp |
-| Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy, `Guard Policy` with its source, `Guards Off` (written only once a fence was switched off for this piece of work), and the three ceremony lines |
+| Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy, `Guard Policy` with its source, `Guards Off` (fences lowered for this piece of work), `Guards On` (fences forced on above the policy word), and the three ceremony lines. The fence lines appear only when used and never include human presence, which has no per-work switch. |
 | Workspace State | Project root, detected languages, frameworks, build system |
 | Execution Plan Summary | Total stages, completed count, in-progress stage |
 | Runtime State | Revision count, Construction checkpoints, iteration and execution selection, receipt-bound Construction Verification Command, plus optional Unit ownership and Unit gate rhythm |

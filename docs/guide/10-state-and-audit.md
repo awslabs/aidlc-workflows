@@ -23,7 +23,7 @@ sidecar's final line ending.
 | Section | Purpose |
 |---------|---------|
 | **Project Information** | Project description, type (greenfield/brownfield), scope, start date, current phase, active agent |
-| **Scope Configuration** | Stages to execute, stages to skip (with reasons), depth level, test strategy, and the per-intent settings: `Guard Policy`, `Guards Off` (present only once a fence was switched off for this piece of work), `Sensors`, `Learnings`, `Summary Confirmation` |
+| **Scope Configuration** | Stages to execute, stages to skip (with reasons), depth level, test strategy, and the per-intent settings: `Guard Policy`, `Guards Off` (fences lowered for this piece of work), `Guards On` (fences forced on above the policy word), `Sensors`, `Learnings`, `Summary Confirmation`. The fence lines appear only when used and never include human presence, which has no per-work switch. |
 | **Workspace State** | Project root, detected languages, frameworks, build system |
 | **Execution Plan Summary** | Total stages, completed count, in-progress stage |
 | **Runtime State** | Revision count, Construction checkpoints, iteration and execution settings, receipt-bound Construction Verification Command, and optional Unit ownership and Unit gate rhythm |

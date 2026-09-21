@@ -24,7 +24,7 @@ patch must do (requirements-analysis), capture the security constraint
 ship through the deployment stages so the patch actually reaches
 production.
 
-Guard Policy defaults to strict: a patch whose inputs move after approval is approved again before it ships.
+Guard Policy defaults to strict: a patch whose inputs move after approval is approved again before it ships, and no fences are lowered.
 
 ## Why these stages, why skip those
 

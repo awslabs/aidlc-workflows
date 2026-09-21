@@ -15,6 +15,7 @@ import {
   parseWorkspaceCommand,
   recordGuardStoodAside,
   resolveProjectDirFromHook,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
@@ -1011,9 +1012,7 @@ export async function run(input: string): Promise<number> {
       return false;
     }
     if (gate.decision !== "stand-aside") return false;
-    process.stdout.write(
-      `${guardStoodAsideLine("state-transition", detail)}\n`,
-    );
+    writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
     recordGuardStoodAside(projectDir, {
       fence: "state-transition",
       authority: gate.authority,
@@ -1048,7 +1047,7 @@ export async function run(input: string): Promise<number> {
     `Delegated agent "${agentType}" cannot run ${delegatedCommand} because only the main ` +
       "workflow session can change stage status or routing. Return the artifact, contribution, " +
       "or review verdict to the main session without parking, resuming, reporting, routing, " +
-      `or presenting an approval question. ${lowerFenceSentence("state-transition")}\n`,
+      "or presenting an approval question.\n",
   );
   return 2;
 }

@@ -70,8 +70,9 @@ for the agents. `strict` reopens that approval and holds every check; `relaxed`
 records the change once, tells the human in one line, continues, and stands the
 plan-approval and review-freeze checks aside; `off` does that and stands the
 state-transition and reviewer-scope checks aside as well. No value removes a
-gate and none of them touches human presence, so it is a question of how much
-the team wants to be asked again, not of how much is checked.
+gate and none of them touches human presence. The conductor still asks every
+approval question; the value also decides which fences stop undirected work,
+and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
 - A matched stock scope carries its own default (`guard_policy:` in the
   scope file; the shipped defaults are strict on enterprise, security-patch,

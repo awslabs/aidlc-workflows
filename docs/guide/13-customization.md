@@ -133,9 +133,9 @@ You can override scope at any time during a workflow:
 
 The seven intent settings are `depth`, `test-strategy`, `review`,
 `guard-policy`, `sensors`, `learnings`, and `summary-confirmation`, in that
-order. Five more keys, `guard.plan-approval`, `guard.review-freeze`,
-`guard.state-transition`, `guard.reviewer-scope`, and `guard.human-presence`,
-switch one guard off or back on for a single piece of work. They all use one
+order. Four more keys, `guard.plan-approval`, `guard.review-freeze`,
+`guard.state-transition`, and `guard.reviewer-scope`, switch one guard off or
+back on for a single piece of work. They all use one
 atomic setter, `config-change`; the slash flags and `config set` routes are front
 ends to that same operation. Mix settings in one command rather than chaining
 separate updates:
@@ -147,9 +147,9 @@ separate updates:
 ```
 
 The native equivalent is `aidlc engine config set <key> <value>` followed by
-the remaining `--key value` flags. `config get <key>` accepts all twelve keys,
-and `config list` (optionally `--json`) returns all twelve, including effective
-values and sources for Guard Policy, the five fences, and the ceremonies:
+the remaining `--key value` flags. `config get <key>` accepts all eleven keys,
+and `config list` (optionally `--json`) returns all eleven, including effective
+values and sources for Guard Policy, the four switchable fences, and the ceremonies:
 
 ```
 /aidlc config get guard-policy
@@ -157,6 +157,8 @@ values and sources for Guard Policy, the five fences, and the ceremonies:
 /aidlc config get summary-confirmation
 /aidlc config list --json
 ```
+
+The additional read-only `guard.human-presence` lookup reports `on (default)` or `off (env AIDLC_SKIP_HUMAN_PRESENCE_GUARD)`; it is not a per-work setting and is not included in `config list`.
 
 `config-change` accepts only those setting flags and `--intent`, `--space`,
 `--project-dir` selectors, with at least one setting required. For example:
@@ -231,6 +233,8 @@ Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. I
 
 No value removes a gate. Every approval question is still asked, a reviewer's verdict is never changed, no evidence is deleted, an agent can never answer for you, and editing the approved plan itself (or its test instructions or Testing Contract) reopens approval under all three values. Guard Policy decides the consequence of a change or an undirected action, not whether the framework notices it.
 
+Asking every approval question is a conductor prose obligation, not something a lowered fence enforces.
+
 #### Defaults per scope
 
 | Scope | Default |
@@ -252,30 +256,32 @@ The resolved value is written to the intent's `aidlc-state.md` at creation as `-
 
 #### This setting used to be called Change Control
 
-Every old spelling still works in this release and is removed in the next minor version: the scope key `change_control`, the state field `Change Control`, the memory heading `## Change Control`, the flag `--change-control`, and the config key `change-control`. Typing the retired flag or config key prints one line naming the new spellings; a retired scope key, state field, or memory heading is read without comment. Nothing writes an old name again: a state file still carrying a `Change Control` line has that line renamed in place the next time the setting is written, so the setting never appears twice. The `CHANGE_CONTROL_SET` audit event stays readable in older ledgers; new rows are `GUARD_POLICY_SET`.
+Every old spelling still works in this release and is removed in the next minor version: the scope key `change_control`, the state field `Change Control`, the memory heading `## Change Control`, the flag `--change-control`, and the config key `change-control`. Typing the retired flag or config key prints one line naming the new spellings; a retired scope key or memory heading is read without comment. Nothing writes an old name again: a state file still carrying a `Change Control` line has that line renamed in place the next time a Guard Policy setting is written, so the setting never appears twice. The `CHANGE_CONTROL_SET` audit event stays readable in older ledgers; new rows are `GUARD_POLICY_SET`.
+
+While a piece of work still carries the retired `Change Control: relaxed` or `Change Control: off` line, every `/aidlc` run carries a notice in the directive's `change_notices`; `next` stays a query and writes nothing. For example: `Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed also lowers the plan-approval and review-freeze fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to confirm it, or 'guard policy strict' to keep them up; this notice repeats until you choose.` Re-affirm with `/aidlc config set guard-policy relaxed` to keep that value or `/aidlc config set guard-policy strict` to raise the fences; the command rewrites the line as `Guard Policy` and the notice stops. A retired strict line gets no notice and is rewritten the next time any Guard Policy setting is written.
 
 ### The five fences
 
-A fence is a guard that refuses an action nothing asked for: no step the workflow is currently running calls for it. Each fence can be switched off for one piece of work and switched back on.
+A fence is a guard that refuses an action nothing asked for: no step the workflow is currently running calls for it. Four fences can be switched off for one piece of work and switched back on; human presence is the key holder and has no per-work switch.
 
-| Fence | What it refuses | Config key | Machine-wide kill switch |
+| Fence | What it refuses | Per-work switch | Machine-wide kill switch |
 |-------|-----------------|------------|--------------------------|
 | Plan approval | code before an approved plan | `guard.plan-approval` | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` |
 | Review freeze | edits to reviewed content after a review receipt | `guard.review-freeze` | `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` |
 | State transition | direct lifecycle commands in place of the workflow's own | `guard.state-transition` | none |
 | Reviewer scope | a reviewer agent writing outside the Unit it was given | `guard.reviewer-scope` | `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` |
-| Human presence | an approval or an answer with no real human turn behind it | `guard.human-presence` | `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` |
+| Human presence | an approval or an answer with no real human turn behind it | none: the key holder has no in-band switch | `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` |
 
 ```
 /aidlc config set guard.plan-approval off
 /aidlc config set guard.plan-approval on
 ```
 
-Switching one off writes `- **Guards Off**: plan-approval (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on writes `GUARD_RESTORED`. The line names only what you lowered, so it is easy to see what is down and put it back, and `/aidlc --status` prints a `Fences:` line with all five and where each setting came from. For one fence the order of precedence is the machine-wide kill switch, then your per-work switch, then the Guard Policy word, then on.
+Switching one off writes `- **Guards Off**: plan-approval (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on removes it from that list and writes `GUARD_RESTORED`. Setting `on` also raises a policy-lowered fence, records `- **Guards On**: plan-approval (set by you)`, and writes `GUARD_RESTORED`. The lines name only the four switchable fences; a persisted human-presence entry is ignored. `/aidlc --status` prints a `Fences:` line with all five and where each setting came from. Precedence is the machine-wide kill switch, then per-work off, then per-work on, then the Guard Policy word, then on by default.
 
-A fence is lowered by a switch and by nothing else. Typing something in the session does not lower one, however clearly you meant it: the framework can tell that you spoke, but not what you asked for, and a fence that opened on any keystroke would be no fence at all. When one holds, the refusal names the switch, so opening it is one deliberate move rather than a guess about your intent.
+A fence is lowered by a switch and by nothing else. Typing something in the session does not lower one, however clearly you meant it: the framework can tell that you spoke, but not what you asked for, and a fence that opened on any keystroke would be no fence at all. A switchable fence's main-session refusal names its switch, so opening it is one deliberate move rather than a guess about your intent. A human-presence refusal names no switch: `This needs a fresh human turn: wait for the person to reply, then record it again.`
 
-Human presence is the strictest of the five. It is what makes your approval yours, so no Guard Policy value lowers it: only its own switch or its kill switch can.
+Human presence is the strictest of the five. It is what makes your approval yours, so neither Guard Policy nor a per-work setting lowers it: only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` does. `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower the fence.
 
 ### Who asked for this: the authority chain
 
@@ -291,10 +297,10 @@ What this classification decides is the changed-input question above: under `str
 
 ### What you see when a guard decides
 
-- **It stands aside.** One line, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work. Recorded in the audit trail: <detail>`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the switch is already off.
+- **It stands aside.** One line names what lowered the fence, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope classic)). Recorded in the audit trail: dispatch of aidlc-developer-agent`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the fence is already off.
 
-  You see that line on Claude Code, Codex, opencode, and Kiro CLI. On Kiro IDE you do not: the IDE hands a hook's output to the agent only at session start and at prompt submit, so a stand-aside there is silent and the audit row is the only record of it. Every hook refusal reason is already invisible on that harness for the same reason. The row is written only when the intent already has an audit trail, so on a brand-new project with no ledger yet a stand-aside leaves neither the line nor the row. If you want to know what a lowered fence let through, read the `GUARD_STOOD_ASIDE` rows in the intent's `audit/` shards rather than relying on having seen the line.
-- **It holds.** The refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.plan-approval off. It is recorded, and it comes back on for the next piece of work.`
+  On Claude Code the hook emits one JSON `systemMessage`, which Claude Code shows to you as a hook message; the model does not see it, and the `GUARD_STOOD_ASIDE` row is the record. On Codex, opencode, and Kiro CLI you see the plain hook line. On Kiro IDE you do not: the IDE hands a hook's output to the agent only at session start and at prompt submit, so a stand-aside there is silent and the audit row is the only record of it. Every hook refusal reason is already invisible on that harness for the same reason. The row is written only when the intent already has an audit trail, so on Kiro IDE against a brand-new project with no ledger yet a stand-aside leaves neither the line nor the row. If you want to know what a lowered fence let through, read the `GUARD_STOOD_ASIDE` rows in the intent's `audit/` shards rather than relying on having seen the line.
+- **It holds.** A switchable fence's main-session refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.plan-approval off. It is recorded, and it comes back on for the next piece of work.` Human presence instead asks for a fresh human turn and never advertises a switch.
 - **It asks.** Under `strict`, an input that changed after you approved something is asked about once, naming what changed.
 
 ---

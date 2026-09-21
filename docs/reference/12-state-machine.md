@@ -505,21 +505,24 @@ column.
 | `GUARD_POLICY_SET` | `tools/aidlc-utility.ts`, `tools/aidlc-lib.ts` | The utility applier builds a row for `config-change --guard-policy <strict\|relaxed\|off>` or a changed scope-owned default in `scope-change`; lib's `appendGuardPolicySetRow` (through `governedGuardPolicy`) records an effective memory-layer change observed at a governed checkpoint. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`). Utility rows use the previously persisted intent value for `Old Value` (raw text if invalid; `strict` if absent), not the memory-effective value; checkpoint rows retain effective old/new values. |
 | `CHANGE_CONTROL_SET` | `Reserved (retired name)` | The name `GUARD_POLICY_SET` replaced. Written by releases before the rename and still read as the same setting history; no shipped emitter writes it. Same fields: `Old Value`, `New Value`, `Source` |
 | `CHANGE_ACCEPTED` | `tools/aidlc-lib.ts` | A governed checkpoint (plan-approval source drift, review-receipt content change, summary-confirmation authorization) accepted an input change under `relaxed` or `off` and continued. Fields: `Stage`, optional `Unit`, `Checkpoint`, `Changed`, `Recorded`, `Current`, `Details` (the one line the human hears). One row per distinct change; the same values never produce a second row |
-| `GUARD_RESTORED` | `tools/aidlc-utility.ts` | `config-change --guard.<fence> on` switched a fence back on for this piece of work after a per-run `off`. Fields: `Guard` (the fence), `Scope`, `Source` (`you`). The matching `off` writes `GUARD_DISABLED` |
+| `GUARD_RESTORED` | `tools/aidlc-utility.ts` | `config-change --guard.<fence> on` switched a fence back on for this piece of work after a per-work `off` or forced it on above a policy word that lowers it. Fields: `Guard` (the switchable fence), `Scope`, `Source` (`you`). The matching `off` writes `GUARD_DISABLED` |
 | `CEREMONY_SET` | `tools/aidlc-utility.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
 
 All seven intent settings share `config-change`: `depth`, `test-strategy`,
 `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, in
-that order. Five per-fence keys, `guard.plan-approval`, `guard.review-freeze`,
-`guard.state-transition`, `guard.reviewer-scope`, and `guard.human-presence`,
-use the same setter and take `on` or `off`. The matching slash flags and every
+that order. Four per-fence keys, `guard.plan-approval`, `guard.review-freeze`,
+`guard.state-transition`, and `guard.reviewer-scope`, use the same setter and
+take `on` or `off`. The matching slash flags and every
 `config set <key> <value>` route can combine settings in one transaction.
-`config get` and `config list` expose all twelve keys; Guard Policy, fence, and
+`config get` and `config list` expose all eleven keys; Guard Policy, fence, and
 ceremony values include effective sources, and the retired key `change-control`
 resolves to `guard-policy`. `config-change` accepts only those setting flags plus
 `--intent`, `--space`, and `--project-dir`, requires at least one setting, and
 refuses unknown flags by name. Validation precedes the complete mutation, so
 invalid values cannot partially apply companion settings.
+Human presence has no per-work switch: only the machine-wide
+`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers it. A `guard.human-presence` setting
+refuses the entire update rather than changing it or any companion setting.
 
 Guard Policy (`strict`, `relaxed`, `off`) decides two things. First, the
 consequence of an input change after a human approval or confirmation: `strict`

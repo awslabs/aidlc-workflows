@@ -54,7 +54,6 @@ import {
   errorMessage,
   guardStoodAsideLine,
   hooksHealthDir,
-  lowerFenceSentence,
   recordGuardStoodAside,
   isClaudeCodeHookInput,
   isTeamUnitOwnership,
@@ -69,6 +68,7 @@ import {
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
   toPosix,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 
 const HOOK_NAME = "reviewer-scope";
@@ -835,9 +835,7 @@ function reviewerScopeStandsAside(
   }
   if (gate.decision !== "stand-aside") return false;
   const detail = `${target} (unit ${unit})`;
-  process.stdout.write(
-    `${guardStoodAsideLine("reviewer-scope", detail)}\n`,
-  );
+  writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
   recordGuardStoodAside(projectDir, {
     fence: "reviewer-scope",
     authority: gate.authority,
@@ -1001,7 +999,7 @@ export async function run(input: string): Promise<number> {
         ? " (an implicit search root the command falls back to with no path, not a path you typed)"
         : "";
       process.stderr.write(
-        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}. ${lowerFenceSentence("reviewer-scope")}\n`,
+        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}.\n`,
       );
       return 2;
     }
@@ -1114,7 +1112,7 @@ export async function run(input: string): Promise<number> {
   );
 
   process.stderr.write(
-    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)} ${lowerFenceSentence("reviewer-scope")}\n`,
+    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`,
   );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }

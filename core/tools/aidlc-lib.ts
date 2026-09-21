@@ -11,6 +11,7 @@ import {
   aidlcInvocation,
   resolveHarnessPath,
   runtimeHarnessDir,
+  runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import {
   guardOperationInvocation,
@@ -20,6 +21,24 @@ import {
   isGuardRecoveryOperation,
   renderGuardOperation,
 } from "./aidlc-guard-operation.ts";
+import {
+  GUARD_FENCES,
+  SWITCHABLE_GUARD_FENCES,
+  type GuardFence,
+  type SwitchableGuardFence,
+  isSwitchableGuardFence,
+  guardFenceConfigKey,
+} from "./aidlc-guard-fences.ts";
+export {
+  GUARD_FENCES,
+  SWITCHABLE_GUARD_FENCES,
+  type GuardFence,
+  type SwitchableGuardFence,
+  isSwitchableGuardFence,
+  GUARD_FENCE_CONFIG_PREFIX,
+  guardFenceConfigKey,
+  guardFenceFromConfigKey,
+} from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
   KNOWN_CODEKB_STAGES,
@@ -22415,68 +22434,11 @@ export function isAutonomousSwarmStage(
   return resolution.state === "ok" && resolution.units.length > 0;
 }
 
-// Deterministic off-switch for the human-presence gate (mirrors
-// artifactGuardDisabled in aidlc-state.ts). The suite sets this globally (the
-// dedicated guard test clears it), and it is the documented bypass for
-// synthetic CI runs that drive approve/answer against bare fixtures.
-//
-// Human presence is the KEY HOLDER, not a fence: no Guard Policy value lowers
-// it, because "a real person is behind this approval" is the one thing an agent
-// must never decide for itself. It has exactly two off-switches, and both are a
-// person's deliberate act: the environment variable above (a machine-wide
-// declaration) and `/aidlc config set guard.human-presence off`, which lowers
-// it for ONE piece of work and is recorded. Pass the project directory to have
-// the per-run switch honoured; without it only the environment variable is read
-// (the shape older callers relied on).
-export function humanPresenceGuardDisabled(
-  projectDir?: string,
-  stateContent?: string | null,
-): boolean {
-  if (resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1") return true;
-  if (projectDir === undefined) return false;
-  try {
-    const state = stateContent ?? authorityStateText(projectDir);
-    const fences = parseGuardsOffLine(getField(state, GUARDS_OFF_FIELD));
-    if (!fences.includes("human-presence")) return false;
-    announcePresenceStoodAside(projectDir);
-    return true;
-  } catch {
-    return false; // unreadable state: the key holder stays on
-  }
-}
-
-let presenceStoodAsideAnnounced = false;
-
-/**
- * "Never silently off" applied to the one guard that is a key rather than a
- * fence: when the human's own `guard.human-presence off` switch is what let a
- * command through, say so once and leave the row.
- *
- * Two deliberate narrowings. It fires only for the STATE-LINE switch, never for
- * AIDLC_SKIP_HUMAN_PRESENCE_GUARD: the environment variable is the machine-wide
- * layer, set once by whoever runs the machine (the test suite sets it globally),
- * so a row per invocation there would say nothing a human chose. And it fires
- * once per process, because a single command reads the key several times while
- * standing aside only once.
- *
- * The line goes to STDERR on purpose. These tools print directive JSON on
- * stdout, and a conductor parses that; an advisory belongs beside it, not in it.
- */
-function announcePresenceStoodAside(projectDir: string): void {
-  if (presenceStoodAsideAnnounced) return;
-  presenceStoodAsideAnnounced = true;
-  try {
-    process.stderr.write(
-      `${guardStoodAsideLine("human-presence", "you turned this check off for this piece of work")}\n`,
-    );
-    recordGuardStoodAside(projectDir, {
-      fence: "human-presence",
-      authority: authorityFor(projectDir),
-      details: "human-presence key off for this piece of work",
-    });
-  } catch {
-    // Advisory only. Announcing a pass must never turn it back into a refusal.
-  }
+// Human presence is the key holder, not a fence the policy word can lower.
+// It has exactly one off-switch: the machine-wide environment variable, set
+// outside the session. Persisted per-work settings cannot lower this guard.
+export function humanPresenceGuardDisabled(): boolean {
+  return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
 }
 
 // An unattended driver is the only component that knows its prompt-submit
@@ -22487,16 +22449,13 @@ export function humanTurnMintAllowed(): boolean {
 }
 
 export function unattendedHumanPresenceHint(): string {
-  // Two sentences, and both are about how the person gets out of here. The
-  // unattended one explains why their prompts are not counting; the second
-  // names the switch, because a human who is present and being told to wait for
-  // a human needs the key in their hand, not a page reference.
+  // Explain unattended submissions when relevant, then require a human reply.
   const unattended = humanTurnMintAllowed()
     ? ""
     : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
-  return `${unattended} ${lowerFenceSentence("human-presence")}`;
+  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.`;
 }
 
 export function setField(content: string, field: string, value: string): string {
@@ -22820,7 +22779,7 @@ export interface GuardRefusalInput {
   };
   /** Set when this refusal IS a fence holding, so the way past it is offered
    *  beside the reasons the workflow can resolve on its own. */
-  fence?: GuardFence;
+  fence?: SwitchableGuardFence;
 }
 
 function guardLifecycleState(
@@ -22851,7 +22810,7 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
  * key reachable at the moment it is needed. It requires a human (it is their
  * key), it is always executable, and it is recorded.
  */
-export function lowerFenceRemedy(fence: GuardFence): GuardRemedy {
+export function lowerFenceRemedy(fence: SwitchableGuardFence): GuardRemedy {
   return {
     op: "lower-fence",
     action:
@@ -22864,7 +22823,7 @@ export function lowerFenceRemedy(fence: GuardFence): GuardRemedy {
 }
 
 /** The sentence a prose refusal adds so the switch is visible where it is needed. */
-export function lowerFenceSentence(fence: GuardFence): string {
+export function lowerFenceSentence(fence: SwitchableGuardFence): string {
   return (
     `If you meant to do this now, turn the check off for this piece of work with ` +
     `/aidlc config set ${guardFenceConfigKey(fence)} off. It is recorded, and it ` +
@@ -30087,38 +30046,12 @@ export function guardPolicyMemoryStrictRefusal(
 export const changeControlMemoryStrictRefusal = guardPolicyMemoryStrictRefusal;
 
 // ---------------------------------------------------------------------------
-// Fences: the five guards a policy word or a per-run switch can lower.
-//
-// A fence is a hook that refuses an action nobody directed: no engine
-// instruction covers it and no human grant is newer than the engine's last
-// directive. The policy word lowers a fixed set; a human can lower any single
-// fence for one piece of work with `/aidlc config set guard.<fence> off`, which
-// writes the `Guards Off` state line and one GUARD_DISABLED row. Human presence
-// (a real human turn behind every approval and answer) is the key holder, not a
-// fence the policy word touches: only the per-run switch or its environment
-// kill switch lowers it.
+// Fence settings: environment, per-work switches, and the policy word.
 // ---------------------------------------------------------------------------
 
-export const GUARD_FENCES = [
-  "plan-approval",
-  "review-freeze",
-  "state-transition",
-  "reviewer-scope",
-  "human-presence",
-] as const;
-export type GuardFence = (typeof GUARD_FENCES)[number];
 export type FenceSetting = "on" | "off";
 export const GUARDS_OFF_FIELD = "Guards Off";
-/** Config keys of the per-run switches: `guard.plan-approval` and so on. */
-export const GUARD_FENCE_CONFIG_PREFIX = "guard.";
-export function guardFenceConfigKey(fence: GuardFence): string {
-  return `${GUARD_FENCE_CONFIG_PREFIX}${fence}`;
-}
-export function guardFenceFromConfigKey(key: string): GuardFence | null {
-  if (!key.startsWith(GUARD_FENCE_CONFIG_PREFIX)) return null;
-  const fence = key.slice(GUARD_FENCE_CONFIG_PREFIX.length);
-  return (GUARD_FENCES as readonly string[]).includes(fence) ? (fence as GuardFence) : null;
-}
+export const GUARDS_ON_FIELD = "Guards On";
 /** The environment kill switch of each fence, `1` forcing it off machine-wide.
  *  The state-transition guard has none: the policy word and the per-run switch
  *  are its only controls. */
@@ -30150,26 +30083,36 @@ export function parseGuardFence(raw: string | null | undefined): GuardFence | nu
 }
 
 /** The fences named on a `Guards Off` state line; `none` or an absent line is the empty list. */
-export function parseGuardsOffLine(raw: string | null | undefined): GuardFence[] {
+export function parseGuardsOffLine(raw: string | null | undefined): SwitchableGuardFence[] {
   if (!raw) return [];
   const list = raw.replace(/\s*\(.*\)\s*$/, "").trim();
   if (list === "" || list.toLowerCase() === "none") return [];
-  const fences: GuardFence[] = [];
+  const fences: SwitchableGuardFence[] = [];
   for (const part of list.split(",")) {
     const fence = parseGuardFence(part);
-    if (fence !== null && !fences.includes(fence)) fences.push(fence);
+    if (isSwitchableGuardFence(fence) && !fences.includes(fence)) fences.push(fence);
   }
   return fences;
 }
 
+/** The switchable fences named on a `Guards On` state line. */
+export function parseGuardsOnLine(raw: string | null | undefined): SwitchableGuardFence[] {
+  return parseGuardsOffLine(raw);
+}
+
 /** The `Guards Off` line for a set of lowered fences, in canonical order. */
-export function formatGuardsOffLine(fences: readonly GuardFence[]): string {
-  const ordered = GUARD_FENCES.filter((fence) => fences.includes(fence));
+export function formatGuardsOffLine(fences: readonly SwitchableGuardFence[]): string {
+  const ordered = SWITCHABLE_GUARD_FENCES.filter((fence) => fences.includes(fence));
   return ordered.length === 0 ? "none" : `${ordered.join(", ")} (set by you)`;
 }
 
+/** The `Guards On` line for fences raised above the policy, in canonical order. */
+export function formatGuardsOnLine(fences: readonly SwitchableGuardFence[]): string {
+  return formatGuardsOffLine(fences);
+}
+
 /** Write the `Guards Off` line, inserting it under the policy line when absent. */
-export function setGuardsOffLine(content: string, fences: readonly GuardFence[]): string {
+export function setGuardsOffLine(content: string, fences: readonly SwitchableGuardFence[]): string {
   if (getField(content, GUARDS_OFF_FIELD) === null) {
     const beforeInsert = content;
     for (const anchor of [GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
@@ -30184,6 +30127,22 @@ export function setGuardsOffLine(content: string, fences: readonly GuardFence[])
   return setField(content, GUARDS_OFF_FIELD, formatGuardsOffLine(fences));
 }
 
+/** Write `Guards On`, inserting it under `Guards Off` or the same state anchors. */
+export function setGuardsOnLine(content: string, fences: readonly SwitchableGuardFence[]): string {
+  if (getField(content, GUARDS_ON_FIELD) === null) {
+    const beforeInsert = content;
+    for (const anchor of [GUARDS_OFF_FIELD, GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
+      content = content.replace(
+        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+        `$1\n- **${GUARDS_ON_FIELD}**:`,
+      );
+      if (content !== beforeInsert) break;
+    }
+    if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_ON_FIELD}**:\n`;
+  }
+  return setField(content, GUARDS_ON_FIELD, formatGuardsOnLine(fences));
+}
+
 export interface FenceResolution {
   fence: GuardFence;
   value: FenceSetting;
@@ -30193,22 +30152,25 @@ export interface FenceResolution {
 
 /**
  * The effective setting of every fence for a state: the environment kill
- * switch first, then the per-run `Guards Off` line, then the policy word,
- * then on. Pure: reads the supplied state only.
+ * switch first, then `Guards Off`, then `Guards On`, then the policy word,
+ * then on. Human presence uses only its environment switch, never state.
  */
 export function resolveFences(
   policy: GuardPolicyResolution,
   stateContent: string | null | undefined,
 ): Record<GuardFence, FenceResolution> {
-  const perRun = parseGuardsOffLine(getField(stateContent ?? "", GUARDS_OFF_FIELD));
+  const perRunOff = parseGuardsOffLine(getField(stateContent ?? "", GUARDS_OFF_FIELD));
+  const perRunOn = parseGuardsOnLine(getField(stateContent ?? "", GUARDS_ON_FIELD));
   const byPolicy = fencesLoweredByPolicy(policy.value);
   const out = {} as Record<GuardFence, FenceResolution>;
   for (const fence of GUARD_FENCES) {
     const env = GUARD_FENCE_ENV[fence];
     if (env !== undefined && resolveProjectFlag(env) === "1") {
       out[fence] = { fence, value: "off", source: `env ${env}` };
-    } else if (perRun.includes(fence)) {
+    } else if (isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
       out[fence] = { fence, value: "off", source: "you" };
+    } else if (isSwitchableGuardFence(fence) && perRunOn.includes(fence)) {
+      out[fence] = { fence, value: "on", source: "you" };
     } else if (byPolicy.includes(fence)) {
       out[fence] = {
         fence,
@@ -30222,11 +30184,13 @@ export function resolveFences(
   return out;
 }
 
-/** `on (default)`, `off (set by you)`, `off (env ...)`, `off (guard policy relaxed (from scope express))`. */
+function fenceSourceLabel(resolution: FenceResolution): string {
+  return resolution.source === "you" ? "set by you" : resolution.source;
+}
+
+/** `on (default)`, `on (set by you)`, `off (set by you)`, `off (env ...)`, or `off (guard policy relaxed (from scope express))`. */
 export function formatFence(resolution: FenceResolution): string {
-  if (resolution.source === "default") return `${resolution.value} (default)`;
-  if (resolution.source === "you") return `${resolution.value} (set by you)`;
-  return `${resolution.value} (${resolution.source})`;
+  return `${resolution.value} (${fenceSourceLabel(resolution)})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -30390,7 +30354,11 @@ export function authorityFor(
   // Without a stamp it is treated as the loop's own work: the instruction, or
   // nothing. A dispatch can never MINT a grant for itself.
   if (actor === "subagent") {
-    const stamped = stampedDispatchAuthority(projectDir, options.sessionId);
+    const sessionId = options.sessionId ??
+      (typeof options.hookInput?.session_id === "string"
+        ? options.hookInput.session_id
+        : undefined);
+    const stamped = stampedDispatchAuthority(projectDir, sessionId);
     if (stamped === "grant") {
       return settle("grant", { source: "dispatch-stamp" });
     }
@@ -30501,7 +30469,7 @@ export function decideFence(
     sessionId?: unknown;
     selection?: WorkflowSelectionOptions;
   } = {},
-): { decision: GuardDecision; authority: Authority; policy: GuardPolicy; fenceSetting: FenceSetting } {
+): { decision: GuardDecision; authority: Authority; policy: GuardPolicy; fenceSetting: FenceSetting; source: string } {
   const state = options.stateContent ?? authorityStateText(projectDir);
   let policy: GuardPolicyResolution;
   try {
@@ -30516,29 +30484,40 @@ export function decideFence(
       stateValue: "strict", rawStateValue: null, stateField: null, memoryStrict: null,
     };
   }
-  const setting = resolveFences(policy, state)[fence].value;
+  const resolution = resolveFences(policy, state)[fence];
   const authority = authorityFor(projectDir, options);
   return {
-    decision: decideGuard({ family: "fence", fence, lowered: setting === "off" }, authority, policy.value),
+    decision: decideGuard({ family: "fence", fence, lowered: resolution.value === "off" }, authority, policy.value),
     authority,
     policy: policy.value,
-    fenceSetting: setting,
+    fenceSetting: resolution.value,
+    source: fenceSourceLabel(resolution),
   };
 }
 
 /**
- * The one line a human hears when a guard stands aside. It takes no authority:
- * a fence stands aside only because it is lowered, so the reason is always the
- * same and saying anything about who was working would misdescribe it. The
- * authority still reaches the ledger, on the GUARD_STOOD_ASIDE row.
+ * The one line a human hears when a guard stands aside. It names what lowered
+ * the fence, so someone using a scope default learns that the policy word did
+ * it. The authority belongs in the GUARD_STOOD_ASIDE audit row, not the line.
  */
 export function guardStoodAsideLine(
   fence: GuardFence,
+  source: string,
   detail?: string,
 ): string {
   return (
-    `Continuing past the ${fence} check because it is off for this piece of work. ` +
+    `Continuing past the ${fence} check because it is off for this piece of work (${source}). ` +
     `Recorded in the audit trail${detail ? `: ${detail}` : "."}`
+  );
+}
+
+/**
+ * Claude Code shows systemMessage to the user while exit-0 plain stdout is
+ * transcript-only; other harnesses read the plain line.
+ */
+export function writeGuardStoodAside(line: string): void {
+  process.stdout.write(
+    `${runtimeHarnessName() === "claude" ? JSON.stringify({ systemMessage: line }) : line}\n`,
   );
 }
 

@@ -192,12 +192,12 @@ The intent-configuration handlers share a single mutation path:
 
 | Dispatcher route | Utility handler | Contract |
 |------------------|-----------------|----------|
-| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, or one of the five `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
-| `aidlc engine config list [--json]` | `config-list` | Read all twelve settings in that order; Guard Policy, fence, and ceremony values include effective sources |
+| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
+| `aidlc engine config list [--json]` | `config-list` | Read all eleven settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
-| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
+| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same eleven settings in the same transaction, including when the requested scope is already current |
 
-`config-change` accepts only the twelve setting flags plus `--intent`, `--space`,
+`config-change` accepts only the eleven setting flags plus `--intent`, `--space`,
 and `--project-dir`, and requires at least one setting. Reject unknown flags by
 name and validate all values before any mutation. A shared utility applier
 returns candidate content, `AuditEntryInput[]`, and output lines in canonical
