@@ -855,6 +855,30 @@ describe("t247 claim-sources sensor", () => {
     ).toHaveLength(2);
   });
 
+  for (const rule of ["- - -", "* * *"]) {
+    test(`a spaced thematic break '${rule}' before a definition does not hide the definition`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\n${rule}\n[Q1]: /url`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "## Problem Statement: claim block has no source tag",
+      );
+    });
+  }
+
   // Definition detection has to agree with CommonMark's definition grammar in
   // both directions. A line that only looks like a definition is prose the
   // reader sees, and a real definition stays real inside a container. Getting

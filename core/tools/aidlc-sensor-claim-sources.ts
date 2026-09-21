@@ -762,6 +762,10 @@ function containerLine(line: string): ContainerLine {
 			context.push("quote");
 			continue;
 		}
+		// CommonMark gives thematic breaks precedence over list markers.
+		if (isThematicBreak(stripped)) {
+			return { text: stripped, context: context.join("/") };
+		}
 		const list = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(
 			stripped,
 		);
@@ -903,6 +907,7 @@ function explicitListContainer(
 		text = text.slice(quote[0].length);
 		before.push("quote");
 	}
+	if (isThematicBreak(text)) return null;
 
 	const marker =
 		/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(text);
