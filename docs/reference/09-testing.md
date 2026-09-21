@@ -792,11 +792,11 @@ which can include quoted text; they do not establish a provider quota failure.
 ## Required jobs across platforms
 
 `tests/native-terminal-profile.json` assigns deterministic terminal controls to
-Linux/Bun, Windows/Bun, Linux/tmux and Windows/node-pty jobs. Portable controls
-run on both operating systems; real Linux supervision, Windows Job Object and
-sharing-handle checks, and compatibility backends have explicit owners.
-The profile targets Linux arm64 and Windows x64, matching the validation hosts;
-declare separate matching obligations when using another architecture.
+Linux/Bun, macOS/Bun, Windows/Bun, Linux/tmux and Windows/node-pty jobs. Portable
+controls run on all three operating systems; native Linux and macOS containment,
+Windows Job Object and sharing-handle checks, and compatibility backends have
+explicit owners. The profile targets Linux arm64, macOS arm64 (`macos-15`) and
+Windows x64; declare separate matching obligations for another architecture.
 Platform-specific controls live in separately selectable test files. Their
 assertions remain required by the profile.
 
@@ -862,6 +862,7 @@ JUnit paths, then reconcile all required jobs:
 ```bash
 bun tests/reconcile-tests.ts reconcile --plan tmp/native-plan.json \
   --receipt "<linux-bun-stamp>/test-matrix-receipt.json" \
+  --receipt "<darwin-bun-stamp>/test-matrix-receipt.json" \
   --receipt "<windows-bun-stamp>/test-matrix-receipt.json" \
   --receipt "<linux-tmux-stamp>/test-matrix-receipt.json" \
   --receipt "<windows-node-pty-stamp>/test-matrix-receipt.json" \
