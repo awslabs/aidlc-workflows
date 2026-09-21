@@ -630,14 +630,17 @@ public static class AidlcProcessProof {
 }
 "@
 # Both independent probes must fail specifically with ERROR_ACCESS_DENIED.
-$launcher = [Diagnostics.Process]::GetProcessById(__PID__)
-$denied = $false
-try { $modules = $launcher.Modules; if ($null -eq $modules -or $modules.Count -eq 0) { throw 'No module evidence.' } }
-catch {
-    if (-not (Test-AccessDenied $_ -Win32)) { throw }
-    $denied = $true
+# Module enumeration needs PROCESS_QUERY_INFORMATION | PROCESS_VM_READ; probe
+# that handle directly because .NET's Process.Modules can return an empty list
+# instead of surfacing the denial.
+if ([Diagnostics.Process]::GetProcessById(__PID__).HasExited) { throw 'Launcher process exited before the proof ran.' }
+$handle = [AidlcProcessProof]::OpenProcess(0x0410, $false, __PID__)
+$errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+if ($handle -ne [IntPtr]::Zero) {
+    [void][AidlcProcessProof]::CloseHandle($handle)
+    throw 'Sandbox can enumerate launcher modules.'
 }
-if (-not $denied) { throw 'Sandbox can enumerate launcher modules.' }
+if ($errorCode -ne 5) { throw 'Module probe did not prove access denial.' }
 $handle = [AidlcProcessProof]::OpenProcess(0x0010, $false, __PID__)
 $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
 if ($handle -ne [IntPtr]::Zero) {
