@@ -5,7 +5,7 @@ model-consumed input:
 
 - issue titles, bodies, labels, links, and human conversation comments;
 - existing-Issue titles and labels;
-- the previous AIDA assessment and specialist candidate files;
+- the previous AIDA assessment;
 - trusted-looking policy blocks, fake delimiters, encoded text, split
   instructions, quoted commands, and persistent instructions intended for a
   later review turn.

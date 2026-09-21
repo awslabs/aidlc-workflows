@@ -27,32 +27,84 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
-  review:
-    name: Review issue intent
+  authorize:
+    name: Authorize issue-review trigger
     if: >-
       github.event_name == 'workflow_dispatch'
       || (github.event_name == 'issues'
-          && ((github.event.action == 'opened'
-               && (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-                            github.event.issue.author_association)
-                   || contains(github.event.issue.labels.*.name, 'ai-review')))
+          && github.event.sender.type != 'Bot'
+          && (github.event.action == 'opened'
               || (github.event.action == 'labeled'
-               && github.event.label.name == 'ai-review')
+                  && github.event.label.name == 'ai-review')
               || (github.event.action == 'edited'
                   && (github.event.changes.title != null
-                      || github.event.changes.body != null)
-                  && (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-                               github.event.issue.author_association)
-                      || contains(github.event.issue.labels.*.name, 'ai-review')))))
+                      || github.event.changes.body != null))))
       || (github.event_name == 'issue_comment'
           && github.event.issue.pull_request == null
           && github.event.comment.user.type != 'Bot'
-          && !startsWith(github.event.comment.body, '<!-- ai-issue-review issue=')
-          && (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-                       github.event.comment.author_association)
-              || contains(github.event.issue.labels.*.name, 'ai-review')))
+          && !startsWith(github.event.comment.body, '<!-- ai-issue-review issue='))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      authorized: ${{ steps.authorization.outputs.authorized }}
+      issue: ${{ steps.authorization.outputs.issue }}
+    steps:
+      - name: Authorize trigger before review concurrency
+        id: authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_ASSOCIATION: >-
+            ${{ github.event.comment.author_association
+                || github.event.issue.author_association }}
+          REQUESTED_ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          echo "issue=$REQUESTED_ISSUE" >> "$GITHUB_OUTPUT"
+          permission="$(gh api "repos/$REPO/collaborators/$GITHUB_ACTOR/permission" \
+            --jq '.permission' 2>/dev/null || true)"
+          gh api "repos/$REPO/issues/$REQUESTED_ISSUE" \
+            > /tmp/authorization-issue.json
+          has_opt_in="$(jq -r 'any(.labels[]; .name == "ai-review")' \
+            /tmp/authorization-issue.json)"
+          issue_association="$(jq -r '.author_association // ""' \
+            /tmp/authorization-issue.json)"
+          can_maintain=false
+          authorized=false
+          case "$permission" in
+            admin|write)
+              can_maintain=true
+              ;;
+          esac
+          case "$EVENT_ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR)
+              can_maintain=true
+              ;;
+          esac
+          if [ "$has_opt_in" = "true" ]; then
+            authorized=true
+          elif [ "$can_maintain" = "true" ]; then
+            case "$issue_association" in
+              OWNER|MEMBER|COLLABORATOR)
+                authorized=true
+                ;;
+            esac
+          fi
+          if [ "$authorized" != "true" ]; then
+            echo "::notice::External issues require the ai-review maintainer opt-in label"
+          fi
+          echo "authorized=$authorized" >> "$GITHUB_OUTPUT"
+
+  review:
+    name: Review issue intent
+    needs: authorize
+    if: needs.authorize.outputs.authorized == 'true'
     concurrency:
-      group: ai-issue-review-${{ github.event.issue.number || inputs.issue_number }}
+      group: ai-issue-review-${{ needs.authorize.outputs.issue }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     environment: ai-pr-review
@@ -62,67 +114,27 @@ jobs:
       id-token: write
       issues: write
     steps:
-      - name: Authorize maintainer trigger
-        id: authorization
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          REQUESTED_ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
-        run: |
-          set -euo pipefail
-          permission="$(gh api "repos/$REPO/collaborators/$GITHUB_ACTOR/permission" \
-            --jq '.permission' 2>/dev/null || true)"
-          has_opt_in="$(gh api "repos/$REPO/issues/$REQUESTED_ISSUE" \
-            --jq 'any(.labels[]; .name == "ai-review")')"
-          case "$permission" in
-            admin|maintain|write)
-              echo "authorized=true" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              external_opt_in=false
-              if [ "$has_opt_in" = "true" ] && [ "$EVENT_NAME" = "issue_comment" ]; then
-                external_opt_in=true
-              elif [ "$has_opt_in" = "true" ] && [ "$EVENT_NAME" = "issues" ] \
-                && { [ "$EVENT_ACTION" = "opened" ] || [ "$EVENT_ACTION" = "edited" ]; }; then
-                external_opt_in=true
-              fi
-              if [ "$external_opt_in" = "true" ]; then
-                echo "authorized=true" >> "$GITHUB_OUTPUT"
-              else
-                echo "::notice::External issue conversation requires the ai-review maintainer opt-in label"
-                echo "authorized=false" >> "$GITHUB_OUTPUT"
-              fi
-              ;;
-          esac
-
       - name: Coalesce rapid conversation updates
-        if: >-
-          steps.authorization.outputs.authorized == 'true'
-          && github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch'
         run: sleep 45
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        if: steps.authorization.outputs.authorized == 'true'
         with:
           fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.event.repository.default_branch }}
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        if: steps.authorization.outputs.authorized == 'true'
         with:
           bun-version: '1.3.14'
 
       - name: Build immutable issue context
         id: context
-        if: steps.authorization.outputs.authorized == 'true'
         env:
           EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          REQUESTED_ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+          REQUESTED_ISSUE: ${{ needs.authorize.outputs.issue }}
         run: |
           set -euo pipefail
           if [ -z "${REQUESTED_ISSUE:-}" ]; then
@@ -141,13 +153,15 @@ jobs:
             exit 0
           fi
 
-          gh api --method GET "repos/$REPO/issues" \
-            -f state=all -f sort=updated -f direction=desc -f per_page=100 -f page=1 \
+          gh api --method GET "search/issues" \
+            -f q="repo:$REPO is:issue" -f sort=updated -f order=desc \
+            -f per_page=100 -f page=1 --jq '.items' \
             > /tmp/issues-page-1.json
-          gh api --method GET "repos/$REPO/issues" \
-            -f state=all -f sort=updated -f direction=desc -f per_page=100 -f page=2 \
+          gh api --method GET "search/issues" \
+            -f q="repo:$REPO is:issue" -f sort=updated -f order=desc \
+            -f per_page=100 -f page=2 --jq '.items' \
             > /tmp/issues-page-2.json
-          jq -s 'add' /tmp/issues-page-1.json /tmp/issues-page-2.json \
+          jq -s 'add | .[:200]' /tmp/issues-page-1.json /tmp/issues-page-2.json \
             > /tmp/issue-catalog.json
           gh api "repos/$REPO/issues/$REQUESTED_ISSUE/comments" --paginate --slurp \
             | jq 'add' > /tmp/issue-comments.json
@@ -161,7 +175,8 @@ jobs:
             --output .ai-issue-review-context
 
           context_id="$(cat .ai-issue-review-context/context-id.txt)"
-          marker="<!-- ai-issue-review context=$context_id -->"
+          review_id="$(cat .ai-issue-review-context/review-id.txt)"
+          marker="<!-- ai-issue-review review=$review_id -->"
           existing="$(gh api "repos/$REPO/issues/$REQUESTED_ISSUE/comments" --paginate \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and ((.body // \"\") | contains(\"$marker\"))) | .id" \
             | head -n1 || true)"
@@ -175,14 +190,14 @@ jobs:
             echo "already_reviewed=$already_reviewed"
             echo "base=$base"
             echo "context_id=$context_id"
+            echo "review_id=$review_id"
             echo "issue=$REQUESTED_ISSUE"
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
 
       - name: Install pinned review CLIs
         if: >-
-          steps.authorization.outputs.authorized == 'true'
-          && steps.context.outputs.skip != 'true'
+          steps.context.outputs.skip != 'true'
           && steps.context.outputs.already_reviewed != 'true'
         run: >-
           npm install --global --silent
@@ -191,15 +206,13 @@ jobs:
 
       - name: Prepare and verify unprivileged review runtimes
         if: >-
-          steps.authorization.outputs.authorized == 'true'
-          && steps.context.outputs.skip != 'true'
+          steps.context.outputs.skip != 'true'
           && steps.context.outputs.already_reviewed != 'true'
         run: bash .github/scripts/prepare-ai-issue-review-runtime.sh
 
       - name: Assume dedicated Bedrock review role through OIDC
         if: >-
-          steps.authorization.outputs.authorized == 'true'
-          && steps.context.outputs.skip != 'true'
+          steps.context.outputs.skip != 'true'
           && steps.context.outputs.already_reviewed != 'true'
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
@@ -209,13 +222,13 @@ jobs:
 
       - name: Run issue-review passes sequentially
         if: >-
-          steps.authorization.outputs.authorized == 'true'
-          && steps.context.outputs.skip != 'true'
+          steps.context.outputs.skip != 'true'
           && steps.context.outputs.already_reviewed != 'true'
         env:
           BASE_SHA: ${{ steps.context.outputs.base }}
           CONTEXT_ID: ${{ steps.context.outputs.context_id }}
           ISSUE_NUMBER: ${{ steps.context.outputs.issue }}
+          REVIEW_ID: ${{ steps.context.outputs.review_id }}
         run: |
           set -euo pipefail
           codex_bin="$(command -v codex)"
@@ -392,7 +405,8 @@ jobs:
             "Bug-report classification" \
             20000 \
             ".ai-issue-review-lenses/bug-triage.raw.json" \
-            "$bug_triage_prompt"
+            "$bug_triage_prompt" \
+            "$(jq -c . .github/prompts/ai-issue-review-bug-triage-schema.json)"
           bun .github/scripts/ai-issue-review.ts validate-triage \
             --issue "$ISSUE_NUMBER" \
             --context-id "$CONTEXT_ID" \
@@ -426,7 +440,7 @@ jobs:
               HOME="$test_home" \
               PATH="$PATH" \
               /bin/bash -c \
-              'ulimit -f 20480; cd "$1" && exec timeout --signal=TERM --kill-after=30s 5m "$2" install --frozen-lockfile --ignore-scripts' \
+              'cd "$1" && exec timeout --signal=TERM --kill-after=30s 5m "$2" install --frozen-lockfile --ignore-scripts' \
               bash "$test_repo" "$bun_bin" \
               >"$verification_log" 2>&1
             setup_status=$?
@@ -564,6 +578,7 @@ jobs:
             --issue "$ISSUE_NUMBER" \
             --context-id "$CONTEXT_ID" \
             --base "$BASE_SHA" \
+            --review-id "$REVIEW_ID" \
             --input .ai-issue-review-final/review.md \
             --metadata .ai-issue-review-context/issue.json \
             --catalog .ai-issue-review-context/issue-catalog.json \
@@ -574,8 +589,7 @@ jobs:
 
       - name: Upsert advisory issue review
         if: >-
-          steps.authorization.outputs.authorized == 'true'
-          && steps.context.outputs.skip != 'true'
+          steps.context.outputs.skip != 'true'
           && steps.context.outputs.already_reviewed != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -593,12 +607,15 @@ jobs:
           fi
           gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" --paginate --slurp \
             | jq 'add' > /tmp/current-issue-comments.json
-          bun .github/scripts/ai-issue-review.ts canonicalize-conversation \
+          bun .github/scripts/ai-issue-review.ts canonicalize-publication-conversation \
             --input /tmp/current-issue-comments.json \
+            --metadata /tmp/current-issue-raw.json \
             --issue "$ISSUE_NUMBER" \
-            --output /tmp/current-conversation.json
-          if ! cmp -s .ai-issue-review-context/conversation.json /tmp/current-conversation.json; then
-            echo "::error::Issue conversation changed during review"
+            --output /tmp/current-publication-conversation.json
+          if ! cmp -s \
+            .ai-issue-review-context/publication-conversation.json \
+            /tmp/current-publication-conversation.json; then
+            echo "::error::Review-triggering issue conversation changed during review"
             exit 1
           fi
 
@@ -636,18 +653,21 @@ jobs:
           fi
           gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" --paginate --slurp \
             | jq 'add' > /tmp/latest-issue-comments.json
-          bun .github/scripts/ai-issue-review.ts canonicalize-conversation \
+          bun .github/scripts/ai-issue-review.ts canonicalize-publication-conversation \
             --input /tmp/latest-issue-comments.json \
+            --metadata /tmp/latest-issue-raw.json \
             --issue "$ISSUE_NUMBER" \
-            --output /tmp/latest-conversation.json
-          if ! cmp -s .ai-issue-review-context/conversation.json /tmp/latest-conversation.json; then
+            --output /tmp/latest-publication-conversation.json
+          if ! cmp -s \
+            .ai-issue-review-context/publication-conversation.json \
+            /tmp/latest-publication-conversation.json; then
             if [ "$created" = "true" ]; then
               gh api --method DELETE "repos/$REPO/issues/comments/$existing_id"
             else
               gh api --method PATCH "repos/$REPO/issues/comments/$existing_id" \
                 --input /tmp/restore-comment.json >/dev/null
             fi
-            echo "::error::Issue conversation changed during publication; restored the previous comment"
+            echo "::error::Review-triggering conversation changed during publication; restored the previous comment"
             exit 1
           fi
 

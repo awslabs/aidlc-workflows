@@ -78,15 +78,18 @@ Include:
 - Expected vs actual behavior
 - The platform, harness, and model you tested with
 
-AIDA's pre-implementation review starts when a maintainer opens or updates an
-issue, or when a human adds to its conversation. External issue conversations
-require a maintainer to apply the `ai-review` opt-in label first. Maintainers can
-also dispatch the **AI Issue Intent Review** workflow with an issue number. The
-review evaluates the current issue and conversation for intent, project
-direction, user experience, scope, feasibility, dependencies, and open
+AIDA's pre-implementation review starts when a maintainer opens, updates, or
+comments on a maintainer-owned issue. A maintainer can apply the `ai-review`
+label to opt an external issue conversation into review; applying the label and
+later human comments then start new reviews. Maintainers can also dispatch the
+**AI Issue Intent Review** workflow with an issue number under the same opt-in
+rule. The review evaluates the current issue and conversation for intent,
+project direction, user experience, scope, feasibility, dependencies, and open
 decisions. For a bug report, it may run up to five relevant existing tests in
 an isolated, network-disabled test process and reports the bounded result as
-evidence. It updates one advisory comment; it does not prioritize, approve,
+evidence. Rapid authorized updates replace an in-progress run, while unrelated
+external comments on an unlabeled maintainer-owned issue do not invalidate its
+publication. It updates one advisory comment; it does not prioritize, approve,
 reject, label, assign, close, or implement the issue.
 
 ## Contributing via Pull Requests

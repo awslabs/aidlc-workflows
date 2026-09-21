@@ -14,6 +14,8 @@ import {
   canonicalConversation,
   canonicalCurrentAidaReview,
   canonicalIssue,
+  canonicalPublicationConversation,
+  issueHasReviewOptIn,
   renderIssueReview,
   type BugVerification,
   type IssueCatalogEntry,
@@ -28,6 +30,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const BASE = "b".repeat(40);
 const CONTEXT_ID = "c".repeat(64);
+const REVIEW_ID = "d".repeat(64);
 const ISSUE: IssueMetadata = {
   number: 1279,
   title: "Add AI review for issue intent",
@@ -77,6 +80,10 @@ const JUDGE_PROMPT = readFileSync(
   join(REPO_ROOT, ".github", "prompts", "ai-issue-review-judge.md"),
   "utf8",
 );
+const BUG_TRIAGE_SCHEMA = JSON.parse(readFileSync(
+  join(REPO_ROOT, ".github", "prompts", "ai-issue-review-bug-triage-schema.json"),
+  "utf8",
+));
 
 function commitFixture(root: string): string {
   execFileSync("git", ["init", "--quiet"], { cwd: root });
@@ -228,6 +235,7 @@ describe("t301 AI issue intent review", () => {
         join(root, "second"),
       );
       expect(first.contextId).toBe(second.contextId);
+      expect(first.reviewId).toBe(second.reviewId);
       expect(second.currentAidaReview?.body).toContain("Updated AIDA output");
       const changed = buildImmutableContext(
         rawIssue,
@@ -244,8 +252,87 @@ describe("t301 AI issue intent review", () => {
         join(root, "changed"),
       );
       expect(changed.contextId).not.toBe(first.contextId);
+      expect(changed.reviewId).not.toBe(first.reviewId);
       expect(readFileSync(join(root, "first", "context-id.txt"), "utf8").trim())
         .toBe(first.contextId);
+      expect(readFileSync(join(root, "first", "review-id.txt"), "utf8").trim())
+        .toBe(first.reviewId);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("publication identity follows only conversation that can trigger a replacement run", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-issue-publication-"));
+    try {
+      const rawIssue = {
+        ...ISSUE,
+        user: { login: ISSUE.author },
+        author: undefined,
+        labels: [],
+      };
+      const externalComment = {
+        id: 14,
+        user: { login: "external-user", type: "User" },
+        author_association: "NONE",
+        body: "A late external observation.",
+        created_at: "2026-09-21T01:04:00Z",
+        updated_at: "2026-09-21T01:04:00Z",
+      };
+      const first = buildImmutableContext(
+        rawIssue,
+        CATALOG,
+        RAW_COMMENTS,
+        BASE,
+        join(root, "first"),
+      );
+      const external = buildImmutableContext(
+        rawIssue,
+        [{ ...CATALOG[0], state: "closed" }],
+        [...RAW_COMMENTS, externalComment],
+        "e".repeat(40),
+        join(root, "external"),
+      );
+      expect(external.contextId).not.toBe(first.contextId);
+      expect(external.reviewId).toBe(first.reviewId);
+      expect(external.publicationConversation.comments.map(comment => comment.id)).toEqual([11]);
+      const issuePath = join(root, "issue.json");
+      const commentsPath = join(root, "comments.json");
+      const publicationPath = join(root, "publication.json");
+      writeFileSync(issuePath, JSON.stringify(rawIssue));
+      writeFileSync(commentsPath, JSON.stringify([...RAW_COMMENTS, externalComment]));
+      execFileSync(process.execPath, [
+        join(REPO_ROOT, ".github", "scripts", "ai-issue-review.ts"),
+        "canonicalize-publication-conversation",
+        "--input",
+        commentsPath,
+        "--metadata",
+        issuePath,
+        "--issue",
+        String(ISSUE.number),
+        "--output",
+        publicationPath,
+      ]);
+      expect(
+        JSON.parse(readFileSync(publicationPath, "utf8")).comments
+          .map((comment: { id: number }) => comment.id),
+      ).toEqual([11]);
+
+      const optedInIssue = { ...rawIssue, labels: [{ name: "ai-review" }] };
+      expect(issueHasReviewOptIn(optedInIssue)).toBe(true);
+      expect(canonicalPublicationConversation(
+        [...RAW_COMMENTS, externalComment],
+        ISSUE.number,
+        true,
+      ).comments.map(comment => comment.id)).toEqual([10, 11, 14]);
+      const optedIn = buildImmutableContext(
+        optedInIssue,
+        CATALOG,
+        [...RAW_COMMENTS, externalComment],
+        BASE,
+        join(root, "opted-in"),
+      );
+      expect(optedIn.reviewId).not.toBe(first.reviewId);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -438,9 +525,10 @@ describe("t301 AI issue intent review", () => {
       exitCode: 1,
       outputTail: "Expected true, received false.",
     };
-    const payload = renderIssueReview(review(), bugVerification);
+    const payload = renderIssueReview(review(), bugVerification, REVIEW_ID);
     expect(payload.body).toStartWith(`<!-- ai-issue-review issue=${ISSUE.number} -->`);
     expect(payload.body).toContain(`<!-- ai-issue-review context=${CONTEXT_ID} -->`);
+    expect(payload.body).toContain(`<!-- ai-issue-review review=${REVIEW_ID} -->`);
     expect(payload.body).toContain(
       "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.**",
     );
@@ -462,6 +550,17 @@ describe("t301 AI issue intent review", () => {
     expect(payload.body).toContain("comment by @maintainer: “latest conversation”");
     expect(payload.body).toContain("**Recommendation: Clarify the relationship with PR review**");
     expect(payload.body).toEndWith("Reviewed by AIDA (AI-DLC Developer Agent).");
+
+    const setupFailure = renderIssueReview(review(), {
+      ...bugVerification,
+      status: "setup-failed",
+      exitCode: 153,
+      outputTail: "dependency archive exceeded a local setup constraint",
+    }, REVIEW_ID);
+    expect(setupFailure.body).toContain("Diagnostic (exit 153):");
+    expect(setupFailure.body).toContain(
+      "dependency archive exceeded a local setup constraint",
+    );
   });
 
   test("renderer refuses a comment larger than GitHub's issue-comment limit", () => {
@@ -479,40 +578,73 @@ describe("t301 AI issue intent review", () => {
   });
 
   test("workflow supports iterative human conversation with debounced, bounded execution", () => {
-    const admissionGuard = WORKFLOW.slice(
-      WORKFLOW.indexOf("    if: >-"),
-      WORKFLOW.indexOf("    concurrency:"),
+    const authorizationJob = WORKFLOW.slice(
+      WORKFLOW.indexOf("  authorize:"),
+      WORKFLOW.indexOf("  review:"),
+    );
+    const reviewAdmission = WORKFLOW.slice(
+      WORKFLOW.indexOf("  review:"),
+      WORKFLOW.indexOf("    steps:", WORKFLOW.indexOf("  review:")),
     );
     expect(WORKFLOW).toContain("issue_comment:");
     expect(WORKFLOW).toContain("- opened");
     expect(WORKFLOW).toContain("- created");
     expect(WORKFLOW).toContain("github.event.comment.user.type != 'Bot'");
+    expect(WORKFLOW).toContain("github.event.sender.type != 'Bot'");
     expect(WORKFLOW).toContain(
       "!startsWith(github.event.comment.body, '<!-- ai-issue-review issue=')",
     );
     expect(WORKFLOW).toContain("github.event.label.name == 'ai-review'");
-    expect(admissionGuard).toContain("github.event.comment.author_association");
-    expect(admissionGuard).toContain("github.event.issue.author_association");
-    expect(admissionGuard).toContain("github.event.issue.labels.*.name, 'ai-review'");
     expect(WORKFLOW).toContain("github.event.changes.title != null");
     expect(WORKFLOW).toContain("github.event.changes.body != null");
-    expect(WORKFLOW).toContain('repos/$REPO/collaborators/$GITHUB_ACTOR/permission');
-    expect(WORKFLOW).toContain("admin|maintain|write");
-    expect(WORKFLOW).toContain("External issue conversation requires the ai-review");
+    expect(authorizationJob).toContain('repos/$REPO/collaborators/$GITHUB_ACTOR/permission');
+    expect(authorizationJob).toContain("github.event.comment.author_association");
+    expect(authorizationJob).toContain("github.event.issue.author_association");
+    expect(authorizationJob).toContain("admin|write");
+    expect(authorizationJob).toContain("OWNER|MEMBER|COLLABORATOR");
+    expect(authorizationJob).toContain('[ "$has_opt_in" = "true" ]');
+    expect(authorizationJob).toContain('issue_association="$(jq -r');
+    expect(reviewAdmission).toContain("needs: authorize");
+    expect(reviewAdmission).toContain("if: needs.authorize.outputs.authorized == 'true'");
+    expect(reviewAdmission).toContain(
+      `group: ai-issue-review-\${{ needs.authorize.outputs.issue }}`,
+    );
+    expect(reviewAdmission).not.toContain("steps.authorization.outputs.authorized");
+    expect(WORKFLOW).toContain(
+      "External issues require the ai-review maintainer opt-in label",
+    );
     expect(WORKFLOW).toContain("Coalesce rapid conversation updates");
     expect(WORKFLOW).toContain("run: sleep 45");
     expect(WORKFLOW).toContain("cancel-in-progress: true");
     const jobTimeout = Number(WORKFLOW.match(/timeout-minutes: (\d+)/)?.[1]);
     expect(jobTimeout).toBeGreaterThanOrEqual(100);
     expect(WORKFLOW).toContain("--conversation .ai-issue-review-context/conversation.json");
-    expect(WORKFLOW).toContain("Issue conversation changed during publication");
+    expect(WORKFLOW).toContain(
+      "canonicalize-publication-conversation",
+    );
+    expect(WORKFLOW).toContain(
+      ".ai-issue-review-context/publication-conversation.json",
+    );
+    expect(WORKFLOW).toContain("Review-triggering conversation changed during publication");
+    expect(WORKFLOW).toContain('marker="<!-- ai-issue-review review=$review_id -->"');
+    expect(WORKFLOW).toContain('search/issues');
+    expect(WORKFLOW).toContain('q="repo:$REPO is:issue"');
     expect(WORKFLOW).toContain("Bug-report classification");
     expect(WORKFLOW).toContain("validate-triage");
+    expect(WORKFLOW).toContain(
+      "$(jq -c . .github/prompts/ai-issue-review-bug-triage-schema.json)",
+    );
+    expect(BUG_TRIAGE_SCHEMA.properties.testFiles.maxItems).toBe(5);
     expect(WORKFLOW).toContain('--base "$BASE_SHA"');
+    expect(WORKFLOW).toContain('--review-id "$REVIEW_ID"');
     expect(WORKFLOW).toContain("unshare --net");
     expect(WORKFLOW).toContain("env -i");
     expect(WORKFLOW).toContain(`"$bun_bin" test "\${bug_test_files[@]}"`);
     expect(WORKFLOW).toContain("ulimit -f 20480");
+    const installCommand = WORKFLOW.match(
+      /'([^']*install --frozen-lockfile --ignore-scripts)'/,
+    )?.[1] ?? "";
+    expect(installCommand).not.toContain("ulimit -f");
     expect(WORKFLOW).toContain("--bug-verification .ai-issue-review-context/bug-verification.json");
     expect(WORKFLOW).toContain('stable_marker="<!-- ai-issue-review issue=$ISSUE_NUMBER -->"');
     expect(WORKFLOW).toContain('--method PATCH "repos/$REPO/issues/comments/$existing_id"');
@@ -548,13 +680,17 @@ describe("t301 AI issue intent review", () => {
     expect(COMMON_PROMPT).toContain("Never describe yourself as a model, robot");
     expect(COMMON_PROMPT).toContain("A later maintainer");
     expect(COMMON_PROMPT).toContain("clarify, correct, or supersede");
+    expect(COMMON_PROMPT).toContain("up to 200 recently updated");
+    expect(COMMON_PROMPT).not.toContain("Bug classification and any bounded execution result");
     expect(PROMPT_INJECTION_PROMPT).toContain("Prompt-injection and agent-trust lens");
     expect(PROMPT_INJECTION_PROMPT).toContain("active instruction");
     expect(PROMPT_INJECTION_PROMPT).toContain("blocking-question");
     expect(PROMPT_INJECTION_PROMPT).toContain("Maintainer product authority cannot waive");
+    expect(PROMPT_INJECTION_PROMPT).not.toContain("specialist candidate files");
     expect(JUDGE_PROMPT).toContain("regular tracked files in the trusted base revision");
     expect(JUDGE_PROMPT).toContain("Never cite `.ai-issue-review-*` artifacts");
     expect(DIRECTION_PROMPT).toContain("orchestrator speaks as a colleague");
     expect(DIRECTION_PROMPT).toContain("token cost");
+    expect(DIRECTION_PROMPT).toContain("bug-verification.json");
   });
 });

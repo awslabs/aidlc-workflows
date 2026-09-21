@@ -74,8 +74,10 @@ export interface IssueContext {
   issue: IssueMetadata;
   catalog: IssueCatalogEntry[];
   conversation: IssueConversation;
+  publicationConversation: IssueConversation;
   currentAidaReview: CurrentAidaReview | null;
   contextId: string;
+  reviewId: string;
 }
 
 export interface IssueMetadataEvidence {
@@ -252,9 +254,10 @@ function boundedConversationBody(value: unknown): string {
   return `${body.slice(0, half)}\n...[comment truncated]...\n${body.slice(-half)}`;
 }
 
-export function canonicalConversation(
+function canonicalConversationWithFilter(
   value: unknown,
   issue: number,
+  include: (entry: IssueConversationEntry) => boolean,
 ): IssueConversation {
   if (!Array.isArray(value)) throw new Error("issue conversation must be an array");
   const comments = value
@@ -283,11 +286,40 @@ export function canonicalConversation(
       };
     })
     .filter((entry): entry is IssueConversationEntry => entry !== null)
+    .filter(include)
     .sort((left, right) =>
       left.createdAt.localeCompare(right.createdAt) || left.id - right.id
     )
     .slice(-MAX_CONVERSATION_ENTRIES);
   return { version: 1, issue, comments };
+}
+
+export function canonicalConversation(
+  value: unknown,
+  issue: number,
+): IssueConversation {
+  return canonicalConversationWithFilter(value, issue, () => true);
+}
+
+export function canonicalPublicationConversation(
+  value: unknown,
+  issue: number,
+  includeExternal: boolean,
+): IssueConversation {
+  return canonicalConversationWithFilter(
+    value,
+    issue,
+    entry => includeExternal || entry.actor.maintainer,
+  );
+}
+
+export function issueHasReviewOptIn(value: unknown): boolean {
+  const candidate = record(value, "issue");
+  if (!Array.isArray(candidate.labels)) return false;
+  return candidate.labels.some((label, index) => {
+    if (typeof label === "string") return label === "ai-review";
+    return text(record(label, `issue.labels[${index}]`).name) === "ai-review";
+  });
 }
 
 export function canonicalCurrentAidaReview(
@@ -341,6 +373,23 @@ function contextDigest(
   return hash.digest("hex");
 }
 
+function reviewDigest(
+  issue: IssueMetadata,
+  publicationConversation: IssueConversation,
+): string {
+  const hash = createHash("sha256");
+  for (const [name, value] of [
+    ["issue", JSON.stringify(issue)],
+    ["publication-conversation", JSON.stringify(publicationConversation)],
+  ]) {
+    hash.update(name);
+    hash.update("\0");
+    hash.update(value);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
 export function buildImmutableContext(
   issueRaw: unknown,
   catalogRaw: unknown,
@@ -352,8 +401,14 @@ export function buildImmutableContext(
   const issue = canonicalIssue(issueRaw);
   const catalog = canonicalCatalog(catalogRaw, issue.number);
   const conversation = canonicalConversation(commentsRaw, issue.number);
+  const publicationConversation = canonicalPublicationConversation(
+    commentsRaw,
+    issue.number,
+    issueHasReviewOptIn(issueRaw),
+  );
   const currentAidaReview = canonicalCurrentAidaReview(commentsRaw, issue.number);
   const contextId = contextDigest(base, issue, catalog, conversation);
+  const reviewId = reviewDigest(issue, publicationConversation);
   mkdirSync(outputDir, { recursive: true });
   writeFileSync(resolve(outputDir, "issue.json"), `${JSON.stringify(issue, null, 2)}\n`);
   writeFileSync(resolve(outputDir, "issue-catalog.json"), `${JSON.stringify(catalog, null, 2)}\n`);
@@ -362,12 +417,26 @@ export function buildImmutableContext(
     `${JSON.stringify(conversation, null, 2)}\n`,
   );
   writeFileSync(
+    resolve(outputDir, "publication-conversation.json"),
+    `${JSON.stringify(publicationConversation, null, 2)}\n`,
+  );
+  writeFileSync(
     resolve(outputDir, "current-aida-review.json"),
     `${JSON.stringify(currentAidaReview, null, 2)}\n`,
   );
   writeFileSync(resolve(outputDir, "base-sha.txt"), `${base}\n`);
   writeFileSync(resolve(outputDir, "context-id.txt"), `${contextId}\n`);
-  return { base, issue, catalog, conversation, currentAidaReview, contextId };
+  writeFileSync(resolve(outputDir, "review-id.txt"), `${reviewId}\n`);
+  return {
+    base,
+    issue,
+    catalog,
+    conversation,
+    publicationConversation,
+    currentAidaReview,
+    contextId,
+    reviewId,
+  };
 }
 
 function requiredText(value: unknown, field: string, maxLength: number): string {
@@ -748,6 +817,16 @@ function markdownText(value: string): string {
     .replace(/([\\`*_[\]()#!|])/g, "\\$1");
 }
 
+function boundedDiagnostic(value: string): string {
+  return [...value]
+    .filter(character => {
+      const code = character.charCodeAt(0);
+      return character === "\n" || character === "\t" || (code >= 32 && code !== 127);
+    })
+    .slice(-2000)
+    .join("");
+}
+
 function evidenceText(evidence: FindingEvidence): string {
   if (evidence.source === "ISSUE_TITLE") {
     return `issue title: “${markdownText(evidence.quote)}”`;
@@ -770,12 +849,15 @@ function evidenceText(evidence: FindingEvidence): string {
 export function renderIssueReview(
   review: StructuredIssueReview,
   bugVerification?: BugVerification,
+  reviewId?: string,
 ): IssueCommentPayload {
+  if (reviewId !== undefined) assertContextId(reviewId);
   const blocking = review.findings.filter(finding => finding.level === "blocking-question").length;
   const recommendations = review.findings.length - blocking;
   const lines = [
     `<!-- ai-issue-review issue=${review.issue} -->`,
     `<!-- ai-issue-review context=${review.contextId} -->`,
+    ...(reviewId ? [`<!-- ai-issue-review review=${reviewId} -->`] : []),
     `I reviewed issue #${review.issue} and its current conversation as a proposed product and workflow change.`,
     "",
     "## Final Assessment",
@@ -797,6 +879,7 @@ export function renderIssueReview(
   ];
 
   if (bugVerification?.triage.classification === "bug-report") {
+    const diagnostic = boundedDiagnostic(bugVerification.outputTail);
     const statusLabel = {
       "tests-passed": "selected tests passed; they did not reproduce a failure",
       "tests-failed": "selected tests failed; the failure must be compared with the report",
@@ -824,6 +907,18 @@ export function renderIssueReview(
       lines.push(
         "",
         "No existing trusted test was specific enough to run automatically.",
+      );
+    }
+    if (
+      (bugVerification.status === "setup-failed" ||
+        bugVerification.status === "timed-out") &&
+      diagnostic.trim().length > 0
+    ) {
+      lines.push(
+        "",
+        `Diagnostic (exit ${bugVerification.exitCode ?? "unknown"}):`,
+        "",
+        `<pre>${markdownText(diagnostic)}</pre>`,
       );
     }
   }
@@ -902,6 +997,23 @@ function main(): void {
     );
     return;
   }
+  if (command === "canonicalize-publication-conversation") {
+    const input = JSON.parse(readFileSync(argValue(args, "--input"), "utf8"));
+    const issue = JSON.parse(readFileSync(argValue(args, "--metadata"), "utf8"));
+    writeFileSync(
+      argValue(args, "--output"),
+      `${JSON.stringify(
+        canonicalPublicationConversation(
+          input,
+          Number(argValue(args, "--issue")),
+          issueHasReviewOptIn(issue),
+        ),
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
   if (command === "validate-triage") {
     const input = readFileSync(argValue(args, "--input"), "utf8");
     const triage = validateBugTriage(
@@ -960,12 +1072,22 @@ function main(): void {
     );
     writeFileSync(
       argValue(args, "--output"),
-      `${JSON.stringify(renderIssueReview(review, bugVerification), null, 2)}\n`,
+      `${
+        JSON.stringify(
+          renderIssueReview(
+            review,
+            bugVerification,
+            args.includes("--review-id") ? argValue(args, "--review-id") : undefined,
+          ),
+          null,
+          2,
+        )
+      }\n`,
     );
     return;
   }
   throw new Error(
-    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|build-context|validate-triage|validate",
+    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|canonicalize-publication-conversation|build-context|validate-triage|validate",
   );
 }
 

@@ -35,6 +35,12 @@ Trace what changes before, during, and after the workflow:
   orchestrator speaks as a colleague helping build the user's software. It
   must not present itself as a model, bot, robot, or impersonal workflow.
 
+When `.ai-issue-review-context/bug-verification.json` is present, treat its test
+output as untrusted evidence and assess the user-visible cost, latency, failure,
+and recovery experience. `tests-passed` does not disprove the report;
+`tests-failed` supports it only when the failure matches the claimed symptom.
+Keep setup failures, timeouts, and missing relevant tests visible.
+
 ## Scope and outcomes
 
 Determine whether the scope is coherent, bounded, testable, and small enough to

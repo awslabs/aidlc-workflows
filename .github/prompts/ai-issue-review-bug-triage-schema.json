@@ -1,0 +1,51 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "issue",
+    "contextId",
+    "classification",
+    "confidence",
+    "rationale",
+    "testFiles"
+  ],
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "contextId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "bug-report",
+        "not-bug",
+        "unclear"
+      ]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "testFiles": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "string",
+        "pattern": "^tests/(smoke|unit|integration)/[A-Za-z0-9._/-]+[.]test[.]ts$"
+      }
+    }
+  }
+}
