@@ -167,6 +167,12 @@ The additional read-only `guard.human-presence` lookup reports `on (default)` or
 bun .claude/tools/aidlc-utility.ts config-change --guard-policy relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
 ```
 
+The typed forms `/aidlc config set guard-policy relaxed --intent <name> --space <name>`
+and `/aidlc --guard-policy relaxed --intent <name> --space <name> ...` bind the
+request to that intent and space; a setter with the same selectors consumes it.
+The trailing `...` in the flags form stands for an optional task description.
+A named intent that does not exist records nothing.
+
 Selectors target the same intent for state, memory policy, and audit without
 switching the active cursors. All supplied values are validated before mutation;
 invalid values or unknown flags refuse the whole update, naming the offending
@@ -256,11 +262,20 @@ Intent creation reads Guard Policy from that scope file. The conductor passes `-
 
 The resolved value is written to the intent's `aidlc-state.md` at creation as `- **Guard Policy**: <value> (from scope <name>)`, rewritten by the flag, typed confirmation words, or a plain-chat request for strict, and read by value only. Because the state file is committed with the intent, the value survives sessions and teammates see the same one; a memory edit that changes the effective value for a running intent is recorded as a `GUARD_POLICY_SET` row naming the memory file the next time a governed check runs. An intent created before this field existed stays `strict (not set)` until you set it; an invalid field is unavailable until `/aidlc --guard-policy` with one of the three values repairs it. The next intent starts from its scope's default again.
 
+If a state file carries both `Guard Policy` and the retired `Change Control` with
+different policy words, strict applies and status shows
+`strict (from conflicting state lines)`; memory-held strict still takes precedence.
+If both agree, the `Guard Policy` line is used. Any write of the policy line removes
+the retired line, leaving one setting. Until a conflict is resolved, `next` carries
+this notice with `<a>` and `<b>` replaced by the raw line values:
+
+> Guard Policy: this piece of work carries both `Guard Policy: <a>` and the retired `Change Control: <b>`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.
+
 #### This setting used to be called Change Control
 
-Every old spelling still works in this release and is removed in the next minor version: the scope key `change_control`, the state field `Change Control`, the memory heading `## Change Control`, the flag `--change-control`, and the config key `change-control`. Typing the retired flag or config key prints one line naming the new spellings; a retired scope key or memory heading is read without comment. Nothing writes an old name again: a state file still carrying a `Change Control` line has that line renamed in place the next time a Guard Policy setting is written, so the setting never appears twice. The `CHANGE_CONTROL_SET` audit event stays readable in older ledgers; new rows are `GUARD_POLICY_SET`.
+Every old spelling still works in this release and is removed in the next minor version: the scope key `change_control`, the state field `Change Control`, the memory heading `## Change Control`, the flag `--change-control`, and the config key `change-control`. Typing the retired flag or config key prints one line naming the new spellings; a retired scope key or memory heading is read without comment. Nothing writes an old name again: any write of the policy line removes the retired `Change Control` line, whether it was the only line or appeared beside `Guard Policy`. The `CHANGE_CONTROL_SET` audit event stays readable in older ledgers; new rows are `GUARD_POLICY_SET`.
 
-While a piece of work still carries the retired `Change Control: relaxed` or `Change Control: off` line, every `/aidlc` run carries a notice in the directive's `change_notices`; `next` stays a query and writes nothing. For example: `Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed now also lowers the plan-approval and review-freeze fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.` Re-affirm with `/aidlc config set guard-policy relaxed` to keep that value or `/aidlc config set guard-policy strict` to raise the fences; the command rewrites the line as `Guard Policy` and the notice stops. A retired strict line gets no notice and is rewritten the next time any Guard Policy setting is written.
+While a piece of work carries only the retired `Change Control: relaxed` or `Change Control: off` line, every `/aidlc` run carries a notice in the directive's `change_notices`; `next` stays a query and writes nothing. For example: `Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed now also lowers the plan-approval and review-freeze fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.` Re-affirm with `/aidlc config set guard-policy relaxed` to keep that value or `/aidlc config set guard-policy strict` to raise the fences; the command rewrites the line as `Guard Policy` and the notice stops. A retired strict line alone gets no notice and is rewritten the next time any Guard Policy setting is written.
 
 ### The five fences
 
@@ -281,9 +296,17 @@ A fence is a guard that refuses an action nothing asked for: no step the workflo
 
 Lowering a fence or the policy word from chat requires the person's exact typed request. For a fence, type `/aidlc config set guard.<fence> off` yourself. For the policy word, type `/aidlc --guard-policy relaxed|off` or the confirmation words `guard policy relaxed|off`, choosing one value. The human-turn hook records what you typed for your session, bound to the space and the piece of work you are on; the setter accepts a lowering only when that record names the same session, space, intent, switch and value, and it spends the record on the first successful write (or an already-set no-op). A later typed switch replaces the record, while unrelated messages leave it untouched. An unrelated reply after the engine's directive opens nothing.
 
+The setter matches the request to the session that ran the command, resolved by
+the harness through a session override or process ancestry; it never falls back
+to the audit ledger. Without a resolvable session, lowering is refused with the
+normal refusal plus `This command ran with no resolvable session, so no typed request can be matched to it.`
+On hosts without process ancestry, including Windows, the harness adapter must
+supply the session. Kiro IDE does so on non-empty-prompt turns by running the
+lowering setter inside its hook with the chat's own session.
+
 When a guard question offers "turn the check off for this piece of work", choosing it runs nothing: the choice tells you the command to type (`/aidlc config set guard.<fence> off`), and typing it is the move. On Codex the skill is `$aidlc`, and its refusals say so.
 
-What counts as typing the switch: a message that begins with `/aidlc` (or `$aidlc`, or `aidlc`) and carries the flags first, such as `/aidlc --guard-policy relaxed`, `/aidlc --guard-policy off --guard.state-transition off`, or `/aidlc --guard-policy relaxed build the auth service` (the description follows the flags and is not read); the exact command `/aidlc config set guard-policy relaxed|off` or `/aidlc config set guard.<fence> off` with nothing else on the line; or the confirmation words `guard policy relaxed|off` on their own. Case and a trailing period do not matter. A question or remark that mentions a switch is not a switch: `/aidlc why was config set guard.plan-approval off suggested?` records nothing, and neither does a flag placed after the description. Add `--space <name>` in the same command when the request is for another space; otherwise it belongs to the space you are working in.
+What counts as typing the switch: a message that begins with `/aidlc` (or `$aidlc`, or `aidlc`) and carries the flags first, such as `/aidlc --guard-policy relaxed`, `/aidlc --guard-policy off --guard.state-transition off`, or `/aidlc --guard-policy relaxed build the auth service` (the description follows the flags and is not read); `config set guard-policy relaxed|off` or `config set guard.<fence> off` after the same command head, followed only by optional `--intent <name>` and `--space <name>` pairs, each at most once and in either order; or the confirmation words `guard policy relaxed|off` on their own. Any other extra token in the config form records no switch. Case and a trailing period do not matter. A question or remark that mentions a switch is not a switch: `/aidlc why was config set guard.plan-approval off suggested?` records nothing, and neither does a flag placed after the description. Both config and flags-first forms bind `--intent <name>` and `--space <name>` to the requested target; omitted selectors use the session's workflow selection, and a named intent that does not exist records nothing.
 
 Direct `intent create --guard-policy relaxed|off` and `scope change --guard-policy relaxed|off` commands require the same typed policy request; compose creation takes its value from the scope file instead. First-use slash flags are recorded before a state file exists, so a later composer approval does not erase the choice. Scope defaults are not gated. `AIDLC_UNATTENDED=1` refuses all lowering from chat, even with a recorded request. `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` bypasses the key for an attended run, not memory-held strict.
 

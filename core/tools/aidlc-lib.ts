@@ -4017,12 +4017,14 @@ export function recordTypedGuardSwitchRequest(
     const selection = resolveWorkflowSelection(projectDir, {
       sessionId: session,
       ...(parsed.space ? { space: parsed.space } : {}),
+      ...(parsed.intent ? { intent: parsed.intent } : {}),
     });
+    const uuid = intentUuidForSelection(projectDir, selection);
+    if (parsed.intent !== null && uuid === null) return false;
     space = selection.space;
-    intentId = intentUuidForSelection(projectDir, selection) ?? "bare-space";
+    intentId = uuid ?? "bare-space";
   } catch {
-    space = activeSpace(projectDir);
-    intentId = activeIntentUuid(projectDir, space) ?? "bare-space";
+    return false;
   }
   const request: GuardSwitchRequest = {
     version: 1,
@@ -29801,6 +29803,8 @@ export interface GuardPolicyResolution {
   rawStateValue: string | null;
   /** The state field the line was read from (new or retired); null when absent. */
   stateField: string | null;
+  /** Both stored lines when they disagree or either cannot be parsed. */
+  conflict?: { guardPolicy: string; changeControl: string };
   /** The first memory layer declaring strict, when one does. */
   memoryStrict: GuardPolicyMemoryDeclaration | null;
 }
@@ -29906,10 +29910,9 @@ export function guardPolicyStateField(state: string): string | null {
 }
 
 /**
- * Write the policy line under its new name. A state file still carrying the
- * retired `Change Control` line has that line renamed in place, so one setting
- * never appears twice; a file with neither gets the line inserted after the
- * scope configuration anchors, or appended.
+ * Write the policy line under its new name, renaming a retired line in place
+ * or inserting after the scope configuration anchors when neither exists.
+ * Every write removes any remaining retired line, whether the words agree or conflict.
  */
 export function setGuardPolicyLine(content: string, line: string): string {
   if (getField(content, GUARD_POLICY_FIELD) === null) {
@@ -29928,6 +29931,10 @@ export function setGuardPolicyLine(content: string, line: string): string {
       if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARD_POLICY_FIELD}**:\n`;
     }
   }
+  content = content.replace(
+    new RegExp(`^[ \\t]*(?:[-*][ \\t]*)?\\*\\*${CHANGE_CONTROL_FIELD}\\*\\*:[^\\r\\n]*(?:\\r?\\n|$)`, "gm"),
+    "",
+  );
   return setField(content, GUARD_POLICY_FIELD, line);
 }
 
@@ -30137,11 +30144,12 @@ export function scopeGuardPolicyDefault(scope: string | null | undefined): Guard
 export const scopeChangeControlDefault = scopeGuardPolicyDefault;
 
 /**
- * Resolved value = the intent's own valid line if present, else strict. Then,
- * if ANY memory layer declares strict, the resolved value is strict and that
- * file is the source. Memory `relaxed` or an absent section has no effect. A
- * malformed state line is a validation error unless the repair command opts
- * into reading it tolerantly. Pure: reads state and memory, writes nothing.
+ * Resolved value = the intent's own valid line if present, else strict. Two
+ * disagreeing state lines resolve to strict until a write keeps one line.
+ * If ANY memory layer declares strict, that file is the source instead.
+ * Memory `relaxed` or an absent section has no effect. A lone malformed state
+ * line is a validation error unless the repair command opts into reading it
+ * tolerantly. Pure: reads state and memory, writes nothing.
  */
 export function resolveGuardPolicy(
   projectDir: string,
@@ -30167,18 +30175,26 @@ export function resolveGuardPolicy(
   }
   const scope = getField(state, "Scope");
   const scopeDefault = scopeGuardPolicyDefault(scope);
-  const stateField = guardPolicyStateField(state);
-  const rawStateValue = stateField === null ? null : getField(state, stateField);
+  const rawGuardPolicy = getField(state, GUARD_POLICY_FIELD);
+  const rawChangeControl = getField(state, CHANGE_CONTROL_FIELD);
+  const stateField = rawGuardPolicy !== null
+    ? GUARD_POLICY_FIELD : rawChangeControl !== null ? CHANGE_CONTROL_FIELD : null;
+  const rawStateValue = rawGuardPolicy ?? rawChangeControl;
   const intent = parseGuardPolicyStateLine(rawStateValue);
-  if (rawStateValue !== null && intent === null && !options.tolerateInvalidState) {
+  const retired = rawGuardPolicy !== null && rawChangeControl !== null
+    ? parseGuardPolicyStateLine(rawChangeControl) : null;
+  const conflict = rawGuardPolicy !== null && rawChangeControl !== null &&
+      (intent === null || retired === null || intent.value !== retired.value)
+    ? { guardPolicy: rawGuardPolicy, changeControl: rawChangeControl } : undefined;
+  if (rawStateValue !== null && intent === null && conflict === undefined && !options.tolerateInvalidState) {
     throw new Error(
       `Invalid Guard Policy "${rawStateValue}" in ${statePath} ` +
         `(field: ${stateField}). Expected one of: ${GUARD_POLICY_VALUES.join(", ")}. ` +
         `Run ${entrySkillInvocation()} --guard-policy strict, relaxed, or off to repair it.`,
     );
   }
-  const stateValue = intent?.value ?? "strict";
-  const stateSource = intent?.source ?? "not set";
+  const stateValue = conflict === undefined ? intent?.value ?? "strict" : "strict";
+  const stateSource = conflict === undefined ? intent?.source ?? "not set" : "conflicting state lines";
   const memoryStrict =
     memoryGuardPolicyDeclarations(projectDir, {
       intent: selection.intent ?? undefined,
@@ -30193,6 +30209,7 @@ export function resolveGuardPolicy(
       stateValue,
       rawStateValue,
       stateField,
+      ...(conflict === undefined ? {} : { conflict }),
       memoryStrict,
     };
   }
@@ -30204,6 +30221,7 @@ export function resolveGuardPolicy(
     stateValue,
     rawStateValue,
     stateField,
+    ...(conflict === undefined ? {} : { conflict }),
     memoryStrict: null,
   };
 }
@@ -30254,13 +30272,16 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
   return [];
 }
 
-// Accept /aidlc, $aidlc, or bare aidlc followed by flags first or the exact
-// four-token config set form. A description or explanation after the flags is
-// never scanned. The whole prompt may instead be the confirmation words
-// guard policy relaxed (also hyphenated, change control, or off).
+// Accept /aidlc, $aidlc, or bare aidlc followed by flags first or config set
+// <key> <value> with only optional --intent and --space pairs, each at most once.
+// Both command forms capture those selectors; flags stop at a description or
+// explanation. The whole prompt may instead be the confirmation words guard
+// policy relaxed (also hyphenated, change control, or off).
 // Strip trailing prompt punctuation and match case-insensitively. strict and
 // on never switch; human presence has no switch. Last value wins per key.
-export function parseTypedGuardSwitchRequest(prompt: string): { switches: GuardSwitch[]; space: string | null } {
+export function parseTypedGuardSwitchRequest(prompt: string): {
+  switches: GuardSwitch[]; space: string | null; intent: string | null;
+} {
   const text = prompt.trim().replace(/[.,;:!?]+$/, "").toLowerCase();
   const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/);
   if (command === null) {
@@ -30270,19 +30291,38 @@ export function parseTypedGuardSwitchRequest(prompt: string): { switches: GuardS
         ? []
         : [{ key: "guard-policy", value: confirmation[1] as GuardSwitch["value"] }],
       space: null,
+      intent: null,
     };
   }
   const tokens = text.slice(command[0].length).trim().split(/\s+/);
-  const configForm = tokens.length === 4 && tokens[0] === "config" && tokens[1] === "set";
+  const configForm = tokens[0] === "config" && tokens[1] === "set";
   const switches = new Map<GuardSwitchKey, GuardSwitch>();
   let space: string | null = null;
-  for (let i = configForm ? 2 : 0; i < tokens.length;) {
+  let intent: string | null = null;
+  if (configForm) {
+    if (tokens.length < 4) return { switches: [], space: null, intent: null };
+    for (let i = 4; i < tokens.length; i += 2) {
+      const selector = tokens[i];
+      const value = tokens[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        return { switches: [], space: null, intent: null };
+      }
+      if (selector === "--space" && space === null) space = value;
+      else if (selector === "--intent" && intent === null) intent = value;
+      else return { switches: [], space: null, intent: null };
+    }
+  }
+  for (let i = configForm ? 2 : 0; i < (configForm ? 4 : tokens.length);) {
     const token = tokens[i++];
     if (!configForm && !token.startsWith("--")) break;
     const configKey = configForm ? token : token.slice(2);
     const value = tokens[i] !== undefined && !tokens[i].startsWith("--") ? tokens[i++] : undefined;
     if (!configForm && configKey === "space" && value !== undefined) {
       space = value;
+      continue;
+    }
+    if (!configForm && configKey === "intent" && value !== undefined) {
+      intent = value;
       continue;
     }
     let key: GuardSwitchKey;
@@ -30296,7 +30336,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): { switches: GuardS
     }
     if (value === "relaxed" || value === "off") switches.set(key, { key, value });
   }
-  return { switches: [...switches.values()], space };
+  return { switches: [...switches.values()], space, intent };
 }
 
 export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
@@ -30323,18 +30363,24 @@ export function guardSwitchAuthority(
     : null;
 }
 
-export function guardSwitchRefusal(wanted: GuardSwitch, context: "config" | "intent-create"): string {
+export function guardSwitchRefusal(
+  wanted: GuardSwitch,
+  context: "config" | "intent-create",
+  options: { sessionMissing?: boolean } = {},
+): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
+  const sessionMissing = options.sessionMissing
+    ? " This command ran with no resolvable session, so no typed request can be matched to it." : "";
   const entry = entrySkillInvocation();
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
-    return `Turning the ${fence} check off is the person's decision. It is accepted only when they typed \`${entry} config set guard.${fence} off\` in this session. Ask them, and run this again after they do.${hint}`;
+    return `Turning the ${fence} check off is the person's decision. It is accepted only when they typed \`${entry} config set guard.${fence} off\` in this session. Ask them, and run this again after they do.${sessionMissing}${hint}`;
   }
   const value = wanted.value;
   if (context === "intent-create") {
-    return `Creating this intent with Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`${entry} --guard-policy ${value}\` in this session. Create it without the flag, or ask them and run this again after they do.${hint}`;
+    return `Creating this intent with Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`${entry} --guard-policy ${value}\` in this session. Create it without the flag, or ask them and run this again after they do.${sessionMissing}${hint}`;
   }
-  return `Setting Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`${entry} --guard-policy ${value}\` in this session. Ask them, and run this again after they do.${hint}`;
+  return `Setting Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`${entry} --guard-policy ${value}\` in this session. Ask them, and run this again after they do.${sessionMissing}${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {

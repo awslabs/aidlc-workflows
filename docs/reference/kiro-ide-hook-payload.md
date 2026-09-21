@@ -64,6 +64,13 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
+On the first empty-prompt UserPromptSubmit turn in a session, `verb-intercept`
+prints the following capability note on stdout at exit 0 and creates
+`capability-noted` in that session's terminal runtime directory. It prints the
+note once per session, never on a non-empty prompt:
+
+> SYSTEM (AIDLC harness capability): this Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat in this session. If the person asks to relax or turn off the guards, do not name a command for them to type; say that the hooks cannot see what they type here and that the routes are guard_policy in the scope file, a memory Guard Policy line, or a Kiro IDE build that delivers the prompt. Raising to strict and turning a fence on still work.
+
 For the empty prompt captured on 1.0.242, the adapter refuses shell commands
 that would lower a fence or Guard Policy before they run (exit 2 with stderr).
 The per-turn `prompt-empty` marker tracks this limitation; a model command
@@ -72,8 +79,23 @@ never mints a typed request. The refusal is:
 > This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.
 
 Raising Guard Policy to `strict`, turning a fence `on`, and other commands use
-the existing adapter path. Newer builds that deliver a non-empty prompt use the
-core human-turn hook to record what the person typed, without this refusal.
+the existing adapter path. On turns not marked `prompt-empty`, the adapter
+recognizes lowering setters in shell PreToolUse payloads: `aidlc-utility.ts`
+`config-change`, `scope-change`, and `intent-create`, or `aidlc.ts engine`
+`config set`, `scope change`, and `intent create`, with lowering settings.
+The hook runs the recognized tool path and arguments itself through the running Bun executable in the
+project directory and `hookChildEnv(projectDir, sessionId)`, using the same
+chat session forwarded to the core human-turn hook. That core hook records
+typed requests when the prompt is non-empty; the setter still requires a
+matching request. `aidlc-orchestrate.ts next` only prints a dispatch and is
+not run as a lowering setter.
+
+The adapter then refuses the model's shell call with exit 2 and both output
+streams plus the setter's exit code on stderr, telling the conductor to relay
+the output verbatim. The per-turn `latch.json` retains the output so a duplicate
+shell call is refused with the same output rather than running the setter again.
+This keeps separate chats bound to their own requests even when they share an
+IDE process or the host has no process ancestry, including Windows.
 
 ### Critical limitations
 

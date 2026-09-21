@@ -8229,11 +8229,16 @@ function withChangeNotices<T extends Directive>(directive: T, notices: string[])
 // the notice recommends, so in that case there is nothing to announce. An
 // unreadable policy is the strictest policy and announces nothing either.
 function retiredGuardPolicyNotice(projectDir: string, stateContent: string): string | null {
-  if (guardPolicyStateField(stateContent) !== CHANGE_CONTROL_FIELD) return null;
   let value: GuardPolicy;
   try {
     const resolution = resolveGuardPolicy(projectDir, stateContent, { tolerateInvalidState: true });
     if (resolution.memoryStrict !== null) return null;
+    if (resolution.conflict !== undefined) {
+      const { guardPolicy, changeControl } = resolution.conflict;
+      return `Guard Policy: this piece of work carries both \`Guard Policy: ${guardPolicy}\` and the retired \`Change Control: ${changeControl}\`, ` +
+        "so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.";
+    }
+    if (guardPolicyStateField(stateContent) !== CHANGE_CONTROL_FIELD) return null;
     value = resolution.value;
   } catch {
     return null;

@@ -120,7 +120,7 @@ afterEach(() => {
   while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
 });
 
-function run(tool: string, args: string[], proj: string, env: Record<string, string> = {}) {
+function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync({
     cmd: [BUN, tool, ...args, "--project-dir", proj],
     env: { ...process.env, ...env },
@@ -553,16 +553,26 @@ describe("t333 (3) resolution precedence", () => {
     expect(guardPolicyRows(proj)).toHaveLength(0);
   });
 
-  test("a record carrying both lines resolves the new one", () => {
+  test("a record carrying both lines resolves strict when they disagree and the new one when they agree", () => {
     const { proj, state } = project("classic");
-    const both = readFileSync(state, "utf-8").replace(
+    const disagreeing = readFileSync(state, "utf-8").replace(
       /^- \*\*Guard Policy\*\*:.*$/m,
       "- **Change Control**: strict (set by you)\n- **Guard Policy**: off (set by you)",
     );
-    writeFileSync(state, both);
-    const resolved = resolveGuardPolicy(proj);
-    expect(resolved.value).toBe("off");
-    expect(resolved.stateField).toBe(GUARD_POLICY_FIELD);
+    writeFileSync(state, disagreeing);
+    const conflicted = resolveGuardPolicy(proj);
+    expect(conflicted.value).toBe("strict");
+    expect(conflicted.source).toBe("conflicting state lines");
+    expect(conflicted.stateField).toBe(GUARD_POLICY_FIELD);
+    expect(conflicted.conflict).toEqual({
+      guardPolicy: "off (set by you)",
+      changeControl: "strict (set by you)",
+    });
+    writeFileSync(state, disagreeing.replace("Change Control**: strict", "Change Control**: off"));
+    const agreeing = resolveGuardPolicy(proj);
+    expect(agreeing.value).toBe("off");
+    expect(agreeing.conflict).toBeUndefined();
+    expect(agreeing.stateField).toBe(GUARD_POLICY_FIELD);
   });
 
   test("memory strict beats both, from any layer, and names its file and section", () => {
@@ -2041,6 +2051,137 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
   });
 
+  test.each([
+    { form: "config intent-first", head: "config set guard-policy relaxed", value: "relaxed", intentFirst: true },
+    { form: "config space-first", head: "config set guard-policy relaxed", value: "relaxed", intentFirst: false },
+    { form: "flags", head: "--guard-policy off", value: "off", intentFirst: true },
+  ])("a typed $form policy request selects the inactive intent, not the active one", ({ head, value, intentFirst }) => {
+    const { proj, state: otherState } = project("enterprise");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const otherIntent = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const created = run(UTILITY, [
+      "intent-create", "--scope", "enterprise", "--arguments", "active piece of work",
+      "--label", "active", "--space", "default",
+    ], proj, FENCE_ENV_CLEAR);
+    expect(created.status, created.stderr).toBe(0);
+    const activeIntent = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(activeIntent).not.toBe(otherIntent);
+    const state = join(intents, activeIntent, "aidlc-state.md");
+    const selectors = intentFirst
+      ? ["--intent", otherIntent, "--space", "default"]
+      : ["--space", "default", "--intent", otherIntent];
+    recordHumanPrompt(proj, `/aidlc ${head} ${selectors.join(" ")}`);
+    const request = readGuardSwitchRequest(proj, FENCE_SESSION);
+    expect(request).not.toBeNull();
+    const before = readFileSync(state, "utf-8");
+    const otherBefore = readFileSync(otherState, "utf-8");
+    const ledger = mutationRows(proj);
+    const otherLedger = mutationRows(proj, otherIntent, "default");
+    const args = ["config-change", "--guard-policy", value];
+    const refused = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({ error: policyRefusal.replaceAll("relaxed", value) });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(readFileSync(otherState, "utf-8")).toBe(otherBefore);
+    expect(mutationRows(proj)).toEqual(ledger);
+    expect(mutationRows(proj, otherIntent, "default")).toEqual(otherLedger);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toEqual(request);
+
+    const lowered = run(UTILITY, [...args, ...selectors], proj, FENCE_ENV_CLEAR);
+    expect(lowered.status, lowered.stderr).toBe(0);
+    expect(getField(readFileSync(otherState, "utf-8"), GUARD_POLICY_FIELD)).toBe(`${value} (set by you)`);
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(mutationRows(proj)).toEqual(ledger);
+    const rows = selectedRows(proj, otherIntent, "default", "GUARD_POLICY_SET");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "New Value")).toBe(value);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
+  });
+
+  test.each([
+    { form: "config", head: "config set guard-policy relaxed" },
+    { form: "flags", head: "--guard-policy relaxed" },
+  ])("a typed $form request for a missing intent records nothing and cannot lower the active policy", ({ head }) => {
+    const { proj, state } = project("enterprise");
+    const selectors = ["--intent", "does-not-exist", "--space", "default"];
+    recordHumanPrompt(proj, `/aidlc ${head} ${selectors.join(" ")}`);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
+    const before = readFileSync(state, "utf-8");
+    const ledger = mutationRows(proj);
+    const args = ["config-change", "--guard-policy", "relaxed"];
+    expect(run(UTILITY, [...args, ...selectors], proj, FENCE_ENV_CLEAR).status).toBe(1);
+    const refused = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({ error: policyRefusal });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(mutationRows(proj)).toEqual(ledger);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
+  });
+
+  test.each([
+    { malformed: "a repeated intent selector", suffix: "--intent {intent} --intent {intent}" },
+    { malformed: "a repeated space selector", suffix: "--space default --space default" },
+    { malformed: "an intent selector without a value", suffix: "--intent" },
+    { malformed: "a space selector without a value", suffix: "--space" },
+    { malformed: "an unrelated trailing flag", suffix: "--space default --review advisory" },
+  ])("a typed config command with $malformed records no lowering request", ({ suffix }) => {
+    const { proj, state } = project("enterprise");
+    const intent = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
+    recordHumanPrompt(proj, `/aidlc config set guard-policy relaxed ${suffix.replaceAll("{intent}", intent)}`);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
+    const before = readFileSync(state, "utf-8");
+    const ledger = mutationRows(proj);
+    const refused = run(UTILITY, ["config-change", "--guard-policy", "relaxed"], proj, FENCE_ENV_CLEAR);
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({ error: policyRefusal });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(mutationRows(proj)).toEqual(ledger);
+  });
+
+  test.each<{ operation: string; prompt: string; args: string[]; refusal: string }>([
+    {
+      operation: "fence setter",
+      prompt: "/aidlc config set guard.plan-approval off",
+      args: ["config-change", "--guard.plan-approval", "off"],
+      refusal: fenceRefusal,
+    },
+    {
+      operation: "intent creation",
+      prompt: "/aidlc --guard-policy relaxed",
+      args: [
+        "intent-create", "--scope", "enterprise", "--arguments", "unbound piece of work",
+        "--label", "unbound", "--guard-policy", "relaxed",
+      ],
+      refusal: createRefusal,
+    },
+  ])("a $operation with no resolvable session cannot spend the ledger session's typed request", ({ prompt, args, refusal }) => {
+    const { proj, state } = project("enterprise");
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: FENCE_SESSION }, proj);
+    expect(rowsOf(proj, "SESSION_STARTED").map((row) => auditBlockField(row.block, "Session"))).toEqual([FENCE_SESSION]);
+    recordHumanPrompt(proj, prompt);
+    const request = readGuardSwitchRequest(proj, FENCE_SESSION);
+    expect(request).not.toBeNull();
+    const before = readFileSync(state, "utf-8");
+    const ledger = mutationRows(proj);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const registry = readFileSync(join(intents, "intents.json"), "utf-8");
+    const active = readFileSync(join(intents, "active-intent"), "utf-8");
+    const records = readdirSync(intents).sort();
+    const refused = run(UTILITY, args, proj, {
+      ...FENCE_ENV_CLEAR, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+    });
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({
+      error: `${refusal} This command ran with no resolvable session, so no typed request can be matched to it.`,
+    });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(mutationRows(proj)).toEqual(ledger);
+    expect(readFileSync(join(intents, "intents.json"), "utf-8")).toBe(registry);
+    expect(readFileSync(join(intents, "active-intent"), "utf-8")).toBe(active);
+    expect(readdirSync(intents).sort()).toEqual(records);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toEqual(request);
+  });
+
   test.each<{ operation: string; prompt: string; args: string[]; refusal: string }>([
     {
       operation: "fence setter",
@@ -2403,6 +2544,99 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 describe("t333 (10) retired policy confirmation", () => {
   const relaxedNotice = "Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed now also lowers the plan-approval and review-freeze fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
   const offNotice = "Guard Policy: off was carried over from this piece of work's retired Change Control line. Under Guard Policy, off now also lowers the plan-approval, review-freeze, state-transition and reviewer-scope fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy off' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
+  const conflictNotice = "Guard Policy: this piece of work carries both `Guard Policy: off (set by you)` and the retired `Change Control: strict (from scope classic)`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.";
+
+  test("conflicting policy lines enforce strict and repeat the notice until a typed choice leaves one line", () => {
+    const { proj, state } = project("classic");
+    const conflicted = readFileSync(state, "utf-8").replace(
+      /^- \*\*Guard Policy\*\*:.*$/m,
+      "- **Guard Policy**: off (set by you)\n- **Change Control**: strict (from scope classic)",
+    );
+    writeFileSync(state, conflicted);
+    expect(resolveGuardPolicy(proj, conflicted)).toMatchObject({
+      value: "strict",
+      source: "conflicting state lines",
+      conflict: { guardPolicy: "off (set by you)", changeControl: "strict (from scope classic)" },
+    });
+    const config = run(UTILITY, ["config-get", "guard-policy"], proj, FENCE_ENV_CLEAR);
+    expect(config.status, config.stderr).toBe(0);
+    expect(config.stdout).toBe("strict (from conflicting state lines)\n");
+    const status = run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR);
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout).toContain(`${STATUS_POLICY}strict (from conflicting state lines)\n`);
+    for (const args of [[], ["--resume"]]) {
+      const next = runOrchestrateNext(ORCHESTRATE, proj, args);
+      expect(next.status, next.stderr).toBe(0);
+      expect(next.directive?.change_notices).toEqual([conflictNotice]);
+      for (const part of next.steering) expect(part.change_notices).toEqual([conflictNotice]);
+      expect(readFileSync(state, "utf-8")).toBe(conflicted);
+    }
+
+    const generation = setField(conflicted, "Current Stage", "code-generation");
+    writeFileSync(state, generation);
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(generation),
+    });
+    mkdirSync(join(proj, "src"), { recursive: true });
+    const guarded = Bun.spawnSync({
+      cmd: [BUN, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")],
+      cwd: proj,
+      env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: proj },
+      stdin: Buffer.from(JSON.stringify({
+        hook_event_name: "PreToolUse", tool_name: "Write", cwd: proj,
+        tool_input: { file_path: join(proj, "src", "unapproved.ts"), content: "export const unapproved = true;\n" },
+      })),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(guarded.exitCode, guarded.stderr.toString()).toBe(2);
+    expect(rowsOf(proj, "PLAN_APPROVAL_BLOCKED")).toHaveLength(1);
+    expect(rowsOf(proj, "GUARD_STOOD_ASIDE")).toHaveLength(0);
+    expect(guardPolicyRows(proj)).toHaveLength(0);
+
+    recordHumanPrompt(proj, "guard policy off");
+    const changed = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
+    expect(changed.status, changed.stderr).toBe(0);
+    const confirmed = readFileSync(state, "utf-8");
+    expect(confirmed.match(/^- \*\*Guard Policy\*\*:.*$/gm)).toEqual(["- **Guard Policy**: off (set by you)"]);
+    expect(getField(confirmed, CHANGE_CONTROL_FIELD)).toBeNull();
+    expect(confirmed).not.toContain("- **Change Control**:");
+    const rows = guardPolicyRows(proj);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("off");
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toBeUndefined();
+    for (const part of next.steering) expect(part.change_notices).toBeUndefined();
+  });
+
+  test("agreeing policy lines use Guard Policy silently and the next write removes the retired line", () => {
+    const { proj, state } = project("classic");
+    const agreed = readFileSync(state, "utf-8").replace(
+      /^- \*\*Guard Policy\*\*:.*$/m,
+      "- **Guard Policy**: relaxed (set by you)\n- **Change Control**: relaxed (from scope classic)",
+    );
+    writeFileSync(state, agreed);
+    const policy = resolveGuardPolicy(proj, agreed);
+    expect(policy.value).toBe("relaxed");
+    expect(policy.source).toBe("you");
+    expect(policy.conflict).toBeUndefined();
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toBeUndefined();
+    for (const part of next.steering) expect(part.change_notices).toBeUndefined();
+    expect(readFileSync(state, "utf-8")).toBe(agreed);
+
+    const changed = run(UTILITY, ["config-change", "--guard-policy", "strict"], proj, FENCE_ENV_CLEAR);
+    expect(changed.status, changed.stderr).toBe(0);
+    const confirmed = readFileSync(state, "utf-8");
+    expect(confirmed.match(/^- \*\*Guard Policy\*\*:.*$/gm)).toEqual(["- **Guard Policy**: strict (set by you)"]);
+    expect(getField(confirmed, CHANGE_CONTROL_FIELD)).toBeNull();
+    expect(confirmed).not.toContain("- **Change Control**:");
+    expect(resolveGuardPolicy(proj, confirmed).value).toBe("strict");
+  });
 
   test("next repeats the retired relaxed notice without changing state bytes", () => {
     const { proj, state } = project("classic");

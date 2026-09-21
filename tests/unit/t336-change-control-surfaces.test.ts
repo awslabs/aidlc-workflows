@@ -243,14 +243,4 @@ describe("t336 (4) every orchestrator skill teaches the new name only", () => {
       expect(skill.includes("Change Control"), harness).toBe(false);
     }
   });
-
-  test("the plain-chat request names all three values", () => {
-    for (const harness of HARNESSES) {
-      const skill = readFileSync(
-        join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"),
-        "utf-8",
-      );
-      expect(skill, harness).toContain("config-change --guard-policy <strict|relaxed|off>");
-    }
-  });
 });

@@ -32,6 +32,15 @@ sidecar's final line ending.
 | **Current Status** | Lifecycle phase, current/next stage, status, last updated timestamp |
 | **Session Resume Point** | Last completed stage, next action, pending artifacts |
 
+If `Guard Policy` and the retired `Change Control` both appear with different
+policy words, strict applies and status shows `strict (from conflicting state lines)`;
+memory-held strict still takes precedence. If both agree, the `Guard Policy`
+line is used. Any write of the policy line removes the retired line, leaving one
+setting. Until a conflict is resolved, `next` carries this notice with `<a>` and
+`<b>` replaced by the raw line values, without changing the state file:
+
+> Guard Policy: this piece of work carries both `Guard Policy: <a>` and the retired `Change Control: <b>`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.
+
 `Construction Verification Command` records the project check reused at every
 Unit/batch checkpoint. A matching current-workflow human approval receipt is
 required before `state set-construction-verification-command` writes the field;

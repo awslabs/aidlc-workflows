@@ -51,9 +51,11 @@
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Missing session_id uses the host-derived or retained identity.
-//   - guard-switch refusal: IDE 1.0.242 hides the typed prompt, so an
-//     empty-prompt turn refuses lowering before a shell command runs. A model
-//     command cannot establish what the person typed; no request is minted.
+//   - guard-switch capability: an empty-prompt turn notes the limitation once
+//     per session and refuses lowering before a shell command runs. Otherwise
+//     a recognized lowering setter runs inside the hook under this chat's
+//     session, with its output latched and relayed through a shell refusal.
+//     A model command cannot establish what the person typed; no request is minted.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +
@@ -89,6 +91,7 @@ import {
   clearPlanApprovalViolation,
   getField,
   hookDebug,
+  hookChildEnv,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
@@ -710,6 +713,8 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   sessionId: ide.sessionId ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
 });
+const promptEmpty = ide.prompt !== undefined && ide.prompt.trim() === "" &&
+  (ide.malformedFields?.length ?? 0) === 0;
 
 // Persist the effective SessionStart identity under the existing gitignored
 // runtime dir so separate adapter processes can forward it to payload-free
@@ -752,7 +757,7 @@ interface TerminalResult {
   output: string;
   exitCode: number;
   typed: string;
-  source: TerminalCommand["source"];
+  source: TerminalCommand["source"] | "guard-switch";
 }
 
 interface TerminalLatch extends TerminalResult {
@@ -921,19 +926,30 @@ function bumpTurn(sessionId: string): number {
   return turn;
 }
 
+
 function recordPromptEmpty(sessionId: string, turn: number): void {
   if (turn <= 0) return;
-  const empty = ide.prompt !== undefined && ide.prompt.trim() === "" &&
-    (ide.malformedFields?.length ?? 0) === 0;
   try {
     writeFileSync(
       join(terminalSessionDir(sessionId), "prompt-empty"),
-      empty ? `${turn}\n` : "",
+      promptEmpty ? `${turn}\n` : "",
       "utf-8",
     );
   } catch {
     // Without prompt evidence, leave lowering to the core typed-request gate.
   }
+}
+
+function notePromptCapability(sessionId: string): void {
+  if (!promptEmpty) return;
+  try {
+    writeFileSync(join(terminalSessionDir(sessionId), "capability-noted"), "", { flag: "wx" });
+  } catch {
+    return;
+  }
+  process.stdout.write(
+    "SYSTEM (AIDLC harness capability): this Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat in this session. If the person asks to relax or turn off the guards, do not name a command for them to type; say that the hooks cannot see what they type here and that the routes are guard_policy in the scope file, a memory Guard Policy line, or a Kiro IDE build that delivers the prompt. Raising to strict and turning a fence on still work.\n",
+  );
 }
 
 function isLoweringGuardSwitch(key: string, value: string | undefined): boolean {
@@ -953,33 +969,68 @@ function hasLoweringGuardFlags(args: string[], allowFences: boolean): boolean {
   });
 }
 
-function isLoweringGuardCommand(
+function loweringGuardInvocation(
   rawCommand: string,
-  invocation: TerminalInvocation | null,
-): boolean {
-  if (invocation !== null) return hasLoweringGuardFlags(invocation.args, false);
+): (TerminalInvocation & { toolPath: string }) | null {
   const match = rawCommand.trim().match(
-    /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/](aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
+    /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
   );
-  if (match === null) return false;
+  if (match === null) return null;
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
-  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return false;
-  const args = splitKiroCommandArgs((match[5] ?? "").toLowerCase());
-  if (match[4].toLowerCase() === "aidlc-utility.ts") {
-    if (args[0] === "config-change" || args[0] === "scope-change") {
-      return hasLoweringGuardFlags(args.slice(1), true);
+  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return null;
+  const args = splitKiroCommandArgs(match[5] ?? "");
+  let lowering: boolean;
+  if (match[4].toLowerCase().endsWith("aidlc-utility.ts")) {
+    const verb = args[0]?.toLowerCase();
+    lowering = verb === "config-change" || verb === "scope-change"
+      ? hasLoweringGuardFlags(args.slice(1), true)
+      : verb === "intent-create" && hasLoweringGuardFlags(args.slice(1), false);
+  } else {
+    // The intent setter lives under the dispatcher's `engine` namespace; the
+    // public `aidlc config <section>` is machine configuration and never lowers.
+    if (args[0]?.toLowerCase() !== "engine") return null;
+    const noun = args[1]?.toLowerCase();
+    const verb = args[2]?.toLowerCase();
+    if (noun === "config" && verb === "set") {
+      lowering = isLoweringGuardSwitch(args[3]?.toLowerCase() ?? "", args[4]?.toLowerCase());
+    } else if (noun === "scope" && verb === "change") {
+      lowering = hasLoweringGuardFlags(args.slice(3), true);
+    } else {
+      lowering = noun === "intent" && verb === "create" &&
+        hasLoweringGuardFlags(args.slice(3), false);
     }
-    return args[0] === "intent-create" && hasLoweringGuardFlags(args.slice(1), false);
   }
-  const start = args[0] === "engine" ? 1 : 0;
-  if (args[start] === "config" && args[start + 1] === "set") {
-    return isLoweringGuardSwitch(args[start + 2] ?? "", args[start + 3]);
+  return lowering ? { raw: rawCommand.trim(), args, toolPath: match[4] } : null;
+}
+
+function runLoweringGuardCommand(
+  invocation: TerminalInvocation & { toolPath: string },
+  sessionId: string,
+): TerminalResult {
+  try {
+    const result = Bun.spawnSync([process.execPath, invocation.toolPath, ...invocation.args], {
+      cwd: projectDir,
+      env: hookChildEnv(projectDir, sessionId),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      output: (
+        decodeHarnessPlainText(result.stdout) +
+        decodeHarnessPlainText(result.stderr)
+      ).trim(),
+      exitCode: result.exitCode ?? 1,
+      typed: invocation.raw,
+      source: "guard-switch",
+    };
+  } catch (error) {
+    return {
+      output: sanitizeHarnessPlainText(String(error)),
+      exitCode: 1,
+      typed: invocation.raw,
+      source: "guard-switch",
+    };
   }
-  if (args[start] === "scope" && args[start + 1] === "change") {
-    return hasLoweringGuardFlags(args.slice(start + 2), true);
-  }
-  return args[start] === "intent" && args[start + 1] === "create" &&
-    hasLoweringGuardFlags(args.slice(start + 2), false);
 }
 
 function promptWasEmpty(sessionId: string, turn: number): boolean {
@@ -1068,6 +1119,7 @@ if (target === "verb-intercept") {
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);
+  notePromptCapability(sessionId);
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;
@@ -1088,9 +1140,12 @@ if (target === "terminal-command-guard") {
     ? ide.toolArgs.command
     : "";
   const invocation = toolTerminalInvocation(rawCommand);
+  const lowering = loweringGuardInvocation(rawCommand);
   const sessionId = terminalSessionId();
   const turn = readTurn(sessionId) || bumpTurn(sessionId);
-  if (promptWasEmpty(sessionId, turn) && isLoweringGuardCommand(rawCommand, invocation)) {
+  if (promptWasEmpty(sessionId, turn) && (
+    invocation !== null ? hasLoweringGuardFlags(invocation.args, false) : lowering !== null
+  )) {
     process.stderr.write(
       "This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.\n",
     );
@@ -1101,10 +1156,17 @@ if (target === "terminal-command-guard") {
     existing?.turn === turn &&
     (
       invocation !== null ||
+      lowering !== null ||
       /aidlc-(?:orchestrate|utility|knowledge)\.ts/i.test(rawCommand)
     )
   ) {
     process.stderr.write(terminalRefusal(existing));
+    return 2;
+  }
+  if (lowering !== null) {
+    const result = runLoweringGuardCommand(lowering, sessionId);
+    writeTerminalLatch(sessionId, turn, lowering, result);
+    process.stderr.write(terminalRefusal(result));
     return 2;
   }
   if (invocation === null) return 0;

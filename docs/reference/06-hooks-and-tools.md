@@ -86,38 +86,42 @@ only a typed prompt: `hook_event_name === "UserPromptSubmit"`, no string
 `fence-switch-<session>.json` in the Plan Approval runtime directory above, with
 the session filename segment produced by `runtimeSessionSegment`. Its
 `GuardSwitchRequest` contains version 1, `session`, `intentId`, `space`,
-`requestedAt`, and the exact parsed `switches`. It records `space` from
-`--space <name>` in the same flags-first command, otherwise from the session's
-selected space, and `intentId` as the target intent UUID or `bare-space` when
-none exists. The setter compares the exact session request, space, `intentId`,
-and key/value with the intent it is about to mutate, selected by
+`requestedAt`, and the exact parsed `switches`. It resolves the request's target
+with `resolveWorkflowSelection(projectDir, { sessionId: session, ...(space ? { space } : {}), ...(intent ? { intent } : {}) })`,
+passing only selectors supplied in either config or flags-first form.
+The recorded `space` is the selected space and `intentId` is the selected intent
+UUID, or `bare-space` when no intent is selected. A named intent that resolves to
+no UUID records nothing. The setter compares the exact session request, space,
+`intentId`, and key/value with the intent it is about to mutate, selected by
 `--intent`/`--space` or the session binding, so a request cannot be spent on a
 different space or intent.
 
-`parseTypedGuardSwitchRequest` returns `{switches,space}`;
+`parseTypedGuardSwitchRequest` returns `{switches,space,intent}`;
 `parseTypedGuardSwitches` wraps its `.switches`. Parsing trims the prompt,
 removes one trailing run of `.,;:!?`, and is case-insensitive. The head
 must be the whole token `/aidlc`, `$aidlc`, or `aidlc`, followed by one of two
 forms:
 
-- Exactly `config set <key> <value>`, with no additional tokens. A lowering is
-  `guard-policy|change-control relaxed|off` or `guard.<fence> off` for one of
-  the four switchable fences.
+- `config set <key> <value>` followed only by optional `--intent <name>` and
+  `--space <name>` pairs, each at most once and in either order. Any other extra
+  token records no switch. A lowering is `guard-policy|change-control relaxed|off`
+  or `guard.<fence> off` for one of the four switchable fences.
 - A flags-first run. While a token starts with `--`, consume the next token as
   its value only when present and not starting with `--`. Stop at the first
   non-flag token and ignore the remaining description. Collect
   `--guard-policy relaxed|off`, the retired `--change-control relaxed|off`,
-  `--guard.<fence> off` for a switchable fence, and `--space <name>`.
+  `--guard.<fence> off` for a switchable fence, `--intent <name>`, and `--space <name>`.
   Example form:
-  `/aidlc --guard-policy relaxed|off [--guard.<fence> off] [--space <name>] <description>`.
+  `/aidlc --guard-policy relaxed|off [--guard.<fence> off] [--intent <name>] [--space <name>] <description>`.
   Here `|` separates alternatives, square brackets mark optional flags, and
   angle brackets mark values to replace; these notation characters are not
   typed. On Codex, replace `/aidlc` with `$aidlc`.
 
 The whole confirmation prompt `guard[- ]policy relaxed|off` or
 `change[- ]control relaxed|off` is also accepted, where `[- ]` means a hyphen
-or a space. A question mentioning switches does not mint a request; quoted,
-negated, or explanatory mentions outside these forms record nothing.
+or a space; both selectors are null for this form. A question mentioning switches
+does not mint a request; quoted, negated, or explanatory mentions outside these
+forms record nothing.
 `strict`, `on`, and `guard.human-presence` never mint a lowering. One entry per
 key, last value wins, keys ordered by first appearance. Codex uses `$aidlc`
 instead of `/aidlc`, including in refusals that tell the person what to type.
@@ -126,11 +130,26 @@ prompt containing switches replaces the request; an unrelated prompt leaves it
 untouched, including a later composer approval. The setter consumes the request
 once after a successful write or an already-set no-op, and refuses every
 lowering under `AIDLC_UNATTENDED=1` before it consults the presence bypass.
+The setter matches the request to the session that ran the command, resolved by
+the harness through a session override or process ancestry, with no audit-ledger
+fallback. If the presence bypass does not apply and no session resolves, lowering
+is refused with the normal refusal plus
+`This command ran with no resolvable session, so no typed request can be matched to it.`
+On hosts without process ancestry, including Windows, the harness adapter must
+supply the session; on non-empty-prompt turns Kiro IDE runs the lowering setter
+inside its hook with the payload's own session.
 Picked answers do not create typed requests or authorize lowering. Selecting a
 `lower-fence` remedy executes nothing; its `human-input` guidance only tells the
 person to type the exact setter command. It carries no `operation` or `command`.
 
 #### Kiro IDE adapter
+
+On the first empty-prompt UserPromptSubmit turn in a session, `verb-intercept`
+prints a capability note on stdout at exit 0 and creates `capability-noted` in
+that session's terminal runtime directory. The note appears once per session,
+never on a non-empty prompt. It tells the conductor not to name a chat lowering
+command when the hooks cannot see typed text, and names the scope-file
+`guard_policy`, memory Guard Policy, and prompt-capable IDE build routes.
 
 When UserPromptSubmit carries an empty prompt, as measured on IDE 1.0.242, the
 adapter refuses shell commands that would lower a fence or Guard Policy before
@@ -141,8 +160,20 @@ The refusal is:
 > This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.
 
 Raising Guard Policy to `strict`, turning a fence `on`, and other commands use
-the existing adapter path. Newer builds that deliver a non-empty prompt use the
-core human-turn hook to record what the person typed, without this refusal.
+the existing adapter path. On turns not marked `prompt-empty`, shell PreToolUse
+recognizes lowering setters in `aidlc-utility.ts config-change`, `scope-change`,
+and `intent-create`, and `aidlc.ts engine config set`, `scope change`, and
+`intent create`. The hook runs the recognized tool path and arguments itself
+through the running Bun executable in the project directory, using `hookChildEnv(projectDir, sessionId)`
+with the same chat session forwarded to the core human-turn hook. The setter
+still requires that chat's matching typed request; `aidlc-orchestrate.ts next`
+only prints a dispatch and is not run as a lowering setter.
+
+The adapter refuses the model's shell call with exit 2 and relays both output
+streams plus the setter's exit code on stderr. The per-turn `latch.json` retains
+the output so a duplicate shell call is refused with the same output, not run
+again. This keeps each chat's requests separate even when several chats share
+an IDE process or the host has no process ancestry, including Windows.
 
 #### Copilot adapter
 
@@ -280,10 +311,15 @@ The only authority is the exact key/value in the typed request bound to the
 invoking session, target space, and target intent UUID (or `bare-space`). A
 recorded `lower-fence` selection supplies no authority and executes nothing;
 the remedy is `human-input` guidance to type the exact setter command, with no
-`operation` or `command`. Session lookup
-uses `resolveWorkflowSelection(...).sessionId` (environment override or process
-ancestry), falling back to `latestLedgerSession(projectDir)`; session-start
-records ancestry even before a workflow exists. Every lowering in a combined
+`operation` or `command`. Session lookup uses
+`resolveWorkflowSelection(...).sessionId` (session override or process ancestry),
+with no fallback to the audit ledger; session-start records ancestry even before
+a workflow exists. If the presence bypass does not apply and no session resolves,
+lowering is refused with the normal refusal plus
+`This command ran with no resolvable session, so no typed request can be matched to it.`
+The harness adapter must supply the session on hosts without process ancestry,
+including Windows; Kiro IDE runs the lowering setter inside its hook with the
+payload's own session on non-empty-prompt turns. Every lowering in a combined
 command must be authorized before any state change; a successful write or an
 already-set no-op clears any typed request used. An unrelated human turn grants
 none of these switches.

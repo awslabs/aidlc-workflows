@@ -158,7 +158,6 @@ import {
   isTeamUnitOwnership,
   isPluginEnabled,
   isoTimestamp,
-  latestLedgerSession,
   isPackageJson,
   isValidRepoName,
   codekbDir,
@@ -6603,8 +6602,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // attended fixtures only.
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
     if (!humanPresenceGuardDisabled()) {
+      if (initialSelection.sessionId === null) {
+        die(guardSwitchRefusal(wanted, "intent-create", { sessionMissing: true }));
+      }
       const authority = guardSwitchAuthority(
-        projectDir, wanted, initialSelection.sessionId ?? latestLedgerSession(projectDir),
+        projectDir, wanted, initialSelection.sessionId,
         {
           space: initialSelection.space,
           intentId: intentUuidForSelection(projectDir, initialSelection) ?? "bare-space",
@@ -8497,7 +8499,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // Apply against the original scope so previous settings and effective
     // output describe the state before this transaction.
     const update = applyIntentSettings(projectDir, contentBefore, requested, {
-      intent, space, sessionId: selection.sessionId ?? latestLedgerSession(projectDir),
+      intent, space, sessionId: selection.sessionId,
       target: { space, intentId: intentUuidForSelection(projectDir, selection) ?? "bare-space" },
     });
     let content = update.content;
@@ -9046,6 +9048,7 @@ function applyIntentSettings(
   }
   let spentSwitchSession: string | null = null;
   if (lowering.length > 0 && !humanPresenceGuardDisabled()) {
+    if (sessionId === null) die(guardSwitchRefusal(lowering[0], "config", { sessionMissing: true }));
     for (const wanted of lowering) {
       const authority = guardSwitchAuthority(projectDir, wanted, sessionId, target);
       if (authority === null) die(guardSwitchRefusal(wanted, "config"));
@@ -9097,19 +9100,19 @@ function applyIntentSettings(
   if (ccRequest !== undefined && changeControl !== null) {
     const previous = cc.rawStateValue;
     const line = formatGuardPolicy(changeControl, ccRequest.source);
-    if (previous === line && cc.stateField === GUARD_POLICY_FIELD) {
+    if (previous === line && cc.stateField === GUARD_POLICY_FIELD && getField(content, CHANGE_CONTROL_FIELD) === null) {
       lines.push(`Guard Policy is already ${line}`);
     } else {
-      // Writes the line under its new name; a retired `Change Control` line is
-      // renamed in place so the setting never appears twice.
+      // Every write keeps only the Guard Policy line, even when its stored text is unchanged.
+      // Resolving a conflict records one GUARD_POLICY_SET from the prior effective policy, not a name-only rename.
       content = setGuardPolicyLine(content, line);
-      if (previous !== line) {
-        const oldValue = cc.intent?.value ?? cc.rawStateValue ?? cc.stateValue;
+      if (previous !== line || cc.conflict !== undefined) {
+        const oldValue = cc.conflict !== undefined ? cc.value : cc.intent?.value ?? cc.rawStateValue ?? cc.stateValue;
         audit.push({
           eventType: "GUARD_POLICY_SET",
           fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
         });
-        const oldDisplay = cc.intent === null && cc.rawStateValue !== null
+        const oldDisplay = cc.conflict === undefined && cc.intent === null && cc.rawStateValue !== null
           ? cc.rawStateValue : formatGuardPolicy(cc.value, cc.source);
         lines.push(`Guard Policy changed: ${oldDisplay} to ${line}`);
       } else {
@@ -9185,13 +9188,13 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   withAuditLock(projectDir, () => {
     const content = readConfigState(projectDir, { intent, space });
     const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), {
-      intent, space, sessionId: selection.sessionId ?? latestLedgerSession(projectDir),
+      intent, space, sessionId: selection.sessionId,
       target: { space, intentId: intentUuidForSelection(projectDir, selection) ?? "bare-space" },
     });
     if (update.content !== content) {
       if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
-      // A retired-field rename with an unchanged value rewrites the line and
-      // records nothing: the value did not move, so there is no row to append.
+      // A name-only rename or removal of an agreeing retired line records nothing.
+      // Resolving conflicting lines records the prior effective policy instead.
       if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
       writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
     }

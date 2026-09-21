@@ -1057,6 +1057,13 @@ omitted intent/space selectors use the active workflow selection. They do not
 switch the active intent or space. Use `scope-change` (the `/aidlc --scope`
 route), not `config-change --scope`, when also changing the scope.
 
+For a typed lowering request, both
+`/aidlc config set guard-policy relaxed --intent <name> --space <name>` and
+`/aidlc --guard-policy relaxed --intent <name> --space <name> ...` bind the request
+to the named intent and space; the setter with the same selectors consumes it.
+The trailing `...` in the flags form stands for an optional task description.
+A named intent that does not exist records nothing.
+
 All flags and values are validated before mutation. Invalid values and unknown
 flags refuse the entire request; an unknown flag is named in the error. If an
 explicit `--guard-policy relaxed` or `--guard-policy off` is refused by a memory
@@ -1119,12 +1126,20 @@ Setting `guard-policy relaxed` or `guard-policy off` from chat requires the
 person's exact typed switch, such as `/aidlc --guard-policy relaxed` or the
 confirmation words `guard policy relaxed` (use `off` for that value). The
 human-turn hook records the key and value for this session, space, and intent.
-The space comes from `--space <name>` in the same flags-first command, otherwise
-the session's selected space; the target is the intent UUID, or `bare-space`
-when none exists. The setter compares the exact session request, space,
-`intentId`, and key/value, then consumes the request once after a successful
-write or an already-set no-op. A later typed switch replaces the request;
-unrelated prompts retain it.
+In either the config or flags-first form, `--intent <name>` and `--space <name>`
+select the target; omitted selectors use the session's workflow selection.
+The target is the intent UUID, or `bare-space` when no intent is selected;
+a named intent that does not exist records nothing.
+The setter matches the typed request to the session that ran the command,
+resolved by the harness through a session override or process ancestry, with
+no fallback to the audit ledger. It also compares space, `intentId`, and key/value,
+then consumes the request once after a successful write or an already-set no-op.
+A later typed switch replaces the request; unrelated prompts retain it.
+Without a resolvable session, lowering is refused with the normal refusal plus
+`This command ran with no resolvable session, so no typed request can be matched to it.`
+On hosts without process ancestry, including Windows, the harness adapter must
+supply the session. Kiro IDE does so on non-empty-prompt turns by running the
+lowering setter inside its hook with the chat's own session.
 An unrelated reply after an engine directive authorizes nothing, and
 `AIDLC_UNATTENDED=1` refuses lowering even if a typed request exists. Scope
 defaults are not gated. The machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`
@@ -1134,8 +1149,10 @@ fence lowered earlier, which `/aidlc --status` shows as
 `on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch
 takes precedence.
 
-A typed `config set` lowering request must contain exactly that key and value;
-use flags-first syntax for combined settings or `--space`. See
+A typed `config set` lowering request accepts `config set <key> <value>` followed
+only by optional `--intent <name>` and `--space <name>` pairs, each at most once
+and in either order; any other extra token records no switch.
+Use flags-first syntax for combined settings. See
 [Customization](13-customization.md#the-five-fences) for the accepted grammar.
 Codex uses `$aidlc`, and its refusals name `$aidlc` instead of `/aidlc`.
 
@@ -1174,12 +1191,17 @@ delivery of its one-line notice depends on the harness, as described in
 
 The shared `config-change --guard-policy <value>` setter rewrites the `Guard
 Policy` line in `aidlc-state.md` as `<value> (set by you)` and adds a
-`GUARD_POLICY_SET` row to the command's audit batch. A record still carrying the
-retired `Change Control` line has it renamed in place on that write. Until then,
-every `/aidlc` run announces a carried-over relaxed or off value; re-affirm with
+`GUARD_POLICY_SET` row to the command's audit batch. Any write of the policy line
+removes the retired `Change Control` line, retaining only `Guard Policy`.
+If both lines exist with different policy words, strict applies and status shows
+`strict (from conflicting state lines)` unless memory holds strict; `next` carries
+the [conflict notice](13-customization.md#where-the-value-lives) until you choose.
+If both agree, the `Guard Policy` line is used and the next policy write removes
+the retired one. A record carrying only a retired relaxed or off line is
+announced on every `/aidlc` run; re-affirm with
 `/aidlc config set guard-policy relaxed` to keep it or
 `/aidlc config set guard-policy strict` to raise the fences and stop the notice.
-`next` writes nothing, and a retired strict line gets no notice. The value is
+`next` writes nothing, and a retired strict line alone gets no notice. The value is
 committed with the intent, survives sessions, and is visible to teammates. The
 same setter repairs an invalid line and records the old text. A plain-chat request
 for strict runs directly. A request to lower the policy, such as "stop asking me
@@ -1246,9 +1268,17 @@ Setting `guard.<fence> off` from chat requires the person's exact typed request:
 they type `/aidlc config set guard.<fence> off` or the flags-first form
 `/aidlc --guard.<fence> off`. A `lower-fence` human-input choice executes nothing
 and only tells the person to type the exact setter command for that fence.
-The setter compares the recorded session request, space, intent UUID (or
-`bare-space` when none exists), and key/value. The space comes from `--space`
-in the same flags-first command, otherwise the session's selected space.
+The setter compares the typed request with the session that ran the command
+(resolved by the harness through a session override or process ancestry), space,
+intent UUID (or `bare-space` when none is selected), and key/value.
+Both config and flags-first forms accept `--intent <name>` and `--space <name>`;
+omitted selectors use the session's workflow selection, and a named intent that
+does not exist records nothing. Session lookup never falls back to the audit ledger.
+Without a resolvable session, lowering is refused with the normal refusal plus
+`This command ran with no resolvable session, so no typed request can be matched to it.`
+The harness adapter must supply the session on hosts without process ancestry,
+including Windows; on non-empty-prompt turns Kiro IDE runs the lowering setter
+inside its hook with the chat's own session.
 A typed request is consumed once after a successful write or an already-set
 no-op. A later typed switch replaces it; unrelated prompts retain it.
 `AIDLC_UNATTENDED=1` refuses lowering even with a recorded request; the

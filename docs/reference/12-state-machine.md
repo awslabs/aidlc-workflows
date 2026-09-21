@@ -562,11 +562,18 @@ value. Fence lowering requires a typed switch such as
 `/aidlc config set guard.<fence> off`. Codex uses `$aidlc` instead of `/aidlc`,
 including in the refusal's instruction to type the setter command.
 The human-turn hook records a version-1 `GuardSwitchRequest` before its state-file
-gate with `session`, `intentId`, `space`, `requestedAt`, and `switches`. It binds
-`space` to `--space <name>` in the same flags-first command, otherwise to the
-session's selected space, and `intentId` to the target intent UUID or `bare-space`
-when none exists. The setter requires that exact session request, space,
-`intentId`, and key/value to match its target. A later typed switch replaces it;
+gate with `session`, `intentId`, `space`, `requestedAt`, and `switches`. Both
+config and flags-first forms accept `--intent <name>` and `--space <name>`;
+omitted selectors use the session's workflow selection. The config form permits
+each selector at most once, in either order, with no other trailing tokens.
+The request binds to the selected space and intent UUID, or `bare-space` when
+no intent is selected; a named intent that does not exist records nothing.
+The setter requires that exact session request, space, `intentId`, and key/value
+to match its target. It resolves the invoking session through the harness's
+session override or process ancestry, never an audit-ledger fallback.
+Without a resolvable session, lowering is refused with the normal refusal plus
+`This command ran with no resolvable session, so no typed request can be matched to it.`
+A later typed switch replaces it;
 unrelated prompts, including composer approval, leave it intact. The successful
 setter, including an already-set no-op, consumes it once. A `lower-fence` remedy
 is `human-input`, with no `operation` or `command`: selecting it only tells the
@@ -577,8 +584,8 @@ lowering even with a request on disk. Scope defaults do not need this key;
 memory-strict and unattended refusal checks.
 
 The retired spellings resolve for one release and are never written: the scope
-key `change_control`, the state field `Change Control` (renamed in place by
-`setGuardPolicyLine` on the next write, so one setting never appears twice), the
+key `change_control`, the state field `Change Control` (`setGuardPolicyLine`
+removes the retired line on every policy write, retaining only `Guard Policy`), the
 memory heading `## Change Control`, the flag `--change-control`, and the config
 key `change-control`. A caller that passes the retired flag or config key (or
 `validate-grid --change-control`) gets one deprecation line on stderr per process
@@ -587,6 +594,18 @@ removal in the next
 minor version. Naming both spellings with DIFFERENT values is refused, whether as
 `--guard-policy` and `--change-control` in one command or as `guard_policy` and
 `change_control` in one scope file; the same value under both names is accepted.
+
+If a state file carries both `Guard Policy` and `Change Control` with different
+policy words, `resolveGuardPolicy` returns `value: "strict"` and
+`source: "conflicting state lines"`, with
+`conflict: { guardPolicy: <raw>, changeControl: <raw> }` holding both raw values.
+Status renders `strict (from conflicting state lines)`; memory-held strict still
+wins as before. If both words agree, the `Guard Policy` line is used and the next
+policy write removes the retired line. Until a conflict is resolved, `next`
+includes this notice in `change_notices`, substituting the raw values for `<a>`
+and `<b>` without changing the state file:
+
+> Guard Policy: this piece of work carries both `Guard Policy: <a>` and the retired `Change Control: <b>`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.
 
 Ceremony settings control sensors, learnings, and consolidated-summary confirmation independently. Every shipped scope declares all three explicitly: `classic` sets sensors and learnings to `on` and summary confirmation to `off`, `express` sets all three to `off`, and the other nine set all three to `on`. A scope file that omits a key still falls back to `on`. An explicit setting writes `on (set by you)` or `off (set by you)` to the selected intent. `summary_confirmation: off` skips only the consolidated-summary "Looks correct" checkpoint declared by stage frontmatter; intent-capture's separate Assumption Confirmation decision remains. Turning a ceremony off does not remove lifecycle hooks or the autonomous single pre-merge reviewer.
 
