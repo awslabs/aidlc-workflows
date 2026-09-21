@@ -114,6 +114,25 @@ function matrixPlan(root: string, options: {
 }
 
 describe("isolated e2e runner contracts", () => {
+  test("unfiltered deterministic deep tiers skip the closed Claude preflight without failing", () => {
+    const root = fixture({ "t-deterministic.test.ts": pass });
+    const integration = join(root, "tests", "integration");
+    mkdirSync(integration, { recursive: true });
+    const driver = "drive" + "Aidlc";
+    writeFileSync(join(integration, "t19.test.ts"), [
+      'import { test } from "bun:test";',
+      `function ${driver}() { throw new Error("closed Claude preflight executed"); }`,
+      `test("Claude preflight", () => ${driver}());`,
+    ].join("\n"));
+    writeFileSync(join(integration, "t-deterministic.test.ts"), pass);
+    const result = run(root, ["--integration", "--isolated-e2e"]);
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain("RESULT: PASS");
+    expect(result.output).not.toContain("## Preflight Health Check");
+    expect(result.output).not.toContain("PREFLIGHT FAILURE");
+    expect(result.output).toContain("=== DONE t19.test.ts (SKIP) ===");
+  }, 60_000);
+
   for (const isolated of [false, true]) {
     test(`matrix receipts include the implicit preflight and real JUnit (isolated=${isolated})`, () => {
       const root = fixture({

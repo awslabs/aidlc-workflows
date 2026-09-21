@@ -1815,7 +1815,9 @@ async function main(): Promise<number> {
   if (args.runUnit) await runTier("unit", "Unit Tests (single-component isolation)");
 
   let preflightRan = false;
-  if (needsLlm && !args.filter) {
+  if (needsLlm && !args.filter && args.noLlm) {
+    process.stdout.write("\n--no-llm: omitting Claude health preflight because its live gate is closed\n");
+  } else if (needsLlm && !args.filter) {
     const preflight = join(SCRIPT_DIR, "integration", "t19.test.ts");
     if (existsSync(preflight)) {
       process.stdout.write("\n## Preflight Health Check (Claude CLI validation)\n");
