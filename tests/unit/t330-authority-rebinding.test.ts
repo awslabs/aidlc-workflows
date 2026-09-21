@@ -641,7 +641,7 @@ describe("t330 (3) engine observers cannot reach a durable write", () => {
         ],
         [
           "writeRecordFileNoFollow",
-          () => writeRecordFileNoFollow(dir, ".aidlc-reviews/barred.json", "{}"),
+          () => writeRecordFileNoFollow(dir, ".aidlc-engine/reviews/barred.json", "{}"),
         ],
         [
           "removeRecordFileNoFollow",
@@ -673,7 +673,7 @@ describe("t330 (3) engine observers cannot reach a durable write", () => {
       // worse than no barrier.
       expect(existsSync(join(dir, "barred.txt"))).toBe(false);
       expect(existsSync(join(dir, "barred.bin"))).toBe(false);
-      expect(existsSync(join(dir, ".aidlc-reviews", "barred.json"))).toBe(false);
+      expect(existsSync(join(dir, ".aidlc-engine/reviews", "barred.json"))).toBe(false);
       expect(readFileSync(join(dir, "kept.txt"), "utf-8")).toBe("kept");
     });
   }

@@ -32,7 +32,7 @@
 //     :149 "**Escalation guidelines:**"
 //     :111 "### Context compaction"
 //     :112 "PreCompact hook"
-//     :115 ".aidlc-recovery.md" recovery breadcrumb
+//     :115 ".aidlc-engine/recovery.md" recovery breadcrumb
 //     :197,201,207,213 the Minor/Major/Scope/Archive change-handling subsections
 //     :168 "### New reference material supplied mid-stage"
 //     :171 "evidence/input for the current stage, never a routing"
@@ -69,7 +69,7 @@
 //   .sh 23 (Escalation guidelines)        -> "escalation guidelines defined"
 //   .sh 24 (### Context compaction)       -> "context compaction subsection exists"
 //   .sh 25 (PreCompact hook)              -> "references the PreCompact hook"
-//   .sh 26 (.aidlc-recovery.md)           -> "references the .aidlc-recovery.md breadcrumb"
+//   .sh 26 (.aidlc-engine/recovery.md)           -> "references the .aidlc-engine/recovery.md breadcrumb"
 //   .sh 27 (### Minor changes)            -> "change handling: minor changes subsection"
 //   .sh 28 (### Major changes)            -> "change handling: major changes subsection"
 //   .sh 29 (### Scope changes)            -> "change handling: scope changes subsection"
@@ -223,8 +223,8 @@ describe("§6 Error Recovery — context compaction", () => {
     expect(recovery).toContain("PreCompact hook");
   });
 
-  test("references the .aidlc-recovery.md breadcrumb [.sh 26]", () => {
-    expect(recovery).toContain(".aidlc-recovery.md");
+  test("references the .aidlc-engine/recovery.md breadcrumb [.sh 26]", () => {
+    expect(recovery).toContain(".aidlc-engine/recovery.md");
   });
 });
 

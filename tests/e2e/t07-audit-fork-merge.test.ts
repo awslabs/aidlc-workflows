@@ -25,8 +25,8 @@
 // subcommand against a genuine git fixture — exactly the .sh's shape.
 //
 // FIXTURE (mirrors make_fixture, t07:53-61): aidlc-audit audit-fork resolves a
-// worktree via worktreePath(projectDir, slug) = <proj>/.aidlc/worktrees/bolt-<slug>
-// (aidlc-lib.ts:148) and refuses if the dir is absent (aidlc-audit.ts:371). The
+// worktree via worktreePath(projectDir, intentId8, slug) and refuses if that
+// intent-scoped directory is absent. The
 // worktree is created with the real `aidlc-worktree.ts create` subcommand, which
 // runs `git worktree add` and asserts it is invoked from the main checkout
 // (assertNotSiblingWorktree). So each case needs an actual git repo on `main`
@@ -96,6 +96,7 @@ import {
   DEFAULT_SPACE,
   cleanupWorktreeFixture,
   FIXTURES_DIR,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
@@ -103,7 +104,7 @@ import {
 // P4: the lock dir is keyed on the COMPOSITE identity (projectDir + intent |
 // __workspace__ sentinel), not bare projectDir — import the real resolver so the
 // planted-lock bucket matches the one audit-merge actually acquires.
-import { auditLockDir as realAuditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditLockDir as realAuditLockDir, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // A FIXED clone-id token seeded into every clone (main + each worktree) so the
 // per-clone audit shard is deterministic and SINGLE: the main shard the header
@@ -151,7 +152,7 @@ afterAll(() => {
 // written here so audit-fork copies it and audit-merge hashes/extends it.
 const auditPath = (p: string): string => join(seededAuditDir(p), shardName());
 const wtDir = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(p, fixtureIntentId8(p), slug);
 // The worktree mirror's per-clone audit shard — carries the SAME relative record
 // dir AND (via the seeded fixed clone-id) the SAME shard name as the main checkout.
 const wtAuditPath = (p: string, slug: string): string =>
@@ -209,8 +210,7 @@ function createWorktree(p: string, slug: string): void {
 function makeFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
-  // State into the per-intent record (the fixture seeds a stateless record; this
-  // makes the active-intent cursor resolve so audit lands under the record).
+  // Give the selected record an active stage for the audit-fork lifecycle.
   writeFileSync(
     seededStateFile(p),
     readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"),

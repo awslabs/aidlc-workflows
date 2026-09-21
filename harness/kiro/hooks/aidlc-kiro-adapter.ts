@@ -51,9 +51,11 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  leadingOrchestratorVerb,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   stateFilePath,
+  stripOrchestratorLauncherOptions,
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -290,10 +292,10 @@ if (target === "verb-intercept") {
   // workflow state existing (same self-gate as the core record-human-turn hook) so a prompt in
   // a project that never ran the framework does not scaffold audit shards.
   //
-  // The seam ALSO touches the .aidlc-human-turn marker (markHumanTurn), which is
+  // The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
   // what makes the Stop hook's conversational carve-out work on this harness.
   // kiro-cli delivers no `transcript_path`, so the carve-out cannot read the turn
-  // history; it compares this marker's mtime against .aidlc-engine-touch instead.
+  // history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
   // Both writes ride this seam, but AIDLC_UNATTENDED=1 deliberately withholds
   // only the authority-bearing ledger event while retaining the conversational
   // marker. See the marker family in aidlc-lib.ts.
@@ -484,7 +486,12 @@ if (target === "guard-tool-call") {
   const m = cmdStr.match(
     /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\b([^\n]*)/,
   );
-  const nextArgs = m ? splitKiroCommandArgs(m[1].trim()) : [];
+  const raw = m ? splitKiroCommandArgs(m[1].trim()) : [];
+  // The engine strips launcher options anywhere before reading the subcommand,
+  // so bare-advancing classification must see the same leading token. The
+  // first-next fidelity comparison below deliberately stays byte-exact: a
+  // launcher option the user did not type is an alteration.
+  const nextArgs = stripOrchestratorLauncherOptions(raw);
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
   // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing
@@ -497,9 +504,13 @@ if (target === "guard-tool-call") {
   // A leading `compose` verb is a deliberate composer dispatch (the engine's
   // Branch 0 exempts flags.compose the same way) - never the spurious bare
   // roll-forward this backstop exists to block.
+  // A sole park / leading team-board deliberately dispatches an orchestrator verb
+  // (engine Branch 1c), using the engine's rule so park <description> stays freeform
+  // and this guard still blocks it.
   const isBareAdvancing =
     m !== null &&
     nextArgs[0] !== "compose" &&
+    leadingOrchestratorVerb(nextArgs) === null &&
     !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
     classifyTerminalCommand(nextArgs) === null;
 
@@ -534,8 +545,8 @@ if (target === "guard-tool-call") {
         Array.isArray(forwarding.args)
       ) {
         const matches =
-          forwarding.args.length === nextArgs.length &&
-          forwarding.args.every((arg, index) => arg === nextArgs[index]);
+          forwarding.args.length === raw.length &&
+          forwarding.args.every((arg, index) => arg === raw[index]);
         if (!matches) {
           process.stderr.write(
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
@@ -981,7 +992,7 @@ function buildForward(): Forward {
       // hook joining an in-flight block sequence starts its count at 1, not 2.
       //
       // The absent transcript no longer makes the conversational carve-out inert:
-      // the core hook falls back to the `.aidlc-human-turn` / `.aidlc-engine-touch`
+      // the core hook falls back to the `.aidlc-engine/human-turn` / `.aidlc-engine/engine-touch`
       // mtime comparison, and the userPromptSubmit seam above writes the former.
       //
       // Kiro CLI 2.16.0 legacy/V2 was measured live consuming this
@@ -994,7 +1005,7 @@ function buildForward(): Forward {
       // discarding Stop-hook stdout and stderr.
       //
       // The core hook also records the `continue-workflow.drops` carve-out and
-      // maintains the `.aidlc-stop-hook/` counter on this legacy/V2 path.
+      // maintains the `.aidlc-engine/stop-hook/` counter on this legacy/V2 path.
       return {
         hook: "aidlc-continue-workflow.ts",
         input: {

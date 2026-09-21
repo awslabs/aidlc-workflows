@@ -36,7 +36,7 @@
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
 //   .sh 1 (elapsed < 10s ceiling)                       -> "completes under the 10s lock-timeout ceiling"
 //   .sh 2 (5 BOLT_STARTED entries, no lost writes)      -> "all 5 BOLT_STARTED entries land (no lost writes)"
-//   .sh 3 (each bolt-1..bolt-5 name appears once)       -> "each of bolt-1..bolt-5 appears exactly once"
+//   .sh 3 (each name appears once)                    -> "each Unit display name appears exactly once"
 //   .sh 4 (#Event == #heading, no half-writes)          -> "every BOLT_STARTED has a matching heading (no half-writes)"
 //   .sh 5 (separator count == fixture + 5)              -> "separator count == fixture (3) + 5 bolts == 8"
 //
@@ -92,7 +92,7 @@ function readAllShards(proj: string): string {
 let current: { proj: string } | null = null;
 
 /**
- * Fork 5 concurrent `bun aidlc-bolt.ts start --name bolt-<i> --batch 1
+ * Fork 5 concurrent `bun aidlc-bolt.ts start --name unit-<i> --batch 1
  * --walking-skeleton false` processes against one audit.md (mirrors the .sh's
  * `for i in 1..5; bun "$BOLT" start ... &` + wait). Returns the post-race
  * bytes + wall-clock elapsed. Uses Bun.spawn (async, non-blocking launch) so
@@ -123,7 +123,7 @@ async function raceFiveBolts(): Promise<RaceResult> {
         BOLT,
         "start",
         "--name",
-        `bolt-${i}`,
+        `unit-${i}`,
         "--batch",
         "1",
         "--walking-skeleton",
@@ -173,12 +173,11 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
     expect(eventCount).toBe(5);
   }, 30_000);
 
-  test("each of bolt-1..bolt-5 appears exactly once [.sh 3]", () => {
-    // The .sh grepped presence per name; STRONGER here — assert EXACTLY one
-    // `**Bolt names**: bolt-<i>` line per i, so no name is dropped or doubled.
+  test("each Unit display name appears exactly once [.sh 3]", () => {
+    // Human display names are audit identities, not physical Bolt branch names.
     const lines = race.body.split("\n");
     for (let i = 1; i <= 5; i++) {
-      const hits = lines.filter((l) => l === `**Bolt names**: bolt-${i}`).length;
+      const hits = lines.filter((l) => l === `**Bolt names**: unit-${i}`).length;
       expect(hits).toBe(1);
     }
   }, 30_000);

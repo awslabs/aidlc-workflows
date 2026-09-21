@@ -161,12 +161,14 @@ function makeNewLayoutProj(recordA: string, recordB: string): string {
     writeFileSync(join(intentsDir, rec, "aidlc-state.md"), stateBody);
   }
   mkdirSync(join(proj, "aidlc", "spaces", DEFAULT_SPACE, "memory"), { recursive: true });
-  // intents.json registry (canonical human list — committed).
+  // intents.json registry (canonical human list — committed). Rows carry no
+  // dirName, so the registry matches records by the legacy `<slug>-<id8>` rule:
+  // the uuid's trailing eight hex chars must equal the record dir's suffix.
   writeFileSync(
     join(intentsDir, "intents.json"),
     `${JSON.stringify(
       [recordA, recordB].map((rec) => ({
-        uuid: `0000000000007000000000000000${rec.slice(-4)}`,
+        uuid: `000000000000700000000000${rec.slice(-8)}`,
         slug: rec.replace(/-[0-9a-f]+$/, ""),
         status: "in-flight",
       })),

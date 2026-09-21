@@ -1,4 +1,5 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue, hook:aidlc-deliver-stage-rules
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue,
+// function:activeDirectiveStorageDir, hook:aidlc-deliver-stage-rules
 //
 // Deterministic stage-rule delivery. Rules cross the engine boundary through
 // bounded load-steering directives before run-stage; optional persona/knowledge
@@ -14,6 +15,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -370,7 +372,7 @@ describe("t248 deterministic steering delivery", () => {
           "spaces",
           "default",
           "intents",
-          ".aidlc-steering-token-key",
+          ".aidlc-engine/steering-token-key",
         ),
       ),
     ).toBe(false);
@@ -392,6 +394,55 @@ describe("t248 deterministic steering delivery", () => {
       "utf-8",
     ).trim();
     expect(otherKey).not.toBe(encodedKey);
+  });
+
+  test("a continuation issued before the engine-directory migration remains valid", () => {
+    const proj = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(proj);
+    const orgPath = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "org.md",
+    );
+    appendFileSync(
+      orgPath,
+      Array.from(
+        { length: 180 },
+        (_, i) => `\n## Upgrade ${i}\n\n${"x".repeat(320)}\n`,
+      ).join(""),
+    );
+
+    const issued = invoke(proj, "next", []).directive;
+    expect(issued.kind).toBe("load-steering");
+    const record = seededRecordDir(proj);
+    renameSync(
+      join(record, ".aidlc-engine", "active-directive.json"),
+      join(record, ".aidlc-active-directive.json"),
+    );
+    renameSync(
+      join(record, ".aidlc-engine", "steering-token-key"),
+      join(record, ".aidlc-steering-token-key"),
+    );
+
+    const continued = invoke(
+      proj,
+      "continue",
+      [issued.continue_token ?? ""],
+    ).directive;
+    expect(continued.kind).not.toBe("error");
+    expect(existsSync(join(record, ".aidlc-active-directive.json"))).toBe(true);
+    expect(
+      existsSync(join(record, ".aidlc-engine", "active-directive.json")),
+    ).toBe(false);
+    expect(existsSync(join(record, ".aidlc-steering-token-key"))).toBe(true);
+    expect(
+      existsSync(join(record, ".aidlc-engine", "steering-token-key")),
+    ).toBe(false);
   });
 
   test("engine observers are read-only for team and solo, and route checks bypass transport", () => {
@@ -431,12 +482,12 @@ describe("t248 deterministic steering delivery", () => {
     expect(teamProbe.kind).toBe("load-steering");
     expect(
       existsSync(
-        join(seededRecordDir(team), ".aidlc-steering-token-key"),
+        join(seededRecordDir(team), ".aidlc-engine/steering-token-key"),
       ),
     ).toBe(false);
     expect(
       existsSync(
-        join(seededRecordDir(team), ".aidlc-active-directive.json"),
+        join(seededRecordDir(team), ".aidlc-engine/active-directive.json"),
       ),
     ).toBe(false);
     const continued = invoke(
@@ -484,12 +535,12 @@ describe("t248 deterministic steering delivery", () => {
     expect(soloProbe.kind).toBe("load-steering");
     expect(
       existsSync(
-        join(seededRecordDir(solo), ".aidlc-steering-token-key"),
+        join(seededRecordDir(solo), ".aidlc-engine/steering-token-key"),
       ),
     ).toBe(false);
     expect(
       existsSync(
-        join(seededRecordDir(solo), ".aidlc-active-directive.json"),
+        join(seededRecordDir(solo), ".aidlc-engine/active-directive.json"),
       ),
     ).toBe(false);
     expect(
@@ -511,10 +562,10 @@ describe("t248 deterministic steering delivery", () => {
     ).directive;
     expect(routeCheck.kind).toBe("run-stage");
     expect(
-      existsSync(join(seededRecordDir(routed), ".aidlc-steering-token-key")),
+      existsSync(join(seededRecordDir(routed), ".aidlc-engine/steering-token-key")),
     ).toBe(false);
     expect(
-      existsSync(join(seededRecordDir(routed), ".aidlc-active-directive.json")),
+      existsSync(join(seededRecordDir(routed), ".aidlc-engine/active-directive.json")),
     ).toBe(false);
   });
 
@@ -536,7 +587,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(twice.kind).toBe("error");
     expect(twice.message).toContain("no longer current");
     const marker = JSON.parse(
-      readFileSync(join(seededRecordDir(proj), ".aidlc-active-directive.json"), "utf-8"),
+      readFileSync(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"), "utf-8"),
     ) as { cursor_harness?: string; owner_session?: string };
     expect(marker.cursor_harness).toBe("claude");
     expect(marker.owner_session).toStartWith("sessionless:");

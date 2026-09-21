@@ -27,6 +27,7 @@ const manifest: HarnessManifest = {
       path: ".gitignore",
       policy: "managed-block",
       marker: "gitignore",
+      shared: "union",
       legacySignatures: {
         wholeFileHashes: [
           "sha256:3da36b2d01551aeae2e366caa08be8cce0dbc9110e252445dcaa4e758e24a0b6",
@@ -35,6 +36,8 @@ const manifest: HarnessManifest = {
           // The pre-v2-sync shipped variant (the reshape branch's .gitignore
           // before the 2.6.123 merge changed the shipped bytes).
           "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:87e4c1237816c477096f2291f1204885692bf39e487afb3d9f67cf7e9b2c84fb",
         ],
       },
     },
@@ -111,9 +114,7 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // The onboarding doc (CLAUDE.md) renders from the shared skeleton
-  // core/templates/onboarding.md with Claude's fills, then the standard
-  // {{HARNESS_DIR}} → .claude transform. Single source across every harness.
+  // Claude keeps neutral guidance and native setup together in its always-on file.
   onboarding: { dst: "CLAUDE.md", fills: onboardingFills },
 
   // Claude renames no core dir.

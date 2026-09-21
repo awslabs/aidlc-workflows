@@ -7,7 +7,7 @@
 //
 // SUBJECT: the bounded Build & Test → Code Generation failure loop-back in the
 // conditional Construction protocol module.
-// Five surfaces carry the contract:
+// Four surfaces carry the contract:
 //   1. dist/claude/.claude/aidlc-common/stages/construction/build-and-test.md
 //      — Step 9's 4-rung failure-escalation ladder, the `## Loop-Back Log`
 //      artifact shape, and the single-stage (--single) carve-out.
@@ -17,19 +17,15 @@
 //      settlement paths, swarm path, question variants, and second
 //      autonomous-stop case.
 //   3. dist/claude/.claude/aidlc-common/protocols/stage-protocol.md — the
-//      NO EMERGENT carve-out, checklist-item-5 exception, and both Artifact
+//      NO EMERGENT carve-out and both Artifact
 //      Re-use overrides.
 //   4. dist/claude/.claude/aidlc-common/protocols/stage-protocol-recovery.md
 //      — the crash-resume bullet (logged-but-not-jumped detection), now under
 //      "Session resume" rather than "Stage re-run".
-//   5. Every harness conductor SKILL (authored harness/<h>/skills/aidlc/
-//      SKILL.md AND its dist copy via the harness matrix) — the parenthetical
-//      exception on the "STAGE RITUAL IS ATOMIC" Key Principles bullet.
 //
 // FIXTURE DISCIPLINE: inputs are the REAL committed shipped files (AIDLC_SRC
-// = <repo>/dist/claude/.claude from tests/harness/fixtures.ts) plus the
-// authored + dist conductor SKILLs discovered through HARNESS_MATRIX (so a
-// new harness cannot escape the gate). NOTHING is written; no temp project,
+// = <repo>/dist/claude/.claude from tests/harness/fixtures.ts) plus authored
+// and harness-matrix Construction protocol copies. NOTHING is written; no temp project,
 // no teardown — there is no mutable surface.
 
 import { describe, expect, test } from "bun:test";
@@ -193,11 +189,6 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     );
   });
 
-  test("EXCEPTION sentence on Critical-checklist item 5 (stage ritual atomic)", () => {
-    expect(MAIN_PROTOCOL).toContain(
-      "EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.",
-    );
-  });
 
   test("ledger paragraph: artifact ledger beats counting STAGE_JUMPED rows", () => {
     expect(CONSTRUCTION_PROTOCOL).toContain("the count of `### Loop-back N` entries IS the bound (max 3 per intent)");
@@ -228,12 +219,13 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     );
   });
 
-  test("the standing autonomy grant covers the replayed code-generation gate (explicit marker)", () => {
+  test("replay retains the grant and follows current checkpoint policy without inventing a human answer", () => {
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      '`--user-input "Autonomous loop-back N per construction protocol module"`',
+      "`Construction Autonomy Mode: autonomous` grant is unchanged by the jump",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain("not a new autonomy inference");
-    expect(CONSTRUCTION_PROTOCOL).toContain("checklist item\n   6");
+    expect(CONSTRUCTION_PROTOCOL).toContain("completion follows the current checkpoint/policy directive");
+    expect(CONSTRUCTION_PROTOCOL).toContain("completion omits `--user-input`");
+    expect(CONSTRUCTION_PROTOCOL).toContain("Fresh Plan Approval is still mandatory");
   });
 
   test("plan approval is re-minted for the replay's new stage attempt", () => {
@@ -309,7 +301,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
       "Under unit-major iteration the autonomous swarm never\nfires: the replay follows the ordinary per-unit walk",
     );
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "the plan-approval carve-out keeps the\nautonomous repair free of an extra human turn",
+      "Fresh target-bound Plan Approval remains\na human stop for the repair",
     );
   });
 
@@ -420,14 +412,15 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 });
 
-describe("t305 Finding 3 (must-fix): rung 4 is a second autonomous-stop case", () => {
-  test("the Bolt halt-and-ask sentence names rung 4 as the second case, not 'the one case'", () => {
+describe("t305 failure stops remain explicit under autonomy", () => {
+  test("Code Generation failure and loop-back exhaustion both stop for the human", () => {
     expect(CONSTRUCTION_PROTOCOL).not.toContain(
       "This is the one case where `autonomous` mode stops to consult the user.",
     );
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "This is one of two cases where `autonomous` mode stops to consult the user — the other is the Build-and-Test failure loop-back's rung 4",
+      "always halt and present the halt-and-ask prompt regardless of autonomy mode",
     );
+    expect(CONSTRUCTION_PROTOCOL).toContain("The Build-and-Test failure loop-back's rung 4 also halts");
   });
 });
 
@@ -558,44 +551,5 @@ describe("t305 stage-protocol-recovery.md — crash-resume bullet", () => {
     expect(RECOVERY).toContain(
       "None of the three paths\nmay treat preserved artifacts or prior receipts as current-attempt evidence",
     );
-  });
-});
-
-describe("t305 conductor SKILLs — STAGE RITUAL IS ATOMIC exception (authored + dist, every harness)", () => {
-  const EXCEPTION_SENTENCE =
-    "(One exception: the Build-and-Test failure loop-back — the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) — jumps back to code-generation from a deliberately in-flight failed stage; its learnings ritual fires on the eventual passing run.)";
-
-  test("every authored conductor SKILL carries the exception on the atomic-ritual bullet", () => {
-    expect(HARNESS_MATRIX).toHaveLength(7);
-    const missing: string[] = [];
-    for (const harness of HARNESS_MATRIX) {
-      const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      const bullet = body
-        .split("\n")
-        .find((l) => l.includes("**STAGE RITUAL IS ATOMIC**"));
-      if (!bullet) {
-        missing.push(`${rel}  missing the STAGE RITUAL IS ATOMIC bullet`);
-      } else if (!bullet.includes(EXCEPTION_SENTENCE)) {
-        // Same-line co-location: the exception is part of the bullet itself,
-        // not merely present somewhere in the file.
-        missing.push(`${rel}  bullet lacks the loop-back exception sentence`);
-      }
-    }
-    expect(missing).toEqual([]);
-  });
-
-  test("every dist conductor SKILL copy carries the same exception (byte-parity spot check)", () => {
-    const missing: string[] = [];
-    for (const harness of HARNESS_MATRIX) {
-      const path = join(harness.skillsRoot, "aidlc", "SKILL.md");
-      const bullet = readFileSync(path, "utf-8")
-        .split("\n")
-        .find((l) => l.includes("**STAGE RITUAL IS ATOMIC**"));
-      if (!bullet?.includes(EXCEPTION_SENTENCE)) {
-        missing.push(`dist ${harness.name}: ${path}`);
-      }
-    }
-    expect(missing).toEqual([]);
   });
 });

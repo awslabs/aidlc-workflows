@@ -94,6 +94,7 @@ const LIVE_PIN_VERSION = patchVersion(2);
 const STALE_PIN_VERSION = patchVersion(3);
 const REMOVABLE_VERSION = patchVersion(4);
 const RUNTIME_ASSET = `aidlc-runtime-${AIDLC_VERSION}.tar.gz`;
+const COPY_RUNTIME_ASSET = `aidlc-copy-runtime-${AIDLC_VERSION}.tar.gz`;
 
 // Removing the whole suite's copied release trees needs its own bounded budget.
 afterAll(() => {
@@ -158,6 +159,13 @@ function writeVerifierCandidate(root: string): void {
     assets,
   };
   writeFileSync(join(root, "version.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(join(root, COPY_RUNTIME_ASSET), "copy runtime\n");
+  writeFileSync(
+    join(root, `${COPY_RUNTIME_ASSET}.sha256`),
+    `${
+      createHash("sha256").update(readFileSync(join(root, COPY_RUNTIME_ASSET))).digest("hex")
+    }  ${COPY_RUNTIME_ASSET}\n`,
+  );
   writeFileSync(
     join(root, "checksums.txt"),
     `${[
@@ -865,6 +873,17 @@ describe("t244 management lifecycle", () => {
 
   test("all harness runtimes install together and config selects one project harness", () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
+    const manifest = JSON.parse(
+      readFileSync(join(release, "version.json"), "utf-8"),
+    ) as {
+      assets: Array<{ name: string; kind: string; target?: string }>;
+    };
+    const runtimeAssets = manifest.assets.filter((asset) => asset.kind === "runtime");
+    expect(runtimeAssets.map((asset) => asset.name)).toEqual([RUNTIME_ASSET]);
+    expect(runtimeAssets[0]?.target).toBeUndefined();
+    expect(manifest.assets.some((asset) => asset.name === COPY_RUNTIME_ASSET)).toBe(false);
+    expect(existsSync(join(release, COPY_RUNTIME_ASSET))).toBe(true);
+    expect(existsSync(join(release, `${COPY_RUNTIME_ASSET}.sha256`))).toBe(true);
     const machine = temp("aidlc-t241-all-harness-");
     const project = temp("aidlc-t241-all-harness-project-");
     mkdirSync(join(project, ".git"));
@@ -876,6 +895,20 @@ describe("t244 management lifecycle", () => {
     for (const harness of RELEASE_HARNESSES) {
       expect(existsSync(join(machine, "versions", AIDLC_VERSION, "runtime", harness))).toBe(true);
     }
+    const installedClaudeSettings = readFileSync(
+      join(
+        machine,
+        "versions",
+        AIDLC_VERSION,
+        "runtime",
+        "claude",
+        ".claude",
+        "settings.json",
+      ),
+      "utf-8",
+    );
+    expect(installedClaudeSettings).toContain('"command": "aidlc engine statusline"');
+    expect(installedClaudeSettings).not.toContain('"command": "bun ');
     for (const file of ["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"]) {
       expect(existsSync(join(machine, "completions", file)), file).toBe(true);
     }
@@ -1444,6 +1477,10 @@ describe("t244 Windows and completion release surfaces", () => {
 
   test("PowerShell installer is authenticated release content and delegates placement", () => {
     const script = readFileSync(INSTALL_PS1, "utf-8");
+    expect(script).toContain("$PackagedVersion = ''");
+    expect(script).toContain(
+      "if (-not $PSBoundParameters.ContainsKey('Version') -and -not $From)",
+    );
     expect(script).toContain("aidlc-windows-x64.exe");
     expect(script).toContain("'install-apply'");
     expect(script).toContain("Get-FileHash -Algorithm SHA256");
@@ -1507,6 +1544,21 @@ describe("t244 Windows and completion release surfaces", () => {
         new RegExp(`^\\s*${helper}\\s+(?!-|\`\\s*$)`, "m"),
       );
     }
+  });
+
+  test("release installers default to their packaged version without overriding explicit or offline selection", () => {
+    const unix = readFileSync(INSTALL_SH, "utf-8");
+    expect(unix.match(/^PACKAGED_VERSION=''$/gm)).toHaveLength(1);
+    expect(unix).toContain(
+      'if [ -z "$VERSION" ] && [ -z "$FROM" ]; then\n  VERSION=$PACKAGED_VERSION\nfi',
+    );
+
+    const powershell = readFileSync(INSTALL_PS1, "utf-8");
+    expect(powershell.match(/^\$PackagedVersion = ''$/gm)).toHaveLength(1);
+    expect(powershell).toContain(
+      "if (-not $PSBoundParameters.ContainsKey('Version') -and -not $From) {\n" +
+        "  $Version = $PackagedVersion\n}",
+    );
   });
 
   const powershellVersionCases = [
@@ -1810,6 +1862,21 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(verified.stdout.trim().split(/\r?\n/)).toHaveLength(10);
     expect(verified.stdout).toContain("install.sh");
     expect(verified.stdout).toContain("install.ps1");
+
+    const replacedCopyRuntime = temp("aidlc-t244-release-copy-runtime-");
+    writeVerifierCandidate(replacedCopyRuntime);
+    writeFileSync(join(replacedCopyRuntime, COPY_RUNTIME_ASSET), "replacement copy runtime\n");
+    const replacedCopyResult = run(RELEASE_VERIFIER, [
+      "candidate",
+      "--directory",
+      replacedCopyRuntime,
+      "--tag",
+      `v${AIDLC_VERSION}`,
+    ], REPO_ROOT);
+    expect(replacedCopyResult.status).toBe(1);
+    expect(replacedCopyResult.stderr).toContain(
+      `${COPY_RUNTIME_ASSET}.sha256 does not authenticate ${COPY_RUNTIME_ASSET}`,
+    );
 
     const replacedInstaller = temp("aidlc-t244-release-installer-");
     writeVerifierCandidate(replacedInstaller);

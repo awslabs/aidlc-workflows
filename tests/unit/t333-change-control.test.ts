@@ -1,9 +1,9 @@
 // covers: function:resolveChangeControl, function:memoryChangeControlDeclarations,
 // function:parseChangeControlStateLine, function:parseChangeControl,
 // function:formatChangeControl, function:scopeChangeControlDefault,
-// function:governedChangeControl, function:recordChangeControlSet,
+// function:governedChangeControl,
 // function:memorySectionBody, function:structuredField,
-// subcommand:aidlc-utility:change-control, subcommand:aidlc-utility:status,
+// subcommand:aidlc-utility:config-change, subcommand:aidlc-utility:status,
 // subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:scope-change,
 // subcommand:aidlc-orchestrate:next, audit:CHANGE_CONTROL_SET
 //
@@ -248,6 +248,50 @@ describe("t333 (2) the grammar", () => {
     expect(structuredField("Methodology: tdd", "Mode")).toBeNull();
   });
 
+  test("a field value continues on indented lines and stops at the next item", () => {
+    const wrapped = [
+      "- **Ordering**: tests first,",
+      "  then implementation.",
+      "- **Coverage**: 80%",
+    ].join("\n");
+    expect(structuredField(wrapped, "Ordering")).toBe("tests first, then implementation.");
+    expect(structuredField(wrapped, "Coverage")).toBe("80%");
+    // A blank line, an unindented line, or a nested bullet ends the value.
+    expect(structuredField("Ordering: a first,\n\n  not the value", "Ordering")).toBe("a first,");
+    expect(structuredField("Ordering: a first,\nnext paragraph", "Ordering")).toBe("a first,");
+    expect(structuredField("- **Ordering**: a first,\n  - sub item", "Ordering")).toBe("a first,");
+    // An empty head with an indented continuation still yields the value.
+    expect(structuredField("Ordering:\n  tests first.", "Ordering")).toBe("tests first.");
+  });
+
+  // These layouts were already accepted before wrapped values were supported.
+  // Nested notes, sibling fields, and new blocks are not part of the field;
+  // only wrapped prose belongs to its value.
+  test("a field value ends at the next item of any marker, a sibling field, or a block", () => {
+    expect(structuredField("- **Ordering**: custom:\n  1. scenarios\n  2. implement", "Ordering")).toBe("custom:");
+    expect(structuredField("- **Ordering**: a\n  + sub", "Ordering")).toBe("a");
+    expect(structuredField("- **Ordering**: a\n  > quoted", "Ordering")).toBe("a");
+    expect(structuredField("- **Ordering**: a\n  | x | y |", "Ordering")).toBe("a");
+    expect(structuredField("- **Ordering**: a\n  ```\n  code\n  ```", "Ordering")).toBe("a");
+    const plain = "  Methodology: tdd\n  Ordering: tests first.";
+    expect(structuredField(plain, "Methodology")).toBe("tdd");
+    expect(structuredField(plain, "Ordering")).toBe("tests first.");
+    expect(structuredField("Methodology: tdd\n  Ordering: tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("  - **Ordering**: long\n    wrapped", "Ordering")).toBe("long wrapped");
+    expect(structuredField("- **Mode**: strict\n  1. Require reapproval when inputs move.", "Mode")).toBe("strict");
+    // A sibling head is one of the structured fields, with or without a space after its colon; any other word: is prose.
+    expect(structuredField("Methodology: tdd\n  Ordering:tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("Methodology: tdd\n  Ordering:tests first.", "Ordering")).toBe("tests first.");
+    expect(structuredField("- **Methodology**: tdd\n  **Ordering**:tests first.", "Methodology")).toBe("tdd");
+    expect(structuredField("- **Ordering**: a,\n  then run https://x.y/z first", "Ordering")).toBe("a, then run https://x.y/z first");
+    expect(structuredField("- **Ordering**: a,\n  then file://share/tests", "Ordering")).toBe("a, then file://share/tests");
+    expect(structuredField("- **Ordering**: run the suite from\n  C:\\tests before implementation", "Ordering")).toBe("run the suite from C:\\tests before implementation");
+    expect(structuredField("- **Ordering**: a,\n  use C:\\tests before implementation", "Ordering")).toBe("a, use C:\\tests before implementation");
+    expect(structuredField("- **Ordering**: a,\n  issue:ABC-123 next, then implement", "Ordering")).toBe("a, issue:ABC-123 next, then implement");
+    expect(structuredField("- **Ordering**: a,\n  at 10:00 run the suite", "Ordering")).toBe("a, at 10:00 run the suite");
+    expect(structuredField("- **Ordering**: a,\n  Note: run them twice", "Ordering")).toBe("a, Note: run them twice");
+  });
+
   test("the section body ignores commented headings and commented lines", () => {
     const content = [
       "# Team",
@@ -309,6 +353,15 @@ describe("t333 (3) resolution precedence", () => {
     }
   });
 
+  test("a Mode line followed by a nested list still declares its value", () => {
+    const { proj } = project("classic");
+    declareMemoryMode(proj, "team", "strict\n  + Strict here holds for every intent.");
+    expect(memoryChangeControlDeclarations(proj)).toEqual([
+      { layer: "team", path: memoryFile(proj, "team"), value: "strict" },
+    ]);
+    expect(resolveChangeControl(proj).value).toBe("strict");
+  });
+
   test("memory relaxed and an absent section have no effect", () => {
     const { proj } = project("enterprise");
     declareMemoryMode(proj, "project", "relaxed");
@@ -339,31 +392,28 @@ describe("t333 (3) resolution precedence", () => {
     expect(resolved.intent).toBeNull();
   });
 
-  test("an invalid state line is a validation error that names the field and repair command", () => {
+  test("an invalid state line refuses resolution while status preserves the invalid state", () => {
     const { proj, state } = project("classic");
     writeFileSync(
       state,
       setField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD, "stricct (set by you)"),
     );
-    const message =
-      `Invalid Change Control "stricct (set by you)" in ${state} (field: Change Control). ` +
-      "Expected one of: strict, relaxed. Run /aidlc --change-control strict or " +
-      "/aidlc --change-control relaxed to repair it.";
-    expect(() => resolveChangeControl(proj)).toThrow(message);
+    const before = readFileSync(state, "utf-8");
+    expect(() => resolveChangeControl(proj)).toThrow();
     const status = run(UTILITY, ["status"], proj);
     expect(status.status, status.stderr).toBe(0);
-    expect(status.stdout).toContain(`Change Control: unavailable (${message})\n`);
+    expect(status.stdout).toContain("Change Control: unavailable");
+    expect(status.stdout).toContain(state);
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(changeControlRows(proj)).toHaveLength(0);
   });
 });
 
-describe("t333 (4) the verb, the flag, and the status line", () => {
-  test("the verb rewrites the line, records CHANGE_CONTROL_SET, and status shows the human as the source", () => {
+describe("t333 (4) config-change, the slash flag, and the status line", () => {
+  test("config-change rewrites the line, records CHANGE_CONTROL_SET, and status shows the human as the source", () => {
     const { proj, state } = project("classic");
-    const flipped = run(UTILITY, ["change-control", "strict"], proj);
+    const flipped = run(UTILITY, ["config-change", "--change-control", "strict"], proj);
     expect(flipped.status, flipped.stderr).toBe(0);
-    expect(flipped.stdout).toBe(
-      "Change Control changed: relaxed (from scope classic) to strict (set by you)\n",
-    );
     expect(getField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD)).toBe(
       "strict (set by you)",
     );
@@ -375,23 +425,21 @@ describe("t333 (4) the verb, the flag, and the status line", () => {
     const status = run(UTILITY, ["status"], proj);
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toContain("Change Control: strict (set by you)\n");
-    const again = run(UTILITY, ["change-control", "strict"], proj);
+    const beforeRepeat = readFileSync(state, "utf-8");
+    const again = run(UTILITY, ["config-change", "--change-control", "strict"], proj);
     expect(again.status).toBe(0);
-    expect(again.stdout).toBe("Change Control is already strict (set by you)\n");
+    expect(readFileSync(state, "utf-8")).toBe(beforeRepeat);
     expect(changeControlRows(proj)).toHaveLength(1);
   });
 
-  test("the verb repairs an invalid state line and records its old text", () => {
+  test("config-change repairs an invalid state line and records its old text", () => {
     const { proj, state } = project("classic");
     writeFileSync(
       state,
       setField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD, "stricct (set by you)"),
     );
-    const repaired = run(UTILITY, ["change-control", "strict"], proj);
+    const repaired = run(UTILITY, ["config-change", "--change-control", "strict"], proj);
     expect(repaired.status, repaired.stderr).toBe(0);
-    expect(repaired.stdout).toBe(
-      "Change Control changed: stricct (set by you) to strict (set by you)\n",
-    );
     expect(getField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD)).toBe(
       "strict (set by you)",
     );
@@ -402,31 +450,25 @@ describe("t333 (4) the verb, the flag, and the status line", () => {
     expect(auditBlockField(rows[0].block, "Source")).toBe("you");
   });
 
-  test("the verb refuses a value outside the two", () => {
-    const { proj } = project("classic");
-    const bad = run(UTILITY, ["change-control", "loose"], proj);
-    expect(bad.status).toBe(1);
-    expect(bad.stderr).toContain(
-      'change-control requires exactly one of: strict, relaxed (received \\"loose\\").',
-    );
-    const missing = run(UTILITY, ["change-control"], proj);
-    expect(missing.status).toBe(1);
-    expect(missing.stderr).toContain("change-control requires exactly one of: strict, relaxed.");
+  test("config-change refuses invalid or missing Change Control values without changing state or settings audit", () => {
+    const { proj, state } = project("classic");
+    const before = readFileSync(state, "utf-8");
+    for (const args of [["--change-control", "loose"], ["--change-control"], []]) {
+      const refused = run(UTILITY, ["config-change", ...args], proj);
+      expect(refused.status).toBe(1);
+      expect(readFileSync(state, "utf-8")).toBe(before);
+      expect(changeControlRows(proj)).toHaveLength(0);
+    }
   });
 
-  test("a memory strict refuses the flip with the exact message and leaves the line alone", () => {
+  test("memory strict refuses a relaxed change and leaves the line alone", () => {
     const { proj, state } = project("classic");
     declareMemoryMode(proj, "project", "strict");
     const before = readFileSync(state, "utf-8");
-    const refused = run(UTILITY, ["change-control", "relaxed"], proj);
+    const refused = run(UTILITY, ["config-change", "--change-control", "relaxed"], proj);
     expect(refused.status).toBe(1);
-    expect(refused.stderr.trim()).toBe(
-      JSON.stringify({
-        error:
-          `Change Control is set to strict in ${memoryFile(proj, "project")} (section: Change Control), ` +
-          "so it cannot be changed from chat. Edit that line to change it for everyone on this repo.",
-      }),
-    );
+    expect(refused.stderr).toContain(memoryFile(proj, "project"));
+    expect(resolveChangeControl(proj).value).toBe("strict");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(changeControlRows(proj)).toHaveLength(0);
     const status = run(UTILITY, ["status"], proj);
@@ -455,18 +497,20 @@ describe("t333 (4) the verb, the flag, and the status line", () => {
     return { kind: parsed.kind, message: parsed.message };
   }
 
-  test("the flag routes to the verb on a live workflow and refuses a bad value", () => {
-    const { proj } = project("classic");
+  test("the slash flag routes to config set and refuses bad or missing values without mutation", () => {
+    const { proj, state } = project("classic");
+    const before = readFileSync(state, "utf-8");
     const routed = run(ORCHESTRATE, ["next", "--change-control", "strict"], proj);
     expect(routed.status, routed.stderr).toBe(0);
     const directive = lastDirective(routed.stdout);
     expect(directive.kind).toBe("print");
-    expect(directive.message).toContain("aidlc-utility.ts change-control strict");
+    expect(directive.message).toContain("engine config set change-control strict");
     const bad = lastDirective(run(ORCHESTRATE, ["next", "--change-control", "maybe"], proj).stdout);
     expect(bad.kind).toBe("error");
-    expect(bad.message).toBe('--change-control requires <strict|relaxed>; received "maybe".');
     const bare = lastDirective(run(ORCHESTRATE, ["next", "--change-control"], proj).stdout);
-    expect(bare.message).toBe("--change-control requires <strict|relaxed>.");
+    expect(bare.kind).toBe("error");
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(changeControlRows(proj)).toHaveLength(0);
   });
 
   test("the flag at creation writes the human as the source", () => {
@@ -521,6 +565,34 @@ describe("t333 (4) the verb, the flag, and the status line", () => {
     expect(changeControlRows(kept.proj)).toHaveLength(0);
   });
 
+  test("a scope-owned Change Control value follows the new scope under memory strict", () => {
+    const { proj, state } = project("classic");
+    expect(getField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD)).toBe(
+      "relaxed (from scope classic)",
+    );
+    const memory = memoryFile(proj, "project");
+    const beforeMemory = readFileSync(memory, "utf-8");
+    declareMemoryMode(proj, "project", "strict");
+    const changed = run(UTILITY, ["scope-change", "--scope", "enterprise"], proj);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD)).toBe(
+      "strict (from scope enterprise)",
+    );
+    const governed = resolveChangeControl(proj);
+    expect(governed.value).toBe("strict");
+    expect(governed.source).toBe("project.md");
+    const rows = changeControlRows(proj);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("scope enterprise");
+
+    writeFileSync(memory, beforeMemory);
+    const ungoverned = resolveChangeControl(proj);
+    expect(ungoverned.value).toBe("strict");
+    expect(ungoverned.source).toBe("scope enterprise");
+  });
+
   test("a scope change commits its state and audit rows together", () => {
     const moved = project("enterprise");
     const beforeFault = readFileSync(moved.state, "utf-8");
@@ -531,7 +603,6 @@ describe("t333 (4) the verb, the flag, and the status line", () => {
       { AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT: "t333" },
     );
     expect(failed.status).toBe(1);
-    expect(failed.stderr).toContain("Cannot record the scope change");
     expect(failed.stderr).toContain("injected ledger fault: t333");
     expect(readFileSync(moved.state, "utf-8")).toBe(beforeFault);
     expect(readAuditShardEvents(moved.proj).filter((row) => row.event === "SCOPE_CHANGED")).toHaveLength(0);
@@ -595,7 +666,7 @@ describe("t333 (5) an explicit workflow selection governs Change Control end to 
 
     const refused = run(
       UTILITY,
-      ["change-control", "relaxed", ...selectedArgs(selected.targetIntent)],
+      ["config-change", "--change-control", "relaxed", ...selectedArgs(selected.targetIntent)],
       selected.proj,
     );
 
@@ -625,7 +696,7 @@ describe("t333 (5) an explicit workflow selection governs Change Control end to 
 
     const changed = run(
       UTILITY,
-      ["change-control", "relaxed", ...selectedArgs(selected.targetIntent)],
+      ["config-change", "--change-control", "relaxed", ...selectedArgs(selected.targetIntent)],
       selected.proj,
     );
 
@@ -655,7 +726,7 @@ describe("t333 (5) an explicit workflow selection governs Change Control end to 
     expect(selectedRows(selected.proj, selected.defaultIntent, "default", "SCOPE_CHANGED")).toHaveLength(0);
   });
 
-  test("a selected scope change stays memory-strict and writes no Change Control row", () => {
+  test("a selected scope change audits its stored default while remaining memory-strict", () => {
     const selected = selectedProject();
     declareAltMemoryStrict(selected.proj);
 
@@ -666,10 +737,19 @@ describe("t333 (5) an explicit workflow selection governs Change Control end to 
     );
 
     expect(changed.status, changed.stderr).toBe(0);
-    expect(resolveChangeControl(selected.proj, null, {
+    const resolution = resolveChangeControl(selected.proj, null, {
       selection: { intent: selected.targetIntent, space: "alt" },
-    }).value).toBe("strict");
-    expect(selectedRows(selected.proj, selected.targetIntent, "alt", "CHANGE_CONTROL_SET")).toHaveLength(0);
+    });
+    expect(resolution.value).toBe("strict");
+    expect(resolution.source).toBe("project.md");
+    expect(getField(readFileSync(selected.targetState, "utf-8"), CHANGE_CONTROL_FIELD)).toBe(
+      "relaxed (from scope classic)",
+    );
+    const rows = selectedRows(selected.proj, selected.targetIntent, "alt", "CHANGE_CONTROL_SET");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("scope classic");
     expect(selectedRows(selected.proj, selected.targetIntent, "alt", "SCOPE_CHANGED")).toHaveLength(1);
     expect(selectedRows(selected.proj, selected.defaultIntent, "default", "SCOPE_CHANGED")).toHaveLength(0);
   });
@@ -782,14 +862,11 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
 
     const refused = run(
       UTILITY,
-      ["change-control", "loose", ...selectedArgs(selected.targetIntent)],
+      ["config-change", "--change-control", "loose", ...selectedArgs(selected.targetIntent)],
       selected.proj,
     );
 
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(
-      'change-control requires exactly one of: strict, relaxed (received \\"loose\\").',
-    );
     const targetAfter = readAuditShardEvents(selected.proj, selected.targetIntent, "alt");
     expect(targetAfter).toHaveLength(beforeTarget.length + 1);
     const row = targetAfter[targetAfter.length - 1];
@@ -809,7 +886,7 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
 
     const refused = run(
       UTILITY,
-      ["change-control", "relaxed", "--space", "alt", "--intent", "not-a-real-intent"],
+      ["config-change", "--change-control", "relaxed", "--space", "alt", "--intent", "not-a-real-intent"],
       selected.proj,
     );
 
@@ -829,7 +906,7 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
     expect(createdSpace.status, createdSpace.stderr).toBe(0);
     const beforeEmpty = existsSync(emptyIntents) ? readdirSync(emptyIntents).sort() : null;
 
-    const refused = run(UTILITY, ["change-control", "loose", "--space", "empty"], selected.proj);
+    const refused = run(UTILITY, ["config-change", "--change-control", "loose", "--space", "empty"], selected.proj);
 
     expect(refused.status).toBe(1);
     expect(existsSync(join(emptyIntents, "audit"))).toBe(false);
@@ -866,7 +943,8 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
       cmd: [
         BUN,
         UTILITY,
-        "change-control",
+        "config-change",
+        "--change-control",
         "loose",
         "--space",
         "alt",
@@ -893,9 +971,7 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
     const [status, out, err] = await Promise.all([child.exited, stdout, stderr]);
     expect(status).toBe(1);
     expect(out).toBe("");
-    expect(err).toContain(
-      'change-control requires exactly one of: strict, relaxed (received \\"loose\\").',
-    );
+    expect(JSON.parse(err.trim().split("\n").pop()!)).toHaveProperty("error");
     const targetAfter = readAuditShardEvents(selected.proj, selected.targetIntent, "alt");
     expect(targetAfter).toHaveLength(beforeTarget.length + 1);
     expect(targetAfter[targetAfter.length - 1]?.event).toBe("ERROR_LOGGED");

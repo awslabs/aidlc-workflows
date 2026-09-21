@@ -6,9 +6,9 @@
 // recorded since the last gate resolution, so a model under autopilot cannot
 // fabricate an approval with no human having acted this turn.
 //
-// Presence remains the gate signal, while the prompt payload is also inspected
-// for an exact protected Plan Approval choice. appendAuditEntry resolves the
-// active intent from the on-disk cursor. No workflow state on disk means nothing
+// Presence remains the gate signal; the prompt payload also answers the single
+// active protected challenge (plan, verification command, policy, or checkpoint).
+// appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
 // to gate, so the hook exits without writing (same self-gate as
 // aidlc-session-start.ts) - otherwise every prompt in a project that carries the
 // harness shell but never ran the framework would scaffold and grow audit
@@ -16,7 +16,7 @@
 // safe. The mint is fail-open (try/catch, exit 0): a mint failure must never
 // block the human's turn.
 //
-// The same seam also touches the .aidlc-human-turn marker (markHumanTurn). The
+// The same seam also touches the .aidlc-engine/human-turn marker (markHumanTurn). The
 // ledger event serves the human-presence GATE; the marker serves the Stop hook's
 // conversational carve-out, which needs a cheap "when was the last human prompt,
 // relative to the last engine advance?" comparison that works on harnesses
@@ -50,28 +50,46 @@
 // a separate behaviour with its own tests. Reviewers who want the marker
 // suppressed too should say so — it is a one-line follow-on, not a silent choice.
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
+  clearPlanApprovalChallenge,
+  planApprovalChallengeRelativePath,
+  protectedQuestionRelativePath,
+  withdrawProtectedQuestions,
   consumeSharedDirectiveAsk,
   humanTurnMintAllowed,
   markHumanTurn,
   resolveProjectDirFromHook,
   stateFilePath,
+  withAuditLock,
 } from "../tools/aidlc-lib.ts";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
+  recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 
 function extractResponseText(value: unknown): string {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) return "";
+    // The parse is here to unwrap an ENVELOPE - a picker that delivers its
+    // selection as JSON - so it hands over only for the shapes an envelope can
+    // take: an object, an array, or a quoted string. A reply that is itself a
+    // JSON scalar is not an envelope, and treating it as one reported no text at
+    // all: "1" parses to a number, falls out of every branch below, and the
+    // reply a numbered gate prompt invites was discarded. "true" and "null" went
+    // the same way. Those keep the text the human actually typed.
     try {
-      return extractResponseText(JSON.parse(trimmed));
+      const parsed: unknown = JSON.parse(trimmed);
+      if (typeof parsed === "string" || (parsed !== null && typeof parsed === "object")) {
+        return extractResponseText(parsed);
+      }
     } catch {
-      return trimmed;
+      // Not JSON at all: the trimmed reply is the text.
     }
+    return trimmed;
   }
   if (Array.isArray(value)) {
     for (const entry of value) {
@@ -102,6 +120,18 @@ function extractResponseText(value: unknown): string {
   return "";
 }
 
+function extractQuestionText(value: unknown): string | null {
+  if (value === null || typeof value !== "object") return null;
+  const input = value as Record<string, unknown>;
+  if (Array.isArray(input.questions)) {
+    // A protected question is asked alone. Never pair an arbitrary first answer
+    // with a matching question elsewhere in a multi-question payload.
+    if (input.questions.length !== 1) return "";
+    return extractQuestionText(input.questions[0]);
+  }
+  return typeof input.question === "string" ? input.question : null;
+}
+
 export async function run(input: string): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -109,6 +139,7 @@ try {
     if (humanTurnMintAllowed()) {
       let sessionId = "";
       let humanResponseText = "";
+      let questionText: string | null = null;
       // The break-glass phrase counts only when the human TYPED it: the prompt
       // text of a UserPromptSubmit payload that names no tool. A picked option
       // (AskUserQuestion PostToolUse, Codex request_user_input, any adapter's
@@ -124,8 +155,11 @@ try {
           message?: unknown;
           tool_response?: unknown;
           toolResponse?: unknown;
+          tool_input?: unknown;
+          toolInput?: unknown;
         };
         if (typeof parsed.session_id === "string") sessionId = parsed.session_id.trim();
+        questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
         for (const candidate of [
           parsed.prompt,
           parsed.user_prompt,
@@ -151,17 +185,25 @@ try {
         }
       } catch { /* presence still records without identity on legacy payloads */ }
       try {
-        appendAuditEntry("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
-        if (sessionId && humanResponseText) {
-          recordPlanApprovalHumanResponse(
-            projectDir,
-            sessionId,
-            humanResponseText,
-          );
-        }
-        if (sessionId && typedPrompt) {
-          recordPlanApprovalOverrideRequest(projectDir, sessionId, typedPrompt);
-        }
+        withAuditLock(projectDir, () => {
+          appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
+          if (sessionId && humanResponseText) {
+            const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
+            const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
+            if (plan && protectedQuestion) {
+              clearPlanApprovalChallenge(projectDir, sessionId);
+              withdrawProtectedQuestions(projectDir, sessionId);
+            } else if (protectedQuestion) {
+              recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
+            } else {
+              // With no active challenge, retain the legacy recovery phrase.
+              recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText);
+            }
+          }
+          if (sessionId && typedPrompt) {
+            recordPlanApprovalOverrideRequest(projectDir, sessionId, typedPrompt);
+          }
+        });
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }

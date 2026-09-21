@@ -99,12 +99,15 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     // there is silently ignored). Anything else in the dir is a shipping bug.
     const rules = readdirSync(join(ENGINE, "rules")).sort();
     expect(rules).toEqual([
+      "aidlc-onboarding.mdc",
       "aidlc-phase-construction.mdc",
       "aidlc-phase-ideation.mdc",
       "aidlc-phase-inception.mdc",
       "aidlc-phase-operation.mdc",
       "aidlc.mdc",
     ]);
+    expect(readFileSync(join(ENGINE, "rules", "aidlc-onboarding.mdc"), "utf-8"))
+      .toMatch(/^---\ndescription: AI-DLC onboarding for Cursor\nalwaysApply: true\n---/);
     const standing = readFileSync(join(ENGINE, "rules", "aidlc.mdc"), "utf-8");
     expect(standing).toMatch(/^alwaysApply: true$/m);
     for (const f of ["org.md", "team.md", "project.md"]) {
@@ -410,6 +413,33 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     }
   });
 
+  test("10b: Cursor installer refuses aidlc config managed blocks before copying", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-config-owned-"));
+    try {
+      for (const [file, block] of [
+        ["AGENTS.md", "<!-- BEGIN AI-DLC:agents -->\n# AI-DLC\n<!-- END AI-DLC:agents -->\n"],
+        [".gitignore", "# BEGIN AI-DLC:gitignore\naidlc/active-space\n# END AI-DLC:gitignore\n"],
+      ]) {
+        const project = join(root, file);
+        mkdirSync(project);
+        writeFileSync(join(project, file), block);
+        const install = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        });
+        expect(install.status).toBe(1);
+        expect(install.stderr).toContain(
+          `refusing to install: ${file} already carries an AI-DLC managed block owned by aidlc config; use \`aidlc config --harness cursor\` to add Cursor to this project`,
+        );
+        expect(readFileSync(join(project, file), "utf-8")).toBe(block);
+        expect(existsSync(join(project, ".cursor"))).toBe(false);
+        expect(readdirSync(project)).toEqual([file]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("11: Cursor installer refuses unresolved file collisions before copying", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-collision-"));
     const project = join(root, "project");
@@ -502,6 +532,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc.mdc"), "utf-8"),
       ).toContain("aidlc/spaces/team-b/memory/");
+      expect(
+        readFileSync(join(project, ".cursor", "rules", "aidlc-onboarding.mdc"), "utf-8"),
+      ).toContain("aidlc/spaces/<space>/memory/");
       for (const phase of ["ideation", "inception", "construction", "operation"]) {
         const installedRule = readFileSync(
           join(project, ".cursor", "rules", `aidlc-phase-${phase}.mdc`),

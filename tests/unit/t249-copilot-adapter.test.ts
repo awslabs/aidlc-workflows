@@ -361,13 +361,14 @@ function executeNoId(
 }
 
 function marker(dir: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8"));
+  return JSON.parse(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8"));
 }
 
 function rewriteMarker(dir: string, update: (value: Record<string, unknown>) => void): void {
-  const path = join(seededRecordDir(dir), ".aidlc-active-directive.json");
+  const path = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
   const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
   update(value);
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
@@ -757,7 +758,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(r.code).toBe(0);
       expect(
         existsSync(
-          join(seededRecordDir(dir), ".aidlc-hooks-health", "validate-state.last"),
+          join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "validate-state.last"),
         ),
       ).toBe(true);
     },
@@ -769,8 +770,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // 12a step-1 dispatch record: the architecture reviewer is scoped to U01.
     const record = seededRecordDir(dir);
     mkdirSync(record, { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -904,8 +906,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const hostSessionId = "11111111-2222-4333-8444-555555555555";
     const record = seededRecordDir(dir);
     mkdirSync(record, { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -961,8 +964,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const hostSessionId = "11111111-2222-4333-8444-555555555556";
     const record = seededRecordDir(dir);
     mkdirSync(record, { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -1001,8 +1005,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const hostSessionId = "11111111-2222-4333-8444-555555555557";
     const record = seededRecordDir(dir);
     mkdirSync(record, { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
     writeFileSync(
-      join(record, ".aidlc-reviewer-dispatch.json"),
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
       JSON.stringify({
         reviewer: "aidlc-architecture-reviewer-agent",
         stage: "functional-design",
@@ -1285,7 +1290,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const foreign = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: "foreign-stop" });
     expect(foreign.stdout).toBe("");
     expect(marker(dir).revision).toBe(beforeForeign);
-    expect(existsSync(join(seededRecordDir(dir), ".aidlc-stop-hook", "block-count.json"))).toBe(false);
+    expect(existsSync(join(seededRecordDir(dir), ".aidlc-engine/stop-hook", "block-count.json"))).toBe(false);
 
     const parked = orchestrationProject();
     driveToRunStage(parked, "park-owner");
@@ -1404,21 +1409,21 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const first = runLifecycle(foreignSession, owner, "direct", ["next"], "claim-owner-next");
     const token = String(first.directive.continue_token);
     const spec = commandSpec(foreignSession, "source", ["continue", token]);
-    const before = readFileSync(join(seededRecordDir(foreignSession), ".aidlc-active-directive.json"), "utf-8");
+    const before = readFileSync(join(seededRecordDir(foreignSession), ".aidlc-engine/active-directive.json"), "utf-8");
     const deniedForeign = runAdapter(foreignSession, "guard-tool-call", commandPayload(
       foreignSession, "different-session", spec.text, "foreign-session-attempt",
     ));
     expect(deniedForeign.code).toBe(0);
     expect(deniedForeign.stdout).toContain('"permissionDecision":"deny"');
     expect(deniedForeign.stdout).toContain("another Copilot session");
-    expect(readFileSync(join(seededRecordDir(foreignSession), ".aidlc-active-directive.json"), "utf-8")).toBe(before);
+    expect(readFileSync(join(seededRecordDir(foreignSession), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(before);
 
     const noCorrelation = commandPayload(foreignSession, "", spec.text);
     delete (noCorrelation as { session_id?: string }).session_id;
     const untracked = runAdapter(foreignSession, "guard-tool-call", noCorrelation);
     expect(untracked.code).toBe(0);
     expect(untracked.stdout).toBe("");
-    expect(readFileSync(join(seededRecordDir(foreignSession), ".aidlc-active-directive.json"), "utf-8")).toBe(before);
+    expect(readFileSync(join(seededRecordDir(foreignSession), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(before);
 
     const stateDrift = orchestrationProject();
     const stateOwner = "state-owner";
@@ -1470,7 +1475,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         dir, "guard-tool-call", commandPayload(dir, "session-b", spec.text, attemptB),
       ));
       const claimedB = marker(dir);
-      const claimedBBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      const claimedBBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
       const claimedBRevision = Number(claimedB.revision);
       expect(claimedB).toMatchObject({
         owner_session: "session-b",
@@ -1492,7 +1497,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
           expect(delayed.status, delayed.stderr).toBe(0);
           expect(JSON.parse(delayed.stdout)).toMatchObject({ kind: "error" });
           expect(delayed.stdout).toContain("stale or superseded");
-          expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(expectedBytes);
+          expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(expectedBytes);
         }
       };
       if (order === "stale-before-owner") executeStaleA(claimedBBytes);
@@ -1516,7 +1521,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       });
       runAdapter(dir, "post-tool", commandPayload(dir, "session-b", commandB, attemptB, true, executedB.stdout));
       const deliveredB = marker(dir);
-      const deliveredBBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      const deliveredBBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
       expect(deliveredB).toMatchObject({
         revision: claimedBRevision + 2,
         owner_session: "session-b",
@@ -1595,9 +1600,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
     expect((issued.active_attempt as Record<string, unknown>).result_sha256).toBeUndefined();
     expect((issued.active_attempt as Record<string, unknown>).result_revision).toBeUndefined();
-    const issuedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+    const issuedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
     runAdapter(dir, "post-tool", commandPayload(dir, "tracked-owner", spec.text, undefined, true, untracked.stdout));
-    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(issuedBytes);
+    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(issuedBytes);
     expect(marker(dir).delivery).toBe("issued");
   }, 30000);
 
@@ -1615,25 +1620,25 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const firstCommand = rewrittenCommand(runAdapter(
         dir, "guard-tool-call", commandPayload(dir, session, firstSpec.text, firstAttempt),
       ));
-      const survivingBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      const survivingBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
       const duplicate = runAdapter(
         dir, "guard-tool-call", commandPayload(dir, session, secondSpec.text, secondAttempt),
       );
       expect(duplicate.code).toBe(0);
       expect(duplicate.stdout).toContain('"permissionDecision":"deny"');
       expect(duplicate.stdout).toContain("already pending");
-      expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(survivingBytes);
+      expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(survivingBytes);
       expect(marker(dir)).toMatchObject({
         active_attempt: { id: firstAttempt, command_kind: "continue", status: "pending" },
       });
       const winner = runShell(dir, firstCommand);
       expect(winner.status, winner.stderr).toBe(0);
       runAdapter(dir, "post-tool", commandPayload(dir, session, firstCommand, firstAttempt, true, winner.stdout));
-      const deliveredBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      const deliveredBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
       runAdapter(dir, "post-tool", commandPayload(
         dir, session, secondSpec.text, secondAttempt, true, '{"kind":"error","message":"duplicate"}',
       ));
-      expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(deliveredBytes);
+      expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(deliveredBytes);
       expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { id: firstAttempt, status: "settled" } });
     }
   }, 60000);
@@ -1664,10 +1669,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
           claim_revision: shared.revision,
         },
       });
-      const sharedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      const sharedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
       const third = noIdClaim(dir, session, commandSpec(dir, scenario.pre[0], ["continue", token]));
       expect(third.attemptId).toBe(first.attemptId);
-      expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(sharedBytes);
+      expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(sharedBytes);
 
       const firstRun = () => runShell(dir, first.updated);
       const secondRun = () => runShell(dir, second.updated);
@@ -1746,11 +1751,11 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const first = noIdClaim(dir, session, commandSpec(dir, "direct", ["continue", token]));
     const second = noIdClaim(dir, session, commandSpec(dir, "source", ["continue", token]));
     expect(second.attemptId).toBe(first.attemptId);
-    const pendingBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+    const pendingBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
     const failed = spawnSync("/definitely/missing-aidlc-engine", [], { cwd: dir, encoding: "utf-8" });
     expect(failed.status).not.toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, second.updated, undefined, true));
-    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(pendingBytes);
+    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(pendingBytes);
     const winner = runShell(dir, first.updated);
     expect(winner.status, winner.stderr).toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, first.updated, undefined, true, winner.stdout));
@@ -1832,18 +1837,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
     const compacted = noIdClaim(dir, session, spec);
     runAdapter(dir, "validate-state", { cwd: dir, session_id: session });
-    const compactedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+    const compactedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
     const compactedRun = runShell(dir, compacted.updated);
     expect(JSON.parse(compactedRun.stdout)).toMatchObject({ kind: "error" });
     expect(compactedRun.stdout).toContain("stale or superseded");
     runAdapter(dir, "post-tool", commandPayload(dir, session, compacted.updated, undefined, true, compactedRun.stdout));
-    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(compactedBytes);
+    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(compactedBytes);
     expect(marker(dir)).toMatchObject({ delivery: "superseded", active_attempt: { id: compacted.attemptId, status: "pending" } });
 
     const recovered = noIdClaim(dir, session, spec);
     executeNoId(dir, session, spec, recovered);
     expect(marker(dir).active_attempt).toMatchObject({ id: recovered.attemptId, status: "settled" });
-    rmSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"));
+    rmSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"));
     const recoveryStop = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     expect((JSON.parse(recoveryStop.stdout) as { decision?: string }).decision).toBe("block");
     const afterRecovery = noIdClaim(dir, session, spec, "vscode");
@@ -1859,7 +1864,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const session = `${dialect}-${shape}-owner`;
         const spec = commandSpec(dir, "direct", ["next"]);
         const claim = noIdClaim(dir, session, spec, dialect);
-        const claimedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+        const claimedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
         const command = shape === "missing" ? spec.text : `${spec.text} --aidlc-attempt-id ${wrongAttempt}`;
         const argv = shape === "missing" ? spec.argv : [...spec.argv, "--aidlc-attempt-id", wrongAttempt];
         const executed = spawnSync(spec.executable, argv, { cwd: dir, encoding: "utf-8" });
@@ -1874,7 +1879,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         } else {
           expect(JSON.parse(executed.stdout)).toMatchObject({ kind: "error" });
           expect(executed.stdout).toContain("stale or superseded");
-          expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(claimedBytes);
+          expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(claimedBytes);
           expect(marker(dir)).toMatchObject({ active_attempt: { id: claim.attemptId, status: "pending" } });
         }
         const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
@@ -2031,11 +2036,15 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     for (const shape of ["missing", "corrupt", "legacy"] as const) {
       const recovery = orchestrationProject();
       driveToRunStage(recovery, `recovery-${shape}`);
-      const path = join(seededRecordDir(recovery), ".aidlc-active-directive.json");
+      const path = join(seededRecordDir(recovery), ".aidlc-engine/active-directive.json");
       if (shape === "missing") rmSync(path);
-      if (shape === "corrupt") writeFileSync(path, "{bad-json\n");
+      if (shape === "corrupt") {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, "{bad-json\n");
+      }
       if (shape === "legacy") {
         const state = readFileSync(seededStateFile(recovery), "utf-8");
+        mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, JSON.stringify({ version: 1, stage: "requirements-analysis", state_sha256: stateDigest(state) }));
       }
       const stopped = runAdapter(recovery, "continue-workflow", { ...FIXTURES.stop, cwd: recovery, session_id: `recovery-${shape}` });
@@ -2044,11 +2053,11 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(reason).not.toContain("orchestrate.ts continue");
       expect(runAdapter(recovery, "continue-workflow", { ...FIXTURES.stop, cwd: recovery, session_id: `recovery-${shape}` }).stdout).toBe("");
       expect(marker(recovery)).toMatchObject({ owner_session: `recovery-${shape}`, stop_count: 2 });
-      expect(existsSync(join(seededRecordDir(recovery), ".aidlc-stop-hook", "block-count.json"))).toBe(false);
+      expect(existsSync(join(seededRecordDir(recovery), ".aidlc-engine/stop-hook", "block-count.json"))).toBe(false);
     }
     const activeRecovery = orchestrationProject();
     driveToRunStage(activeRecovery, "active-recovery");
-    rmSync(join(seededRecordDir(activeRecovery), ".aidlc-active-directive.json"));
+    rmSync(join(seededRecordDir(activeRecovery), ".aidlc-engine/active-directive.json"));
     expect(runAdapter(activeRecovery, "continue-workflow", { ...FIXTURES.stop, cwd: activeRecovery, session_id: "active-recovery", stop_hook_active: true }).stdout).toBe("");
     expect(marker(activeRecovery).stop_count).toBe(2);
   }, 60000);
@@ -2057,10 +2066,14 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     for (const shape of ["missing", "malformed", "v1"] as const) {
       const dir = orchestrationProject();
       const session = `human-${shape}`;
-      const path = join(seededRecordDir(dir), ".aidlc-active-directive.json");
-      if (shape === "malformed") writeFileSync(path, "{bad-json\n");
+      const path = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
+      if (shape === "malformed") {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, "{bad-json\n");
+      }
       if (shape === "v1") {
         const state = readFileSync(seededStateFile(dir), "utf-8");
+        mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, `${JSON.stringify({
           version: 1,
           stage: "requirements-analysis",
@@ -2088,6 +2101,89 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect((JSON.parse(second.stdout) as { decision?: string }).decision, shape).toBe("block");
     }
   }, 30000);
+
+  test("24c: read-only next forms are not claimed as coordination and stay conversational at Stop", () => {
+    const dir = orchestrationProject();
+    const session = "read-only-next-owner";
+    driveToRunStage(dir, session);
+    for (const args of [
+      ["next", "--status"],
+      ["next", "intent", "list"],
+      ["next", "team-board"],
+      ["next", "team-board", "--status"],
+      ["next", "--config", "bogus"],
+      ["next", "--config", "trust", "extra"],
+    ]) {
+      for (const form of ["direct", "source"] as const) {
+        const spec = commandSpec(dir, form, args);
+        const attempt = `${session}-${form}-${args.slice(1).join("-")}`;
+        const human = runAdapter(dir, "record-human-turn", {
+          ...FIXTURES.userPromptSubmit,
+          cwd: dir,
+          session_id: session,
+          prompt: `/aidlc ${args.slice(1).join(" ")}`,
+        });
+        expect(human.code, spec.text).toBe(0);
+        const engineSequence = marker(dir).engine_sequence;
+        const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
+        expect(pre.code, spec.text).toBe(0);
+        expect(pre.stdout, spec.text).toBe("");
+        const executed = runShell(dir, spec.text);
+        expect(executed.status, executed.stderr).toBe(0);
+        expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
+          kind: (args[1] === "team-board" && args.length > 2) || (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ? "error" : "print",
+        });
+        const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
+        expect(post.code, spec.text).toBe(0);
+        expect(marker(dir).engine_sequence, spec.text).toBe(engineSequence);
+        const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+        expect(stopped.code, spec.text).toBe(0);
+        expect(stopped.stdout, spec.text).toBe("");
+      }
+    }
+    const negative = commandSpec(dir, "direct", ["next", "--report", "--status"]);
+    const human = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit,
+      cwd: dir,
+      session_id: session,
+      prompt: "/aidlc --report --status",
+    });
+    expect(human.code, negative.text).toBe(0);
+    const before = marker(dir);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, negative.text, `${session}-valued`));
+    expect(pre.code, negative.text).toBe(0);
+    expect(rewrittenCommand(pre), negative.text).toContain("--aidlc-attempt-id");
+    expect(marker(dir).engine_sequence, negative.text).toBe(Number(before.event_sequence) + 1);
+    expect(Number(marker(dir).engine_sequence), negative.text).toBeGreaterThan(Number(before.engine_sequence));
+    // Claim only: --status is the report path, not a read-only mode switch.
+    const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect(stopped.code, negative.text).toBe(0);
+    expect(JSON.parse(stopped.stdout)).toMatchObject({ decision: "block" });
+    // A fresh workflow keeps the prior Stop's no-progress cap out of this claim check.
+    const pluginDir = orchestrationProject();
+    driveToRunStage(pluginDir, session);
+    const pluginNegative = commandSpec(pluginDir, "direct", ["next", "plugin", "list", "--status"]);
+    const pluginHuman = runAdapter(pluginDir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit,
+      cwd: pluginDir,
+      session_id: session,
+      prompt: "/aidlc plugin list --status",
+    });
+    expect(pluginHuman.code, pluginNegative.text).toBe(0);
+    const pluginBefore = marker(pluginDir);
+    const pluginPre = runAdapter(pluginDir, "guard-tool-call", commandPayload(pluginDir, session, pluginNegative.text, `${session}-plugin`));
+    expect(pluginPre.code, pluginNegative.text).toBe(0);
+    expect(rewrittenCommand(pluginPre), pluginNegative.text).toContain("--aidlc-attempt-id");
+    expect(marker(pluginDir).engine_sequence, pluginNegative.text).toBe(Number(pluginBefore.event_sequence) + 1);
+    expect(Number(marker(pluginDir).engine_sequence), pluginNegative.text).toBeGreaterThan(Number(pluginBefore.engine_sequence));
+    // Claim only: --status belongs to the plugin argv, not a read-only mode switch.
+    const pluginStopped = runAdapter(pluginDir, "continue-workflow", { ...FIXTURES.stop, cwd: pluginDir, session_id: session });
+    expect(pluginStopped.code, pluginNegative.text).toBe(0);
+    expect(JSON.parse(pluginStopped.stdout)).toMatchObject({ decision: "block" });
+    runLifecycle(dir, session, "direct", ["next"], `${session}-control`);
+    const control = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect(JSON.parse(control.stdout)).toMatchObject({ decision: "block" });
+  }, 60000);
 
   test("25: execution-shaped classification allows inspection, wrappers, and one terminal redirect", () => {
     const dir = orchestrationProject();
@@ -2172,7 +2268,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = orchestrationProject();
     const lockDir = join(
       seededRecordDir(dir),
-      ".aidlc-active-directive.lock",
+      ".aidlc-engine/active-directive.lock",
     );
     const lockToken = "live-claim-owner";
     mkdirSync(join(lockDir, lockToken), { recursive: true });
@@ -2203,8 +2299,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const session = "foreign-project-owner";
     runLifecycle(current, session, "direct", ["next"], "local-next");
     runLifecycle(foreign, "foreign-project-session", "source", ["next"], "foreign-next");
-    const currentMarkerPath = join(seededRecordDir(current), ".aidlc-active-directive.json");
-    const foreignMarkerPath = join(seededRecordDir(foreign), ".aidlc-active-directive.json");
+    const currentMarkerPath = join(seededRecordDir(current), ".aidlc-engine/active-directive.json");
+    const foreignMarkerPath = join(seededRecordDir(foreign), ".aidlc-engine/active-directive.json");
     const currentBefore = readFileSync(currentMarkerPath, "utf-8");
     const foreignBefore = readFileSync(foreignMarkerPath, "utf-8");
     for (const form of ["direct", "source"] as const) {
@@ -2228,8 +2324,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const session = "compiled-foreign-owner";
     runLifecycle(current, session, "direct", ["next"], "compiled-local-next");
     runLifecycle(foreign, "compiled-foreign-session", "source", ["next"], "compiled-foreign-next");
-    const currentMarkerPath = join(seededRecordDir(current), ".aidlc-active-directive.json");
-    const foreignMarkerPath = join(seededRecordDir(foreign), ".aidlc-active-directive.json");
+    const currentMarkerPath = join(seededRecordDir(current), ".aidlc-engine/active-directive.json");
+    const foreignMarkerPath = join(seededRecordDir(foreign), ".aidlc-engine/active-directive.json");
     const currentBefore = readFileSync(currentMarkerPath, "utf-8");
     const foreignBefore = readFileSync(foreignMarkerPath, "utf-8");
     const spec = commandSpec(current, "compiled", ["next", "--project-dir", foreign]);

@@ -43,9 +43,45 @@ const manifest: HarnessManifest = {
   orchestratorSkillPath: ".cursor/skills/aidlc/SKILL.md",
   tierFlavor: "cursor",
   rootIntegrations: [
-    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
-    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
-    { path: "install.ts", policy: "whole-file" },
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      shared: "union",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:b4bf7694361e76aae9feabc5d985d09afb7863cf8458b0c9aaa73f20a589582f",
+        ],
+      },
+    },
+    {
+      path: "AGENTS.md",
+      policy: "managed-block",
+      marker: "agents",
+      shared: "identical",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
+          "sha256:2907b5293bfd8bd9d5f8b7a8025bfe23edd0ffcd31f925761916088517880936",
+          // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
+          "sha256:2ef8a8cd1b72e59d017013b8d261721b1c5dedb82499b44dc9a97be01b6a73cb",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
+        ],
+      },
+    },
+    {
+      path: "install.ts",
+      policy: "whole-file",
+      legacySignatures: {
+        wholeFileHashes: [
+          // The pre-neutral shipped variant (#1268 changed this file).
+          "sha256:338e1d36257108ce908eb42992e87e5df7cf96003a45e04a72189e4d79110aba",
+        ],
+      },
+    },
   ],
 
   // Same core projection as claude, into .cursor/.
@@ -98,7 +134,7 @@ const manifest: HarnessManifest = {
 
   // AGENTS.md at the project root — Cursor auto-reads it (root + nested) as
   // plain ambient instructions (no @-import expansion; live-verified).
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "rules/aidlc-onboarding.mdc", fills: onboardingFills },
 
   // .cursor/rules/ is Cursor's native rules dir and our stub deliberately
   // lives there; core projects no rules/ dir, so nothing needs renaming.

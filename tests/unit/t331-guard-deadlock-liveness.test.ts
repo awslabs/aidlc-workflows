@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
+  worktreePath,
   type ActiveDirectiveGuardRemedy,
   type AttemptView,
   type AuditShardEvent,
@@ -69,6 +70,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { guardPreflight } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -254,7 +256,7 @@ describe("bounded guard-remedy liveness", () => {
                 ) {
                   expect(summaryCoverage).not.toBe("current");
                   expect(reviewCoverage).not.toBe("current");
-                  expect(["in-progress", "awaiting-approval"]).toContain(
+                  expect(["in-progress", "awaiting-approval", "revising"]).toContain(
                     lifecycle,
                   );
                 }
@@ -317,8 +319,10 @@ describe("bounded guard-remedy liveness", () => {
       stage: "functional-design",
       reason_codes: ["TEST"],
       remedies: [{
-        op: "change-scope",
-        action: "Change scope.",
+        op: "restart-stage",
+        action: "Restart the stage.",
+        operation: { kind: "restart-stage", stage: "functional-design" },
+        interaction: "command",
         command: "bun .claude/tools/aidlc-orchestrate.ts next --scope <scope>",
         requiresHuman: true,
         executableNow: true,
@@ -340,7 +344,7 @@ describe("bounded guard-remedy liveness", () => {
     expect(bare.valid).toBe(false);
     if (!bare.valid) {
       expect(bare.errors.join("\n")).toContain(
-        "bun-qualified packaged AIDLC tool invocation",
+        "structured recovery operation",
       );
     }
 
@@ -350,6 +354,13 @@ describe("bounded guard-remedy liveness", () => {
         ...base.remedies[0],
         command:
           "bun .ported.harness/tools/aidlc-orchestrate.ts next --stage functional-design",
+      }],
+    }).valid).toBe(true);
+    expect(validateDirective({
+      ...base,
+      remedies: [{
+        ...base.remedies[0],
+        command: "aidlc engine orchestrate next --stage functional-design",
       }],
     }).valid).toBe(true);
   });
@@ -492,7 +503,7 @@ describe("bounded guard-remedy liveness", () => {
     ).toBe(0);
     expect(aborted.stdout).toContain('"emitted":"BOLT_FAILED"');
     expect(
-      existsSync(join(project, ".aidlc", "worktrees", "bolt-alpha")),
+      existsSync(worktreePath(project, fixtureIntentId8(project), "alpha")),
     ).toBe(false);
     expect(readAllAuditShards(project)).toContain("**Reason**: aborted");
   }, 60000);
@@ -969,7 +980,7 @@ describe("AttemptView projections and refusal streaks", () => {
       const auditBefore = readAllAuditShards(project);
       const streakDir = join(
         seededRecordDir(project),
-        ".aidlc-guard-refusals",
+        ".aidlc-engine/guard-refusals",
       );
       const previous = new Map<string, string | undefined>();
       for (const name of [
@@ -1159,7 +1170,7 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(attempted.status).not.toBe(0);
     const guardDir = join(
       seededRecordDir(project),
-      ".aidlc-guard-refusals",
+      ".aidlc-engine/guard-refusals",
     );
     const recordName = readdirSync(guardDir).find((name) =>
       name.endsWith(".json")
@@ -1648,7 +1659,7 @@ describe("AttemptView projections and refusal streaks", () => {
     );
   });
 
-  test("the gate's Request Changes choice tolerates case, prefix, and punctuation but not paraphrase", () => {
+  test("the gate's Request Changes choice tolerates case, prefix, punctuation, and a recommended decorator but not paraphrase", () => {
     for (const reply of [
       "Request Changes",
       "request changes",
@@ -1658,6 +1669,29 @@ describe("AttemptView projections and refusal streaks", () => {
       '"Request Changes"',
       "Request Changes.",
       "  Request   Changes  ",
+      // The picker returns the recommended choice's decorated label.
+      "Request Changes (Recommended)",
+      "request changes (recommended)",
+      // The decorator composes with surrounding double quotes.
+      '"Request Changes (Recommended)"',
+      // The decorator composes with surrounding single quotes.
+      "'Request Changes (Recommended)'",
+      // The decorator composes with a trailing period.
+      "Request Changes (Recommended).",
+      // The decorator composes with a trailing exclamation mark.
+      "Request Changes (Recommended)!",
+      // The decorator composes with an alphabetic option prefix.
+      "B. Request Changes (Recommended)",
+      // The decorator composes with a numeric prefix, case, and punctuation.
+      "2) request changes (recommended).",
+      // The decorator must compose both inside and outside the wrappers.
+      // These rows pin the direction a fixed-order normalization would drop.
+      // The decorator sits outside trailing punctuation.
+      "Request Changes. (Recommended)",
+      // The decorator sits outside surrounding quotes.
+      '"Request Changes" (Recommended)',
+      // Quotes sit inside and punctuation outside the decorator.
+      '"Request Changes (Recommended)".',
     ]) {
       expect(isRequestChangesChoice(reply), reply).toBe(true);
     }
@@ -1665,6 +1699,10 @@ describe("AttemptView projections and refusal streaks", () => {
       "Approve",
       "please change it",
       "Request Changes to the plan",
+      "(Recommended)",
+      "Request Changes (Recommended) extra",
+      "Request Changes (Recommended) (Recommended)",
+      '"Approve (Recommended)"',
       "Changes",
       "",
       undefined,
@@ -1760,7 +1798,7 @@ describe("AttemptView projections and refusal streaks", () => {
 
       expect(consumeSharedDirectiveAsk(project, scenario.response), scenario.name).toBe(true);
       const marker = JSON.parse(
-        readFileSync(join(seededRecordDir(project), ".aidlc-active-directive.json"), "utf-8"),
+        readFileSync(join(seededRecordDir(project), ".aidlc-engine/active-directive.json"), "utf-8"),
       ) as {
         guard_recovery_response?: { selected_op?: string | null };
       };
@@ -1873,7 +1911,7 @@ describe("AttemptView projections and refusal streaks", () => {
       "spaces",
       "default",
       "intents",
-      ".aidlc-guard-refusals",
+      ".aidlc-engine/guard-refusals",
     );
     const readSignature = (): string => {
       const file = readdirSync(guardDir).find((name) => name.endsWith(".json"));

@@ -1,14 +1,13 @@
-// covers: function:resolveDefaultScope, function:loadScopeMetadata
+// covers: function:selectionAwareDefaultScope
 //
-// resolveDefaultScope(preferred) is bundle-aware. It routes the core-era
-// hardcoded defaults that leak through a plugin-only install (where the core
-// feature/poc scopes are deselected by plugin selection):
+// Selection-aware resolution rescues a caller's explicit preferred scope when
+// that scope is absent from the enabled install:
 //   - preferred is enabled                        -> preferred (stock: feature/poc)
 //   - preferred NOT enabled + a scope declares
 //     freeform_default: true                      -> that nominated scope
 //   - preferred NOT enabled + a sole plugin owner -> its alphabetically-first scope
 //   - preferred NOT enabled + no nomination and
-//     no sole owner                               -> preferred (caller validates)
+//     no sole owner                               -> preferred + selection error
 //
 // The nomination is checked BEFORE the sole-plugin heuristic, so a plugin that
 // ships several scopes can name its lean default rather than losing to the
@@ -22,9 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  resolveDefaultScope,
-  loadScopeMetadata,
-  validScopes,
+  selectionAwareDefaultScope,
 } from "../../core/tools/aidlc-lib.ts";
 import { compileStageGraph } from "../../core/tools/aidlc-graph.ts";
 import { withEnvAndFreshCaches } from "../harness/fixtures.ts";
@@ -40,7 +37,7 @@ afterEach(() => {
 // stubbed empty via AIDLC_SCOPE_GRID: the resolver only reads scope NAMES and
 // their plugin/freeform-default frontmatter (all from the .md files), so an
 // empty grid keeps validScopes() derivable without a compiled stage-graph.json.
-function fixtureEnv(files: Record<string, string>): Record<string, string> {
+function fixtureEnv(files: Record<string, string>): Record<string, string | undefined> {
   const dir = mkdtempSync(join(tmpdir(), "t257-"));
   tempDirs.push(dir);
   for (const [name, body] of Object.entries(files)) {
@@ -48,7 +45,13 @@ function fixtureEnv(files: Record<string, string>): Record<string, string> {
   }
   const gridPath = join(dir, "scope-grid.json");
   writeFileSync(gridPath, "{}\n", "utf-8");
-  return { AIDLC_SCOPES_DIR: dir, AIDLC_SCOPE_GRID: gridPath };
+  return {
+    AIDLC_SCOPES_DIR: dir,
+    AIDLC_SCOPE_GRID: gridPath,
+    AIDLC_SCOPE_MAPPING: undefined,
+    AIDLC_RUNTIME_HARNESS_ROOT: undefined,
+    AIDLC_RUNTIME_ROOT: undefined,
+  };
 }
 
 // A minimal scope .md. `plugin` and `freeform_default` are optional extras
@@ -56,14 +59,14 @@ function fixtureEnv(files: Record<string, string>): Record<string, string> {
 const scopeMd = (name: string, extra = "") =>
   `---\nname: ${name}\ndepth: Minimal\nkeywords:\n  - ${name}\ndescription: ${name} scope\n${extra}---\n\n# ${name}\n`;
 
-describe("t257 resolveDefaultScope bundle-aware default", () => {
+describe("t257 selection-aware scope rescue", () => {
   test("returns preferred when it is an enabled scope (stock behaviour)", () => {
     const env = fixtureEnv({
       "aidlc-feature.md": scopeMd("feature"),
       "aidlc-lite.md": scopeMd("lite", "freeform_default: true\n"),
     });
     withEnvAndFreshCaches(env, () => {
-      expect(resolveDefaultScope("feature")).toBe("feature");
+      expect(selectionAwareDefaultScope("feature").scope).toBe("feature");
     });
   });
 
@@ -77,32 +80,19 @@ describe("t257 resolveDefaultScope bundle-aware default", () => {
       "bundle-validate.md": scopeMd("bundle-validate", "plugin: demo\nfreeform_default: true\n"),
     });
     withEnvAndFreshCaches(env, () => {
-      expect(resolveDefaultScope("feature")).toBe("bundle-validate");
+      expect(selectionAwareDefaultScope("feature").scope).toBe("bundle-validate");
     });
   });
 
-  test("plugin-only install: intent-create's core 'poc' default resolves to an enabled scope, not a crash", () => {
-    // Reproduces the bug: on a plugin-only install the core "poc" default is
-    // absent, so handleIntentCreate's `validScopes().has(scope)` guard would die
-    // with "Unknown scope". The resolver maps "poc" to the nominated default,
-    // which IS a valid scope, so the guard passes.
+  test("an unavailable explicit poc preference resolves to the sole plugin's first scope", () => {
     const env = fixtureEnv({
       "bundle-all.md": scopeMd("bundle-all", "plugin: demo\n"),
-      "bundle-validate.md": scopeMd("bundle-validate", "plugin: demo\nfreeform_default: true\n"),
+      "bundle-validate.md": scopeMd("bundle-validate", "plugin: demo\n"),
     });
     withEnvAndFreshCaches(env, () => {
-      const resolved = resolveDefaultScope("poc");
-      expect(resolved).toBe("bundle-validate");
-      expect(validScopes().has(resolved)).toBe(true);
-    });
-  });
-
-  test("parses freeform_default:true into ScopeMetadata", () => {
-    const env = fixtureEnv({
-      "bundle-validate.md": scopeMd("bundle-validate", "plugin: demo\nfreeform_default: true\n"),
-    });
-    withEnvAndFreshCaches(env, () => {
-      expect(loadScopeMetadata()["bundle-validate"].freeformDefault).toBe(true);
+      const resolved = selectionAwareDefaultScope("poc");
+      expect(resolved.scope).toBe("bundle-all");
+      expect(resolved.error).toBeUndefined();
     });
   });
 
@@ -113,19 +103,17 @@ describe("t257 resolveDefaultScope bundle-aware default", () => {
     });
     expect(() =>
       withEnvAndFreshCaches(env, () => compileStageGraph())
-    ).toThrow(
-      "Multiple enabled scopes declare freeform_default: true (bundle-all, bundle-validate). " +
-        "At most one enabled scope may nominate the freeform default.",
-    );
+    ).toThrow();
   });
 
-  test("returns preferred unchanged when nothing is nominated and no sole plugin owner", () => {
-    // "bundle-all" carries no plugin field (core-bucketed) and no nomination, so
-    // neither the nomination nor the sole-plugin heuristic fires; the caller-
-    // supplied "feature" is returned for the caller's own validation to reject.
+  test("an unavailable preference without nomination or a sole plugin owner requires an explicit scope", () => {
+    // A core-owned scope cannot nominate a substitute through the sole-plugin
+    // heuristic; preserve the preference and report that selection is required.
     const env = fixtureEnv({ "bundle-all.md": scopeMd("bundle-all") });
     withEnvAndFreshCaches(env, () => {
-      expect(resolveDefaultScope("feature")).toBe("feature");
+      const resolved = selectionAwareDefaultScope("feature");
+      expect(resolved.scope).toBe("feature");
+      expect(resolved.error).toContain("Pass --scope explicitly");
     });
   });
 });

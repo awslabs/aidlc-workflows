@@ -434,7 +434,7 @@ function confirmUnitSummary(proj: string, unit: string): void {
 }
 
 function guardRefusalCount(proj: string): number {
-  const dir = join(seededRecordDir(proj), ".aidlc-guard-refusals");
+  const dir = join(seededRecordDir(proj), ".aidlc-engine/guard-refusals");
   const file = readdirSync(dir).find((name) => name.endsWith(".json"));
   if (!file) throw new Error("guard refusal record missing");
   return (
@@ -1172,6 +1172,37 @@ describe("t278 engine-emitted wave contract", () => {
     );
     expect(parentMemory.match(/aidlc-wave-memory:alpha:/g)?.length).toBe(1);
     expect(next(proj).directive.gate).toBe(true);
+  }, 30000);
+
+  test("wave completion keeps absent diaries absent when learnings is off", () => {
+    const proj = project("functional-design", "stage-major", "none");
+    const state = seededStateFile(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace(
+      "## Scope Configuration\n",
+      "## Scope Configuration\n- **Learnings**: off (set by you)\n",
+    ));
+    const installedTemplate = join(proj, ".claude", "knowledge", "aidlc-shared", "memory-template.md");
+    mkdirSync(dirname(installedTemplate), { recursive: true });
+    copyFileSync(join(AIDLC_SRC, "knowledge", "aidlc-shared", "memory-template.md"), installedTemplate);
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+
+    const directive = next(proj).directive;
+    expect(directive.ceremony).toMatchObject({ learnings: "off" });
+    expect(directive.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      review_state: "not-required",
+      completion_required: true,
+    });
+    const parentMemory = join(proj, directive.memory_path!);
+    const unitMemory = join(proj, directive.wave!.entries[0].unit_memory_path);
+    expect(existsSync(parentMemory)).toBe(false);
+    expect(existsSync(unitMemory)).toBe(false);
+
+    completeWave(proj, "alpha");
+    expect(auditEventCount(proj, "UNIT_COMPLETED")).toBe(1);
+    expect(existsSync(parentMemory)).toBe(false);
+    expect(existsSync(unitMemory)).toBe(false);
   }, 30000);
 
   test.each([

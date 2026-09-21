@@ -4,10 +4,10 @@
 // literal next to a comment that names PREVIEW_CHANNEL.
 //
 // Stable ids are exactly `x.y.z`. Preview ids are
-// `<x.y.z>-preview.<YYYYMMDD>.<N>`: the source tree's AIDLC_VERSION, the UTC
-// build date, and a positive build counter for that date. Nothing else is a
-// version anywhere in the install tree, so a version is always a safe directory
-// name by construction.
+// `<x.y.(z+1)>-preview.<YYYYMMDD>.<N>`: the next patch after the source tree's
+// current AIDLC_VERSION, the UTC build date, and a positive build counter for
+// that date. Nothing else is a version anywhere in the install tree, so a
+// version is always a safe directory name by construction.
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 export const STABLE_CHANNEL = "stable";
@@ -124,21 +124,35 @@ export function previewVersion(base: string, date: string, build: number): strin
   return requireVersion(`${base}-${PREVIEW_CHANNEL}.${date}.${build}`);
 }
 
+export function nextPatchVersion(version: string): string {
+  const parsed = parseVersion(version);
+  if (parsed.channel !== STABLE_CHANNEL) {
+    throw new Error(`next patch base must be a stable x.y.z version, got "${version}"`);
+  }
+  if (!Number.isSafeInteger(parsed.patch) || parsed.patch >= Number.MAX_SAFE_INTEGER) {
+    throw new Error(`cannot increment patch version "${version}" safely`);
+  }
+  return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
+}
+
 // The version a release build stamps into its artifacts. Unset or equal to the
-// source version means an ordinary stable build; a preview id must be built from
-// exactly the source tree's AIDLC_VERSION so `x.y.z` in the id is never a lie.
+// source version means an ordinary stable build; a preview id must use the next
+// patch after the source tree's current AIDLC_VERSION. The preview does not edit
+// that source version or decide whether the eventual stable release is a patch
+// or a minor.
 export function releaseBuildVersion(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env[BUILD_VERSION_ENV]?.trim();
   if (!configured || configured === AIDLC_VERSION) return AIDLC_VERSION;
   const parsed = parseVersion(configured);
   if (parsed.channel !== PREVIEW_CHANNEL) {
     throw new Error(
-      `${BUILD_VERSION_ENV} must be unset, ${AIDLC_VERSION}, or a ${PREVIEW_CHANNEL} id built from it; got "${configured}"`,
+      `${BUILD_VERSION_ENV} must be unset, ${AIDLC_VERSION}, or a next-patch ${PREVIEW_CHANNEL} id; got "${configured}"`,
     );
   }
-  if (parsed.base !== AIDLC_VERSION) {
+  const expectedBase = nextPatchVersion(AIDLC_VERSION);
+  if (parsed.base !== expectedBase) {
     throw new Error(
-      `${BUILD_VERSION_ENV} "${configured}" is not built from source version ${AIDLC_VERSION}`,
+      `${BUILD_VERSION_ENV} "${configured}" does not use next patch ${expectedBase} after source version ${AIDLC_VERSION}`,
     );
   }
   return configured;

@@ -249,6 +249,35 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(graph).not.toContain('".claude/rules/');
   });
 
+  test("Codex config injects the native onboarding in both distribution channels", () => {
+    for (const channel of ["dist", "dist-release"]) {
+      const root = join(REPO_ROOT, channel, "codex", ".codex");
+      const raw = readFileSync(join(root, "config.toml"), "utf-8");
+      // The parser's object return type omits these shipped Codex config fields.
+      const config = Bun.TOML.parse(raw) as {
+        developer_instructions?: string;
+        shell_environment_policy?: { set?: Record<string, string> };
+      };
+      const onboarding = readFileSync(join(root, "onboarding.md"), "utf-8");
+      expect(typeof config.developer_instructions).toBe("string");
+      // Bun 1.3.14 incorrectly preserves the opening newline of a TOML literal string.
+      const instructions = config.developer_instructions as string;
+      expect(instructions.replace(/^\n/, "")).toBe(onboarding);
+      const standardConfig = parse(raw) as typeof config;
+      expect(standardConfig.developer_instructions).toBe(onboarding);
+      expect(config.developer_instructions).toContain("# AI-DLC on Codex CLI");
+      expect(config.developer_instructions).toContain(".agents/skills/");
+      expect(config.shell_environment_policy).toMatchObject({
+        set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },
+      });
+      expect(raw).toContain('set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }');
+      if (channel === "dist-release") {
+        expect(config.developer_instructions).toContain("- **Runtime**:");
+        expect(config.developer_instructions).not.toMatch(/\bbun\b/);
+      }
+    }
+  });
+
   test("5: hooks.json wires only Codex-real events through the adapter (no SessionEnd)", () => {
     const wiring = JSON.parse(readFileSync(join(CODEX_DST, "hooks.json"), "utf-8")) as {
       hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;

@@ -67,12 +67,13 @@ import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   FIXTURES_DIR,
 } from "../harness/fixtures.ts";
-import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditLockDir, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The per-intent record dir the inline git project seeds (was flat aidlc-docs/).
 function recordDir(proj: string): string {
@@ -179,18 +180,12 @@ function auditAppend(dir: string, event: string, fields: [string, string][]): vo
 }
 
 const fragPath = (proj: string, slug: string): string =>
-  join(
-    proj,
-    ".aidlc",
-    "worktrees",
-    `bolt-${slug}`,
-    "aidlc",
-    "spaces",
-    DEFAULT_SPACE,
-    "intents",
-    DEFAULT_RECORD_DIR,
-    "runtime-graph.json",
-  );
+  join(worktreePath(proj, fixtureIntentId8(proj), slug), "aidlc",
+  "spaces",
+  DEFAULT_SPACE,
+  "intents",
+  DEFAULT_RECORD_DIR,
+  "runtime-graph.json",);
 
 /**
  * Build a clean git-init'd project with seeded construction state + empty
@@ -315,7 +310,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     // Simulate the milestone 10 hook + milestone 9 dispatcher: a SENSOR_FIRED + SENSOR_FAILED
     // pair written to pay's WORKTREE audit. Direct-append (deterministic) so we
     // verify the audit-merge + compile propagation, not any sensor predicate.
-    const payWt = join(batchProj, ".aidlc", "worktrees", "bolt-pay");
+    const payWt = worktreePath(batchProj, fixtureIntentId8(batchProj), "pay");
     // Pin the worktree append to the SAME per-clone shard audit-fork wrote (and
     // audit-merge later reads): copy the MAIN clone-id token into the worktree's
     // gitignored aidlc/.aidlc-clone-id so auditShardName(payWt) resolves the

@@ -12,8 +12,8 @@
 //      {{HARNESS_DIR}} → harnessDir in .md prose (the ONE transform class) and
 //      applying the manifest's rules-dir rename.
 //   2. COPY harness/<name>/<src> → dist/<name>/<harnessDir>/<dst> (authored
-//      surfaces: orchestrator skill, CLAUDE.md/AGENTS.md, settings/config), same
-//      token substitution on .md.
+//      surfaces: orchestrator skill, settings/config), same token substitution
+//      on .md; render neutral onboarding and native setup from their skeletons.
 //   3. COMPILE the stage graph into the assembled tree (emits harness-correct
 //      stage-graph.json + scope-grid.json — compiled data lives only in dist).
 //   4. GENERATE runners into the assembled tree by composing aidlc-runner-gen's
@@ -66,7 +66,7 @@ import {
   injectDelegatedKnowledgePreflight,
   reviewerAgentSet,
 } from "./agent-knowledge.ts";
-import { renderOnboarding } from "./onboarding.ts";
+import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
 import {
   buildPluginProjection as emitPluginProjection,
   type PluginTarget,
@@ -93,7 +93,7 @@ import {
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "../core/tools/aidlc-command.ts";
-import { ROUTES } from "../core/tools/aidlc.ts";
+import { ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { sha256Bytes } from "../core/tools/aidlc-distribution.ts";
@@ -136,9 +136,9 @@ if (TIER_CAP) {
 
 // The version stamped into every projected aidlc-version.ts copy and projection
 // stamp. Unset means the source version. A release build sets AIDLC_BUILD_VERSION
-// to a preview id derived from the source version; the source tree is never
-// edited. Honoured in --check mode too, so the two-build determinism guard
-// measures the same stamped projection the release will ship.
+// to a next-patch preview id derived from the current source version; the source
+// tree is never edited. Honoured in --check mode too, so the two-build
+// determinism guard measures the same stamped projection the release will ship.
 const BUILD_VERSION = releaseBuildVersion();
 if (BUILD_VERSION !== AIDLC_VERSION) {
   console.error(`[version] stamping projections with ${BUILD_VERSION_ENV}=${BUILD_VERSION}`);
@@ -156,8 +156,9 @@ function stampVersionModule(content: string): string {
   return content.replace(VERSION_ASSIGNMENT, `export const AIDLC_VERSION = "${BUILD_VERSION}";`);
 }
 
-// The shared onboarding-doc skeleton, rendered per harness (scripts/onboarding.ts).
+// Neutral and native onboarding skeletons (scripts/onboarding.ts).
 const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
+const HARNESS_ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding-harness.md");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
 const INVOKE_TOKEN = /\{\{INVOKE\}\}/g;
 const TOOL_PREFIX_TOKEN = /\{\{TOOL_PREFIX\}\}/g;
@@ -220,7 +221,12 @@ function substituteToken(
 // packagers. No-op when rulesRename is null (claude).
 function applyRulesRename(s: string, harnessDir: string, rulesRename: string | null): string {
   if (!rulesRename) return s;
-  return s.replaceAll(`${harnessDir}/rules/`, `${harnessDir}/${rulesRename}/`);
+  // Codex's native Starlark permission file is not an AIDLC markdown rule.
+  const escapedHarnessDir = harnessDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return s.replace(
+    new RegExp(`${escapedHarnessDir}/rules/(?!default\\.rules)`, "g"),
+    `${harnessDir}/${rulesRename}/`,
+  );
 }
 
 // Read the authored `tier:` from an agent .md's YAML FRONTMATTER (scoped to
@@ -619,7 +625,19 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
   }
   const rootIntegrations = m.rootIntegrations.map((integration) => {
     if (integration.policy !== "managed-block") return integration;
-    const currentHash = sha256Bytes(readFileSync(join(outRoot, integration.path)));
+    const bytes = readFileSync(join(outRoot, integration.path));
+    if (integration.shared === "union") {
+      const dst = join(
+        treeRoot,
+        "tools",
+        "data",
+        "root-blocks",
+        integration.marker || basename(integration.path),
+      );
+      mkdirSync(dirname(dst), { recursive: true });
+      writeFileSync(dst, bytes);
+    }
+    const currentHash = sha256Bytes(bytes);
     return {
       ...integration,
       legacySignatures: {
@@ -639,6 +657,11 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     productName: m.productName,
     configNextStep: m.configNextStep,
     harnessDir: m.harnessDir,
+    ...(m.onboarding?.harnessDst
+      ? { onboarding: `${m.harnessDir}/${m.onboarding.harnessDst}` }
+      : m.onboarding && !m.onboarding.projectRoot
+        ? { onboarding: `${m.harnessDir}/${m.onboarding.dst}` }
+        : {}),
     managedDirectories,
     rootIntegrations,
   };
@@ -834,27 +857,36 @@ function buildTree(
     writeFileSync(outPath, out);
   }
 
-  // 2b. Render the onboarding doc from the shared skeleton (scripts/onboarding.ts),
-  //     then run it through the SAME transform as any core .md — so {{HARNESS_DIR}}
-  //     and the rules-rename are applied identically. The skeleton is the single
-  //     source for every harness's onboarding doc; codex renders its own (with a
-  //     Codex-specific header) inside emit(), so its manifest leaves onboarding null.
+  // 2b. Split neutral project instructions from each harness's native setup.
+  // Claude and Copilot keep both parts in their single always-on file.
   if (m.onboarding) {
-    const { dst, projectRoot, fills } = m.onboarding;
-    const rendered = renderOnboarding(readFileSync(ONBOARDING_SKELETON, "utf-8"), fills);
+    const { dst, projectRoot, harnessDst, fills } = m.onboarding;
+    const neutral = renderNeutralOnboarding(readFileSync(ONBOARDING_SKELETON, "utf-8"));
+    const harnessSkeleton = readFileSync(HARNESS_ONBOARDING_SKELETON, "utf-8");
+    const rendered = harnessDst
+      ? neutral
+      : renderOnboarding(harnessSkeleton + "\n## Shared AI-DLC onboarding\n\n" + neutral, fills);
     const outPath = projectRoot ? join(outRoot, dst) : join(treeRoot, dst);
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(
       outPath,
-      transform(
-        dst,
-        Buffer.from(rendered, "utf-8"),
-        harnessDir,
-        m.rulesRename,
-        harnessKind,
-        invoke,
-      ),
+      transform(ONBOARDING_SKELETON, Buffer.from(rendered), harnessDir, m.rulesRename, harnessKind, invoke),
     );
+    if (harnessDst) {
+      const harnessPath = join(treeRoot, harnessDst);
+      mkdirSync(dirname(harnessPath), { recursive: true });
+      writeFileSync(
+        harnessPath,
+        transform(
+          HARNESS_ONBOARDING_SKELETON,
+          Buffer.from(renderOnboarding(harnessSkeleton, fills)),
+          harnessDir,
+          m.rulesRename,
+          harnessKind,
+          invoke,
+        ),
+      );
+    }
   }
 
   // 2c. Emit the relocated method ("memory") tree at the workspace root
@@ -917,8 +949,8 @@ function buildTree(
     runTool(treeRoot, harnessDir, m.name, ["tools/aidlc-runner-gen.ts", "scopes"]);
   }
 
-  // 5. Per-shell emissions (codex only today). These may live outside
-  //    <harnessDir> (e.g. .agents/skills/ and root AGENTS.md); the generated
+  // 5. Per-shell emissions. These may live outside
+  //    <harnessDir> (e.g. .agents/skills/ and .github/); the generated
   //    root inventory includes them automatically.
   if (m.emit) {
     m.emit({
@@ -1096,31 +1128,13 @@ function rewriteNativeInvocations(
 ): void {
   projectNativeRootIntegrations(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
-  const delegateNames = [
-    "audit",
-    "bolt",
-    "graph",
-    "init",
-    "jump",
-    "learnings",
-    "lifecycle",
-    "log",
-    "orchestrate",
-    "runner-gen",
-    "runtime",
-    "sensor",
-    "sensor-claim-sources",
-    "sensor-linter",
-    "sensor-required-sections",
-    "sensor-type-check",
-    "sensor-upstream-coverage",
-    "state",
-    "swarm",
-    "utility",
-    "validate",
-    "worktree",
-    "workspace-sync",
-  ].join("|");
+  // The hand-maintained list had drifted to 23 of 33 tools, omitting review-brief.
+  // Deriving it from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms
+  // covered by both the rewrite and bareToolCheck. The leftover checks below
+  // still reject a rewrite to a non-route.
+  const delegateNames = Object.values(TOOLS)
+    .map((file) => escapeRegExp(file.slice("aidlc-".length, -".ts".length)))
+    .join("|");
   // The authored subprocess adapters, each backed by an `aidlc engine adapter
   // <harness>` dispatcher route. Only these project onto that route; any other
   // hook file keeps the generic one-argument `engine hook <name>` rewrite.
@@ -1146,7 +1160,7 @@ function rewriteNativeInvocations(
   );
   const bareToolCheck = new RegExp(bareToolPattern.source, "i");
   for (const file of walk(outRoot)) {
-    if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
+    if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
     let value = readFileSync(file, "utf-8");
     // Claude's source hook/statusline dispatcher is rooted at the project, so
     // it still loads after an application command changes cwd. JSON escapes
@@ -1178,16 +1192,15 @@ function rewriteNativeInvocations(
       (_match, verb: string) =>
         `${trustedCommand("workspace")} ${verb === "codekb-path" ? "codekb" : verb}`,
     );
-    // The per-intent Change Control flip lives under the `config` noun in the
-    // native dispatcher (`config set change-control <value>`), so its direct
-    // utility invocation is rewritten verb-aware for the same reason.
-    const changeControlUtilityPattern = new RegExp(
-      String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc-utility\.ts${suffix}\s+change-control\b`,
+    // Settings share one utility transaction; project its first setting onto
+    // the dispatcher's config noun and preserve all trailing flags/selectors.
+    const configUtilityPattern = new RegExp(
+      String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc-utility\.ts${suffix}\s+config-change\s+--(depth|test-strategy|review|change-control|sensors|learnings|summary-confirmation)\b`,
       "gi",
     );
     value = value.replace(
-      changeControlUtilityPattern,
-      () => trustedCommand("config set change-control"),
+      configUtilityPattern,
+      (_match, key: string) => trustedCommand(`config set ${key}`),
     );
     value = value.replace(toolPattern, (_match, delegate: string | undefined) =>
       delegate ? trustedCommand(delegate) : TRUSTED_COMMAND_PREFIX
@@ -1275,7 +1288,7 @@ function rewriteNativeInvocations(
 
   const leftovers: string[] = [];
   for (const file of walk(outRoot)) {
-    if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
+    if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
     const value = readFileSync(file, "utf-8");
     for (const token of ["{{INVOKE}}", "{{TOOL_PREFIX}}"]) {
       if (value.includes(token)) {
@@ -1669,6 +1682,23 @@ function cleanWriteOutputs(harnesses: string[], fullBuild: boolean): void {
   }
 }
 
+function assertIdenticalRootIntegrations(root: string, harnesses: string[]): void {
+  const owners = new Map<string, { harness: string; bytes: Buffer }>();
+  for (const name of harnesses) {
+    for (const integration of loadManifest(name).rootIntegrations) {
+      if (integration.shared !== "identical") continue;
+      const bytes = readFileSync(join(root, name, integration.path));
+      const previous = owners.get(integration.path);
+      if (previous && !previous.bytes.equals(bytes)) {
+        throw new Error(
+          `shared identical root integration ${integration.path} differs between ${previous.harness} and ${name}`,
+        );
+      }
+      if (!previous) owners.set(integration.path, { harness: name, bytes });
+    }
+  }
+}
+
 function buildCheckPass(root: string, harnesses: string[]): void {
   const distRoot = join(root, "dist");
   const releaseRoot = join(root, "dist-release");
@@ -1680,6 +1710,8 @@ function buildCheckPass(root: string, harnesses: string[]): void {
     buildTree(manifest, nativeRoot, "aidlc");
     rewriteNativeInvocations(nativeRoot, manifest, copyRoot);
   }
+  assertIdenticalRootIntegrations(distRoot, harnesses);
+  assertIdenticalRootIntegrations(releaseRoot, harnesses);
   emitPlugins(harnesses, distRoot, false);
 }
 
@@ -1782,6 +1814,8 @@ if (check) {
     writeHarness(n);
     writeReleaseHarness(n);
   }
+  assertIdenticalRootIntegrations(join(REPO_ROOT, "dist"), targets);
+  assertIdenticalRootIntegrations(join(REPO_ROOT, "dist-release"), targets);
   // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
   emitPlugins(targets);
 }

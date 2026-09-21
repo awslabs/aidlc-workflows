@@ -59,17 +59,61 @@ namespace through atomic `git update-ref` only when no remote is configured. If
 clones. This topology is useful for one machine and deterministic tests; remove
 the remote only when the whole exercise is intentionally local/offline.
 
+Bolt directories and branches use `bolt-<id8>_<slug>`, where `<id8>` is the
+selected intent's registry UUID suffix, also used by Unit claims at
+`refs/heads/claim/<id8>/<unit>`. Parallel intents can therefore use the same Unit
+slug in one checkout or across worktrees of one clone without colliding
+([#1252](https://github.com/awslabs/aidlc-workflows/issues/1252)). See
+[Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for naming and legacy compatibility. Use the path returned by `create`; this
+example assumes intent identity `7c31e9a0`.
+
 ```bash
 # From unscoped main:
 # Optional local-only mode: git remote remove origin
 aidlc worktree create --slug payments --base main
-cd .aidlc/worktrees/bolt-payments
+cd .aidlc/worktrees/bolt-7c31e9a0_payments
 aidlc unit claim payments --team "Payments team"
 ```
 
 Run the same scoped build and `publish` commands below from that worktree. After
 main lands and pushes the candidate, return to main and discard the completed
 local worktree with `aidlc worktree discard --slug payments`.
+Discard sets aside tracked files, non-ignored untracked files, and reviewed
+source refs before removing the checkout and branch. To inspect that work later,
+run `aidlc engine worktree restore --slug payments`; it creates an isolated
+checkout under `.aidlc/restored/` without touching a new live `bolt-7c31e9a0_payments`.
+Add `--parked <stamp>` for one saved attempt or bare `--raw` to bypass checkout
+conversions. Ignored untracked files are not saved, and `eol/text=auto`
+normalization during saving cannot be reversed by restore.
+
+To remove the recovery refs, use `aidlc engine worktree purge --slug payments`,
+optionally with `--parked <stamp>` for one attempt or `--older-than <days>` for
+attempts strictly older than a nonnegative finite number of days. Age uses the
+stamp's UTC timestamp, ignoring its `-N` collision suffix; the two selectors are
+mutually exclusive. Purge refuses while a matching restored checkout exists,
+including one moved elsewhere. Doctor lists saved attempts informationally with
+typed `restore_operation` and `purge_operation` values for the exact slug, stamp,
+and repository, followed by `--intent <record-dir-name> --space <space>` to keep
+the operation bound to its owning intent even after the active intent changes.
+Conductors invoke their `worktree` engine route with each listed
+arg exactly as argv, never joined into a shell command. Optional
+`restore_command` and `purge_command` are safe human display text; rendering
+failures omit the corresponding command and supply `restore_command_error` or
+`purge_command_error` while keeping the operation. If only reviewed source refs
+remained to save, the attempt is `evidence-only` with `parked_commit: "-"`: no
+files can be restored, abort omits `restore_operation`, `restore_hint`,
+`restore_hint_error`, and `parked_excludes`, and doctor offers only the purge
+operation and its command-or-error fields. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
+for the recovery walkthrough and [CLI Commands](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs)
+for the flags.
+
+Creation refuses an intent without a registry UUID; adopt or re-create that
+intent before Construction. Cleanup also refuses when the Bolt branch is
+checked out at another worktree path and names that owner instead of deleting
+its branch or retained/parked refs. Pre-upgrade legacy `bolt-<slug>` Bolts can
+merge, discard, and purge to completion only with matching intent provenance;
+new Bolts never use that shape. `doctor` reports both shapes.
 
 Normal scoped `next`, lifecycle, review, and gate work is offline-first. Network
 access is confined to explicit claim, publish, status, pin, and merge-ref

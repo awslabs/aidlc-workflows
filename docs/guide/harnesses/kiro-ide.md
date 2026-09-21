@@ -6,6 +6,11 @@ the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules —
 is byte-shared across every harness; only the shell (skills, agent surfaces,
 hook wiring, activation) differs.
 
+Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
+whose `inclusion: always` frontmatter loads it automatically. The root
+`AGENTS.md` block is harness-neutral and shared with other installed harnesses;
+engine directories must still differ (Kiro CLI and Kiro IDE cannot share `.kiro/`).
+
 > [!IMPORTANT]
 > **Run AI-DLC on Kiro IDE with Claude Opus 4.8.** The conductor drives a
 > multi-step ritual per stage — clarifying questions, artifact generation, a
@@ -64,7 +69,7 @@ user-owned settings. Open `your-project/` in Kiro IDE and run
 
 ### Versioned manual-copy alternative
 
-Download and extract a specific release's `aidlc-runtime-X.Y.Z.tar.gz` as described in
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
 [Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
 then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
@@ -135,6 +140,7 @@ Open `your-project/` in Kiro IDE. The install ships:
 - `.kiro/steering/aidlc-active-memory.md` — always-included IDE steering whose
   live file references preload the active-space memory files for both the
   conductor and delegated agents.
+- `.kiro/steering/aidlc-onboarding.md` — always-included harness setup and commands.
 - `.kiro/hooks/aidlc-*.json` — the framework hooks registered in the IDE's
   native v2 hook format. They appear in the IDE's Agent Hooks panel. (Kiro IDE
   1.x no longer executes the legacy `.kiro.hook` format the harness shipped
@@ -224,7 +230,7 @@ You will see a "Run Command Hook" line in chat each time one fires.
 
 If a hook isn't behaving as expected, turn on debug logging and each hook
 appends its decision path (which gate it took, the resolved paths, why it
-exited) to `<record>/.aidlc-hooks-health/hook-debug.log`. It is **off by
+exited) to `<record>/.aidlc-engine/hooks-health/hook-debug.log`. It is **off by
 default** — no log is written and there is no overhead on a normal run. Two
 ways to enable it, either works:
 
