@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  worktreePath,
   activeIntentUuid,
   artifactFilename,
   eventMatchesClaimAttempt,
@@ -20,6 +21,7 @@ import {
   unitReleasePendingPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -1338,7 +1340,7 @@ describe("t325 atomic team Unit claims", () => {
     expect(
       run(RUNTIME, ["fragment-fork", "--slug", "alpha"], checkout).status,
     ).toBe(0);
-    const wt = join(checkout, ".aidlc", "worktrees", "bolt-alpha");
+    const wt = worktreePath(checkout, fixtureIntentId8(checkout), "alpha");
     const mainCloneId = readFileSync(
       join(checkout, "aidlc", ".aidlc-clone-id"),
       "utf-8",
@@ -1439,7 +1441,7 @@ describe("t325 atomic team Unit claims", () => {
     ).toBe(0);
     const fork = run(AUDIT, ["audit-fork", "--slug", "alpha"], checkout);
     expect(fork.status, fork.out).toBe(0);
-    const wt = join(checkout, ".aidlc", "worktrees", "bolt-alpha");
+    const wt = worktreePath(checkout, fixtureIntentId8(checkout), "alpha");
     expect(
       run(AUDIT, [
         "append",

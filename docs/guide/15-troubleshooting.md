@@ -318,15 +318,15 @@ sibling repository name).
 
 If files were saved, ask to restore them. The assistant uses the saved result's
 `restore_operation`: route `worktree`, args
-`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? "."]` when the
-stamp is known. It invokes the installed `{{INVOKE}} engine worktree <args...>`
+`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]` when the
+stamp is known. The final selectors pin the owning intent. It invokes the installed `{{INVOKE}} engine worktree <args...>`
 route with each listed arg exactly as a separate argv argument, never joined
 into a shell command. `restore_hint` is human display text only, not the
 assistant's execution input. The equivalent manual command, run from the main
 project checkout, is:
 
 ```bash
-aidlc engine worktree restore --slug <slug> --parked <stamp> --repo <name|.>
+aidlc engine worktree restore --slug <slug> --parked <stamp> --repo <name|.> --intent <record-dir-name> --space <space>
 ```
 
 The operation always includes `--repo <name>` for a sibling repository or
@@ -338,7 +338,7 @@ is invalid, the result omits `restore_hint` and supplies `restore_hint_error`
 with the reason. The typed operation remains available; this does not mean
 that only evidence was saved or withdraw the restoration offer.
 
-Do not drop the operation's exact stamp or repository selector: without
+Do not drop the operation's exact stamp, repository, or owning intent selectors: without
 `--parked`, restore chooses the latest saved head. For manual invocation an exact
 stamp found in only one repository selects it before generic slug ambiguity;
 if selection is still ambiguous, use doctor's exact operation with `--repo <name>`
@@ -366,7 +366,7 @@ not offer restoration. Selecting that attempt with restore, even with `--raw`,
 refuses with `no restorable files were parked for <slug> <stamp>; only review evidence was kept`.
 
 After a successful restore, open the returned `worktree_path`, normally
-`.aidlc/restored/bolt-<slug>-<stamp>`. It is separate from any new live attempt;
+`.aidlc/restored/bolt-<id8>_<slug>-<stamp>` (the recorded legacy name for a pre-upgrade attempt). It is separate from any new live attempt;
 restoring files does not resume the old attempt or make its review current.
 This is local recovery, not a remote backup. If the old checkout was already
 gone, only its remaining branch tip and review evidence could be saved; if its
@@ -387,7 +387,7 @@ for filter failures and raw recovery details.
 Run `/aidlc --doctor` (or `aidlc doctor`) to find saved attempts. Its informational
 **Parked attempts** section lists slug, stamp, age, mode, restored-checkout
 presence, and typed recovery operations with exact `--parked <stamp>` and
-explicit `--repo <name>` or `--repo .` args. Every JSON entry has
+explicit `--repo <name>` or `--repo .` args, followed by owning `--intent` and `--space` selectors. Every JSON entry has
 `purge_operation`; only restorable entries have `restore_operation`. Each has
 route `worktree` and args to pass exactly as argv, never a shell command string.
 Optional `restore_command` and `purge_command` are safe human display text;
@@ -396,14 +396,19 @@ if rendering fails, the corresponding command is omitted and
 the operation. Evidence-only entries have only the purge operation and its
 command-or-error fields. Impossible dates or times have `age_days: null` in JSON
 and show `unknown` in human-readable output. Saved attempts are not warnings or
-failures. Once you no longer need one, remove any restored checkout first, then:
+failures.
+
+Doctor resolves namespaced attempts through their intent's registry UUID and
+legacy attempts through the exact `WORKTREE_DISCARDED` `Parked ref` provenance.
+Unknown or ambiguous owners and unattributed legacy parks are not listed.
+Once you no longer need one, remove any restored checkout first, then:
 
 ```bash
-aidlc engine worktree purge --slug <slug> --parked <stamp> --repo <name|.>
-aidlc engine worktree purge --slug <slug> --older-than 30 --repo <name|.>
+aidlc engine worktree purge --slug <slug> --parked <stamp> --repo <name|.> --intent <record-dir-name> --space <space>
+aidlc engine worktree purge --slug <slug> --older-than 30 --repo <name|.> --intent <record-dir-name> --space <space>
 ```
 
-Purge without either selector removes every saved stamp for the slug.
+Purge without either stamp selector removes every saved stamp for the selected intent's Bolt.
 `--older-than` accepts nonnegative finite days and selects strictly older UTC
 stamp timestamps, ignoring any `-N` suffix. The strict calendar parser rejects
 impossible dates and times rather than normalizing them. Age-filtered purge

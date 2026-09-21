@@ -18,6 +18,7 @@ import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
+  BoltIdentityError,
   claimAttemptFields,
   cloneIdPath,
   errorMessage,
@@ -32,13 +33,14 @@ import {
   refuseEngineObserverWrite,
   releaseAuditLock,
   requireLiveClaimForTeamUnit,
+  resolveBoltIdentity,
   resolveProjectDir,
+  resolveWorkflowSelection,
   validateBoltSlug,
   validateLiveUnitScope,
   worktreeClaimBoundaryMatches,
   worktreeAuditFilePath,
   worktreeDocsDir,
-  worktreePath,
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
 
@@ -1242,7 +1244,14 @@ function handleAuditFork(args: string[], projectDir: string): void {
   // fork used). recordPrefix is the worktree mirror's relative record dir
   // (null -> flat-legacy mirror, today's behaviour).
   const { intent, space } = parseSelectorFlags(args);
-  const wtPath = worktreePath(projectDir, slug);
+  const selection = resolveWorkflowSelection(projectDir, { intent, space });
+  let wtPath: string;
+  try {
+    wtPath = resolveBoltIdentity(projectDir, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) jsonError(e.message);
+    throw e;
+  }
   const priorForkVerification = existsSync(wtPath)
     ? worktreeClaimBoundaryMatches(projectDir, wtPath, slug)
     : null;
@@ -1518,7 +1527,14 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
 
   const mainAuditPath = auditFilePath(projectDir, intent, space);
-  const wtPath = worktreePath(projectDir, slug);
+  const selection = resolveWorkflowSelection(projectDir, { intent, space });
+  let wtPath: string;
+  try {
+    wtPath = resolveBoltIdentity(projectDir, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) jsonError(e.message);
+    throw e;
+  }
   const scopeStamp = requireLiveClaimForTeamUnit(projectDir, slug, {
     intent,
     space,

@@ -25,12 +25,15 @@ import {
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import {
+  boltName,
+  worktreePath,
   type ActiveDirectiveMarker,
   type GuardRefusal,
   type GuardRefusalInput,
   splitKiroCommandArgs,
 } from "../../core/tools/aidlc-lib.ts";
 import {
+  fixtureIntentId8,
   createTestProject,
   DEFAULT_SPACE,
   REPO_ROOT,
@@ -724,7 +727,7 @@ describe("source and native guard remedies execute their owning operations", () 
       const unit = "alpha-unit";
       const slug = "alpha-attempt";
       succeeded(p.tool("worktree", ["create", "--slug", slug, "--base", "main"]));
-      const worktree = join(p.project, ".aidlc", "worktrees", `bolt-${slug}`);
+      const worktree = worktreePath(p.project, fixtureIntentId8(p.project), slug);
       expect(existsSync(worktree)).toBe(true);
       const baseBefore = succeeded(run(
         ["git", "rev-parse", "HEAD"], p.project, p.env,
@@ -750,8 +753,8 @@ describe("source and native guard remedies execute their owning operations", () 
       });
       expect(existsSync(worktree)).toBe(false);
       expect(succeeded(run(["git", "worktree", "list", "--porcelain"], p.project, p.env)).stdout)
-        .not.toContain(`bolt-${slug}`);
-      expect(run(["git", "show-ref", "--quiet", "--verify", `refs/heads/bolt-${slug}`], p.project, p.env).status)
+        .not.toContain(boltName(fixtureIntentId8(p.project), slug));
+      expect(run(["git", "show-ref", "--quiet", "--verify", `refs/heads/${boltName(fixtureIntentId8(p.project), slug)}`], p.project, p.env).status)
         .toBe(1);
       expect(succeeded(run(["git", "rev-parse", "HEAD"], p.project, p.env)).stdout).toBe(baseBefore);
       expect(readFileSync(join(p.project, "src", "base.ts"), "utf-8")).toBe("export const base = 1;\n");
@@ -770,7 +773,7 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(p.marker()).toBeNull();
       expect(p.guard("Write", { file_path: join(p.project, "src", "unapproved.ts") }).status).toBe(2);
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
-      expect(p.state()).not.toMatch(new RegExp(`^- \\*\\*Bolt Refs\\*\\*:.*bolt-${slug}`, "m"));
+      expect(p.state()).not.toMatch(new RegExp(`^- \\*\\*Bolt Refs\\*\\*:.*${slug}`, "m"));
       p.assertNoNestedState();
     }, 120_000);
   }

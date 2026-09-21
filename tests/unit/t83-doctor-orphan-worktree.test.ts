@@ -55,7 +55,7 @@
 //     byte the heredocs the .sh wrote.
 //   - Bolt Refs are set via sedReplaceInFile, the TS port of the .sh's sed_i on
 //     the `- **Bolt Refs**:` state line.
-//   - Worktree dirs are mkdir'd under <proj>/.aidlc/worktrees/bolt-<slug>/,
+//   - Worktree dirs use the selected intent's canonical worktreePath,
 //     the same layout Check 1/3/4 walk.
 //   - Every temp dir is torn down in afterEach (cleanupTestProject).
 //
@@ -81,16 +81,21 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { appendFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { type EngineInvocation, renderEngineInvocation } from "../../core/tools/aidlc-guard-operation.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { boltName, createIntent, legacyParkedRefPrefix, legacyWorktreePath, parkedRefPrefix, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   FIXTURES_DIR,
   cleanupTestProject,
   createTestProject,
   seedAuditFile,
   seedStateFile,
+  seededRecordDir,
   seededAuditDir,
   seededStateFile,
   sedReplaceInFile,
@@ -130,24 +135,9 @@ function appendAudit(proj: string, body: string): void {
   appendFileSync(join(seededAuditDir(proj), "fixture.md"), `\n${body}\n\n---\n`);
 }
 
-/**
- * The bare-space worktree record root the doctor's Check 3/4 resolve when no
- * recordPrefix is threaded: worktreeStateFilePath/worktreeAuditFilePath fall back
- * to relativeSpaceRecordPrefix() = aidlc/spaces/default/intents. So the worktree
- * state file lives at <wt>/aidlc/spaces/default/intents/aidlc-state.md and the
- * worktree audit shard under <wt>/aidlc/spaces/default/intents/audit/.
- */
+/** Doctor follows the owner's per-intent record, as the native fork writers do. */
 function wtRecordRoot(proj: string, slug: string): string {
-  return join(
-    proj,
-    ".aidlc",
-    "worktrees",
-    `bolt-${slug}`,
-    "aidlc",
-    "spaces",
-    DEFAULT_SPACE,
-    "intents",
-  );
+  return join(worktreePath(proj, fixtureIntentId8(proj), slug), relative(proj, seededRecordDir(proj)));
 }
 
 /** Replicate aidlc-lib's auditShardName for a worktree: <host>-<clone-id>.md,
@@ -157,7 +147,7 @@ function wtRecordRoot(proj: string, slug: string): string {
  *  on-disk token. (The lib's auditShardName is memoized per-process, so calling
  *  it from the test process is unreliable across cases; replicate the algorithm.) */
 function seedWtAuditShard(proj: string, slug: string, contents: string): void {
-  const wtRoot = join(proj, ".aidlc", "worktrees", `bolt-${slug}`);
+  const wtRoot = worktreePath(proj, fixtureIntentId8(proj), slug);
   mkdirSync(join(wtRoot, "aidlc"), { recursive: true });
   const token = "ffffffffffff";
   writeFileSync(join(wtRoot, "aidlc", ".aidlc-clone-id"), `${token}\n`, "utf-8");
@@ -172,9 +162,9 @@ function seedWtAuditShard(proj: string, slug: string, contents: string): void {
   writeFileSync(join(auditDir, `${host}-${token}.md`), contents, "utf-8");
 }
 
-/** mkdir -p <proj>/.aidlc/worktrees/bolt-<slug>[/<bare-space-record-root>] */
+/** Seed a canonical worktree, optionally including its mirrored intent record. */
 function mkWorktree(proj: string, slug: string, withDocs = false): string {
-  const dir = join(proj, ".aidlc", "worktrees", `bolt-${slug}`);
+  const dir = worktreePath(proj, fixtureIntentId8(proj), slug);
   mkdirSync(withDocs ? wtRecordRoot(proj, slug) : dir, { recursive: true });
   return dir;
 }
@@ -222,10 +212,29 @@ function initRepo(proj: string): void {
     "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture");
 }
 
-function parkHead(proj: string, slug: string, stamp: string, mode: "snapshot" | "branch-tip" | "legacy"): void {
-  const prefix = `refs/aidlc/parked/${slug}/${stamp}`;
+function parkHead(proj: string, slug: string, stamp: string, mode: "snapshot" | "branch-tip", intentId8 = fixtureIntentId8(proj)): void {
+  const prefix = `${parkedRefPrefix(intentId8, slug)}${stamp}`;
   git(proj, "update-ref", `${prefix}/head`, "HEAD");
-  if (mode !== "legacy") git(proj, "update-ref", `${prefix}/${mode}`, "HEAD");
+  git(proj, "update-ref", `${prefix}/${mode}`, "HEAD");
+}
+
+function recordParkedAttempt(
+  proj: string,
+  slug: string,
+  parkedRef: string,
+  repo: string | null = null,
+  intent = DEFAULT_RECORD_DIR,
+  space = DEFAULT_SPACE,
+): void {
+  const path = parkedRef.startsWith(legacyParkedRefPrefix(slug))
+    ? legacyWorktreePath(proj, slug)
+    : worktreePath(proj, fixtureIntentId8(proj, intent, space), slug);
+  appendAuditEntry("WORKTREE_DISCARDED", {
+    "Bolt slug": slug,
+    "Worktree path": relative(proj, path).replaceAll("\\", "/"),
+    "Parked ref": parkedRef,
+    Repo: repo ?? "-",
+  }, proj, intent, space);
 }
 
 function runRecoveryOperation(
@@ -261,8 +270,8 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     );
     const { out } = runDoctor(proj);
     // .sh grepped two ERE lines; assert the same two literals render.
-    expect(out).toContain("Orphan worktrees: 0 (1 active fork)");
-    expect(out).toContain("Orphan state files: 0 (1 active)");
+    expect(out).toContain(`Orphan worktrees: 0 (1 active fork: ${boltName(fixtureIntentId8(proj), "activeslug")})`);
+    expect(out).toContain(`Orphan state files: 0 (1 active: ${boltName(fixtureIntentId8(proj), "activeslug")})`);
   }, 30000);
 
   test("3: cleanup-orphan classification (WORKTREE_MERGED + dir persists)", () => {
@@ -275,7 +284,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
         "**Timestamp**: 2026-05-19T10:00:00Z",
         "**Event**: WORKTREE_MERGED",
         "**Bolt slug**: cleanuptest",
-        "**Worktree path**: /tmp/bolt-cleanuptest",
+        `**Worktree path**: ${worktreePath(proj, fixtureIntentId8(proj), "cleanuptest")}`,
         "**Target branch**: main",
         "**Strategy**: squash",
       ].join("\n"),
@@ -327,13 +336,13 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
         "**Timestamp**: 2026-05-19T11:00:00Z",
         "**Event**: WORKTREE_DISCARDED",
         "**Bolt slug**: discardedstate",
-        "**Worktree path**: /tmp/bolt-discardedstate",
+        `**Worktree path**: ${worktreePath(proj, fixtureIntentId8(proj), "discardedstate")}`, 
         "**Reason**: user-discard",
       ].join("\n"),
     );
     const { out } = runDoctor(proj);
     // Observed but reconciled → "0 (1 active)", NOT a drift row.
-    expect(out).toContain("Orphan state files: 0 (1 active)");
+    expect(out).toContain(`Orphan state files: 0 (1 active: ${boltName(fixtureIntentId8(proj), "discardedstate")})`);
     expect(out).not.toContain("Orphan state files: 1 drift");
   }, 30000);
 
@@ -589,6 +598,19 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     expect(out).toContain("unknown Reason");
     expect(out).toContain("track for follow-up");
   }, 30000);
+  test("mixed current and legacy directories retain distinct orphan classifications", () => {
+    const proj = freshProject();
+    const slug = "api";
+    setBoltRefs(proj, `[${slug}]`);
+    mkWorktree(proj, slug);
+    // Deliberate pre-upgrade directory: the hex-looking slug is not an id8.
+    mkdirSync(legacyWorktreePath(proj, "abcdef01-api"), { recursive: true });
+    const result = runDoctor(proj);
+    expect(result.status).not.toBe(0);
+    expect(result.out).toContain("bolt-abcdef01-api (legacy");
+    expect(result.out).not.toContain(`${boltName(fixtureIntentId8(proj), slug)} (unknown intent)`);
+    expect(result.out).toContain("Orphan worktrees: 1 drift");
+  }, 30000);
 });
 
 describe("t83 doctor parked attempts", () => {
@@ -599,16 +621,118 @@ describe("t83 doctor parked attempts", () => {
     expect(JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts).toEqual([]);
   }, 30000);
 
+  test("unrecorded parks require the exact ref in their owning intent's discard rows", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    const stamp = "20240101T000000Z";
+    const prefix = `${parkedRefPrefix(fixtureIntentId8(proj), "saved")}${stamp}`;
+    parkHead(proj, "saved", stamp, "snapshot");
+    const foreign = createIntent(proj, "other-intent", DEFAULT_SPACE);
+    recordParkedAttempt(proj, "saved", prefix, null, foreign.dirName);
+    recordParkedAttempt(proj, "saved", `${prefix}-2`);
+    recordParkedAttempt(proj, "other-slug", prefix);
+    appendAuditEntry("WORKTREE_CREATED", {
+      "Bolt slug": "saved", "Parked ref": prefix,
+    }, proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+
+    const [attempt] = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(attempt).toMatchObject({
+      slug: "saved", stamp, mode: "unrecorded", repo: null, restored_exists: false,
+      restored_path: join(proj, ".aidlc", "restored", `${boltName(fixtureIntentId8(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE), "saved")}-${stamp}`),
+      note: `no WORKTREE_DISCARDED row records this parked attempt; inspect ${prefix} manually`,
+    });
+    expect(attempt.age_days).toBeNumber();
+    for (const field of ["restore_operation", "purge_operation", "restore_command", "purge_command", "restore_command_error", "purge_command_error"]) {
+      expect(attempt).not.toHaveProperty(field);
+    }
+    const { out } = runDoctor(proj, []);
+    expect(out).toContain("mode unrecorded");
+    expect(out).not.toMatch(/^\s+(?:restore|purge):/m);
+
+    recordParkedAttempt(proj, "saved", prefix);
+    const [recorded] = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(recorded.mode).toBe("snapshot");
+    expect(recorded).not.toHaveProperty("note");
+    expect(recorded.restore_operation.args).toEqual([
+      "restore", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE,
+    ]);
+  }, 30000);
+
+  test("unknown and ambiguous owners leave parked namespaces visible without recovery operations", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    const stamp = "20240101T000000Z";
+    const unknown = `${parkedRefPrefix("ffffffff", "unknown")}${stamp}`;
+    const legacy = `${legacyParkedRefPrefix("legacy")}${stamp}`;
+    const ambiguous = `${legacyParkedRefPrefix("ambiguous")}${stamp}`;
+    const evidence = `${parkedRefPrefix(fixtureIntentId8(proj), "evidence")}${stamp}`;
+    for (const prefix of [unknown, legacy, ambiguous]) git(proj, "update-ref", `${prefix}/head`, "HEAD");
+    const head = git(proj, "rev-parse", "HEAD");
+    git(proj, "update-ref", `${evidence}/reviewed-source/${head}`, head);
+    recordParkedAttempt(proj, "ambiguous", ambiguous);
+    const foreign = createIntent(proj, "other-intent", DEFAULT_SPACE);
+    recordParkedAttempt(proj, "ambiguous", ambiguous, null, foreign.dirName);
+
+    const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(attempts.map((attempt: { slug: string }) => attempt.slug)).toEqual(["ambiguous", "evidence", "legacy", "unknown"]);
+    for (const attempt of attempts) {
+      expect(attempt.mode).toBe("unrecorded");
+      expect(attempt).not.toHaveProperty("restore_operation");
+      expect(attempt).not.toHaveProperty("purge_operation");
+      expect(attempt).not.toHaveProperty("restore_command");
+      expect(attempt).not.toHaveProperty("purge_command");
+    }
+  }, 30000);
+
+  test("a legacy park's sole recording owner cannot offer recovery when its id8 collides across spaces", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    const ownerId8 = fixtureIntentId8(proj);
+    const stamp = "20240101T000000Z";
+    const prefix = `${legacyParkedRefPrefix("saved")}${stamp}`;
+    git(proj, "update-ref", `${prefix}/head`, "HEAD");
+    git(proj, "update-ref", `${prefix}/snapshot`, "HEAD");
+    recordParkedAttempt(proj, "saved", prefix);
+    const foreign = createIntent(proj, "other-intent", "platform");
+    const registryPath = join(proj, "aidlc", "spaces", foreign.space, "intents", "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8"));
+    registry[0].uuid = "ffffffff-ffff-7fff-8fff-ffffffffffff";
+    writeFileSync(registryPath, JSON.stringify(registry));
+
+    const [recorded] = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(recorded).toMatchObject({ slug: "saved", stamp, mode: "snapshot" });
+    expect(recorded).not.toHaveProperty("note");
+    expect(recorded.restore_operation).toEqual({
+      route: "worktree", args: ["restore", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
+    });
+    expect(recorded.purge_operation).toEqual({
+      route: "worktree", args: ["purge", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
+    });
+
+    // Ambiguous id8 owners cannot execute recovery, even with a sole discard row.
+    // Doctor must not offer operations that identity resolution will reject.
+    registry[0].uuid = `ffffffff-ffff-7fff-8fff-ffff${ownerId8}`;
+    writeFileSync(registryPath, JSON.stringify(registry));
+    const [ambiguous] = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(ambiguous).toMatchObject({ slug: "saved", stamp, mode: "unrecorded" });
+    expect(ambiguous.note).toContain(prefix);
+    expect(ambiguous).not.toHaveProperty("restore_operation");
+    expect(ambiguous).not.toHaveProperty("purge_operation");
+    expect(ambiguous).not.toHaveProperty("restore_command");
+    expect(ambiguous).not.toHaveProperty("purge_command");
+  }, 30000);
+
   test("a parked snapshot lists recovery actions without changing health severity", () => {
     const proj = freshProject();
     initRepo(proj);
     const baseline = JSON.parse(runDoctor(proj, ["--json"]).out);
     const stamp = "20240101T000000Z-2";
     parkHead(proj, "saved", stamp, "snapshot");
+    recordParkedAttempt(proj, "saved", `${parkedRefPrefix(fixtureIntentId8(proj), "saved")}${stamp}`);
     const reviewed = git(proj, "rev-parse", "HEAD");
-    git(proj, "update-ref", `refs/aidlc/parked/saved/${stamp}/reviewed-source/${reviewed}`, reviewed);
+    git(proj, "update-ref", `${parkedRefPrefix(fixtureIntentId8(proj), "saved")}${stamp}/reviewed-source/${reviewed}`, reviewed);
     // Arbitrary leaves are neither restorable attempts nor reviewed evidence.
-    git(proj, "update-ref", "refs/aidlc/parked/headless/20240101T000000Z/source", "HEAD");
+    git(proj, "update-ref", `${parkedRefPrefix(fixtureIntentId8(proj), "headless")}20240101T000000Z/source`, "HEAD");
     const earliestAge = Math.floor((Date.now() - Date.UTC(2024, 0, 1)) / 86_400_000);
     const result = JSON.parse(runDoctor(proj, ["--json"]).out);
     const latestAge = Math.floor((Date.now() - Date.UTC(2024, 0, 1)) / 86_400_000);
@@ -619,13 +743,13 @@ describe("t83 doctor parked attempts", () => {
     const attempt = result.data.parked_attempts[0];
     expect(attempt).toMatchObject({
       slug: "saved", stamp, mode: "snapshot", repo: null, restored_exists: false,
-      restored_path: join(proj, ".aidlc", "restored", `bolt-saved-${stamp}`),
+      restored_path: join(proj, ".aidlc", "restored", `${boltName(fixtureIntentId8(proj), "saved")}-${stamp}`),
     });
     expect(attempt.restore_operation).toEqual({
-      route: "worktree", args: ["restore", "--slug", "saved", "--parked", stamp, "--repo", "."],
+      route: "worktree", args: ["restore", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
     });
     expect(attempt.purge_operation).toEqual({
-      route: "worktree", args: ["purge", "--slug", "saved", "--parked", stamp, "--repo", "."],
+      route: "worktree", args: ["purge", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
     });
     expect(attempt.restore_command).toBe(renderEngineInvocation(attempt.restore_operation, { mode: "source", harnessDir: ".claude" }));
     expect(attempt.purge_command).toBe(renderEngineInvocation(attempt.purge_operation, { mode: "source", harnessDir: ".claude" }));
@@ -651,8 +775,9 @@ describe("t83 doctor parked attempts", () => {
     git(proj, "-c", "user.name=Doctor fixture", "-c", "user.email=doctor@example.test",
       "-c", "commit.gpgsign=false", "commit", "-m", "saved content");
     const stamp = "20240101T000000Z-2";
-    const prefix = `refs/aidlc/parked/saved/${stamp}/`;
+    const prefix = `${parkedRefPrefix(fixtureIntentId8(proj), "saved")}${stamp}/`;
     parkHead(proj, "saved", stamp, "snapshot");
+    recordParkedAttempt(proj, "saved", prefix.slice(0, -1));
     const savedRefs = git(proj, "for-each-ref", "--format=%(refname)", prefix);
     const env = { AIDLC_HARNESS_DIR: ".claude;echo injected" };
     const attempts = JSON.parse(runDoctor(proj, ["--json"], env).out).data.parked_attempts;
@@ -663,10 +788,10 @@ describe("t83 doctor parked attempts", () => {
     expect(attempt.restore_command_error).toMatch(/harness/i);
     expect(attempt.purge_command_error).toMatch(/harness/i);
     expect(attempt.restore_operation).toEqual({
-      route: "worktree", args: ["restore", "--slug", "saved", "--parked", stamp, "--repo", "."],
+      route: "worktree", args: ["restore", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
     });
     expect(attempt.purge_operation).toEqual({
-      route: "worktree", args: ["purge", "--slug", "saved", "--parked", stamp, "--repo", "."],
+      route: "worktree", args: ["purge", "--slug", "saved", "--parked", stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
     });
     const { out } = runDoctor(proj, [], env);
     expect(out).toContain(attempt.restore_command_error);
@@ -689,6 +814,7 @@ describe("t83 doctor parked attempts", () => {
     initRepo(proj);
     const stamp = "20260231T000000Z";
     parkHead(proj, "impossible-date", stamp, "snapshot");
+    recordParkedAttempt(proj, "impossible-date", `${parkedRefPrefix(fixtureIntentId8(proj), "impossible-date")}${stamp}`);
 
     const result = JSON.parse(runDoctor(proj, ["--json"]).out);
     expect(result.data.parked_attempts).toEqual([
@@ -698,17 +824,29 @@ describe("t83 doctor parked attempts", () => {
     expect(out).toContain(`impossible-date / ${stamp} (repo ., age unknown days, mode snapshot)`);
   }, 30000);
 
-  test("same-slug same-stamp attempts report only the owning repository as restored", () => {
+  test("legacy same-slug same-stamp attempts report only the owning repository as restored", () => {
     const proj = setupIntegrationProject({ withState: STATE_FIXTURE, withAudit: true });
     created.push(proj);
     const sibling = join(proj, "api");
     initRepo(proj);
     initRepo(sibling);
     const stamp = "20240101T000000Z";
-    parkHead(proj, "shared", stamp, "branch-tip");
-    parkHead(sibling, "shared", stamp, "legacy");
+    // Deliberate pre-namespace parks: each exact ref is owned by a discarded audit row.
+    const prefix = `${legacyParkedRefPrefix("shared")}${stamp}`;
+    git(proj, "update-ref", `${prefix}/head`, "HEAD");
+    git(proj, "update-ref", `${prefix}/branch-tip`, "HEAD");
+    git(sibling, "update-ref", `${prefix}/head`, "HEAD");
+    for (const repo of [null, "api"]) recordParkedAttempt(proj, "shared", prefix, repo);
     const restored = join(proj, ".aidlc", "restored", `bolt-shared-${stamp}`);
     const before = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    for (const attempt of before) {
+      expect(attempt.restore_operation).toEqual({
+        route: "worktree", args: ["restore", "--slug", "shared", "--parked", stamp, "--repo", attempt.repo ?? ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
+      });
+      expect(attempt.purge_operation).toEqual({
+        route: "worktree", args: ["purge", "--slug", "shared", "--parked", stamp, "--repo", attempt.repo ?? ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
+      });
+    }
     runRecoveryOperation(proj, before.find((attempt: { repo: string | null }) => attempt.repo === "api").restore_operation);
     const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
     expect(attempts).toEqual([
@@ -750,25 +888,32 @@ describe("t83 doctor parked attempts", () => {
     symlinkSync(external, join(proj, "linked"), "junction");
     mkdirSync(join(proj, "ordinary"));
     const stamp = "20240101T000000Z";
-    parkHead(recordedRepo, "historical", stamp, "snapshot");
-    parkHead(external, "linked-history", stamp, "snapshot");
-    // Audit membership is slug-scoped, not permission to discover every park in this link.
-    parkHead(external, "unrecorded-slug", stamp, "snapshot");
-    parkHead(proj, "root-only", stamp, "branch-tip");
-    const historicalAudit = join(proj, "aidlc", "spaces", "history", "intents", "old-record", "audit");
+    const historicalRecord = "old-record";
+    const historicalIntents = join(proj, "aidlc", "spaces", "history", "intents");
+    const historicalAudit = join(historicalIntents, historicalRecord, "audit");
     mkdirSync(historicalAudit, { recursive: true });
-    writeFileSync(join(historicalAudit, "history.md"), [
+    // The registry supplies identity only; repository discovery must still come from audit.
+    writeFileSync(join(historicalIntents, "intents.json"), JSON.stringify([
+      { uuid: "00000000-0000-7000-8000-000000000002", slug: "old", dirName: historicalRecord, status: "archived" },
+    ]));
+    writeFileSync(join(historicalIntents, historicalRecord, "aidlc-state.md"), readFileSync(STATE_FIXTURE));
+    const historicalId8 = fixtureIntentId8(proj, historicalRecord, "history");
+    parkHead(recordedRepo, "historical", stamp, "snapshot", historicalId8);
+    parkHead(external, "linked-history", stamp, "snapshot", historicalId8);
+    // Audit membership is slug-scoped, not permission to discover every park in this link.
+    parkHead(external, "unrecorded-slug", stamp, "snapshot", historicalId8);
+    parkHead(proj, "root-only", stamp, "branch-tip", historicalId8);
+    for (const [slug, repo, event] of [
       ["historical", "node_modules", "WORKTREE_CREATED"],
       ["linked-history", "linked", "WORKTREE_DISCARDED"],
       ["root-only", "ordinary", "WORKTREE_CREATED"],
-    ].map(([slug, repo, event]) => [
-      "## Historical Worktree",
-      "**Timestamp**: 2024-01-01T00:00:00Z",
-      `**Event**: ${event}`,
-      `**Bolt slug**: ${slug}`,
-      `**Repo**: ${repo}`,
-      "\n---\n",
-    ].join("\n")).join("\n"));
+    ]) appendAuditEntry(event, {
+      "Bolt slug": slug,
+      Repo: repo,
+      ...(event === "WORKTREE_DISCARDED" ? { "Parked ref": `${parkedRefPrefix(historicalId8, slug)}${stamp}` } : {}),
+    }, proj, historicalRecord, "history");
+    recordParkedAttempt(proj, "historical", `${parkedRefPrefix(historicalId8, "historical")}${stamp}`, "node_modules", historicalRecord, "history");
+    recordParkedAttempt(proj, "root-only", `${parkedRefPrefix(historicalId8, "root-only")}${stamp}`, null, historicalRecord, "history");
     const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
     expect(attempts).toEqual([
       expect.objectContaining({
@@ -782,14 +927,20 @@ describe("t83 doctor parked attempts", () => {
       }),
     ]);
     const linked = attempts.find((attempt: { repo: string | null }) => attempt.repo === "linked");
+    expect(linked.restore_operation).toEqual({
+      route: "worktree", args: ["restore", "--slug", "linked-history", "--parked", stamp, "--repo", "linked", "--intent", historicalRecord, "--space", "history"],
+    });
+    expect(linked.purge_operation).toEqual({
+      route: "worktree", args: ["purge", "--slug", "linked-history", "--parked", stamp, "--repo", "linked", "--intent", historicalRecord, "--space", "history"],
+    });
     runRecoveryOperation(proj, linked.restore_operation);
     expect(readFileSync(join(linked.restored_path, "saved.txt"), "utf-8")).toBe(savedBytes);
     git(external, "worktree", "remove", "--force", linked.restored_path);
     runRecoveryOperation(proj, linked.purge_operation);
-    expect(git(external, "for-each-ref", "--format=%(refname)", `refs/aidlc/parked/linked-history/${stamp}/`)).toBe("");
+    expect(git(external, "for-each-ref", "--format=%(refname)", `${parkedRefPrefix(historicalId8, "linked-history")}${stamp}/`)).toBe("");
     expect(git(external, "for-each-ref", "--format=%(refname)", "refs/aidlc/parked/")).toBe([
-      `refs/aidlc/parked/unrecorded-slug/${stamp}/head`,
-      `refs/aidlc/parked/unrecorded-slug/${stamp}/snapshot`,
+      `${parkedRefPrefix(historicalId8, "unrecorded-slug")}${stamp}/head`,
+      `${parkedRefPrefix(historicalId8, "unrecorded-slug")}${stamp}/snapshot`,
     ].join("\n"));
   }, 30000);
 
@@ -816,7 +967,7 @@ describe("t83 doctor parked attempts", () => {
     const sibling = join(proj, "api");
     initRepo(sibling);
     const stamp = "20240101T000000Z";
-    const prefix = `refs/aidlc/parked/reviewed/${stamp}`;
+    const prefix = `${parkedRefPrefix(fixtureIntentId8(proj), "reviewed")}${stamp}`;
     for (const repo of [proj, sibling]) {
       const first = git(repo, "rev-parse", "HEAD");
       git(repo, "update-ref", `${prefix}/reviewed-source/${first}`, first);
@@ -825,8 +976,9 @@ describe("t83 doctor parked attempts", () => {
       const second = git(repo, "rev-parse", "HEAD");
       git(repo, "update-ref", `${prefix}/reviewed-source/${second}`, second);
     }
+    for (const repo of [null, "api"]) recordParkedAttempt(proj, "reviewed", prefix, repo);
     // Unrecognized leaves are not tool-authored evidence-only namespaces.
-    git(proj, "update-ref", "refs/aidlc/parked/unrecognized/20240101T000000Z/reviewed-source/not-a-commit", "HEAD");
+    git(proj, "update-ref", `${parkedRefPrefix(fixtureIntentId8(proj), "unrecognized")}20240101T000000Z/reviewed-source/not-a-commit`, "HEAD");
 
     const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
     expect(attempts).toEqual([
@@ -863,11 +1015,19 @@ describe("t83 doctor parked attempts", () => {
     git(selected, "-c", "user.name=Doctor fixture", "-c", "user.email=doctor@example.test",
       "-c", "commit.gpgsign=false", "commit", "-m", "saved content");
     const stamp = "20240101T000000Z";
-    const prefix = `refs/aidlc/parked/saved/${stamp}/`;
-    parkHead(selected, "saved", stamp, "snapshot");
+    const intentId8 = fixtureIntentId8(proj);
+    const prefix = `${parkedRefPrefix(intentId8, "saved")}${stamp}/`;
+    parkHead(selected, "saved", stamp, "snapshot", intentId8);
+    recordParkedAttempt(proj, "saved", prefix.slice(0, -1), repo === "." ? null : repo);
     const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
     expect(attempts).toHaveLength(1);
     const [attempt] = attempts;
+    expect(attempt.restore_operation).toEqual({
+      route: "worktree", args: ["restore", "--slug", "saved", "--parked", stamp, "--repo", repo, "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
+    });
+    expect(attempt.purge_operation).toEqual({
+      route: "worktree", args: ["purge", "--slug", "saved", "--parked", stamp, "--repo", repo, "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
+    });
     expect(attempt.restore_command).toBe(renderEngineInvocation(attempt.restore_operation, { mode: "source", harnessDir: ".claude" }));
     expect(attempt.purge_command).toBe(renderEngineInvocation(attempt.purge_operation, { mode: "source", harnessDir: ".claude" }));
     const { out } = runDoctor(proj, []);
@@ -878,15 +1038,17 @@ describe("t83 doctor parked attempts", () => {
     // even after another repo and a newer attempt make either selector ambiguous.
     const competing = repo === "." ? join(proj, "later") : proj;
     if (repo === ".") initRepo(competing);
-    parkHead(competing, "saved", stamp, "snapshot");
+    parkHead(competing, "saved", stamp, "snapshot", intentId8);
+    recordParkedAttempt(proj, "saved", prefix.slice(0, -1), repo === "." ? "later" : null);
     const competingRefs = git(competing, "for-each-ref", "--format=%(refname)", prefix);
     writeFileSync(join(selected, "saved.txt"), "newer attempt must remain parked\n");
     git(selected, "add", "saved.txt");
     git(selected, "-c", "user.name=Doctor fixture", "-c", "user.email=doctor@example.test",
       "-c", "commit.gpgsign=false", "commit", "-m", "newer saved content");
     const newerStamp = "20240102T000000Z";
-    const newerPrefix = `refs/aidlc/parked/saved/${newerStamp}/`;
-    parkHead(selected, "saved", newerStamp, "snapshot");
+    const newerPrefix = `${parkedRefPrefix(intentId8, "saved")}${newerStamp}/`;
+    parkHead(selected, "saved", newerStamp, "snapshot", intentId8);
+    recordParkedAttempt(proj, "saved", newerPrefix.slice(0, -1), repo === "." ? null : repo);
     const newerRefs = git(selected, "for-each-ref", "--format=%(refname)", newerPrefix);
     runRecoveryOperation(proj, attempt.restore_operation);
     expect(readFileSync(join(attempt.restored_path, "saved.txt"), "utf-8")).toBe(`saved in ${repo}\n`);

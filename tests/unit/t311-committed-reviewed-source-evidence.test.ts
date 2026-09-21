@@ -20,6 +20,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  boltName,
   normalizeManifestSourcePath,
   parseUnitSourceListing,
   readUnitSourceManifest,
@@ -189,7 +190,7 @@ describe("t311 committed reviewed-source evidence", () => {
     // Shell prefixes apply only when the queried repo carries the workspace shell.
     expect(sourcePathIsExcluded("aidlc/", true)).toBe(true);
     expect(sourcePathIsExcluded("aidlc/spaces/default/intents/i/audit/a.md", true)).toBe(true);
-    expect(sourcePathIsExcluded(".aidlc/worktrees/bolt-x/app.ts", true)).toBe(true);
+    expect(sourcePathIsExcluded(`.aidlc/worktrees/${boltName("abcdef01", "x")}/app.ts`, true)).toBe(true);
     expect(sourcePathIsExcluded("aidlc/notes.md", false)).toBe(false);
     expect(sourcePathIsExcluded("src/aidlc/notes.md", true)).toBe(false);
     expect(sourcePathIsExcluded("app.ts", true)).toBe(false);

@@ -2,6 +2,14 @@
 
 ### Before initial protected prepare
 
+Bolt directories and branches use the selected intent's `bolt-<id8>_<slug>`
+identity, where `<id8>` is the same registry UUID suffix as Unit claims. This
+isolates same-named Units across parallel intents. Use emitted paths and branch
+names, not names reconstructed from Unit slugs. Creation without a registry
+UUID refuses; adopt or re-create the intent before Construction. See
+[Bolt identity](../../knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for naming and provenance-gated completion of pre-upgrade legacy Bolts.
+
 For protected Code Generation, the approved parent application source must be
 committed and reproducible from the selected worktree base before initial
 `prepare`. This applies to both legacy autonomous workflows and new checkpoint
@@ -212,8 +220,11 @@ the human gate, run `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts merge --slug
 <that converged result row's bolt_slug> --target <the same base branch used by
 prepare> --strategy squash` for each result row whose status is `converged` and
 which is absent from `merge_failures`. The merge recovers the creating
-repository and intent from a unique durable source authority, consumes the
-immutable `Source Commit`, disables ambient Git hooks, and emits
+repository from a unique durable source authority; its intent remains the
+selected workflow intent. Pass `--intent`/`--space` only when they name the
+session's active workflow; swarm refuses a mismatch before mutation or audit
+emission. The merge consumes the immutable `Source Commit`, disables ambient
+Git hooks, and emits
 `SWARM_SOURCE_MERGED`; modern convergence does not advance
 the batch until that row exists. A normal non-zero result before
 `[merge-succeeded:<sha>]` preserves the worktree: resolve the conflict or target
@@ -225,16 +236,25 @@ source or duplicating authority. If the marker exists but
 `SWARM_SOURCE_MERGED` does not, do not retry the merge: preserve the worktree
 and follow the named stage-restart or explicit human-approved bypass remedy.
 
+Cleanup also refuses if the Bolt branch is checked out at a foreign worktree
+path, preserving its branch and retained/parked refs. Surface the owner path;
+do not treat another intent's same-named Unit as cleanup for this batch.
+
 **Recoverable abort/discard.** In every harness's recovery path below, aborting
 and discarding the old Bolt means park/discard: snapshot tracked and non-ignored
 untracked files (or keep the remaining branch tip when the checkout is gone) and
 park reviewed source refs before removing the live checkout and branch. The
 conductor must obtain the human's selection and execute the returned recovery
 command unchanged. When present, the returned `restore_operation` recovers
-parked work in an isolated `.aidlc/restored/bolt-<slug>-<stamp>` checkout on
-`restore/bolt-<slug>-<stamp>`, never overwriting a new live Bolt. If only review
-evidence remained, there are no saved working files to restore, so neither
-`restore_operation` nor `restore_hint` is returned. Restored artifacts and receipts are not
+parked work in an isolated `.aidlc/restored/bolt-<id8>_<slug>-<stamp>` checkout on
+`restore/bolt-<id8>_<slug>-<stamp>`, never overwriting a new live Bolt. Its saved
+args select the exact slug, stamp, and repository, then append
+`--intent <record-dir-name> --space <space>` so later execution cannot drift to
+another active intent. If only review evidence remained, there are no saved
+working files to restore, so neither `restore_operation` nor `restore_hint` is
+returned. Namespaced and legacy restores both require the selected intent's
+exact `WORKTREE_DISCARDED` `Parked ref` and stamp provenance; legacy restores
+retain their legacy name. Restored artifacts and receipts are not
 current-attempt evidence; retry still requires a fresh `prepare` and review
 boundary as described below.
 
