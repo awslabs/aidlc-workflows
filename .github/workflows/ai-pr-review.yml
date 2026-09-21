@@ -17,9 +17,6 @@ on:
   pull_request_review_comment:
     types:
       - created
-  issue_comment:
-    types:
-      - created
   workflow_dispatch:
     inputs:
       pr_number:
@@ -54,12 +51,8 @@ jobs:
           && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
           && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository)
-      || (github.event_name == 'issue_comment'
-          && github.event.issue.pull_request
-          && github.actor != 'github-actions[bot]'
-          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     concurrency:
-      group: ai-pr-review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+      group: ai-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     environment: ai-pr-review
@@ -67,7 +60,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      issues: read
       pull-requests: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -86,7 +78,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          REQUESTED_PR: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          REQUESTED_PR: ${{ github.event.pull_request.number || inputs.pr_number }}
           TRIGGER_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
@@ -190,7 +182,7 @@ jobs:
 
           context_id="$(cat .ai-review-context/context-id.txt)"
           existing_record="$(gh api "repos/$REPO/pulls/$REQUESTED_PR/reviews" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=$context_id -->\"))) | [.id, .state] | @tsv" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=$context_id -->\"))) | [.id, .state] | @tsv" \
             | head -n1 || true)"
           existing_review=""
           existing_state=""
@@ -356,25 +348,6 @@ jobs:
             set -e
 
             if [ "$status" -ne 0 ]; then
-              if [ "$runtime" = "fable" ]; then
-                if sudo -u ai-pr-review grep -Eiq \
-                  'aws_review|data[ -]?retention|data sharing' "$error_file"; then
-                  echo "::error::$name failed because Fable 5.1 data retention is not enabled for this AWS account"
-                elif sudo -u ai-pr-review grep -Eiq \
-                  'accessdenied|not authorized|not permitted|permission' "$error_file"; then
-                  echo "::error::$name failed because the Bedrock review role cannot access the Fable inference profile"
-                elif sudo -u ai-pr-review grep -Eiq \
-                  'invalid.*model|model.*invalid|inference profile.*(not found|unsupported)|resource.*not found' \
-                  "$error_file"; then
-                  echo "::error::$name failed because Bedrock did not accept inference profile $FABLE_MODEL from $AWS_REGION"
-                elif sudo -u ai-pr-review grep -Eiq \
-                  'credential|security token|expiredtoken|unrecognizedclient' "$error_file"; then
-                  echo "::error::$name failed because Claude Code could not use the assumed AWS credentials"
-                elif sudo -u ai-pr-review grep -Fq \
-                  'Input must be provided either through stdin or as a prompt argument' "$error_file"; then
-                  echo "::error::$name failed because Claude Code did not receive the review prompt"
-                fi
-              fi
               echo "::error::$name failed with exit code $status; model transcript was suppressed"
               sudo find "$output_dir" -depth -delete
               return "$status"
@@ -573,7 +546,7 @@ jobs:
 
           marker="<!-- ai-pr-review context=$CONTEXT_ID -->"
           existing_record="$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and ((.body // \"\") | startswith(\"$marker\"))) | [.id, .state] | @tsv" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"$marker\"))) | [.id, .state] | @tsv" \
             | head -n1 || true)"
           existing=""
           existing_state=""

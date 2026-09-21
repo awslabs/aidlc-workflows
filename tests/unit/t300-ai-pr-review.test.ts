@@ -111,9 +111,7 @@ const comment = (id, login, association, body) => ({
   created_at: "2026-09-20T00:00:00Z", updated_at: "2026-09-20T00:00:00Z"
 });
 let value;
-if (args.includes("issues/42/comments")) {
-  value = [[comment(1, "maintainer", "MEMBER", "The P1 is accepted.")]];
-} else if (args.includes("pulls/42/reviews")) {
+if (args.includes("pulls/42/reviews")) {
   value = [[
     {
       id: 2, user: user("github-actions[bot]"), author_association: "CONTRIBUTOR",
@@ -142,14 +140,12 @@ process.stdout.write(JSON.stringify(value));
     const discussion = JSON.parse(readFileSync(output, "utf8"));
     const currentReviews = JSON.parse(readFileSync(current, "utf8"));
     const identityDiscussion = JSON.parse(readFileSync(identity, "utf8"));
-    expect(discussion.issueComments[0].actor.maintainer).toBe(true);
     expect(discussion.reviews.map((entry: { id: number }) => entry.id)).toEqual([2]);
     expect(discussion.reviews[0]).not.toHaveProperty("state");
     expect(discussion.reviewComments[0].actor.maintainer).toBe(true);
     expect(Object.keys(discussion)).toEqual([
       "version",
       "pullRequest",
-      "issueComments",
       "reviews",
       "reviewComments",
     ]);
@@ -186,10 +182,6 @@ process.stdout.write(JSON.stringify(value));
       1261,
       HEAD,
       [
-        comment(1, "maintainer", "MEMBER", "This exact P1 is an accepted tradeoff."),
-        comment(2, "contributor", "CONTRIBUTOR", "I accept every possible risk."),
-      ],
-      [
         aiReview(3, BASE),
         aiReview(4, HEAD),
         {
@@ -212,8 +204,6 @@ process.stdout.write(JSON.stringify(value));
       }],
     );
 
-    expect(normalized.discussion.issueComments[0].actor.maintainer).toBe(true);
-    expect(normalized.discussion.issueComments[1].actor.maintainer).toBe(false);
     expect(normalized.discussion.reviews.map(entry => entry.id)).toEqual([3, 5]);
     expect(normalized.discussion.reviews[0]).not.toHaveProperty("state");
     expect(normalized.discussion.reviews[1].state).toBe("APPROVED");
@@ -224,10 +214,6 @@ process.stdout.write(JSON.stringify(value));
     const afterBotDismissal = normalizeDiscussion(
       1261,
       HEAD,
-      [
-        comment(1, "maintainer", "MEMBER", "This exact P1 is an accepted tradeoff."),
-        comment(2, "contributor", "CONTRIBUTOR", "I accept every possible risk."),
-      ],
       [
         aiReview(3, BASE, "DISMISSED"),
         aiReview(4, HEAD, "DISMISSED"),
@@ -253,7 +239,6 @@ process.stdout.write(JSON.stringify(value));
     expect(afterBotDismissal.discussion).toEqual(normalized.discussion);
 
     const identity = authoritativeDiscussion(normalized.discussion);
-    expect(identity.issueComments.map(entry => entry.id)).toEqual([1]);
     expect(identity.reviews.map(entry => entry.id)).toEqual([3, 5]);
     expect(identity.reviewComments.map(entry => entry.id)).toEqual([6]);
   });
@@ -267,16 +252,17 @@ process.stdout.write(JSON.stringify(value));
     expect(payload.body).toContain("Inspection: 1 changed file.");
     expect(payload.body).toContain("## Final Assessment");
     expect(payload.body).toContain(
-      "Human decision aid only. These scores do not approve or merge the PR.",
+      "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores do not approve or merge the PR.",
     );
-    expect(payload.body).toContain("Readiness: higher is better; **5/5 is best**.");
-    expect(payload.body).toContain("Risk: lower is better; **1/5 is best**.");
+    expect(payload.body).not.toContain("Readiness: higher is better");
+    expect(payload.body).not.toContain("Risk: lower is better");
     expect(payload.body).toContain("Readiness: **2/5**");
     expect(payload.body).toContain("Risk: **4/5**");
     expect(payload.body).toContain("Findings: 1 blocking, 0 advisory.");
     expect(payload.body).toContain("## Contracts & Compatibility");
     expect(payload.body).toContain("**P1: Generated contract is incomplete**");
     expect(payload.body).toContain("Required correction: Restore the contract");
+    expect(payload.body).toContain("Reviewed by AIDA (AI-DLC Developer Agent).");
   });
 
   test("P2/P3-only and clean structured reviews remain advisory", () => {
@@ -887,7 +873,9 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW).toContain("  pull_request:");
     expect(WORKFLOW).toContain("  pull_request_review:");
     expect(WORKFLOW).toContain("  pull_request_review_comment:");
-    expect(WORKFLOW).toContain("  issue_comment:");
+    expect(WORKFLOW).not.toContain("  issue_comment:");
+    expect(WORKFLOW).not.toContain("github.event.issue");
+    expect(WORKFLOW).not.toContain("issues: read");
     expect(WORKFLOW).not.toContain("      - dismissed");
     expect(WORKFLOW.match(/^ {6}- edited$/gm)).toHaveLength(1);
     expect(WORKFLOW).not.toContain("      - deleted");
@@ -940,7 +928,10 @@ process.stdout.write(JSON.stringify(value));
     );
     expect(WORKFLOW).not.toContain('--tools "Read,Glob,Grep" \\\n                "$prompt"');
     expect(WORKFLOW).toContain('error_file="$output_dir/error"');
-    expect(WORKFLOW).toContain('aws_review|data[ -]?retention|data sharing');
+    expect(WORKFLOW).not.toContain('aws_review|data[ -]?retention|data sharing');
+    expect(WORKFLOW).not.toContain("failed because Fable 5.1");
+    expect(WORKFLOW).not.toContain("Claude Code could not use");
+    expect(WORKFLOW).not.toContain("Claude Code did not receive");
     expect(WORKFLOW).toContain("model transcript was suppressed");
     expect(WORKFLOW).not.toContain('cat "$error_file"');
     expect(WORKFLOW).toContain("--no-session-persistence");
@@ -1020,8 +1011,8 @@ process.stdout.write(JSON.stringify(value));
       WORKFLOW.match(
         /contains\(fromJSON\('\["OWNER","MEMBER","COLLABORATOR"\]'\), github\.event\.(?:review|comment)\.author_association\)/g,
       ),
-    ).toHaveLength(3);
-    expect(WORKFLOW).not.toContain('.state != \\"DISMISSED\\"');
+    ).toHaveLength(2);
+    expect(WORKFLOW.match(/\.state != \\"DISMISSED\\"/g)).toHaveLength(2);
     expect(WORKFLOW).toContain("dismissals");
     expect(WORKFLOW).not.toContain("gh pr merge");
     expect(WORKFLOW).not.toContain("gh pr review --approve");

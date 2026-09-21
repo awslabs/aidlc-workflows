@@ -88,7 +88,7 @@ export interface DiscussionActor {
 
 export interface DiscussionEntry {
   id: number;
-  kind: "issue-comment" | "review" | "review-comment" | "ai-review";
+  kind: "review" | "review-comment" | "ai-review";
   actor: DiscussionActor;
   body: string;
   createdAt: string;
@@ -104,7 +104,6 @@ export interface DiscussionEntry {
 export interface ReviewDiscussion {
   version: 1;
   pullRequest: number;
-  issueComments: DiscussionEntry[];
   reviews: DiscussionEntry[];
   reviewComments: DiscussionEntry[];
 }
@@ -225,23 +224,20 @@ function date(value: unknown): string {
 
 function commentEntry(
   value: Record<string, unknown>,
-  kind: "issue-comment" | "review-comment",
 ): DiscussionEntry {
   const entry: DiscussionEntry = {
-    id: integer(value.id, `${kind} id`),
-    kind,
+    id: integer(value.id, "review-comment id"),
+    kind: "review-comment",
     actor: actor(value.user, value.author_association),
     body: text(value.body),
     createdAt: date(value.created_at),
     updatedAt: date(value.updated_at),
   };
-  if (kind === "review-comment") {
-    entry.commitId = text(value.commit_id);
-    entry.path = text(value.path);
-    entry.line = typeof value.line === "number" ? value.line : null;
-    entry.side = typeof value.side === "string" ? value.side : null;
-    entry.replyToId = typeof value.in_reply_to_id === "number" ? value.in_reply_to_id : null;
-  }
+  entry.commitId = text(value.commit_id);
+  entry.path = text(value.path);
+  entry.line = typeof value.line === "number" ? value.line : null;
+  entry.side = typeof value.side === "string" ? value.side : null;
+  entry.replyToId = typeof value.in_reply_to_id === "number" ? value.in_reply_to_id : null;
   return entry;
 }
 
@@ -269,7 +265,6 @@ function byTimeAndId(left: DiscussionEntry, right: DiscussionEntry): number {
 export function normalizeDiscussion(
   pullRequest: number,
   head: string,
-  issueCommentsRaw: Record<string, unknown>[],
   reviewsRaw: Record<string, unknown>[],
   reviewCommentsRaw: Record<string, unknown>[],
 ): { discussion: ReviewDiscussion; currentAiReviews: DiscussionEntry[] } {
@@ -292,10 +287,9 @@ export function normalizeDiscussion(
   const discussion: ReviewDiscussion = {
     version: 1,
     pullRequest,
-    issueComments: issueCommentsRaw.map(value => commentEntry(value, "issue-comment")).sort(byTimeAndId),
     reviews: stableReviews,
     reviewComments: reviewCommentsRaw
-      .map(value => commentEntry(value, "review-comment"))
+      .map(value => commentEntry(value))
       .sort(byTimeAndId),
   };
   return { discussion, currentAiReviews };
@@ -304,7 +298,6 @@ export function normalizeDiscussion(
 export function authoritativeDiscussion(discussion: ReviewDiscussion): ReviewDiscussion {
   return {
     ...discussion,
-    issueComments: discussion.issueComments.filter(entry => entry.actor.maintainer),
     reviews: discussion.reviews.filter(
       entry => entry.actor.maintainer || entry.kind === "ai-review",
     ),
@@ -321,10 +314,6 @@ export function buildDiscussion(
   identityOutput?: string,
   ghExecutable = "gh",
 ): void {
-  const issueComments = paginatedRecords(
-    `repos/${repository}/issues/${pullRequest}/comments`,
-    ghExecutable,
-  );
   const reviews = paginatedRecords(
     `repos/${repository}/pulls/${pullRequest}/reviews`,
     ghExecutable,
@@ -336,7 +325,6 @@ export function buildDiscussion(
   const normalized = normalizeDiscussion(
     pullRequest,
     head,
-    issueComments,
     reviews,
     reviewComments,
   );
@@ -771,11 +759,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     "## Final Assessment",
     "",
-    "Human decision aid only. These scores do not approve or merge the PR.",
-    "",
-    "Readiness: higher is better; **5/5 is best**.",
-    "",
-    "Risk: lower is better; **1/5 is best**.",
+    "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores do not approve or merge the PR.",
     "",
     `Readiness: **${review.assessment.readiness.score}/5** — ${
       markdownText(review.assessment.readiness.rationale)
@@ -842,6 +826,8 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
   lines.push(
     "",
     `Residual risk: ${markdownText(review.residualRisk)}`,
+    "",
+    "Reviewed by AIDA (AI-DLC Developer Agent).",
     "",
     `[AI-PR-REVIEWED] ${review.head}`,
   );
