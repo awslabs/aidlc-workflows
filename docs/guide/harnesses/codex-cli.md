@@ -7,15 +7,17 @@ byte-identical across every distribution — only the shell differs. The
 source/development tree is **generated** into ignored local `dist/codex/` from
 `core/` + `harness/codex/` by `bun scripts/package.ts codex`; never hand-edit it.
 
-Harness-specific onboarding is injected into every Codex session through
-`developer_instructions` in the project's `.codex/config.toml`, which Codex loads
-when the project is trusted. `.codex/onboarding.md` keeps the same content as a
-human-readable copy. The harness-neutral root `AGENTS.md` block lists that copy
-and is shared with other installed harnesses whose engine directories differ.
-The [Codex configuration reference](https://developers.openai.com/codex/config-reference/)
-documents `developer_instructions` as additional developer instructions injected
-into the session. Live injection was not verified on the review host; a live
-Codex session check remains the reviewer ask.
+The project's `.codex/config.toml` sets `developer_instructions` to the Codex
+onboarding, as documented in the
+[Codex configuration reference](https://developers.openai.com/codex/config-reference/).
+A trusted-project Codex session receives this onboarding without reading a file.
+`.codex/onboarding.md` keeps the same content as a human-readable copy. The
+harness-neutral root `AGENTS.md` block lists that copy and is shared with other
+installed harnesses whose engine directories differ.
+
+In a fresh Codex session ask for the AI-DLC commands for this harness — the answer
+should name `$aidlc` and `.agents/skills/` without reading `.codex/onboarding.md`;
+`$aidlc --doctor` verifies the readable copy.
 
 ## Prerequisites
 
@@ -73,8 +75,9 @@ trust action before those hooks run:
   `$CODEX_HOME/config.toml`. Replace an existing set for that hooks path rather
   than appending duplicate TOML tables.
 
-Merge the generated `.codex/config.toml` settings into your user config as
-needed. Then run `$aidlc --doctor` in Codex.
+Keep the generated `.codex/config.toml` project-scoped; do not merge it into
+`~/.codex/config.toml`, because `developer_instructions` carries this project's
+AI-DLC onboarding. Then run `$aidlc --doctor` in Codex.
 
 ### Versioned manual-copy alternative
 
@@ -142,9 +145,10 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    including upgrades that add a new matcher. Replace the old tables before
    opening a fresh Codex session; otherwise Codex silently skips the new hook.
 
-4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), merge
-   the shipped `.codex/config.toml` into your `~/.codex/config.toml` (or keep
-   it project-level — trusted projects read it). Verify with:
+4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), keep
+   the shipped config at `.codex/config.toml` in the trusted project. Do not
+   merge it into `~/.codex/config.toml`: its `developer_instructions` carries
+   this project's AI-DLC onboarding. Verify with:
 
    ```bash
    cd your-project

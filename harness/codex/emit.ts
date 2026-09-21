@@ -93,8 +93,9 @@ function emitConfigToml(onboarding: string): string {
   if (onboarding.includes("'''")) {
     throw new Error("Codex onboarding contains the TOML multiline literal delimiter (''').");
   }
-  return `# dist/codex shipped config — copy into the project's .codex/config.toml
-# (trusted projects) or merge into ~/.codex/config.toml.
+  return `# dist/codex shipped config — project-scoped; copy into .codex/config.toml
+# of a trusted project. Do not merge this file into ~/.codex/config.toml:
+# developer_instructions carries this project's AI-DLC onboarding.
 
 # AI-DLC Codex onboarding, injected into every session (same content as .codex/onboarding.md).
 developer_instructions = '''
