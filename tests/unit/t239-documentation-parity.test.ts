@@ -165,6 +165,37 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
+  test("reviewer-tier prose matches the harness projections", () => {
+    expect(TIER_PROJECTIONS.balanced.claude).toEqual({
+      model: "sonnet",
+      effort: "medium",
+    });
+    expect(TIER_PROJECTIONS.balanced.codex).toEqual({
+      model: null,
+      effort: "medium",
+    });
+    expect(TIER_PROJECTIONS.balanced.opencode).toEqual({
+      model: null,
+      variant: "medium",
+    });
+    for (const path of [
+      ["docs", "guide", "06-agents.md"],
+      ["docs", "guide", "agents", "architect-agent.md"],
+      ["docs", "harness-engineering", "03-adding-an-agent.md"],
+      ["docs", "reference", "agents", "README.md"],
+      ["harness", "codex", "emit.ts"],
+    ]) {
+      const text = normalized(read(...path));
+      expect(text, path.join("/")).not.toContain(
+        "pins a mid-size model at medium effort on claude code, codex, and opencode",
+      );
+      expect(text, path.join("/")).not.toContain(
+        "a mid-size model at reduced effort on claude code, codex, and opencode",
+      );
+      expect(text, path.join("/")).not.toContain("balanced pins both");
+    }
+  });
+
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
     expect(eventTypes.length).toBe(102);
 

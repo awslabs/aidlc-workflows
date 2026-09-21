@@ -3264,6 +3264,82 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 120_000);
 
+  test("refresh reports removal of unrecorded legacy Bedrock defaults", () => {
+    const env = runtimeEnv();
+    for (const [harness, harnessDir, configName] of [
+      ["claude", ".claude", "settings.json"],
+      ["codex", ".codex", "config.toml"],
+    ]) {
+      const project = install(harness);
+      const dataPath = join(project, harnessDir, "tools", "data", "harness.json");
+      const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+      delete data.providers;
+      writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+      const configPath = join(project, harnessDir, configName);
+      if (harness === "claude") {
+        const settings = JSON.parse(readFileSync(configPath, "utf-8"));
+        Object.assign(settings.env, {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_REGION: "us-east-1",
+          ANTHROPIC_DEFAULT_FABLE_MODEL:
+            "global.anthropic.claude-fable-5[1m]",
+          ANTHROPIC_DEFAULT_OPUS_MODEL:
+            "global.anthropic.claude-opus-4-8[1m]",
+          ANTHROPIC_DEFAULT_SONNET_MODEL:
+            "global.anthropic.claude-sonnet-4-6[1m]",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL:
+            "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        });
+        writeFileSync(configPath, `${JSON.stringify(settings, null, 2)}\n`);
+      } else {
+        const legacyBlock =
+          `# Model: these session defaults are what judgment-tier agent roles inherit\n` +
+          `# (their TOMLs omit model/model_reasoning_effort by design - see the tier\n` +
+          `# projection); balanced roles pin gpt-5.6-terra/medium, while templated roles inherit.\n` +
+          `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+          `# unavailable there; the market-research stage degrades gracefully). For\n` +
+          `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+          `# block.\n` +
+          `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+          `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+          `[model_providers.amazon-bedrock.aws]\n` +
+          `profile = "default"\nregion = "us-east-1"\n\n`;
+        writeFileSync(
+          configPath,
+          withLegacyCodexProviderBlock(
+            readFileSync(configPath, "utf-8"),
+            legacyBlock,
+          ),
+        );
+      }
+
+      const args = [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(DIST_RELEASE, harness),
+        "--harness",
+        harness,
+        "--yes",
+      ];
+      const preview = run([...args, "--dry-run", "--json"], project, env);
+      expect(preview.status, preview.stdout + preview.stderr).toBe(0);
+      const note = JSON.parse(preview.stdout).data.notes.join("\n");
+      expect(note).toContain(`${harnessDir}/${configName}`);
+      expect(note).toContain(
+        "config providers --provider amazon-bedrock --region us-east-1 --yes",
+      );
+
+      const refreshed = run(args, project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(refreshed.stdout).toContain(`Note: Removed legacy AI-DLC Bedrock defaults from ${harnessDir}/${configName}`);
+      expect(refreshed.stdout).toContain(
+        "config providers --provider amazon-bedrock --region us-east-1 --yes",
+      );
+    }
+  }, 120_000);
+
   test("legacy Claude cleanup preserves a user-authored AWS profile", () => {
     const project = install("claude");
     const env = runtimeEnv();

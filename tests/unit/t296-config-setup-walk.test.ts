@@ -218,6 +218,42 @@ describe("t296 first-run config setup walk", () => {
     expect(result.stdout).not.toContain("Manual provider setup complete?");
   }, 90_000);
 
+  test("provider re-entry preserves a recorded other answer and its pending action", () => {
+    const path = project("aidlc-t296-walk-other-");
+    const env = hookPathEnv("aidlc", true);
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    const dataPath = join(path, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "other",
+      acknowledged: true,
+      pendingActions: [{
+        id: "non-bedrock-provider-configuration",
+        status: "pending",
+      }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    const result = run(
+      ["config", "providers", "--project-dir", path, "--harness", "claude"],
+      path,
+      env,
+      "1\n\ny\n",
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("recorded: other; default");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toEqual({
+      schemaVersion: 1,
+      provider: "other",
+      acknowledged: true,
+      pendingActions: [{
+        id: "non-bedrock-provider-configuration",
+        status: "pending",
+      }],
+    });
+  }, 60_000);
+
   test("Kiro's providers section asks nothing and records nothing", () => {
     const path = project("aidlc-t296-walk-kiro-managed-");
     const env = hookPathEnv("aidlc", true, {

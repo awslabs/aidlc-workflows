@@ -539,8 +539,9 @@ bytes remain valid.
 
 On these harnesses `keep current` is the first answer and the default.
 `amazon-bedrock` is the second answer. Re-entering the section with the recorded
-Bedrock answer keeps the region and profile unless you explicitly replace them;
-pending actions can still be completed with `--mark-done`.
+answer preserves it: Bedrock keeps its region and profile unless you explicitly
+replace them, while `other` keeps its pending manual-setup action. Pending
+actions can still be completed with `--mark-done`.
 
 ### Trust Diagnostics
 

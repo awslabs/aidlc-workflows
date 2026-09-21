@@ -134,6 +134,7 @@ import {
   flagFiles,
   flagIssues,
   hasLegacyClaudeProviderConfig,
+  hasLegacyCodexProviderConfig,
   managedBlockMarkers,
   normalizeProvidersRecord,
   normalizeProjectChoicesRecord,
@@ -1767,9 +1768,16 @@ function diagnosticWizard(
     const recordedBedrock = records.providers?.provider === "amazon-bedrock"
       ? records.providers
       : null;
+    const recordedOther = records.providers?.provider === "other"
+      ? records.providers
+      : null;
     process.stdout.write(
       `    1. keep current     inherit the provider already configured in the harness${
-        recordedBedrock ? "" : " (default)"
+        recordedBedrock
+          ? ""
+          : recordedOther
+          ? " (recorded: other; default)"
+          : " (default)"
       }\n`,
     );
     process.stdout.write(`    2. amazon-bedrock   ${copy.bedrock}${
@@ -1783,7 +1791,9 @@ function diagnosticWizard(
     }\n`);
     const choice = promptChoice("  Provider", 2, recordedBedrock ? 2 : 1);
     const providerAnswer = choice === 1
-      ? "current"
+      ? recordedOther
+        ? "other"
+        : "current"
       : "amazon-bedrock";
     const args = ["--provider", providerAnswer];
     const skipMarkDone = new Set<string>();
@@ -4016,6 +4026,37 @@ function preserveUserProviderFields(
   return true;
 }
 
+function unrecordedLegacyProviderMigration(
+  projectDir: string,
+  harnessDir: string,
+  harness: ModelHarness,
+  previousProvider: ProvidersRecord | null,
+): { path: string; region: string } | null {
+  if (previousProvider !== null) return null;
+  if (harness === "claude") {
+    const relative = `${harnessDir}/settings.json`;
+    const path = join(projectDir, relative);
+    if (!regularFile(path)) return null;
+    const settings = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    const env = settings.env && typeof settings.env === "object" &&
+        !Array.isArray(settings.env)
+      ? settings.env as Record<string, unknown>
+      : {};
+    return hasLegacyClaudeProviderConfig(env) && typeof env.AWS_REGION === "string"
+      ? { path: relative, region: env.AWS_REGION }
+      : null;
+  }
+  if (harness === "codex") {
+    const relative = `${harnessDir}/config.toml`;
+    const path = join(projectDir, relative);
+    return regularFile(path) &&
+        hasLegacyCodexProviderConfig(readFileSync(path, "utf-8"))
+      ? { path: relative, region: "us-east-1" }
+      : null;
+  }
+  return null;
+}
+
 function prepareRefreshSource(
   projectDir: string,
   sourceRoot: string,
@@ -4122,6 +4163,12 @@ function prepareRefreshSource(
   if (typeof distribution !== "string") {
     throw new Error(`${stagedHarnessData}: distribution must be a string`);
   }
+  const legacyProviderMigration = unrecordedLegacyProviderMigration(
+    projectDir,
+    descriptor.harnessDir,
+    modelHarness(distribution),
+    previousProvider,
+  );
   const providers = normalizeProvidersRecord(staged.providers);
   if (providers) {
     staged.providers = reconcileProviderActions(
@@ -4216,6 +4263,19 @@ function prepareRefreshSource(
     },
     previousProvider,
   );
+  if (
+    legacyProviderMigration &&
+    normalizeProvidersRecord(staged.providers)?.provider !== "amazon-bedrock"
+  ) {
+    notes.push(
+      `Removed legacy AI-DLC Bedrock defaults from ${legacyProviderMigration.path}; ` +
+        `${distribution} now uses the provider configured in the harness. To opt back in, run ` +
+        `${configCommandForHarness(
+          descriptor.harnessDir,
+          `providers --provider amazon-bedrock --region ${legacyProviderMigration.region} --yes`,
+        )}.`,
+    );
+  }
   // Provider/model fields can be updated in place only while framework-owned
   // entries still match the recorded baseline.
   if (modelHarness(distribution) === "claude") {
@@ -5513,6 +5573,7 @@ function customizeFirstRun(
       return;
     }
     if (step === 3) {
+      const previousPreset = choices.preset;
       process.stdout.write("  Step 3 of 6 - Model effort preset\n");
       process.stdout.write("    1. balanced    medium effort for deciding, reviewing, and writing up (recommended, default)\n");
       process.stdout.write("    2. thorough    session effort for deciding and writing up, extra-high reviewing\n");
@@ -5528,6 +5589,9 @@ function customizeFirstRun(
       process.stdout.write(choices.preset === "unchanged"
         ? "  Keeping existing settings unchanged; no preset recorded.\n\n"
         : `  Using the ${choices.preset} preset.\n\n`);
+      if (previousPreset === "unchanged" && choices.preset !== "unchanged") {
+        editStep(6);
+      }
       return;
     }
     if (step === 4) {
@@ -5562,6 +5626,10 @@ function customizeFirstRun(
       return;
     }
     process.stdout.write("  Step 6 of 6 - Where to record the model preset\n");
+    if (choices.preset === "unchanged") {
+      process.stdout.write("  Not applicable: no model preset will be recorded.\n\n");
+      return;
+    }
     process.stdout.write("    1. this project, committed     aidlc.settings.json - shared with your team  (default)\n");
     process.stdout.write("    2. this project, just for you  aidlc.settings.local.json - gitignored\n");
     process.stdout.write("    3. this machine                every project you set up here\n");
@@ -5589,7 +5657,13 @@ function customizeFirstRun(
     process.stdout.write(`    3. Preset       ${choices.preset === "unchanged" ? "none (unchanged)" : choices.preset}\n`);
     process.stdout.write(`    4. Plugins      ${choices.pluginLabel}\n`);
     process.stdout.write(`    5. MCP          ${choices.mcp === "defaults" ? "on" : "off"}\n`);
-    process.stdout.write(`    6. Preset in    ${firstRunSettingsTargetLabel(choices.target)}\n`);
+    process.stdout.write(
+      `    6. Preset in    ${
+        choices.preset === "unchanged"
+          ? "n/a (no preset recorded)"
+          : firstRunSettingsTargetLabel(choices.target)
+      }\n`,
+    );
     const value = firstRunPromptValue(configPrompt("  Apply? [Y/n]:")).toLowerCase();
     if (!value || value === "y" || value === "yes") return choices;
     if (value === "n" || value === "no") {

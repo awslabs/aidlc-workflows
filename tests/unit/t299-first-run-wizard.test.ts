@@ -264,6 +264,8 @@ describe("t299 first-run setup wizard", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Keeping existing settings unchanged; no preset recorded.");
     expect(result.stdout).toContain("3. Preset       none (unchanged)");
+    expect(result.stdout).toContain("6. Preset in    n/a (no preset recorded)");
+    expect(result.stdout).not.toContain("Preset in [");
     expect(result.stdout).not.toContain("Using the unchanged preset.");
     expect(result.stdout).not.toContain("Recording model preset");
     expect(result.stdout).toContain("Model preset ... left unchanged");
@@ -279,7 +281,7 @@ describe("t299 first-run setup wizard", () => {
     }
   }, 60_000);
 
-  test("unchanged preserves pre-seeded project policy byte-for-byte when recording locally", () => {
+  test("unchanged preserves pre-seeded project policy byte-for-byte", () => {
     const prior = `${JSON.stringify({
       schemaVersion: 1,
       models: {
@@ -290,7 +292,7 @@ describe("t299 first-run setup wizard", () => {
       },
     }, null, 4)}\n`;
     const env = isolatedMachineEnv();
-    const result = runWizard("2\n\n\n4\n\n\n2\n\n", {
+    const result = runWizard("2\n\n\n4\n\n\n\n\n", {
       env,
       prepare: (project) => {
         writeFileSync(join(project, "aidlc.settings.json"), prior);
@@ -310,6 +312,21 @@ describe("t299 first-run setup wizard", () => {
       join(result.project, ".claude", "agents", "aidlc-product-lead-agent.md"),
       "utf-8",
     )).toContain("effort: xhigh");
+  }, 60_000);
+
+  test("changing an unchanged preset re-opens the preset target step", () => {
+    const result = runWizard(
+      `${["2", "", "", "4", "", "", "3", "1", "2", ""].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.match(/Step 6 of 6 - Where to record the model preset/g))
+      .toHaveLength(2);
+    expect(result.stdout.match(/Preset in \[1\]:/g)).toHaveLength(1);
+    expect(result.stdout).toContain("6. Preset in    this project, just for you");
+    expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
+    expect(JSON.parse(
+      readFileSync(join(result.project, "aidlc.settings.local.json"), "utf-8"),
+    ).models.preset).toBe("balanced");
   }, 60_000);
 
   test("review accepts a step number, re-enters it, then applies", () => {

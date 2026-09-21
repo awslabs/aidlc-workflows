@@ -287,10 +287,9 @@ export function emitTrustSeed(
 // The old D7 model map is DERIVED from the tier projection module. Codex reads
 // `tier:` from the core agent .md (authoritative source of truth) and looks up
 // {model, effort} via projectTier. A null projected value means the TOML key
-// is OMITTED: the spawned role then falls back to the shipped config.toml
-// session defaults (live-verified on codex-cli 0.139.0 and 0.142.5: a role
-// TOML without `model` spawns on the config.toml model + effort). Judgment
-// and templated omit both keys; balanced pins both.
+// is OMITTED: the spawned role inherits the session value. Judgment and
+// templated omit both keys; balanced omits the model and pins medium reasoning
+// effort.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
   // BOM tolerance, matching the packager's agent reader and the rule parser.
