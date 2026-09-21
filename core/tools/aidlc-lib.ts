@@ -4832,16 +4832,21 @@ export function relativeRecordDirForSelection(selection: WorkflowSelection): str
   return `aidlc/spaces/${selection.space}/intents/${selection.intent}`;
 }
 
+// Sibling-only swarm worktrees have no local registry; their delegated parent
+// creation authority supplies the UUID only for the same selected intent.
 export function intentUuidForSelection(
   projectDir: string,
   selection: WorkflowSelection,
 ): string | null {
   if (selection.intent === null) return null;
-  return (
-    listIntents(projectDir, selection.space).find(
-      (entry) => entry.dirName === selection.intent,
-    )?.uuid ?? null
-  );
+  const uuid = listIntents(projectDir, selection.space).find(
+    (entry) => entry.dirName === selection.intent,
+  )?.uuid;
+  if (uuid) return uuid;
+  const delegated = delegatedWorktreeIntent(projectDir);
+  return delegated?.space === selection.space && delegated.intent === selection.intent
+    ? delegated.intentUuid
+    : null;
 }
 
 // Read the intent UUID this conversation last stamped, or null. Best-effort.
@@ -5036,13 +5041,22 @@ export function delegatedWorktreeIntent(projectDir: string): {
   }
   const child = canonicalPathKey(projectDir);
   const parent = dirname(dirname(dirname(child)));
-  if (canonicalPathKey(worktreePath(parent, meta.boltSlug)) !== child ||
+  const expectedDir = typeof meta.intentId8 === "string"
+    ? worktreePath(parent, meta.intentId8, meta.boltSlug)
+    : legacyWorktreePath(parent, meta.boltSlug);
+  if ((meta.intentId8 !== undefined &&
+    (typeof meta.intentId8 !== "string" || !BOLT_INTENT_ID8_REGEX.test(meta.intentId8))) ||
+    canonicalPathKey(expectedDir) !== child ||
     relativeRecordDir(parent) !== meta.intentRecord) {
     throw new Error("Delegated worktree does not match the active parent intent record");
   }
   assertNoSymlinkInChainOrThrow(parent, relative(parent, projectDir));
   const [, space, intent] = record;
   const intentUuid = listIntents(parent, space).find((entry) => entry.dirName === intent)?.uuid;
+  if (meta.intentId8 !== undefined &&
+    (!intentUuid || meta.intentId8 !== idSuffix(intentUuid))) {
+    throw new Error("Delegated worktree does not match the active parent intent record");
+  }
   const unreadable: string[] = [];
   const creations = maximalAttemptEvents(readAuditShardEvents(parent, intent, space, unreadable).filter(
     (row) => row.event === "WORKTREE_CREATED" && auditBlockField(row.block, "Bolt slug") === meta.boltSlug,
@@ -10614,8 +10628,211 @@ export function readAuditShardEvents(
   return rows;
 }
 
-export function worktreePath(projectDir: string, boltSlug: string): string {
-  return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
+/**
+ * `_` cannot occur in a Bolt slug, so intent-scoped and legacy names are disjoint.
+ * Legacy names are read-only compatibility identities, resolved only by provenance;
+ * newly created Bolts always use the selected intent's registry identity.
+ */
+export const BOLT_INTENT_ID8_REGEX = /^[0-9a-f]{8}$/;
+export const BOLT_NAME_REGEX = /^bolt-([0-9a-f]{8})_([a-z][a-z0-9-]*)$/;
+export const LEGACY_BOLT_NAME_REGEX = /^bolt-([a-z][a-z0-9-]*)$/;
+
+export function boltName(intentId8: string, slug: string): string {
+  return `bolt-${intentId8}_${slug}`;
+}
+
+export function legacyBoltName(slug: string): string {
+  return `bolt-${slug}`;
+}
+
+export function parseBoltName(
+  name: string,
+): { intentId8: string | null; slug: string } | null {
+  const current = BOLT_NAME_REGEX.exec(name);
+  if (current) return { intentId8: current[1], slug: current[2] };
+  const legacy = LEGACY_BOLT_NAME_REGEX.exec(name);
+  return legacy ? { intentId8: null, slug: legacy[1] } : null;
+}
+
+export function worktreesDir(projectDir: string): string {
+  return join(projectDir, ".aidlc", "worktrees");
+}
+
+export function worktreePath(projectDir: string, intentId8: string, slug: string): string {
+  return join(worktreesDir(projectDir), boltName(intentId8, slug));
+}
+
+export function legacyWorktreePath(projectDir: string, slug: string): string {
+  return join(worktreesDir(projectDir), legacyBoltName(slug));
+}
+
+export function intentId8ForSelection(
+  projectDir: string,
+  selection: WorkflowSelection,
+): string | null {
+  const uuid = intentUuidForSelection(projectDir, selection);
+  return uuid ? idSuffix(uuid) : null;
+}
+
+export interface BoltIdentity {
+  intentId8: string;
+  slug: string;
+  name: string;
+  branch: string;
+  dir: string;
+  reviewedSourceRefPrefix: string;
+  parkedRefPrefix: string;
+  legacy: boolean;
+}
+
+export type BoltIdentityErrorCode = "NO_INTENT" | "NO_INTENT_UUID" | "AMBIGUOUS_INTENT_ID8";
+
+export class BoltIdentityError extends Error {
+  constructor(
+    readonly code: BoltIdentityErrorCode,
+    readonly recordDir: string | null,
+    slug: string,
+  ) {
+    super(
+      code === "NO_INTENT"
+        ? `No intent selected for Bolt ${slug}; pass --intent/--space or switch to the workflow.`
+        : code === "AMBIGUOUS_INTENT_ID8"
+          ? `Intent record ${recordDir} shares its eight-character uuid suffix with another registered intent, so its Bolt names would collide; re-create one of the two intents before Construction.`
+          : `Intent record ${recordDir} has no registry identity (uuid); adopt or re-create the intent before Construction. ` +
+            "Bolt worktrees are named by intent so parallel intents cannot collide.",
+    );
+    this.name = "BoltIdentityError";
+  }
+}
+
+// True when another registered intent RECORD in any space of this workspace
+// maps to the same id8 — a different uuid with the same suffix (2^-32 per
+// pair) or a duplicated uuid in a hand-edited or badly merged registry. The
+// id8 is the whole of a Bolt's intent authority, so either case must refuse
+// rather than share directories, branches and recovery refs between records.
+export function intentId8IsAmbiguous(
+  projectDir: string,
+  selection: WorkflowSelection,
+  uuid: string,
+): boolean {
+  const id8 = idSuffix(uuid);
+  for (const space of listSpaces(projectDir)) {
+    for (const entry of listIntents(projectDir, space.name)) {
+      if (space.name === selection.space && entry.dirName === selection.intent) continue;
+      if (entry.uuid && idSuffix(entry.uuid) === id8) return true;
+    }
+  }
+  return false;
+}
+
+export function newBoltIdentity(
+  projectDir: string,
+  intentId8: string,
+  slug: string,
+): BoltIdentity {
+  const name = boltName(intentId8, slug);
+  return {
+    intentId8,
+    slug,
+    name,
+    branch: name,
+    dir: worktreePath(projectDir, intentId8, slug),
+    reviewedSourceRefPrefix: reviewedSourceRefPrefix(intentId8, slug),
+    parkedRefPrefix: parkedRefPrefix(intentId8, slug),
+    legacy: false,
+  };
+}
+
+export function legacyBoltIdentity(
+  projectDir: string,
+  intentId8: string,
+  slug: string,
+): BoltIdentity {
+  const name = legacyBoltName(slug);
+  return {
+    intentId8,
+    slug,
+    name,
+    branch: name,
+    dir: legacyWorktreePath(projectDir, slug),
+    reviewedSourceRefPrefix: legacyReviewedSourceRefPrefix(slug),
+    parkedRefPrefix: legacyParkedRefPrefix(slug),
+    legacy: true,
+  };
+}
+
+export function resolveBoltIdentity(
+  projectDir: string,
+  slug: string,
+  selection: WorkflowSelection,
+): BoltIdentity {
+  const record = relativeRecordDirForSelection(selection);
+  const intent = selection.intent;
+  if (intent === null) {
+    throw new BoltIdentityError("NO_INTENT", record, slug);
+  }
+  const uuid = intentUuidForSelection(projectDir, selection);
+  if (uuid === null) {
+    throw new BoltIdentityError("NO_INTENT_UUID", record, slug);
+  }
+  if (intentId8IsAmbiguous(projectDir, selection, uuid)) {
+    throw new BoltIdentityError("AMBIGUOUS_INTENT_ID8", record, slug);
+  }
+  const intentId8 = idSuffix(uuid);
+  if (existsSync(worktreePath(projectDir, intentId8, slug))) {
+    return newBoltIdentity(projectDir, intentId8, slug);
+  }
+  // The selected intent's causal frontier must name this legacy Bolt; writable
+  // metadata only corroborates that audit provenance, never authorizes adoption
+  // by itself. WORKTREE_MERGED/DISCARDED record intent before the git operation:
+  // a still-existing checkout proves it did not complete, so matching intentRecord
+  // permits retry after either row. Pre-P7 metadata needs an open creation instead,
+  // because a later terminal row may precede reuse by another pre-upgrade intent.
+  // With no directory, cleanup-only verbs verify git state themselves. Shard
+  // filenames are not time order; unreadable shards and frontier ties fail closed.
+  // The legacy name is repository-global, so intent counts never imply ownership.
+  const legacyDir = legacyWorktreePath(projectDir, slug);
+  const frontierNamesLegacyBolt = (requireOpenCreation: boolean): boolean => {
+    const unreadableShards: string[] = [];
+    const lifecycle = readAuditShardEvents(projectDir, intent, selection.space, unreadableShards)
+      .filter((event) =>
+        (event.event === "WORKTREE_CREATED" ||
+          event.event === "WORKTREE_MERGED" ||
+          event.event === "WORKTREE_DISCARDED") &&
+        auditBlockField(event.block, "Bolt slug") === slug);
+    if (unreadableShards.length > 0 || lifecycle.length === 0) return false;
+    const frontier = maximalAttemptEvents(lifecycle);
+    if (frontier.length !== 1) return false;
+    const top = frontier[0];
+    if (requireOpenCreation && top.event !== "WORKTREE_CREATED") return false;
+    if (top.event === "WORKTREE_CREATED" &&
+      auditBlockField(top.block, "Branch name") !== legacyBoltName(slug)) return false;
+    const path = auditBlockField(top.block, "Worktree path");
+    return path !== null &&
+      canonicalPathKey(resolveAuditWorktreePath(projectDir, path)) === canonicalPathKey(legacyDir);
+  };
+  if (existsSync(legacyDir)) {
+    const intentRecord = readWorktreeMetaIntentRecord(legacyDir);
+    if ((intentRecord === record || intentRecord === null) && frontierNamesLegacyBolt(intentRecord === null)) {
+      return legacyBoltIdentity(projectDir, intentId8, slug);
+    }
+  } else if (frontierNamesLegacyBolt(false)) {
+    return legacyBoltIdentity(projectDir, intentId8, slug);
+  }
+  return newBoltIdentity(projectDir, intentId8, slug);
+}
+
+export function readWorktreeMetaIntentRecord(worktreeDir: string): string | null | undefined {
+  try {
+    const meta: unknown = JSON.parse(
+      readFileSync(join(worktreeDir, ".aidlc", "worktree-meta.json"), "utf-8"),
+    );
+    if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return undefined;
+    if (!("intentRecord" in meta)) return null;
+    return typeof meta.intentRecord === "string" ? meta.intentRecord : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Parse a parked-attempt stamp without normalizing impossible calendar dates. */
@@ -12999,10 +13216,10 @@ function hasDurableSourceBindingEvidence(
   const candidates = [
     join(projectDir, ".aidlc", "worktree-meta.json"),
   ];
-  const worktrees = join(projectDir, ".aidlc", "worktrees");
+  const worktrees = worktreesDir(projectDir);
   try {
     for (const entry of readdirSync(worktrees, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
+      if (entry.isDirectory() && parseBoltName(entry.name) !== null) {
         candidates.push(
           join(worktrees, entry.name, ".aidlc", "worktree-meta.json"),
         );
@@ -15102,12 +15319,24 @@ export function freshReviewReceipts(
 // Private refs keep reviewed-source commits reachable until the Bolt is merged
 // or discarded. The commit suffix matters: a later finalize retry must not move
 // the only ref away from an earlier commit already named by an audit row.
-export function reviewedSourceRefPrefix(boltSlug: string): string {
-  return `refs/aidlc/reviewed-source/${boltSlug}/`;
+export function reviewedSourceRefPrefix(intentId8: string, slug: string): string {
+  return `refs/aidlc/reviewed-source/${intentId8}/${slug}/`;
 }
 
-export function reviewedSourceRef(boltSlug: string, commit: string): string {
-  return `${reviewedSourceRefPrefix(boltSlug)}${commit}`;
+export function reviewedSourceRef(intentId8: string, slug: string, commit: string): string {
+  return `${reviewedSourceRefPrefix(intentId8, slug)}${commit}`;
+}
+
+export function legacyReviewedSourceRefPrefix(slug: string): string {
+  return `refs/aidlc/reviewed-source/${slug}/`;
+}
+
+export function parkedRefPrefix(intentId8: string, slug: string): string {
+  return `refs/aidlc/parked/${intentId8}/${slug}/`;
+}
+
+export function legacyParkedRefPrefix(slug: string): string {
+  return `refs/aidlc/parked/${slug}/`;
 }
 
 // --- Multi-repo: repos are siblings of the workspace ----------------------------

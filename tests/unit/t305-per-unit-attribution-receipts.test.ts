@@ -25,6 +25,9 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  boltName,
+  reviewedSourceRefPrefix,
+  worktreePath,
   auditBlockField,
   currentStageSourceBaseline,
   currentSwarmAttemptObligations,
@@ -51,6 +54,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   cleanupWorktreeFixture,
   createTestProject,
@@ -1603,10 +1607,7 @@ describe("t305 real receipt and guard flows", () => {
       "{}\n",
     );
     const otherWorktree = join(
-      isolated.project,
-      ".aidlc",
-      "worktrees",
-      "bolt-other",
+      worktreePath(isolated.project, fixtureIntentId8(isolated.project), "other"),
       ".aidlc",
     );
     mkdirSync(otherWorktree, { recursive: true });
@@ -1949,7 +1950,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Unit obligations**: alpha,beta",
     );
-    const wt = join(project, ".aidlc", "worktrees", "bolt-alpha");
+    const wt = worktreePath(project, fixtureIntentId8(project), "alpha");
     writeFileSync(join(wt, "alpha.ts"), "export const alpha = true;\n");
     const reviewed = review(
       wt,
@@ -2273,7 +2274,7 @@ describe("t305 healthy settled-swarm source completion", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const healthy = true;\n");
     const reviewed = review(
@@ -2367,12 +2368,7 @@ describe("t305 healthy settled-swarm source completion", () => {
       ["alpha", 0, "export const alphaOwned = true;"],
       ["beta", 39, "export const betaOwned = true;"],
     ] as Array<[string, number, string]>) {
-      const wt = join(
-        project,
-        ".aidlc",
-        "worktrees",
-        `bolt-${unit}`,
-      );
+      const wt = worktreePath(project, fixtureIntentId8(project), unit);
       const lines = [...baseLines];
       lines[index] = value;
       writeFileSync(join(wt, "shared.ts"), `${lines.join("\n")}\n`);
@@ -2499,7 +2495,7 @@ describe("t305 healthy settled-swarm source completion", () => {
       "main",
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     writeFileSync(
       join(wt, "driver-target.ts"),
       "export const reviewed = true;\n",
@@ -2565,7 +2561,7 @@ describe("t305 post-merge source authority failure", () => {
         "main",
       ]);
       expect(prepared.rc, prepared.out).toBe(0);
-      const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+      const wt = worktreePath(project, fixtureIntentId8(project), unit);
       writeFileSync(join(wt, source), `export const value = ${JSON.stringify(value)};\n`);
       const reviewed = review(
         wt,
@@ -2640,7 +2636,7 @@ describe("t305 post-merge source authority failure", () => {
       "main",
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const cleanupRetry = true;\n");
     const reviewed = review(
@@ -2672,7 +2668,7 @@ describe("t305 post-merge source authority failure", () => {
         "#!/bin/sh",
         '[ "$1" = "prepared" ] || exit 0',
         "while read old new ref; do",
-        `  if [ "$ref" = "refs/heads/bolt-${unit}" ]; then`,
+        `  if [ "$ref" = "refs/heads/${boltName(fixtureIntentId8(project), unit)}" ]; then`,
         '    case "$new" in',
         "      000000*)",
         `        if [ ! -e "${marker}" ]; then`,
@@ -2708,57 +2704,13 @@ describe("t305 post-merge source authority failure", () => {
     const firstOutput = `${first.stdout ?? ""}${first.stderr ?? ""}`;
     expect(first.status).not.toBe(0);
     expect(firstOutput).toContain("[merge-succeeded:");
-    expect(firstOutput).toContain(`branch -D bolt-${unit} failed`);
+    expect(firstOutput).toContain(`branch -D ${boltName(fixtureIntentId8(project), unit)} failed`);
     expect(existsSync(join(project, source))).toBe(true);
     expect(existsSync(wt)).toBe(false);
     expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
       .toHaveLength(1);
 
-    const authorityBlocks = readAllAuditShards(project)
-      .split(/\n---\n/)
-      .filter(
-        (block) =>
-          block.includes(`**Unit name**: ${unit}`) &&
-          (
-            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
-            block.includes("**Event**: SWARM_SOURCE_MERGED")
-          ),
-      );
-    const decoyAudit = join(
-      project,
-      "aidlc",
-      "spaces",
-      "default",
-      "intents",
-      "cleanup-decoy",
-      "audit",
-    );
-    mkdirSync(decoyAudit, { recursive: true });
-    writeFileSync(
-      join(decoyAudit, "decoy.md"),
-      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
-    );
-    const ambiguous = spawnSync(
-      process.execPath,
-      [
-        WORKTREE,
-        "merge",
-        "--slug",
-        unit,
-        "--target",
-        "main",
-        "--strategy",
-        "squash",
-        "--project-dir",
-        project,
-      ],
-      { cwd: project, encoding: "utf-8" },
-    );
-    expect(ambiguous.status).not.toBe(0);
-    expect(`${ambiguous.stdout}${ambiguous.stderr}`).toContain(
-      "multiple durable SWARM_SOURCE_MERGED authorities",
-    );
-
+    // R4(b): the advanced-stage retry must reconcile the retained branch and source, not a prior no-op.
     appendAuditEntry(
       "STAGE_STARTED",
       { Stage: "code-generation", Agent: "aidlc-developer-agent" },
@@ -2770,6 +2722,19 @@ describe("t305 post-merge source authority failure", () => {
       ["-C", project, "rev-parse", "HEAD"],
       { encoding: "utf-8" },
     ).stdout.trim();
+    expect(
+      spawnSync("git", ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`], {
+        encoding: "utf-8",
+      }).status,
+    ).toBe(0);
+    const retainedPrefix = reviewedSourceRefPrefix(fixtureIntentId8(project), unit);
+    const sourceCommit = readAllAuditShards(project).split(/\n---\n/)
+      .filter((block) => block.includes("**Event**: SWARM_SOURCE_MERGED"))
+      .at(-1)?.match(/^\*\*Source Commit\*\*: (.+)$/m)?.[1];
+    expect(sourceCommit).toMatch(/^[0-9a-f]{40,64}$/);
+    expect(spawnSync("git", ["-C", project, "rev-parse", "--verify", `${retainedPrefix}${sourceCommit}`], {
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(sourceCommit!);
     const retried = spawnSync(
       process.execPath,
       [
@@ -2800,10 +2765,71 @@ describe("t305 post-merge source authority failure", () => {
     expect(
       spawnSync(
         "git",
-        ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/bolt-${unit}`],
+        ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`],
         { encoding: "utf-8" },
       ).status,
     ).toBe(1);
+    expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
+      .toHaveLength(1);
+    expect(existsSync(wt)).toBe(false);
+    expect(spawnSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", retainedPrefix], {
+      encoding: "utf-8",
+    }).stdout).toBe("");
+
+    const authorityBlocks = readAllAuditShards(project)
+      .split(/\n---\n/)
+      .filter(
+        (block) =>
+          block.includes(`**Unit name**: ${unit}`) &&
+          (
+            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
+            block.includes("**Event**: SWARM_SOURCE_MERGED")
+          ),
+      );
+    // R4(b): only after stage-advance cleanup, plant another intent's decoy rows.
+    // They neither block nor authorize the original intent's idempotent retry.
+    const decoyAudit = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "cleanup-decoy",
+      "audit",
+    );
+    mkdirSync(decoyAudit, { recursive: true });
+    writeFileSync(
+      join(decoyAudit, "decoy.md"),
+      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
+    );
+    const withDecoy = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    expect(withDecoy.status, `${withDecoy.stdout ?? ""}${withDecoy.stderr ?? ""}`).toBe(0);
+    expect(withDecoy.stdout).toContain('"cleanup_reconciled":true');
+    expect(spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(headAfterLanding);
+    expect(existsSync(wt)).toBe(false);
+    expect(spawnSync("git", ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`], {
+      encoding: "utf-8",
+    }).status).toBe(1);
+    expect(spawnSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", retainedPrefix], {
+      encoding: "utf-8",
+    }).stdout).toBe("");
     expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
       .toHaveLength(1);
   }, 120000);
@@ -2822,7 +2848,7 @@ describe("t305 post-merge source authority failure", () => {
       "main",
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -2901,7 +2927,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -2978,7 +3004,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -3056,7 +3082,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -3137,7 +3163,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(
       join(wt, source),

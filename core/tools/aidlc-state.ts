@@ -47,6 +47,7 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
   type AcceptedChange,
@@ -132,6 +133,7 @@ import {
   replaceSection,
   selfAttributedDecisionMarker,
   resolveBoltDag,
+  resolveBoltIdentity,
   requireLiveClaimForTeamUnit,
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
@@ -165,7 +167,6 @@ import {
   validScopes,
   withAuditLock,
   worktreeDocsDir,
-  worktreePath,
   worktreeStateFilePath,
   workspaceSourceState,
   writeStateFile,
@@ -7315,11 +7316,6 @@ function handleFork(args: string[]): void {
   });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  requireLiveClaimForTeamUnit(pd, slug, {
-    intent,
-    space,
-    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
-  });
   // recordPrefix is the worktree mirror's relative record dir (null -> the flat
   // legacy mirror, today's behaviour); wtRecord is the resolved record-dir NAME
   // the worktree state file lives under (null -> flat). Resolved on the MAIN
@@ -7346,8 +7342,19 @@ function handleFork(args: string[]): void {
   lockSpace = space;
 
   // target-dir lets tests point fork at a fixture worktree-parent. Defaults
-  // to the project's .aidlc/worktrees/bolt-<slug>/ via worktreePath().
-  const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
+  // to the selected intent's canonical Bolt directory.
+  let wtPath: string;
+  try {
+    wtPath = flags["target-dir"] ?? resolveBoltIdentity(pd, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) errorWithSlug(slug, e.message);
+    throw e;
+  }
+  requireLiveClaimForTeamUnit(pd, slug, {
+    intent,
+    space,
+    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
+  });
 
   if (!existsSync(wtPath)) {
     errorWithSlug(slug, `worktree directory does not exist: ${wtPath}. Run aidlc-worktree create first.`);
@@ -7495,11 +7502,6 @@ function handleMerge(args: string[]): void {
   });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  requireLiveClaimForTeamUnit(pd, slug, {
-    intent,
-    space,
-    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
-  });
   const recordPrefix = relativeRecordDir(pd, intent, space);
   // Resolve the intent ONCE before locking (same rationale as handleFork):
   // activeIntent maps an omitted selector to the active record, so resolvedIntent
@@ -7514,7 +7516,18 @@ function handleMerge(args: string[]): void {
   lockIntent = resolvedIntent;
   lockSpace = space;
 
-  const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
+  let wtPath: string;
+  try {
+    wtPath = flags["target-dir"] ?? resolveBoltIdentity(pd, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) errorWithSlug(slug, e.message);
+    throw e;
+  }
+  requireLiveClaimForTeamUnit(pd, slug, {
+    intent,
+    space,
+    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
+  });
   if (!existsSync(wtPath)) {
     errorWithSlug(slug, `worktree directory does not exist: ${wtPath}.`);
   }

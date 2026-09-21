@@ -8,18 +8,22 @@
 // then the orchestrator calls `verify` as a deterministic post-dispatch
 // backstop confirming the audit event landed.
 //
-// Sibling-worktree rejection: rejects calls from inside a non-main worktree
-// to avoid the dev-worktree-vs-bolt-worktree clash. Run from the main repo
-// checkout.
+// Bolt directories, branches, and retained refs are scoped by the selected
+// intent's registry identity. Pre-upgrade slug-only Bolts are resolved only
+// through matching provenance; new worktrees never use legacy names.
+// Nested checkouts are refused; external linked worktrees remain supported.
 
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
+  BOLT_INTENT_ID8_REGEX,
+  type BoltIdentity,
+  BoltIdentityError,
   boltSlugForUnit,
   currentSwarmSourceOpeningFingerprint,
   currentSwarmSourceMergeChain,
@@ -29,31 +33,34 @@ import {
   filteredRawIndexEntries,
   findAllEvents,
   getField,
+  legacyBoltIdentity,
   gitCommitSourceListing,
-  intentsDir,
   isValidRepoName,
   latestMainWorkflowStageRunFloorForProject,
-  listIntentDirs,
-  listSpaces,
   maximalAttemptEvents,
+  newBoltIdentity,
   parseParkedStampInstant,
+  parseBoltName,
   parseSourceListing,
   readAllAuditShards,
   readAuditShardEvents,
   readStateFile,
   recoveryRepoCandidates,
   relativeRecordDir,
+  relativeRecordDirForSelection,
   repoDir,
-  reviewedSourceRefPrefix,
   resolveAuditWorktreePath,
   resolveBoltDag,
+  resolveBoltIdentity,
   resolveConstructionRepo,
   resolveProjectDir,
+  resolveWorkflowSelection,
   serializeSourceListing,
   sourceListingEntriesEqual,
   sourceListingSha256,
   swarmUnitCheckpointRejections,
   type WorkspaceSourceState,
+  type WorkflowSelection,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   workspaceSourceFailureSuffix,
@@ -61,7 +68,7 @@ import {
   workspaceSourceExclusionPathspecs,
   workspaceSourcePathIsExcluded,
   workspaceSourceState,
-  worktreePath,
+  worktreesDir,
   worktreeStateFilePath,
   writeFileAtomic,
   REPO_NAME_REGEX,
@@ -167,8 +174,8 @@ interface RetainedSourceRef {
   oid: string;
 }
 
-function retainedSourceRefs(repoCwd: string, slug: string): RetainedSourceRef[] | null {
-  const prefix = reviewedSourceRefPrefix(slug);
+function retainedSourceRefs(repoCwd: string, identity: BoltIdentity): RetainedSourceRef[] | null {
+  const prefix = identity.reviewedSourceRefPrefix;
   const listed = runGit(
     ["for-each-ref", "--format=%(refname)%09%(objectname)", prefix],
     repoCwd,
@@ -182,20 +189,20 @@ function retainedSourceRefs(repoCwd: string, slug: string): RetainedSourceRef[] 
     const ref = line.slice(0, tab);
     const oid = line.slice(tab + 1);
     if (!ref.startsWith(prefix) || !/^[0-9a-f]{40,64}$/.test(oid)) return null;
+    if (!/^[0-9a-f]{40,64}$/.test(ref.slice(prefix.length))) continue;
     refs.push({ ref, oid });
   }
   return refs;
 }
 
 function recordedWorktreeSelector(
-  pd: string,
-  slug: string,
+  identity: BoltIdentity,
 ): {
   intent?: string;
   space?: string;
   repoSelector?: string | null;
 } | null {
-  const path = join(worktreePath(pd, slug), ".aidlc", WORKTREE_META_FILENAME);
+  const path = join(identity.dir, ".aidlc", WORKTREE_META_FILENAME);
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
@@ -236,7 +243,8 @@ function recordedWorktreeSelector(
 
 // Compare-and-delete each ref: if another process moved one after enumeration,
 // preserve it and report a cleanup failure instead of deleting newer evidence.
-function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): string | null {
+function deleteRetainedSourceRefs(repoCwd: string, identity: BoltIdentity, refs: RetainedSourceRef[], tag: string): string | null {
+  assertBoltBranchOwnedHere(repoCwd, identity, tag);
   for (const retained of refs) {
     const deleted = runGit(["update-ref", "-d", retained.ref, retained.oid], repoCwd);
     if (!deleted.ok) {
@@ -249,8 +257,8 @@ function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): s
 // --- Nested-worktree detection ---
 //
 // `aidlc-worktree` must not run from a checkout NESTED INSIDE the main repo
-// checkout's working tree — the `.aidlc/worktrees/<bolt>` (or legacy
-// `.claude/worktrees/<dev>`) shape the error names. A nested checkout is refused
+// checkout's working tree — `.aidlc/worktrees/bolt-<id8>_<slug>` (or a
+// provenance-matched legacy `bolt-<slug>` / `.claude/worktrees/<dev>`). A nested checkout is refused
 // because a Bolt worktree created from there would sit inside another worktree's
 // tracked tree.
 // The main checkout is the directory whose `.git` is `git rev-parse
@@ -265,6 +273,8 @@ function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): s
 // and `--base` / the merge target stay bound to the invoking checkout — which is
 // the property that keeps a unit forking from the branch holding approved work
 // rather than from whatever the main checkout happens to have checked out.
+// Intent-scoped branches avoid collisions between these external checkouts;
+// pre-upgrade names are supported for existing Bolts, never for new creation.
 //
 // P7 (multi-repo): the guard is RE-ANCHORED to the TARGET repo's checkout. When
 // `--repo <name>` selects a sibling repo, `repoCwd` is that repo dir and every
@@ -357,6 +367,19 @@ function validateStrategy(strategy: string | undefined): string {
   return strategy;
 }
 
+function resolveCommandBoltIdentity(
+  pd: string,
+  slug: string,
+  selection: WorkflowSelection,
+): BoltIdentity {
+  try {
+    return resolveBoltIdentity(pd, slug, selection);
+  } catch (e) {
+    if (e instanceof BoltIdentityError) errorWithSlug(slug, e.message);
+    throw e;
+  }
+}
+
 // Resolve the cwd every git op in a construction handler must run in (P7). With
 // `--repo <name>` it is the sibling repo dir; absent it the lone recorded repo is
 // inferred (or the projectDir for a legacy single-repo intent). A disambiguation
@@ -446,7 +469,11 @@ function handleCreate(args: string[]): void {
   }
 
   const pd = resolveProjectDir(projectDir);
-  const intentRecord = relativeRecordDir(pd, flags.intent, flags.space);
+  const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+  let identity = resolveCommandBoltIdentity(pd, slug, selection);
+  if (selection.intent !== null) flags.intent = selection.intent;
+  flags.space = selection.space;
+  const intentRecord = relativeRecordDirForSelection(selection);
   // P7: anchor every git op to the target sibling repo (or the projectDir for a
   // legacy single-repo intent). The guard is evaluated against that same checkout.
   const repoTarget = resolveRepoTarget(pd, flags, slug);
@@ -454,6 +481,15 @@ function handleCreate(args: string[]): void {
   const creatingGitCommonDir = gitCommonDirRealpath(repoCwd);
   if (creatingGitCommonDir === null) {
     errorWithSlug(slug, "Cannot resolve the creating repository common dir.");
+  }
+  // A pre-upgrade audit-first create that died between its WORKTREE_CREATED
+  // row and `git worktree add` leaves an open legacy creation with no directory,
+  // branch, registration or retained ref. That phantom is doctor's to reconcile;
+  // it must not make the slug uncreatable, so with no durable git evidence the
+  // new Bolt takes the intent-scoped identity instead of "adopting" nothing.
+  if (identity.legacy && !existsSync(identity.dir) &&
+    !repositoryBoltEvidence(pd, repoTarget.repo, identity).durable) {
+    identity = newBoltIdentity(pd, identity.intentId8, slug);
   }
   assertNotSiblingWorktree(repoCwd);
 
@@ -485,7 +521,15 @@ function handleCreate(args: string[]): void {
     errorWithSlug(slug, `Base source listing could not be computed for: ${flags.base}`);
   }
 
-  const wtPath = worktreePath(pd, slug);
+  const wtPath = identity.dir;
+  if (identity.legacy && !existsSync(wtPath)) {
+    const retained = retainedSourceRefs(repoCwd, identity);
+    if (retained === null) errorWithSlug(slug, "reviewed-source ref enumeration failed");
+    errorWithSlug(
+      slug,
+      `Legacy Bolt ${slug} left branch ${identity.branch}${retained.length > 0 ? ` and ${retained.length} retained refs` : ""} behind; run discard --slug ${slug} under its intent to park and clean them before creating a new Bolt.`,
+    );
+  }
   if (existsSync(wtPath)) {
     errorWithSlug(
       slug,
@@ -495,7 +539,7 @@ function handleCreate(args: string[]): void {
     );
   }
 
-  const branchName = `bolt-${slug}`;
+  const branchName = identity.branch;
   const branchExists = runGit(["rev-parse", "--verify", `refs/heads/${branchName}`], repoCwd);
   if (branchExists.ok) {
     const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
@@ -546,9 +590,10 @@ function handleCreate(args: string[]): void {
   // WORKTREE_CREATED/worktree-meta.json record.
   const add = runGit(["worktree", "add", wtPath, "-b", branchName, baseCommit], repoCwd);
   if (!add.ok) {
+    assertBoltBranchOwnedHere(repoCwd, identity, "Failed-create cleanup");
     if (
       existsSync(wtPath) ||
-      repositoryRegistersBoltWorktree(pd, repoCwd, slug)
+      repositoryRegistersBoltWorktree(pd, repoCwd, identity)
     ) {
       runGit(["worktree", "remove", "--force", wtPath], repoCwd);
     }
@@ -557,6 +602,7 @@ function handleCreate(args: string[]): void {
       repoCwd,
     );
     if (leakedBranch.ok && leakedBranch.stdout.trim() === baseCommit) {
+      assertBoltBranchOwnedHere(repoCwd, identity, "Failed-create cleanup");
       runGit(
         ["update-ref", "-d", `refs/heads/${branchName}`, baseCommit],
         repoCwd,
@@ -579,6 +625,8 @@ function handleCreate(args: string[]): void {
         {
           version: 1,
           boltSlug: slug,
+          intentId8: identity.intentId8,
+          branch: identity.branch,
           baseBranch: flags.base,
           baseCommit,
           baseSourceListing: rawBase.hash,
@@ -699,52 +747,18 @@ function latestUnambiguousRow(
   return latest.at(-1) ?? null;
 }
 
-function allWorktreeAuditRows(
+function selectedWorktreeAuditRows(
   pd: string,
+  selection: WorkflowSelection,
 ): { rows: ScopedWorktreeAuditRow[]; unreadableShards: string[] } {
-  const rows: ScopedWorktreeAuditRow[] = [];
-  const unreadable = new Set<string>();
-  const seenRows = new Set<string>();
-  for (const { name: space } of listSpaces(pd)) {
-    const intentNames = new Set(listIntentDirs(pd, space));
-    try {
-      for (const entry of readdirSync(intentsDir(pd, space), {
-        withFileTypes: true,
-      })) {
-        if (
-          entry.isDirectory() &&
-          existsSync(join(intentsDir(pd, space), entry.name, "audit"))
-        ) {
-          intentNames.add(entry.name);
-        }
-      }
-    } catch {
-      // The explicit-space read below reports an unreadable aggregate root.
-    }
-    for (const intent of [undefined, ...[...intentNames].sort()]) {
-      const failures: string[] = [];
-      const selectedRows = readAuditShardEvents(pd, intent, space, failures);
-      for (const failure of failures) unreadable.add(failure);
-      for (const row of selectedRows) {
-        const key = `${row.shard}\0${row.pos}`;
-        if (seenRows.has(key)) continue;
-        seenRows.add(key);
-        const shardRelative = relative(intentsDir(pd, space), row.shard)
-          .replaceAll("\\", "/");
-        const parts = shardRelative.split("/");
-        rows.push({
-          ...row,
-          authoritySpace: space,
-          ...(parts.length >= 3 &&
-          parts[0] !== ".." &&
-          parts[1] === "audit"
-            ? { authorityIntent: parts[0] }
-            : {}),
-        });
-      }
-    }
-  }
-  return { rows, unreadableShards: [...unreadable].sort() };
+  const unreadableShards: string[] = [];
+  const rows = readAuditShardEvents(pd, selection.intent ?? undefined, selection.space, unreadableShards)
+    .map((row) => ({
+      ...row,
+      authoritySpace: selection.space,
+      ...(selection.intent === null ? {} : { authorityIntent: selection.intent }),
+    }));
+  return { rows, unreadableShards };
 }
 
 function repoSelectorKey(repo: string | null): string {
@@ -773,23 +787,33 @@ function worktreeCheckedOutAt(porcelain: string, branchRef: string): string | nu
   return null;
 }
 
+function assertBoltBranchOwnedHere(repoCwd: string, identity: BoltIdentity, tag: string): void {
+  const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
+  if (!listed.ok) {
+    errorWithSlug(identity.slug, `${tag} cannot verify Bolt branch ownership: ${listed.stderr.trim() || `exit ${listed.code}`}`);
+  }
+  const owner = worktreeCheckedOutAt(listed.stdout, `refs/heads/${identity.branch}`);
+  if (owner !== null && pathKey(owner) !== pathKey(identity.dir)) {
+    const prefix = `${tag} branch ${identity.branch}`;
+    const refusal = "; refusing to delete another worktree's Bolt";
+    errorWithSlug(identity.slug, {
+      message: `${prefix} is checked out at ${owner}${refusal}`,
+      auditMessage: `${prefix} (checked out in another worktree of this repository)${refusal}`,
+    });
+  }
+}
+
 function repositoryRegistersBoltWorktree(
-  pd: string,
+  _pd: string,
   repoCwd: string,
-  slug: string,
+  identity: BoltIdentity,
 ): boolean {
   const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
   if (!listed.ok) return false;
-  const branchName = `bolt-${slug}`;
-  const expectedPath = pathKey(worktreePath(pd, slug));
-  for (const line of listed.stdout.split(/\r?\n/)) {
-    if (
-      (line.startsWith("worktree ") &&
-        pathKey(line.slice("worktree ".length)) === expectedPath) ||
-      line === `branch refs/heads/${branchName}`
-    ) {
-      return true;
-    }
+  const expectedPath = pathKey(identity.dir);
+  for (const block of listed.stdout.split(/\r?\n\r?\n/)) {
+    const path = block.split(/\r?\n/).find((line) => line.startsWith("worktree "))?.slice(9);
+    if (path !== undefined && pathKey(path) === expectedPath) return true;
   }
   return false;
 }
@@ -797,7 +821,7 @@ function repositoryRegistersBoltWorktree(
 function repositoryBoltEvidence(
   pd: string,
   repo: string | null,
-  slug: string,
+  identity: BoltIdentity,
 ): RepositoryBoltEvidence {
   const cwd = repo === null ? pd : repoDir(pd, repo);
   if (!runGit(["rev-parse", "--git-dir"], cwd).ok) {
@@ -808,14 +832,14 @@ function repositoryBoltEvidence(
       retained: false,
     };
   }
-  const branchName = `bolt-${slug}`;
+  const branchName = identity.branch;
   const branch = runGit(
     ["rev-parse", "--verify", `refs/heads/${branchName}`],
     cwd,
   ).ok;
-  const retained = retainedSourceRefs(cwd, slug);
+  const retained = retainedSourceRefs(cwd, identity);
   const retainedPresent = retained !== null && retained.length > 0;
-  const registered = repositoryRegistersBoltWorktree(pd, cwd, slug);
+  const registered = repositoryRegistersBoltWorktree(pd, cwd, identity);
   return {
     branch,
     durable: branch || retainedPresent || registered,
@@ -841,18 +865,24 @@ interface DiscardCreationAuthority {
   intent?: string;
   repo?: string | null;
   space?: string;
+  legacyDiscardRef?: string | null;
+  legacyMergeRecorded?: boolean;
 }
 
 function discardCreationAuthority(
   pd: string,
-  slug: string,
+  identity: BoltIdentity,
+  selection: WorkflowSelection,
   recorded: ReturnType<typeof recordedWorktreeSelector>,
   explicitRepo?: string,
 ): DiscardCreationAuthority {
-  const audit = allWorktreeAuditRows(pd);
+  const slug = identity.slug;
+  const audit = selectedWorktreeAuditRows(pd, selection);
   const creationRows = audit.rows.filter(
     (row) =>
       row.event === "WORKTREE_CREATED" &&
+      row.authoritySpace === selection.space &&
+      row.authorityIntent === selection.intent &&
       auditBlockField(row.block, "Bolt slug") === slug,
   );
   const selectors = worktreeRepoCandidates(pd, audit.rows, slug);
@@ -868,10 +898,10 @@ function discardCreationAuthority(
 
   const evidence = new Map<string, RepositoryBoltEvidence>();
   for (const [key, repo] of selectors) {
-    evidence.set(key, repositoryBoltEvidence(pd, repo, slug));
+    evidence.set(key, repositoryBoltEvidence(pd, repo, identity));
   }
   const evidenceExists =
-    existsSync(worktreePath(pd, slug)) ||
+    existsSync(identity.dir) ||
     [...evidence.values()].some((value) => value.durable);
   if (!evidenceExists) return { evidenceExists: false };
 
@@ -881,8 +911,8 @@ function discardCreationAuthority(
     return (
       recordedPath !== null &&
       pathKey(resolveAuditWorktreePath(pd, recordedPath)) ===
-        pathKey(worktreePath(pd, slug)) &&
-      branch === `bolt-${slug}`
+        pathKey(identity.dir) &&
+      branch === identity.branch
     );
   });
   const rowsByTimestamp = new Map<string, ScopedWorktreeAuditRow[]>();
@@ -930,6 +960,18 @@ function discardCreationAuthority(
       evidence.get(repoSelectorKey(repo))?.durable === true
     );
   });
+  // A namespaced Bolt is always created audit-first by this tool, so the
+  // selected intent's own WORKTREE_CREATED must corroborate whatever git
+  // evidence exists. Without it the branch or ref belongs to someone else —
+  // a linked checkout whose registry diverged onto the same id8, or a hand
+  // made name — and discard must not park and delete it. Only pre-upgrade
+  // (legacy) Bolts may fall back to evidence-only ownership below.
+  if (!identity.legacy && wellShapedRows.length === 0 && audit.unreadableShards.length === 0) {
+    errorWithSlug(
+      slug,
+      `refusing to discard: no WORKTREE_CREATED row of intent ${relativeRecordDirForSelection(selection) ?? selection.space} names ${identity.name}; a branch or ref alone is not provenance for an intent-scoped Bolt`,
+    );
+  }
   const corroboratedRepos = new Map<string, string | null>();
   for (const row of corroborated) {
     const field = auditBlockField(row.block, "Repo") as string;
@@ -1013,7 +1055,7 @@ function discardCreationAuthority(
         .join(", ");
       errorWithSlug(
         slug,
-        `refusing to discard: a readable WORKTREE_CREATED record names ${repos}, but no worktree registration, bolt-${slug} branch, or retained reviewed-source ref remains there to corroborate it. If this Bolt was already discarded, this is expected; otherwise inspect ${repos} for the bolt-${slug} branch`,
+        `refusing to discard: a readable WORKTREE_CREATED record names ${repos}, but no worktree registration, ${identity.branch} branch, or retained reviewed-source ref remains there to corroborate it. If this Bolt was already discarded, this is expected; otherwise inspect ${repos} for the ${identity.branch} branch`,
       );
     }
     errorWithSlug(
@@ -1047,7 +1089,7 @@ function discardCreationAuthority(
         const labels = repos.map((repo) => JSON.stringify(repo)).join(", ");
         errorWithSlug(
           slug,
-          `refusing to discard: pre-upgrade Bolt evidence spans repositories ${labels} without WORKTREE_CREATED Repo authority. Delete the stray bolt-${slug} branch in the repository that is not the creating one, then retry with --repo <creating-repo>`,
+          `refusing to discard: pre-upgrade Bolt evidence spans repositories ${labels} without WORKTREE_CREATED Repo authority. Delete the stray ${identity.branch} branch in the repository that is not the creating one, then retry with --repo <creating-repo>`,
         );
       }
     }
@@ -1072,8 +1114,34 @@ function discardCreationAuthority(
       `refusing to discard: worktree metadata repository ${JSON.stringify(repoSelectorLabel(recorded.repoSelector))} does not match corroborated WORKTREE_CREATED repository ${JSON.stringify(repoSelectorLabel(auditRepo))}`,
     );
   }
+  let legacyDiscardRef: string | null | undefined;
+  let legacyMergeRecorded = false;
+  if (identity.legacy && !existsSync(identity.dir)) {
+    const lifecycle = audit.rows.filter((row) =>
+      VALID_VERIFY_EVENTS.has(row.event) && auditBlockField(row.block, "Bolt slug") === slug);
+    const frontier = maximalAttemptEvents(lifecycle);
+    if (frontier.length === 1 && frontier[0].event !== "WORKTREE_CREATED") {
+      const discarded = maximalAttemptEvents(lifecycle.filter((row) => {
+        if (row.event !== "WORKTREE_DISCARDED") return false;
+        const path = auditBlockField(row.block, "Worktree path");
+        return path !== null && pathKey(resolveAuditWorktreePath(pd, path)) === pathKey(identity.dir);
+      }));
+      if (discarded.length > 0) {
+        legacyDiscardRef = discarded.length === 1 ? auditBlockField(discarded[0].block, "Parked ref") : null;
+      } else {
+        // The frontier is a WORKTREE_MERGED with no discard: this intent's Bolt
+        // either merged completely or died mid-cleanup. Either way a leftover
+        // legacy branch is not discard's to park — the cleanup-only merge retry
+        // owns it and checks the tip against the landed source commit — and it
+        // may belong to a later pre-upgrade intent that reused the global name.
+        legacyMergeRecorded = true;
+      }
+    }
+  }
   return {
     evidenceExists: true,
+    legacyDiscardRef,
+    legacyMergeRecorded,
     ...(auditRepo === undefined
       ? {}
       : {
@@ -1095,13 +1163,14 @@ function rowAfter(candidate: WorktreeAuditRow, boundary: WorktreeAuditRow): bool
 
 function convergedSourceRecord(
   pd: string,
-  slug: string,
+  identity: BoltIdentity,
   repoCwd: string,
   intent?: string,
   space?: string,
   selectedRepo: string | null = null,
 ): ConvergedSourceRecord | null {
-  const wtPath = worktreePath(pd, slug);
+  const slug = identity.slug;
+  const wtPath = identity.dir;
   let worktreeMeta: {
     boltSlug: string;
     baseCommit: string;
@@ -1184,7 +1253,7 @@ function convergedSourceRecord(
       (!worktreeMeta.intentRecord ||
         worktreeMeta.intentRecord !== relativeRecordDir(pd, intent, space))
     ) {
-      const expected = recordedWorktreeSelector(pd, slug);
+      const expected = recordedWorktreeSelector(identity);
       const recovery =
         typeof expected?.space === "string" &&
         typeof expected.intent === "string"
@@ -1210,7 +1279,7 @@ function convergedSourceRecord(
       );
     }
   }
-  const retained = retainedSourceRefs(repoCwd, slug);
+  const retained = retainedSourceRefs(repoCwd, identity);
   if (retained === null) {
     errorWithSlug(slug, "refusing to merge: reviewed-source ref enumeration failed");
   }
@@ -1891,10 +1960,10 @@ interface SwarmWorktreeIdentity {
 }
 
 function currentSwarmWorktreeIdentity(
-  pd: string,
-  slug: string,
+  identity: BoltIdentity,
 ): SwarmWorktreeIdentity | null | undefined {
-  const path = join(worktreePath(pd, slug), ".aidlc", WORKTREE_META_FILENAME);
+  const slug = identity.slug;
+  const path = join(identity.dir, ".aidlc", WORKTREE_META_FILENAME);
   if (!existsSync(path)) return undefined;
   try {
     const parsed = JSON.parse(readFileSync(path, "utf-8")) as Record<
@@ -1932,14 +2001,14 @@ function currentSwarmWorktreeIdentity(
 
 function mergedSwarmCleanupAuthority(
   pd: string,
-  slug: string,
+  boltIdentity: BoltIdentity,
+  selection: WorkflowSelection,
   target: string,
   explicitRepo?: string,
-  intent?: string,
-  space?: string,
   identity?: SwarmWorktreeIdentity,
 ): MergedSwarmAuthority | null {
-  const audit = allWorktreeAuditRows(pd);
+  const slug = boltIdentity.slug;
+  const audit = selectedWorktreeAuditRows(pd, selection);
   const candidates = new Map<
     string,
     {
@@ -1954,8 +2023,6 @@ function mergedSwarmCleanupAuthority(
     if (row.event !== "SWARM_SOURCE_MERGED") continue;
     const unit = auditBlockField(row.block, "Unit name");
     if (unit === null || boltSlugForUnit(unit) !== slug) continue;
-    if (space !== undefined && row.authoritySpace !== space) continue;
-    if (intent !== undefined && row.authorityIntent !== intent) continue;
     const repoField = auditBlockField(row.block, "Repo");
     const repo =
       repoField === "-"
@@ -1998,12 +2065,12 @@ function mergedSwarmCleanupAuthority(
       (() => {
         const path = auditBlockField(candidate.block, "Worktree path");
         return path !== null &&
-          pathKey(resolveAuditWorktreePath(pd, path)) === pathKey(worktreePath(pd, slug));
+          pathKey(resolveAuditWorktreePath(pd, path)) === pathKey(boltIdentity.dir);
       })()));
-    if (creations.length > 1) continue;
+    if (creations.length !== 1) continue;
     const creation = creations[0];
-    if (creation && !rowAfter(row, creation)) continue;
-    if (identity !== undefined && (!creation ||
+    if (!rowAfter(row, creation)) continue;
+    if (identity !== undefined && (
       creation.authoritySpace !== row.authoritySpace ||
       creation.authorityIntent !== row.authorityIntent ||
       auditBlockField(creation.block, "Base commit") !== identity.baseCommit ||
@@ -2021,7 +2088,7 @@ function mergedSwarmCleanupAuthority(
       (candidate) =>
         candidate.event === "SWARM_UNIT_CONVERGED" &&
         auditBlockField(candidate.block, "Unit name") === unit &&
-        (!creation || rowAfter(candidate, creation)),
+        rowAfter(candidate, creation),
     ));
     const convergence = convergences.length === 1 ? convergences[0] : null;
     if (!convergence ||
@@ -2038,10 +2105,10 @@ function mergedSwarmCleanupAuthority(
       !runGit(["merge-base", "--is-ancestor", mergeCommit, target], repoCwd).ok
     ) continue;
     const branch = runGit(
-      ["rev-parse", "--verify", `refs/heads/bolt-${slug}`],
+      ["rev-parse", "--verify", `refs/heads/${boltIdentity.branch}`],
       repoCwd,
     );
-    const retained = retainedSourceRefs(repoCwd, slug);
+    const retained = retainedSourceRefs(repoCwd, boltIdentity);
     const cleanupEvidence =
       (branch.ok && branch.stdout.trim() === sourceCommit) ||
       (retained?.some((entry) => entry.oid === sourceCommit) ?? false);
@@ -2098,18 +2165,20 @@ function mergedSwarmCleanupAuthority(
 
 function reconcileMergedSwarmCleanup(
   pd: string,
-  slug: string,
+  identity: BoltIdentity,
   repoCwd: string,
   target: string,
   authority: MergedSwarmAuthority | null,
 ): boolean {
   if (authority === null) return false;
+  const slug = identity.slug;
   const cleanupTag = `[merge-succeeded:${authority.mergeCommit}]`;
+  assertBoltBranchOwnedHere(repoCwd, identity, cleanupTag);
 
-  const wtPath = worktreePath(pd, slug);
-  const branchName = `bolt-${slug}`;
+  const wtPath = identity.dir;
+  const branchName = identity.branch;
   const dirExists = existsSync(wtPath);
-  const registered = repositoryRegistersBoltWorktree(pd, repoCwd, slug);
+  const registered = repositoryRegistersBoltWorktree(pd, repoCwd, identity);
   if (dirExists || registered) {
     if (!dirExists) {
       errorWithSlug(
@@ -2145,6 +2214,7 @@ function reconcileMergedSwarmCleanup(
         `${cleanupTag} cleanup-only branch ${branchName} moved after source landing; preserve it for inspection`,
       );
     }
+    assertBoltBranchOwnedHere(repoCwd, identity, cleanupTag);
     const deleted = runGit(
       ["update-ref", "-d", `refs/heads/${branchName}`, branchOid],
       repoCwd,
@@ -2156,14 +2226,14 @@ function reconcileMergedSwarmCleanup(
       );
     }
   }
-  const retained = retainedSourceRefs(repoCwd, slug);
+  const retained = retainedSourceRefs(repoCwd, identity);
   if (retained === null) {
     errorWithSlug(
       slug,
       `${cleanupTag} cleanup-only reviewed-source ref enumeration failed`,
     );
   }
-  const refCleanupError = deleteRetainedSourceRefs(repoCwd, retained);
+  const refCleanupError = deleteRetainedSourceRefs(repoCwd, identity, retained, cleanupTag);
   if (refCleanupError) {
     errorWithSlug(
       slug,
@@ -2275,41 +2345,30 @@ function handleMerge(args: string[]): void {
   const message = flags.message ?? `Bolt ${slug}`;
 
   const pd = resolveProjectDir(projectDir);
-  const recorded = recordedWorktreeSelector(pd, slug);
-  if (flags.intent === undefined && flags.space === undefined) {
-    if (
-      recorded !== null &&
-      recorded.intent !== undefined &&
-      recorded.space !== undefined
-    ) {
-      flags.intent = recorded.intent;
-      flags.space = recorded.space;
-    }
-  }
+  const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+  const identity = resolveCommandBoltIdentity(pd, slug, selection);
+  if (selection.intent !== null) flags.intent = selection.intent;
+  flags.space = selection.space;
+  const recorded = recordedWorktreeSelector(identity);
   if (
     flags.repo === undefined &&
     typeof recorded?.repoSelector === "string"
   ) {
     flags.repo = recorded.repoSelector;
   }
-  const worktreeIdentity = currentSwarmWorktreeIdentity(pd, slug);
+  const worktreeIdentity = currentSwarmWorktreeIdentity(identity);
   const cleanupAuthority =
     worktreeIdentity === null
       ? null
       : mergedSwarmCleanupAuthority(
           pd,
-          slug,
+          identity,
+          selection,
           flags.target,
           flags.repo,
-          flags.intent,
-          flags.space,
           worktreeIdentity,
         );
   if (recorded === null && cleanupAuthority !== null) {
-    flags.space = cleanupAuthority.space;
-    if (cleanupAuthority.intent !== undefined) {
-      flags.intent = cleanupAuthority.intent;
-    }
     if (cleanupAuthority.repo !== null) {
       flags.repo = cleanupAuthority.repo;
     }
@@ -2323,7 +2382,7 @@ function handleMerge(args: string[]): void {
   if (
     reconcileMergedSwarmCleanup(
       pd,
-      slug,
+      identity,
       repoCwd,
       flags.target,
       cleanupAuthority,
@@ -2351,11 +2410,11 @@ function handleMerge(args: string[]): void {
     );
   }
 
-  const wtPath = worktreePath(pd, slug);
-  const branchName = `bolt-${slug}`;
+  const wtPath = identity.dir;
+  const branchName = identity.branch;
   const sourceRecord = convergedSourceRecord(
     pd,
-    slug,
+    identity,
     repoCwd,
     flags.intent,
     flags.space,
@@ -2455,7 +2514,7 @@ function handleMerge(args: string[]): void {
 
   // This is the last guard before source mutation. The convergence selector is
   // the requested intent/space, and the returned target is an immutable commit
-  // object rather than the movable bolt-<slug> branch.
+  // object rather than the movable intent-scoped Bolt branch.
   let mergeTarget = assertConvergedSourceUnchanged(slug, wtPath, sourceRecord) ?? branchName;
   let bypassBranchOid = "";
   if (sourceRecord?.kind === "bypass" && strategy !== "rebase") {
@@ -2714,6 +2773,7 @@ function handleMerge(args: string[]): void {
       );
     }
   }
+  assertBoltBranchOwnedHere(repoCwd, identity, cleanupTag);
   // A swarm snapshot does not move the Bolt branch, so reviewed application
   // files may still be modified/untracked in this disposable checkout. Once
   // that immutable source has landed, align the checkout to it before forced
@@ -2818,6 +2878,7 @@ function handleMerge(args: string[]): void {
       `${cleanupTag} worktree remove failed: ${rm.stderr.trim() || `exit ${rm.code}`}`
     );
   }
+  assertBoltBranchOwnedHere(repoCwd, identity, cleanupTag);
   const del =
     sourceRecord?.kind === "bypass"
       ? runGit(
@@ -2831,11 +2892,11 @@ function handleMerge(args: string[]): void {
       `${cleanupTag} branch -D ${branchName} failed: ${del.stderr.trim() || `exit ${del.code}`}`
     );
   }
-  const retained = retainedSourceRefs(repoCwd, slug);
+  const retained = retainedSourceRefs(repoCwd, identity);
   if (retained === null) {
     errorWithSlug(slug, `${cleanupTag} reviewed-source ref enumeration failed`);
   }
-  const refCleanupError = deleteRetainedSourceRefs(repoCwd, retained);
+  const refCleanupError = deleteRetainedSourceRefs(repoCwd, identity, retained, cleanupTag);
   if (refCleanupError) {
     errorWithSlug(slug, `${cleanupTag} reviewed-source ref cleanup failed: ${refCleanupError}`);
   }
@@ -2882,21 +2943,25 @@ function listConflictFiles(cwd?: string): string[] {
 
 const PARKED_STAMP_RE = /^\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?$/;
 
-function parkedSourceRefs(repoCwd: string, slug: string): RetainedSourceRef[] {
-  const prefix = `refs/aidlc/parked/${slug}/`;
+function parkedSourceRefs(repoCwd: string, identity: BoltIdentity): RetainedSourceRef[] {
+  const prefix = identity.parkedRefPrefix;
   const listed = runGit(["for-each-ref", "--format=%(refname)%09%(objectname)", prefix], repoCwd);
   if (!listed.ok) throw new Error(listed.stderr.trim() || "parked ref enumeration failed");
-  return listed.stdout.split(/\r?\n/).filter(Boolean).map((line) => {
+  return listed.stdout.split(/\r?\n/).filter(Boolean).flatMap((line) => {
     const [ref, oid] = line.split("\t");
     if (!ref?.startsWith(prefix) || !/^[0-9a-f]{40,64}$/.test(oid ?? "")) {
       throw new Error("invalid parked ref enumeration");
     }
-    return { ref, oid };
+    const suffix = ref.slice(prefix.length);
+    const slash = suffix.indexOf("/");
+    if (slash === -1 || !PARKED_STAMP_RE.test(suffix.slice(0, slash)) ||
+      !/^(?:head|snapshot|branch-tip|reviewed-source\/[0-9a-f]{40,64})$/.test(suffix.slice(slash + 1))) return [];
+    return [{ ref, oid }];
   });
 }
 
-function parkedStamp(ref: string): string {
-  return ref.split("/")[4];
+function parkedStamp(ref: string, identity: BoltIdentity): string {
+  return ref.slice(identity.parkedRefPrefix.length).split("/")[0];
 }
 
 function validateParkedStamp(stamp: string | undefined): void {
@@ -2913,7 +2978,7 @@ interface ParkedAttempt {
 
 function parkAttempt(
   repoCwd: string,
-  slug: string,
+  identity: BoltIdentity,
   wtPath: string,
   dirExists: boolean,
   registered: boolean,
@@ -2921,10 +2986,10 @@ function parkAttempt(
   retained: RetainedSourceRef[],
 ): ParkedAttempt {
   const baseStamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  const occupied = new Set(parkedSourceRefs(repoCwd, slug).map(({ ref }) => parkedStamp(ref)));
+  const occupied = new Set(parkedSourceRefs(repoCwd, identity).map(({ ref }) => parkedStamp(ref, identity)));
   let stamp = baseStamp;
   for (let suffix = 2; occupied.has(stamp); suffix++) stamp = `${baseStamp}-${suffix}`;
-  const ref = `refs/aidlc/parked/${slug}/${stamp}`;
+  const ref = `${identity.parkedRefPrefix}${stamp}`;
   const objectEnv = { GIT_NO_REPLACE_OBJECTS: "1" };
   const requireGit = (args: string[], cwd = repoCwd, env: NodeJS.ProcessEnv = objectEnv): string => {
     const result = runGit(args, cwd, env);
@@ -2932,6 +2997,7 @@ function parkAttempt(
     return result.stdout.trim();
   };
   let commit: string | null = null;
+  let branchTip: string | null = null;
   if (dirExists) {
     if (!registered) throw new Error("worktree directory is not registered with the creating repository");
     const idx = join(tmpdir(), `aidlc-park-${process.pid}-${randomUUID()}`);
@@ -2946,7 +3012,8 @@ function parkAttempt(
       GIT_COMMITTER_EMAIL: "aidlc@localhost",
     };
     try {
-      const head = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
+      const head = requireGit(["rev-parse", "--verify", `refs/heads/${identity.branch}^{commit}`]);
+      branchTip = head;
       requireGit(["read-tree", head], wtPath, env);
       requireGit(["add", "-A"], wtPath, env);
       // Clean filters may transform dirty bytes; the park must hold the exact
@@ -3050,18 +3117,20 @@ function parkAttempt(
       const tree = requireGit(["write-tree"], wtPath, env);
       commit = requireGit([
         "commit-tree", tree, "-p", head, "-m",
-        `aidlc: parked bolt-${slug} at ${stamp} (agent-discard)`,
+        `aidlc: parked ${identity.name} at ${stamp} (agent-discard)`,
       ], wtPath, env);
     } finally {
       rmSync(idx, { force: true });
     }
   } else if (branchExists) {
-    commit = requireGit(["rev-parse", "--verify", `refs/heads/bolt-${slug}^{commit}`]);
+    commit = requireGit(["rev-parse", "--verify", `refs/heads/${identity.branch}^{commit}`]);
   }
   const mode = dirExists ? "snapshot" : branchExists ? "branch-tip" : "evidence-only";
   if (commit !== null) {
     requireGit(["update-ref", `${ref}/head`, commit, ""]);
     requireGit(["update-ref", `${ref}/${mode}`, commit, ""]);
+    // A retry after checkout removal must distinguish this branch from a reused legacy name.
+    if (branchTip !== null) requireGit(["update-ref", `${ref}/branch-tip`, branchTip, ""]);
   }
   // Copy every source ref before audit/removal. Originals remain intact if any
   // copy fails; their compare-and-delete runs only after successful teardown.
@@ -3070,6 +3139,19 @@ function parkAttempt(
     requireGit(["update-ref", `${ref}/reviewed-source/${sourceCommit}`, source.oid, ""]);
   }
   return { ref, commit: commit ?? "-", mode };
+}
+
+function assertNoForeignBoltDirectory(pd: string, identity: BoltIdentity, selection: WorkflowSelection): void {
+  const root = worktreesDir(pd);
+  if (!existsSync(root)) return;
+  for (const name of readdirSync(root).sort()) {
+    const parsed = parseBoltName(name);
+    if (parsed === null || parsed.slug !== identity.slug || name === identity.name) continue;
+    errorWithSlug(
+      identity.slug,
+      `no Bolt ${identity.slug} belongs to intent ${relativeRecordDirForSelection(selection)}; this checkout holds ${name} (${parsed.intentId8 === null ? "legacy" : `intent ${parsed.intentId8}`}) at ${join(root, name)} — select that intent to discard it`,
+    );
+  }
 }
 
 // --- Subcommand: discard ---
@@ -3087,26 +3169,21 @@ function handleDiscard(args: string[]): void {
   if (flags.repo !== undefined && !isValidRepoName(flags.repo)) {
     errorWithSlug(slug, `Invalid --repo "${flags.repo}": a repo name must be a single path segment matching ${REPO_NAME_REGEX}.`);
   }
-  const intentWasExplicit =
-    flags.intent !== undefined || flags.space !== undefined;
-  const recorded = recordedWorktreeSelector(pd, slug);
-  if (
-    flags.intent === undefined &&
-    flags.space === undefined &&
-    recorded?.intent !== undefined &&
-    recorded.space !== undefined
-  ) {
-    flags.intent = recorded.intent;
-    flags.space = recorded.space;
-  }
+  const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+  const identity = resolveCommandBoltIdentity(pd, slug, selection);
+  if (selection.intent !== null) flags.intent = selection.intent;
+  flags.space = selection.space;
+  const recorded = recordedWorktreeSelector(identity);
   const authority = discardCreationAuthority(
     pd,
-    slug,
+    identity,
+    selection,
     recorded,
     flags.repo,
   );
-  const wtPath = worktreePath(pd, slug);
+  const wtPath = identity.dir;
   if (!authority.evidenceExists) {
+    assertNoForeignBoltDirectory(pd, identity, selection);
     console.log(
       JSON.stringify({
         emitted: null,
@@ -3123,17 +3200,12 @@ function handleDiscard(args: string[]): void {
         ? null
         : `aidlc/spaces/${authority.space}/intents/${authority.intent}`;
     if (
-      intentWasExplicit &&
       relativeRecordDir(pd, flags.intent, flags.space) !== authorityRecord
     ) {
       errorWithSlug(
         slug,
         `refusing to discard: selected intent ${JSON.stringify(relativeRecordDir(pd, flags.intent, flags.space))} does not match creating intent ${JSON.stringify(authorityRecord)}`,
       );
-    }
-    if (!intentWasExplicit && authority.intent !== undefined) {
-      flags.intent = authority.intent;
-      flags.space = authority.space;
     }
   }
   const creatingRepo =
@@ -3158,21 +3230,43 @@ function handleDiscard(args: string[]): void {
     ? { cwd: pd, repo: null }
     : resolveRepoTarget(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
+  assertBoltBranchOwnedHere(repoCwd, identity, "Discard");
 
-  const branchName = `bolt-${slug}`;
+  const branchName = identity.branch;
   const dirExists = existsSync(wtPath);
-  const registered = repositoryRegistersBoltWorktree(pd, repoCwd, slug);
-  const branchExists = runGit([
+  const registered = repositoryRegistersBoltWorktree(pd, repoCwd, identity);
+  const branch = runGit([
     "rev-parse",
     "--verify",
     `refs/heads/${branchName}`,
-  ], repoCwd).ok;
-  const retained = retainedSourceRefs(repoCwd, slug);
+  ], repoCwd);
+  const branchExists = branch.ok;
+  if (identity.legacy && !dirExists && branchExists && authority.legacyDiscardRef !== undefined) {
+    const ref = authority.legacyDiscardRef;
+    let recordedTip: string | null = null;
+    if (ref?.startsWith(identity.parkedRefPrefix) &&
+      PARKED_STAMP_RE.test(ref.slice(identity.parkedRefPrefix.length))) {
+      const tip = runGit(["rev-parse", "--verify", `${ref}/branch-tip`], repoCwd);
+      const head = tip.ok ? tip : runGit(["rev-parse", "--verify", `${ref}/head`], repoCwd);
+      if (head.ok) recordedTip = head.stdout.trim();
+    }
+    if (recordedTip !== branch.stdout.trim()) {
+      errorWithSlug(slug, `legacy branch ${branchName} tip does not match this intent's recorded discard; leaving it for inspection`);
+    }
+  }
+  if (identity.legacy && !dirExists && branchExists && authority.legacyMergeRecorded) {
+    errorWithSlug(
+      slug,
+      `legacy Bolt ${slug} recorded a merge; finish it with merge --slug ${slug} (cleanup-only) instead of discard — the leftover branch ${branchName} may belong to a later attempt`,
+    );
+  }
+  const retained = retainedSourceRefs(repoCwd, identity);
   if (retained === null) {
     errorWithSlug(slug, "reviewed-source ref enumeration failed");
   }
 
   if (!dirExists && !branchExists && retained.length === 0) {
+    assertNoForeignBoltDirectory(pd, identity, selection);
     console.log(
       JSON.stringify({
         emitted: null,
@@ -3187,14 +3281,14 @@ function handleDiscard(args: string[]): void {
   const discardedApproval = dirExists &&
     relativeRecordDir(pd, flags.intent, flags.space) === relativeRecordDir(pd)
     ? (() => {
-        const identity = currentSwarmWorktreeIdentity(pd, slug);
-        return identity?.stage === "code-generation"
-          ? captureCodeGenerationDiscardApproval(pd, wtPath, identity.unit) : null;
+        const swarmIdentity = currentSwarmWorktreeIdentity(identity);
+        return swarmIdentity?.stage === "code-generation"
+          ? captureCodeGenerationDiscardApproval(pd, wtPath, swarmIdentity.unit) : null;
       })()
     : null;
   let parked: ParkedAttempt;
   try {
-    parked = parkAttempt(repoCwd, slug, wtPath, dirExists, registered, branchExists, retained);
+    parked = parkAttempt(repoCwd, identity, wtPath, dirExists, registered, branchExists, retained);
   } catch (e) {
     errorWithSlug(slug, `refusing to discard: parking the attempt failed: ${errorMessage(e)}`);
   }
@@ -3223,6 +3317,7 @@ function handleDiscard(args: string[]): void {
     }
   }
   if (branchExists) {
+    assertBoltBranchOwnedHere(repoCwd, identity, "Discard");
     const del = runGit(["branch", "-D", branchName], repoCwd);
     if (!del.ok) {
       errorWithSlug(
@@ -3231,7 +3326,7 @@ function handleDiscard(args: string[]): void {
       );
     }
   }
-  const refCleanupError = deleteRetainedSourceRefs(repoCwd, retained);
+  const refCleanupError = deleteRetainedSourceRefs(repoCwd, identity, retained, "Discard");
   if (refCleanupError) {
     errorWithSlug(slug, `reviewed-source ref cleanup failed: ${refCleanupError}`);
   }
@@ -3245,7 +3340,7 @@ function handleDiscard(args: string[]): void {
       audit_timestamp: auditTs,
       parked_ref: parked.ref,
       parked_commit: parked.commit,
-      parked_stamp: parkedStamp(parked.ref),
+      parked_stamp: parkedStamp(parked.ref, identity),
       parked_mode: parked.mode,
       parked_repo: parkedRepo,
     })
@@ -3254,12 +3349,61 @@ function handleDiscard(args: string[]): void {
 
 // --- Subcommands: restore / purge ---
 // Local recovery uses a separate path and branch namespace, never a live Bolt.
+interface ParkedRecoveryScope {
+  identity: BoltIdentity;
+  stamps: ReadonlySet<string>;
+}
+
+interface ParkedRecoveryRef extends RetainedSourceRef {
+  identity: BoltIdentity;
+  stamp: string;
+}
+
+function parkedRecoveryScopes(
+  pd: string,
+  identity: BoltIdentity,
+  rows: readonly WorktreeAuditRow[],
+): ParkedRecoveryScope[] {
+  const identities = identity.legacy
+    ? [identity]
+    : [identity, legacyBoltIdentity(pd, identity.intentId8, identity.slug)];
+  return identities.map((parkedIdentity) => {
+    const stamps = new Set<string>();
+    // Namespaced refs are shared by every checkout of this repository too;
+    // only this intent's recorded parks authorize their recovery or deletion.
+    for (const row of rows) {
+      if (row.event !== "WORKTREE_DISCARDED" || auditBlockField(row.block, "Bolt slug") !== identity.slug) continue;
+      const ref = auditBlockField(row.block, "Parked ref");
+      if (ref === null || !ref.startsWith(parkedIdentity.parkedRefPrefix)) continue;
+      const stamp = ref.slice(parkedIdentity.parkedRefPrefix.length);
+      if (PARKED_STAMP_RE.test(stamp)) stamps.add(stamp);
+    }
+    return { identity: parkedIdentity, stamps };
+  });
+}
+
+function parkedRecoveryRefs(repoCwd: string, scopes: readonly ParkedRecoveryScope[]): ParkedRecoveryRef[] {
+  return scopes.flatMap(({ identity, stamps }) =>
+    parkedSourceRefs(repoCwd, identity).flatMap((entry) => {
+      const stamp = parkedStamp(entry.ref, identity);
+      return !stamps.has(stamp)
+        ? []
+        : [{ ...entry, identity, stamp }];
+    }));
+}
+
 function parkedRepoCwd(
   pd: string,
   flags: Record<string, string>,
-  slug: string,
+  identity: BoltIdentity,
+  scopes: readonly ParkedRecoveryScope[],
+  rows: readonly WorktreeAuditRow[],
 ): string {
-  const candidates = worktreeRepoCandidates(pd, allWorktreeAuditRows(pd).rows, slug);
+  const slug = identity.slug;
+  if (flags.parked !== undefined && !scopes.some(({ stamps }) => stamps.has(flags.parked))) {
+    errorWithSlug(slug, `parked attempt ${flags.parked} is not recorded by intent ${relativeRecordDir(pd, flags.intent, flags.space)}`);
+  }
+  const candidates = worktreeRepoCandidates(pd, rows, slug);
   if (flags.repo !== undefined) {
     const repo = flags.repo === "." ? null : flags.repo;
     if (repo !== null && !candidates.has(repoSelectorKey(repo)) && isValidRepoName(repo) && lstatSync(repoDir(pd, repo), { throwIfNoEntry: false })?.isSymbolicLink()) {
@@ -3278,13 +3422,10 @@ function parkedRepoCwd(
   const parkedRepos: { cwd: string; repo: string | null; exact: boolean }[] = [];
   for (const repo of candidates.values()) {
     const cwd = repo === null ? pd : repoDir(pd, repo);
-    if (!existsSync(join(cwd, ".git"))) continue;
-    const listed = runGit(
-      ["for-each-ref", "--format=%(refname)", `refs/aidlc/parked/${slug}/`],
-      cwd,
-    );
-    if (listed.ok && listed.stdout.trim()) parkedRepos.push({ cwd, repo,
-      exact: flags.parked !== undefined && listed.stdout.split(/\r?\n/).some((ref) => parkedStamp(ref) === flags.parked),
+    if (!existsSync(join(cwd, ".git")) || !runGit(["rev-parse", "--git-dir"], cwd).ok) continue;
+    const refs = parkedRecoveryRefs(cwd, scopes);
+    if (refs.length > 0) parkedRepos.push({ cwd, repo,
+      exact: flags.parked !== undefined && refs.some(({ stamp }) => stamp === flags.parked),
     });
   }
   if (flags.parked !== undefined) {
@@ -3357,31 +3498,37 @@ function handleRestore(args: string[]): void {
   const slug = validateSlug(flags.slug);
   validateParkedStamp(flags.parked);
   const pd = resolveProjectDir(projectDir);
-  const repoCwd = parkedRepoCwd(pd, flags, slug);
+  const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+  const identity = resolveCommandBoltIdentity(pd, slug, selection);
+  if (selection.intent !== null) flags.intent = selection.intent;
+  flags.space = selection.space;
+  const rows = readAuditShardEvents(pd, selection.intent ?? undefined, selection.space);
+  const scopes = parkedRecoveryScopes(pd, identity, rows);
+  const repoCwd = parkedRepoCwd(pd, flags, identity, scopes, rows);
   assertNotSiblingWorktree(repoCwd);
-  const refs = parkedSourceRefs(repoCwd, slug);
-  const heads = refs.filter(({ ref }) =>
-    ref === `refs/aidlc/parked/${slug}/${parkedStamp(ref)}/head` &&
-    PARKED_STAMP_RE.test(parkedStamp(ref)) &&
-    (flags.parked === undefined || parkedStamp(ref) === flags.parked));
-  heads.sort((a, b) => parkedStamp(a.ref).localeCompare(parkedStamp(b.ref), "en", { numeric: true }));
+  const refs = parkedRecoveryRefs(repoCwd, scopes);
+  const heads = refs.filter(({ ref, identity: parkedIdentity, stamp }) =>
+    ref === `${parkedIdentity.parkedRefPrefix}${stamp}/head` &&
+    PARKED_STAMP_RE.test(stamp) &&
+    (flags.parked === undefined || stamp === flags.parked));
+  heads.sort((a, b) => a.stamp.localeCompare(b.stamp, "en", { numeric: true }));
   const head = heads.at(-1);
   if (!head) {
-    const evidence = refs.filter(({ ref }) =>
+    const evidence = refs.filter(({ ref, stamp }) =>
       /\/reviewed-source\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(ref) &&
-      PARKED_STAMP_RE.test(parkedStamp(ref)) &&
-      (flags.parked === undefined || parkedStamp(ref) === flags.parked));
-    evidence.sort((a, b) => parkedStamp(a.ref).localeCompare(parkedStamp(b.ref), "en", { numeric: true }));
+      PARKED_STAMP_RE.test(stamp) &&
+      (flags.parked === undefined || stamp === flags.parked));
+    evidence.sort((a, b) => a.stamp.localeCompare(b.stamp, "en", { numeric: true }));
     const latestEvidence = evidence.at(-1);
     if (latestEvidence) {
-      errorWithSlug(slug, `no restorable files were parked for ${slug} ${parkedStamp(latestEvidence.ref)}; only review evidence was kept`);
+      errorWithSlug(slug, `no restorable files were parked for ${slug} ${latestEvidence.stamp}; only review evidence was kept`);
     }
     errorWithSlug(slug, `no parked attempt for slug ${slug}${flags.parked ? ` at ${flags.parked}` : ""}`);
   }
-  const stamp = parkedStamp(head.ref);
+  const { stamp, identity: parkedIdentity } = head;
   const parkedRef = head.ref.slice(0, -"/head".length);
-  const wtPath = resolve(pd, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
-  const branch = `restore/bolt-${slug}-${stamp}`;
+  const wtPath = resolve(pd, ".aidlc", "restored", `${parkedIdentity.name}-${stamp}`);
+  const branch = `restore/${parkedIdentity.name}-${stamp}`;
   if (existsSync(wtPath) || runGit(["rev-parse", "--verify", `refs/heads/${branch}`], repoCwd).ok) {
     errorWithSlug(slug, `already restored at ${wtPath}`);
   }
@@ -3395,10 +3542,10 @@ function handleRestore(args: string[]): void {
   } else {
     // Legacy parks have only /head for both shapes. Only tool-authored snapshot
     // commits contain working-tree bytes; ordinary branch tips need checkout conversions.
-    const identity = runGit(["log", "-1", "--format=%an%x00%ae%x00%s", head.oid], repoCwd, { GIT_NO_REPLACE_OBJECTS: "1" });
-    if (!identity.ok) errorWithSlug(slug, `cannot classify parked head: ${identity.stderr.trim() || `exit ${identity.code}`}`);
-    const [author, email, subject] = identity.stdout.split("\0");
-    restoreMode = author === "AI-DLC" && email === "aidlc@localhost" && subject?.startsWith(`aidlc: parked bolt-${slug} at `)
+    const commitIdentity = runGit(["log", "-1", "--format=%an%x00%ae%x00%s", head.oid], repoCwd, { GIT_NO_REPLACE_OBJECTS: "1" });
+    if (!commitIdentity.ok) errorWithSlug(slug, `cannot classify parked head: ${commitIdentity.stderr.trim() || `exit ${commitIdentity.code}`}`);
+    const [author, email, subject] = commitIdentity.stdout.split("\0");
+    restoreMode = author === "AI-DLC" && email === "aidlc@localhost" && subject?.startsWith(`aidlc: parked ${parkedIdentity.name} at `)
       ? "legacy-snapshot" : "legacy-branch-tip";
   }
   const raw = restoreMode !== "branch-tip" && restoreMode !== "legacy-branch-tip";
@@ -3511,11 +3658,16 @@ function handlePurge(args: string[]): void {
     cutoff = Date.now() - days * 86_400_000;
   }
   const pd = resolveProjectDir(projectDir);
-  const repoCwd = parkedRepoCwd(pd, flags, slug);
+  const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+  const identity = resolveCommandBoltIdentity(pd, slug, selection);
+  if (selection.intent !== null) flags.intent = selection.intent;
+  flags.space = selection.space;
+  const rows = readAuditShardEvents(pd, selection.intent ?? undefined, selection.space);
+  const scopes = parkedRecoveryScopes(pd, identity, rows);
+  const repoCwd = parkedRepoCwd(pd, flags, identity, scopes, rows);
   assertNotSiblingWorktree(repoCwd);
   const skippedUnparseable = new Set<string>();
-  const refs = parkedSourceRefs(repoCwd, slug).filter(({ ref }) => {
-    const stamp = parkedStamp(ref);
+  const refs = parkedRecoveryRefs(repoCwd, scopes).filter(({ stamp }) => {
     if (flags.parked !== undefined && stamp !== flags.parked) return false;
     if (cutoff === undefined) return true;
     const timestamp = parseParkedStampInstant(stamp);
@@ -3525,21 +3677,28 @@ function handlePurge(args: string[]): void {
     }
     return timestamp < cutoff;
   });
-  const stamps = [...new Set(refs.map(({ ref }) => parkedStamp(ref)))].sort((a, b) =>
+  const stamps = [...new Set(refs.map(({ stamp }) => stamp))].sort((a, b) =>
     a.localeCompare(b, "en", { numeric: true }));
   const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
   if (!listed.ok) errorWithSlug(slug, `git worktree list failed: ${listed.stderr.trim()}`);
-  for (const stamp of stamps) {
-    const wtPath = resolve(pd, ".aidlc", "restored", `bolt-${slug}-${stamp}`);
-    const branch = `refs/heads/restore/bolt-${slug}-${stamp}`;
+  const attempts = new Map(refs.map(({ identity: parkedIdentity, stamp }) =>
+    [`${parkedIdentity.name}-${stamp}`, parkedIdentity]));
+  for (const [name, parkedIdentity] of attempts) {
+    assertBoltBranchOwnedHere(repoCwd, parkedIdentity, "Purge");
+    const wtPath = resolve(pd, ".aidlc", "restored", name);
+    const branch = `refs/heads/restore/${name}`;
     // Match registrations too: a restored checkout may have been moved.
     const registeredPath = worktreeCheckedOutAt(listed.stdout, branch);
     if (existsSync(wtPath) || registeredPath) {
       errorWithSlug(slug, `restore checkout still present at ${registeredPath ?? wtPath}; remove it first`);
     }
   }
-  const cleanupError = deleteRetainedSourceRefs(repoCwd, refs);
-  if (cleanupError) errorWithSlug(slug, `parked ref cleanup failed: ${cleanupError}`);
+  for (const { identity: parkedIdentity } of scopes) {
+    const scopedRefs = refs.filter((entry) => entry.identity === parkedIdentity);
+    if (scopedRefs.length === 0) continue;
+    const cleanupError = deleteRetainedSourceRefs(repoCwd, parkedIdentity, scopedRefs, "Purge");
+    if (cleanupError) errorWithSlug(slug, `parked ref cleanup failed: ${cleanupError}`);
+  }
   console.log(JSON.stringify({
     purged: refs.length,
     slug,
@@ -3554,14 +3713,14 @@ function handlePurge(args: string[]): void {
 //
 // Filters `git worktree list --porcelain` output to entries that are AIDLC
 // Bolt worktrees: parent path is `<projectDir>/.aidlc/worktrees/` AND the
-// basename starts with `bolt-`. Both conditions are required so an
+// basename parses as an intent-scoped or legacy Bolt name. Both conditions are required so an
 // unrelated worktree someone happens to name `bolt-other` outside our
 // namespace doesn't masquerade as a Bolt. Read-only — no audit emission.
 function handleList(_args: string[]): void {
   // No assertNotSiblingWorktree here — list is read-only and useful from
   // anywhere. Run from current cwd's git context.
   const pd = resolveProjectDir(projectDir);
-  const boltsDir = pathKey(resolve(pd, ".aidlc", "worktrees"));
+  const boltsDir = pathKey(worktreesDir(pd));
 
   const r = runGit(["worktree", "list", "--porcelain"]);
   if (!r.ok) {
@@ -3594,19 +3753,18 @@ function handleList(_args: string[]): void {
   }
   if (isCompleteWT(cur)) all.push({ ...cur, branch: cur.branch ?? "" });
 
-  const bolts = all
-    .filter((w) => {
-      const base = w.path.split(/[\\/]/).filter(Boolean).pop() ?? "";
-      if (!base.startsWith("bolt-")) return false;
-      // Require parent to be the framework-owned bolts directory.
-      const parent = pathKey(dirname(w.path));
-      return parent === boltsDir;
-    })
-    .map((w) => ({
-      slug: (w.path.split(/[\\/]/).filter(Boolean).pop() ?? "").slice("bolt-".length),
+  const bolts = all.flatMap((w) => {
+    const base = w.path.split(/[\\/]/).filter(Boolean).pop() ?? "";
+    const parsed = parseBoltName(base);
+    if (parsed === null || pathKey(dirname(w.path)) !== boltsDir) return [];
+    return [{
+      slug: parsed.slug,
       worktree_path: w.path,
       branch: w.branch,
-    }));
+      intent_id8: parsed.intentId8,
+      legacy: parsed.intentId8 === null,
+    }];
+  });
 
   console.log(JSON.stringify({ worktrees: bolts }));
 }
@@ -3636,8 +3794,9 @@ function handleVerify(args: string[]): void {
   }
 
   const pd = resolveProjectDir(projectDir);
+  const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
   // Read across every per-clone audit shard (single shard in the common case).
-  const audit = readAllAuditShards(pd, flags.intent, flags.space);
+  const audit = readAllAuditShards(pd, selection.intent ?? undefined, selection.space);
   if (audit.length === 0) {
     process.stdout.write(
       `${JSON.stringify({
@@ -3702,8 +3861,9 @@ function handleInfo(args: string[]): void {
   const slug = validateSlug(flags.slug);
 
   const pd = resolveProjectDir(projectDir);
+  const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
   // Read across every per-clone audit shard (single shard in the common case).
-  const audit = readAllAuditShards(pd, flags.intent, flags.space);
+  const audit = readAllAuditShards(pd, selection.intent ?? undefined, selection.space);
   if (audit.length === 0) {
     process.stderr.write(
       `error: no WORKTREE_CREATED audit entry for slug ${slug} (audit log absent)\n`
@@ -3732,7 +3892,19 @@ function handleInfo(args: string[]): void {
   // Absence of the file or the field both resolve to merge_held=false — the
   // resume-path check is "do not dispatch a merge that's actively held",
   // not "every Bolt has had its hold state explicitly initialised".
+  // `info` is an audit query, so it must not require a registry identity: the
+  // intent id comes from the audited branch name, falling back to the recorded
+  // worktree's metadata for a pre-upgrade branch name, else null.
   const resolvedWorktreePath = resolveAuditWorktreePath(pd, pathMatch[1]);
+  let intentId8 = parseBoltName(branchMatch[1])?.intentId8 ?? null;
+  if (intentId8 === null) {
+    try {
+      const meta = JSON.parse(readFileSync(join(resolvedWorktreePath, ".aidlc", WORKTREE_META_FILENAME), "utf-8")) as { intentId8?: unknown };
+      if (typeof meta.intentId8 === "string" && BOLT_INTENT_ID8_REGEX.test(meta.intentId8)) intentId8 = meta.intentId8;
+    } catch {
+      // Pre-upgrade and already-removed worktrees may have no readable metadata.
+    }
+  }
   let mergeHeld = false;
   const wtStatePath = worktreeStateFilePath(resolvedWorktreePath);
   if (existsSync(wtStatePath)) {
@@ -3745,6 +3917,7 @@ function handleInfo(args: string[]): void {
       slug,
       path: resolvedWorktreePath,
       branch_name: branchMatch[1],
+      intent_id8: intentId8,
       audit_timestamp: match.timestamp,
       merge_held: mergeHeld,
     })
