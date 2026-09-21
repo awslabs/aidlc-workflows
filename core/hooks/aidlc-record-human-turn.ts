@@ -8,9 +8,9 @@
 //
 // Presence remains the gate signal; the prompt payload also answers the single
 // active protected challenge (plan, verification command, policy, or checkpoint).
-// A typed prompt also records the exact fence switches requested in this session,
-// even before workflow state exists. Only a typed UserPromptSubmit opens this
-// request; the setter consumes it after the selected change succeeds.
+// A typed prompt also records the exact fence switches requested for this session's
+// selected workflow, even before workflow state exists. The setter consumes the
+// request after the selected change succeeds.
 // appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
 // to gate, so the hook skips ledger writes (same self-gate as
 // aidlc-session-start.ts) - otherwise every prompt in a project that carries the

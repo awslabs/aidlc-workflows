@@ -50,7 +50,10 @@
 //   - terminal-command-guard: when the prompt is empty, recognize the exact
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
-//     its output. Payloads without session_id share the explicit legacy bucket.
+//     its output. Missing session_id uses the host-derived or retained identity.
+//   - guard-switch stand-in: IDE 1.0.242 hides the typed prompt, so only an
+//     empty-prompt turn's first AIDLC shell command may record a lowering
+//     switch. Newer builds exposing the prompt record it through the core hook.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +
@@ -88,11 +91,13 @@ import {
   hookDebug,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  humanTurnMintAllowed,
   isAutonomousMode,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
   recordHookDrop,
+  recordTypedGuardSwitchRequest,
   readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
@@ -117,7 +122,7 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -874,7 +879,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
 }
 
 function terminalSessionId(): string {
-  return ide.sessionId?.trim() || LEGACY_SESSION_ID;
+  if (ide.sessionId?.trim()) return ide.sessionId.trim();
+  try {
+    return legacyPlanApprovalSessionId();
+  } catch {
+    return rememberedKiroIdeSessionId();
+  }
 }
 
 function terminalSessionDir(sessionId: string): string {
@@ -907,10 +917,65 @@ function bumpTurn(sessionId: string): number {
   try {
     mkdirSync(terminalSessionDir(sessionId), { recursive: true });
     writeFileSync(turnCounterPath(sessionId), `${turn}\n`, "utf-8");
+    rmSync(join(terminalSessionDir(sessionId), "first-aidlc-call"), { force: true });
   } catch {
     return 0;
   }
   return turn;
+}
+
+function recordPromptEmpty(sessionId: string, turn: number): void {
+  if (turn <= 0) return;
+  const empty = ide.prompt !== undefined && ide.prompt.trim() === "" &&
+    (ide.malformedFields?.length ?? 0) === 0;
+  try {
+    writeFileSync(
+      join(terminalSessionDir(sessionId), "prompt-empty"),
+      empty ? `${turn}\n` : "",
+      "utf-8",
+    );
+  } catch {
+    // Missing prompt evidence cannot authorize the stand-in.
+  }
+}
+
+function recordFirstGuardSwitch(
+  sessionId: string,
+  turn: number,
+  rawCommand: string,
+  invocation: TerminalInvocation | null,
+): void {
+  if (turn <= 0) return;
+  const dir = terminalSessionDir(sessionId);
+  try {
+    if (readFileSync(join(dir, "prompt-empty"), "utf-8").trim() !== String(turn)) return;
+    let slashForm: string | null = invocation === null ? null : `/aidlc ${invocation.raw}`;
+    if (invocation === null) {
+      const match = rawCommand.trim().match(
+        /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/](aidlc(?:-[\w-]+)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
+      );
+      if (match === null) return;
+      const runner = match[1] ?? match[2] ?? match[3] ?? "";
+      if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return;
+      const tool = match[4].toLowerCase();
+      const args = (match[5] ?? "").trim();
+      if (tool === "aidlc-utility.ts") {
+        const config = args.match(/^config-change(?:\s+([\s\S]*))?$/i);
+        if (config) slashForm = `/aidlc ${config[1] ?? ""}`;
+      } else if (tool === "aidlc.ts") {
+        const config = args.match(/^(?:engine\s+)?config\s+set(?:\s+([\s\S]*))?$/i);
+        if (config) slashForm = `/aidlc config set ${config[1] ?? ""}`;
+      }
+    }
+    // Claim even a non-lowering AIDLC call. Exclusive creation prevents two
+    // concurrent PreToolUse hooks from both spending this turn's stand-in.
+    writeFileSync(join(dir, "first-aidlc-call"), `${turn}\n`, { encoding: "utf-8", flag: "wx" });
+    if (slashForm !== null && humanTurnMintAllowed()) {
+      recordTypedGuardSwitchRequest(projectDir, sessionId, slashForm);
+    }
+  } catch {
+    // A prior claim or unreadable evidence cannot mint another request.
+  }
 }
 
 function readTerminalLatch(sessionId: string): TerminalLatch | null {
@@ -986,6 +1051,7 @@ function terminalRefusal(result: TerminalResult): string {
 if (target === "verb-intercept") {
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
+  recordPromptEmpty(sessionId, turn);
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;
@@ -1008,6 +1074,7 @@ if (target === "terminal-command-guard") {
   const invocation = toolTerminalInvocation(rawCommand);
   const sessionId = terminalSessionId();
   const turn = readTurn(sessionId) || bumpTurn(sessionId);
+  recordFirstGuardSwitch(sessionId, turn, rawCommand, invocation);
   const existing = readTerminalLatch(sessionId);
   if (
     existing?.turn === turn &&
@@ -1029,25 +1096,11 @@ if (target === "terminal-command-guard") {
   return 2;
 }
 
-// --- mint: record a HUMAN_TURN event on prompt submit ---
-//
-// Wired by aidlc-mint.json (UserPromptSubmit). Payload-independent (never
-// reads stdin — a mint must never wait on it), so resolve the project dir
-// from process.cwd() — appendAuditEntry then resolves the
-// active intent from the on-disk cursor (aidlc/spaces/<space>/intents/active-intent)
-// using only that dir, so the event lands in the correct per-intent shard with
-// no payload. One ledger event per human turn; no marker file, no turn counter.
-// Gated on workflow state existing (same self-gate as the core mint hook) so a
-// prompt in a project that never ran the framework does not scaffold audit
-// shards. Fail-open (try/catch, exit 0) so a mint failure never blocks the
-// human's turn.
-//
-// The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
-// what makes the Stop hook's conversational carve-out work on this harness. The
-// IDE delivers no `transcript_path`, so the carve-out cannot read the turn
-// history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
-// Both writes ride this one seam so the ledger and the marker can never
-// disagree about when a human spoke. See the marker family in aidlc-lib.ts.
+// UserPromptSubmit forwards to the core human-turn hook below. That hook
+// records typed switches before its state-file gate, then records HUMAN_TURN
+// and the conversational Stop marker only when workflow state exists.
+// The adapter separately tracks empty prompts against the terminal turn so
+// the first shell call can stand in for prompt text hidden by IDE 1.0.242.
 // --- block: the preToolUse human-presence floor ---
 //
 // Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while
@@ -1292,15 +1345,8 @@ function buildForward(): Forward {
     }
 
     case "record-human-turn": {
-      const sessionId =
-        ide.sessionId?.trim() ||
-        (() => {
-          try {
-            return legacyPlanApprovalSessionId();
-          } catch {
-            return rememberedKiroIdeSessionId();
-          }
-        })();
+      const sessionId = terminalSessionId();
+      recordPromptEmpty(sessionId, readTurn(sessionId) || bumpTurn(sessionId));
       if (ide.channel === "legacy") {
         markKiroIdeLegacyPlanApprovalHost(projectDir, sessionId);
       }

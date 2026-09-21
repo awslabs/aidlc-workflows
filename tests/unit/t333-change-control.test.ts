@@ -1807,8 +1807,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   const createRefusal = "Creating this intent with Guard Policy relaxed lowers fences and is the person's decision. It is accepted only when they typed `/aidlc --guard-policy relaxed` in this session. Create it without the flag, or ask them and run this again after they do.";
 
   // Refusals still log ERROR_LOGGED, but must not mutate workflow facts.
-  function mutationRows(proj: string) {
-    return readAuditShardEvents(proj).filter((row) => row.event !== "ERROR_LOGGED");
+  function mutationRows(proj: string, intent?: string, space?: string) {
+    return readAuditShardEvents(proj, intent, space).filter((row) => row.event !== "ERROR_LOGGED");
   }
 
   test("a fresh human turn alone does not authorize lowering a fence", () => {
@@ -1821,6 +1821,78 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(JSON.parse(refused.stderr)).toEqual({ error: fenceRefusal });
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
+  });
+
+  test.each<{ prompt: string; args: string[]; refusal: string }>([
+    {
+      prompt: "why was `guard.plan-approval off` suggested?",
+      args: ["config-change", "--guard.plan-approval", "off"],
+      refusal: fenceRefusal,
+    },
+    {
+      prompt: "do not run /aidlc config set guard.plan-approval off",
+      args: ["config-change", "--guard.plan-approval", "off"],
+      refusal: fenceRefusal,
+    },
+    {
+      prompt: "I read about --guard-policy relaxed in the docs",
+      args: ["config-change", "--guard-policy", "relaxed"],
+      refusal: policyRefusal,
+    },
+    {
+      prompt: "guard policy relaxed is what the team uses",
+      args: ["config-change", "--guard-policy", "relaxed"],
+      refusal: policyRefusal,
+    },
+    {
+      prompt: "/aidlc --guard-policy strict",
+      args: ["config-change", "--guard-policy", "relaxed"],
+      refusal: policyRefusal,
+    },
+    {
+      prompt: "/aidlc guard-policy relaxed",
+      args: ["config-change", "--guard-policy", "relaxed"],
+      refusal: policyRefusal,
+    },
+  ])("a non-affirmative prompt mints no lowering request: $prompt", ({ prompt, args, refusal }) => {
+    const { proj, state } = project("enterprise");
+    recordHumanPrompt(proj, prompt);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
+    const before = readFileSync(state, "utf-8");
+    const ledger = mutationRows(proj);
+    const refused = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({ error: refusal });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(mutationRows(proj)).toEqual(ledger);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
+  });
+
+  test.each([
+    { prompt: "/aidlc --guard-policy relaxed build the auth service", value: "relaxed" },
+    { prompt: "Guard policy off.", value: "off" },
+  ])("an affirmative policy prompt authorizes its setter: $prompt", ({ prompt, value }) => {
+    const { proj, state } = project("enterprise");
+    recordHumanPrompt(proj, prompt);
+    const lowered = run(UTILITY, ["config-change", "--guard-policy", value], proj, FENCE_ENV_CLEAR);
+    expect(lowered.status, lowered.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe(`${value} (set by you)`);
+    expect(guardPolicyRows(proj)).toHaveLength(1);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
+  });
+
+  test("a typed config set command authorizes exactly the review-freeze fence", () => {
+    const { proj, state } = project("enterprise");
+    recordHumanPrompt(proj, "/aidlc config set guard.review-freeze off");
+    const lowered = run(UTILITY, ["config-change", "--guard.review-freeze", "off"], proj, FENCE_ENV_CLEAR);
+    expect(lowered.status, lowered.stderr).toBe(0);
+    const content = readFileSync(state, "utf-8");
+    expect(getField(content, GUARDS_OFF_FIELD)).toBe("review-freeze (set by you)");
+    expect(getField(content, GUARD_POLICY_FIELD)).toBe("strict (from scope enterprise)");
+    expect(rowsOf(proj, "GUARD_DISABLED").map((row) => auditBlockField(row.block, "Guard"))).toEqual([
+      "review-freeze",
+    ]);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
   });
 
   test("a typed fence switch survives an unrelated reply and authorizes exactly one setter", () => {
@@ -1921,21 +1993,87 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(mutationRows(proj)).toEqual(ledger);
   });
 
-  test("an unattended setter cannot lower a fence even with a valid typed request", () => {
-    const { proj, state } = project("enterprise");
+  test("a typed fence switch cannot be spent on an explicitly selected other intent", () => {
+    const { proj, state: otherState } = project("enterprise");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const otherIntent = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const created = run(UTILITY, [
+      "intent-create", "--scope", "enterprise", "--arguments", "active piece of work",
+      "--label", "active", "--space", "default",
+    ], proj, FENCE_ENV_CLEAR);
+    expect(created.status, created.stderr).toBe(0);
+    const activeIntent = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(activeIntent).not.toBe(otherIntent);
+    const state = join(intents, activeIntent, "aidlc-state.md");
     recordHumanPrompt(proj, "/aidlc config set guard.plan-approval off");
     const before = readFileSync(state, "utf-8");
+    const otherBefore = readFileSync(otherState, "utf-8");
     const ledger = mutationRows(proj);
-    const refused = run(UTILITY, ["config-change", "--guard.plan-approval", "off"], proj, {
-      ...FENCE_ENV_CLEAR, AIDLC_UNATTENDED: "1",
+    const otherLedger = mutationRows(proj, otherIntent, "default");
+    const args = ["config-change", "--guard.plan-approval", "off"];
+    const refused = run(UTILITY, [...args, "--intent", otherIntent, "--space", "default"], proj, FENCE_ENV_CLEAR);
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({ error: fenceRefusal });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(readFileSync(otherState, "utf-8")).toBe(otherBefore);
+    expect(mutationRows(proj)).toEqual(ledger);
+    expect(mutationRows(proj, otherIntent, "default")).toEqual(otherLedger);
+    const lowered = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
+    expect(lowered.status, lowered.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("plan-approval (set by you)");
+    expect(readFileSync(otherState, "utf-8")).toBe(otherBefore);
+    expect(mutationRows(proj, otherIntent, "default")).toEqual(otherLedger);
+    expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toBeNull();
+  });
+
+  test.each<{ operation: string; prompt: string; args: string[]; refusal: string }>([
+    {
+      operation: "fence setter",
+      prompt: "/aidlc config set guard.plan-approval off",
+      args: ["config-change", "--guard.plan-approval", "off"],
+      refusal: fenceRefusal,
+    },
+    {
+      operation: "policy setter",
+      prompt: "/aidlc --guard-policy relaxed",
+      args: ["config-change", "--guard-policy", "relaxed"],
+      refusal: policyRefusal,
+    },
+    {
+      operation: "intent creation",
+      prompt: "/aidlc --guard-policy relaxed",
+      args: [
+        "intent-create", "--scope", "enterprise", "--arguments", "unattended piece of work",
+        "--label", "unattended", "--guard-policy", "relaxed",
+      ],
+      refusal: createRefusal,
+    },
+  ])("an unattended $operation cannot lower fences even with the presence bypass and a typed request", ({ prompt, args, refusal }) => {
+    const { proj, state } = project("enterprise");
+    recordHumanPrompt(proj, prompt);
+    const request = readGuardSwitchRequest(proj, FENCE_SESSION);
+    expect(request).not.toBeNull();
+    const before = readFileSync(state, "utf-8");
+    const ledger = mutationRows(proj);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const registry = readFileSync(join(intents, "intents.json"), "utf-8");
+    const active = readFileSync(join(intents, "active-intent"), "utf-8");
+    const records = readdirSync(intents).sort();
+    const refused = run(UTILITY, args, proj, {
+      ...FENCE_ENV_CLEAR, AIDLC_UNATTENDED: "1", AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
     });
     expect(refused.status).toBe(1);
     const error = JSON.parse(refused.stderr).error;
-    expect(error).toStartWith(fenceRefusal);
+    expect(error).toStartWith(refusal);
     expect(error).toContain("AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count as a human reply.");
     expect(error).toEndWith("This needs a fresh human turn: wait for the person to reply, then record it again.");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
+    expect(readFileSync(join(intents, "intents.json"), "utf-8")).toBe(registry);
+    expect(readFileSync(join(intents, "active-intent"), "utf-8")).toBe(active);
+    expect(readdirSync(intents).sort()).toEqual(records);
+    expect(readGuardSwitchRequest(proj, FENCE_SESSION)).toEqual(request);
   });
 
   test("intent creation requires a typed policy choice recorded before the first workflow and consumes it", () => {
@@ -2014,7 +2152,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
   });
 
-  test("scope-change requires every lowering choice before changing any setting", () => {
+  test("scope-change requires every lowering choice and accepts combined switches without a slash", () => {
     const { proj, state } = project("enterprise");
     recordHumanPrompt(proj, "/aidlc --guard-policy relaxed");
     // state-transition stays up under relaxed, so its switch is an effective
@@ -2029,7 +2167,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     });
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
-    recordHumanPrompt(proj, "/aidlc --guard-policy relaxed --guard.state-transition off");
+    recordHumanPrompt(proj, "aidlc --guard-policy relaxed --guard.state-transition off");
     const changed = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");

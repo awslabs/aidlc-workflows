@@ -64,6 +64,10 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
+For the empty prompt captured on 1.0.242, the adapter's guard-switch stand-in
+can record a lowering switch from only that turn's first AIDLC shell command;
+non-empty prompts use the core human-turn hook instead.
+
 ### Critical limitations
 
 1. **PostToolUse write/shell captures have empty tool inputs** on both

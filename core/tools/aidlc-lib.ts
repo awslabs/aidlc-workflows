@@ -4010,10 +4010,18 @@ export function recordTypedGuardSwitchRequest(
   if (switches.length === 0) return false;
   const path = guardSwitchRequestPath(projectDir, session);
   if (!path) throw new Error("Guard switch request requires a nonblank session");
+  let intentId: string;
+  try {
+    intentId = intentUuidForSelection(
+      projectDir, resolveWorkflowSelection(projectDir, { sessionId: session }),
+    ) ?? "bare-space";
+  } catch {
+    intentId = activeIntentUuid(projectDir) ?? "bare-space";
+  }
   const request: GuardSwitchRequest = {
     version: 1,
     session,
-    intentId: activeIntentUuid(projectDir) ?? "bare-space",
+    intentId,
     requestedAt: isoTimestamp(),
     switches,
   };
@@ -30237,32 +30245,38 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
   return [];
 }
 
-// The fence switches a typed prompt names, read from its words: the slash flag
-// (`--guard-policy relaxed`, retired `--change-control`), the config form
-// (`guard-policy off`, `guard.plan-approval off`) and the confirmation words
-// (`guard policy relaxed`). `strict` and `on` raise, so they are never switches;
-// human presence has no switch. Trailing punctuation on a word is ignored so a
-// sentence ending in `relaxed.` still reads. One entry per key, last value wins.
+// Only two affirmative forms count: an `/aidlc` or `aidlc` command with lowering
+// flags or `config set`, or exactly the confirmation words `guard policy relaxed`
+// (also hyphenated, `change control`, or `off`). Quoted, negated, or explanatory
+// mentions never count: the prompt must begin with the command or be exactly the
+// confirmation words. `strict` and `on` never switch; human presence has no switch.
+// Strip trailing prompt punctuation. One entry per key, last value wins.
 export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
-  const tokens = prompt.toLowerCase().split(/\s+/).map((token) => token.replace(/[.,;:!?)"'`]+$/, ""));
+  const text = prompt.trim().replace(/[.,;:!?]+$/, "").toLowerCase();
+  const command = text.match(/^\/?aidlc(?:\s+|$)/);
+  if (command === null) {
+    const confirmation = text.match(/^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/);
+    return confirmation === null
+      ? []
+      : [{ key: "guard-policy", value: confirmation[1] as GuardSwitch["value"] }];
+  }
+  const tokens = text.slice(command[0].length).split(/\s+/);
   const switches = new Map<GuardSwitchKey, GuardSwitch>();
   for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
+    let configKey = tokens[i];
     let value = tokens[i + 1];
-    let key: GuardSwitchKey;
-    if (
-      token === "--guard-policy" || token === "--change-control" ||
-      token === "guard-policy" || token === "change-control"
-    ) {
-      key = "guard-policy";
-    } else if (
-      (token === "guard" && value === "policy") ||
-      (token === "change" && value === "control")
-    ) {
-      key = "guard-policy";
-      value = tokens[i + 2];
+    if (configKey === "config" && value === "set") {
+      configKey = tokens[i + 2] ?? "";
+      value = tokens[i + 3];
+    } else if (configKey.startsWith("--")) {
+      configKey = configKey.slice(2);
     } else {
-      const configKey = token.startsWith("--") ? token.slice(2) : token;
+      continue;
+    }
+    let key: GuardSwitchKey;
+    if (configKey === "guard-policy" || configKey === "change-control") {
+      key = "guard-policy";
+    } else {
       if (!configKey.startsWith("guard.")) continue;
       const fence = configKey.slice("guard.".length);
       if (!isSwitchableGuardFence(fence) || value !== "off") continue;
@@ -30274,13 +30288,15 @@ export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
 }
 
 // Lowering needs the exact human selection: either the consumed guard-recovery
-// remedy for this fence or a typed request for this session and intent. A fresh
-// human turn alone says nothing about which fence or policy the person chose.
+// remedy for this fence or a typed request for this session, bound to the workflow
+// the setter mutates rather than the cursor. A fresh human turn alone says nothing
+// about which fence or policy the person chose.
 export function guardSwitchAuthority(
   projectDir: string,
   stateContent: string | null,
   wanted: GuardSwitch,
   sessionId: string | null,
+  targetIntentId: string,
 ): GuardSwitchAuthority | null {
   if (process.env.AIDLC_UNATTENDED === "1") return null;
   if (wanted.key.startsWith("guard.") && wanted.value === "off" && stateContent !== null) {
@@ -30308,7 +30324,7 @@ export function guardSwitchAuthority(
   if (sessionId === null) return null;
   const request = readGuardSwitchRequest(projectDir, sessionId);
   return request !== null &&
-      request.intentId === (activeIntentUuid(projectDir) ?? "bare-space") &&
+      request.intentId === targetIntentId &&
       request.switches.some((entry) => entry.key === wanted.key && entry.value === wanted.value)
     ? { source: "typed-request", session: sessionId }
     : null;

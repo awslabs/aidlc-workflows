@@ -162,6 +162,7 @@ import {
   isValidRepoName,
   codekbDir,
   intentsDir,
+  intentUuidForSelection,
   codekbRepoName,
   codekbScopeFingerprint,
   codekbSourceFingerprint,
@@ -6595,13 +6596,19 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(guardPolicyMemoryStrictRefusal(preflightMemoryStrict));
   }
   let spentSwitchSession: string | null = null;
-  if ((requestedChangeControl === "relaxed" || requestedChangeControl === "off") && !humanPresenceGuardDisabled()) {
+  if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
-    const authority = guardSwitchAuthority(
-      projectDir, null, wanted, initialSelection.sessionId ?? latestLedgerSession(projectDir),
-    );
-    if (authority === null) die(guardSwitchRefusal(wanted, "intent-create"));
-    if (authority.source === "typed-request") spentSwitchSession = authority.session;
+    // An unattended driver never lowers fences. The presence bypass is for
+    // attended fixtures only.
+    if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
+    if (!humanPresenceGuardDisabled()) {
+      const authority = guardSwitchAuthority(
+        projectDir, null, wanted, initialSelection.sessionId ?? latestLedgerSession(projectDir),
+        intentUuidForSelection(projectDir, initialSelection) ?? "bare-space",
+      );
+      if (authority === null) die(guardSwitchRefusal(wanted, "intent-create"));
+      if (authority.source === "typed-request") spentSwitchSession = authority.session;
+    }
   }
   // A flat aidlc-docs/ layout is migrated into the DEFAULT space by the first
   // creation (below, under the lock). An explicit other space cannot be honored
@@ -8487,6 +8494,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // output describe the state before this transaction.
     const update = applyIntentSettings(projectDir, contentBefore, requested, {
       intent, space, sessionId: selection.sessionId ?? latestLedgerSession(projectDir),
+      targetIntentId: intentUuidForSelection(projectDir, selection) ?? "bare-space",
     });
     let content = update.content;
     const auditEntries = update.audit;
@@ -8949,7 +8957,9 @@ function applyIntentSettings(
   projectDir: string,
   content: string,
   requested: IntentSettingsRequest,
-  { sessionId = null, ...selection }: { intent?: string; space?: string; sessionId?: string | null },
+  { sessionId = null, targetIntentId, ...selection }: {
+    intent?: string; space?: string; sessionId?: string | null; targetIntentId: string;
+  },
 ): { content: string; audit: AuditEntryInput[]; lines: string[]; spentSwitchSession: string | null } {
   const rawDepth = requested.depth?.value;
   const rawStrategy = requested["test-strategy"]?.value;
@@ -9025,10 +9035,15 @@ function applyIntentSettings(
   if (ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off")) {
     lowering.push({ key: "guard-policy", value: changeControl });
   }
+  // An unattended driver never lowers fences. The presence bypass is for
+  // attended fixtures only.
+  if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
+    die(guardSwitchRefusal(lowering[0], "config"));
+  }
   let spentSwitchSession: string | null = null;
   if (lowering.length > 0 && !humanPresenceGuardDisabled()) {
     for (const wanted of lowering) {
-      const authority = guardSwitchAuthority(projectDir, content, wanted, sessionId);
+      const authority = guardSwitchAuthority(projectDir, content, wanted, sessionId, targetIntentId);
       if (authority === null) die(guardSwitchRefusal(wanted, "config"));
       if (authority.source === "typed-request") spentSwitchSession = authority.session;
     }
@@ -9167,6 +9182,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     const content = readConfigState(projectDir, { intent, space });
     const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), {
       intent, space, sessionId: selection.sessionId ?? latestLedgerSession(projectDir),
+      targetIntentId: intentUuidForSelection(projectDir, selection) ?? "bare-space",
     });
     if (update.content !== content) {
       if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();

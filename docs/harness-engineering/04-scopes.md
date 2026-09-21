@@ -85,8 +85,10 @@ explicitly.
 The optional `guard_policy:` field is the value a new intent on this scope
 starts with, written to its state file at creation as
 `- **Guard Policy**: <value> (from scope <name>)`. The human can flip it for
-that one intent with `/aidlc --guard-policy <value>` or a plain-chat request;
-an older intent without this line remains strict until explicitly set, while
+that one intent by typing `/aidlc --guard-policy <value>` themselves; a
+plain-chat request raises it to `strict` directly, while `relaxed` and `off`
+need that exact typed command. An older intent without this line remains strict
+until explicitly set, while
 the next new intent starts from the scope default again. To hold a value for
 everyone on the repo, do not edit eleven scope files: declare it once in memory
 (`## Guard Policy` with `Mode: strict` in `aidlc/spaces/<space>/memory/org.md`,

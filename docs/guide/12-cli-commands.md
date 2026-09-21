@@ -1162,8 +1162,11 @@ every `/aidlc` run announces a carried-over relaxed or off value; re-affirm with
 `next` writes nothing, and a retired strict line gets no notice. The value is
 committed with the intent, survives sessions, and is visible to teammates. The
 same setter repairs an invalid line and records the old text. A plain-chat request
-such as "stop asking me to re-approve when files change" is not a switch: the
-person must type the policy choice before the conductor can apply it.
+for strict runs directly. A request to lower the policy, such as "stop asking me
+to re-approve when files change", is not a switch: the conductor names the exact
+command for you to type (`/aidlc --guard-policy relaxed` or
+`/aidlc --guard-policy off`) and ends the turn. When your next message is that
+command, the conductor acts on it as on that slash command.
 For configuration and scope changes, the row's `Old Value` is the previously
 saved intent value (raw text if invalid; `strict` when no line existed), not
 the memory-effective value. Governed-checkpoint observations still record

@@ -85,20 +85,45 @@ only a typed prompt: `hook_event_name === "UserPromptSubmit"`, no string
 `/aidlc --guard-policy relaxed build X` is recorded. The per-session file is
 `fence-switch-<session>.json` in the Plan Approval runtime directory above, with
 the session filename segment produced by `runtimeSessionSegment`. Its
-`GuardSwitchRequest` contains version 1, the session, `requestedAt`, the active
-intent UUID or `bare-space`, and the exact parsed `switches`.
+`GuardSwitchRequest` contains version 1, the session, `requestedAt`, the UUID of
+the intent the session is bound to (or `bare-space`), and the exact parsed
+`switches`. The setter compares that UUID with the intent it is about to mutate,
+the one selected by `--intent`/`--space` or the session binding, so a request
+recorded for one workflow cannot be spent on another.
 
-`parseTypedGuardSwitches` scans whitespace-separated tokens case-insensitively.
-It recognizes `--guard-policy`, `guard-policy`, or `guard policy` followed by
-`relaxed` or `off`, plus the retired `--change-control`, `change-control`, and
-`change control` spellings. It also recognizes `guard.<fence> off` or `--guard.<fence> off` for the
-four switchable fences. `strict`, `on`, and `guard.human-presence` never record
-a lowering request. The last occurrence of each key wins, with keys ordered by
-first appearance. A later typed prompt containing switches replaces the request;
-an unrelated prompt leaves it untouched, including a later composer approval.
-The setter consumes the request once after a successful write or an already-set
-no-op. Picked answers do not create typed requests; an engine-published
-guard-recovery question instead records its selected remedy on the directive.
+`parseTypedGuardSwitches` reads only an affirmative, top-level form of the
+prompt (trimmed, one trailing run of `.,;:!?` ignored, case-insensitive). Either
+the prompt begins with `/aidlc` or `aidlc` and its remaining words carry
+`--guard-policy relaxed|off`, the retired `--change-control relaxed|off`,
+`--guard.<fence> off` for one of the four switchable fences, or the config form
+`config set guard-policy|change-control relaxed|off` / `config set guard.<fence>
+off`; or the whole prompt is the confirmation words `guard policy relaxed|off`
+(hyphen or space; `change control` still accepted). Anything else records
+nothing: a quoted, negated or explanatory mention of a switch is not a switch,
+and `strict`, `on`, and `guard.human-presence` never record a lowering. One
+entry per key, last value wins, keys ordered by first appearance. A later typed
+prompt containing switches replaces the request; an unrelated prompt leaves it
+untouched, including a later composer approval. The setter consumes the request
+once after a successful write or an already-set no-op, and refuses every
+lowering under `AIDLC_UNATTENDED=1` before it consults the presence bypass.
+Picked answers do not create typed requests; an engine-published guard-recovery
+question instead records its selected remedy on the directive.
+
+#### Kiro IDE adapter
+
+When UserPromptSubmit carries an empty prompt, as measured on IDE 1.0.242, the
+adapter lets only that turn's first AIDLC shell command stand in for the typed
+lowering switch, using per-session `prompt-empty` and `first-aidlc-call` markers
+bound to the terminal turn counter.
+Non-empty prompts use the core human-turn hook instead; later AIDLC commands
+and unattended turns cannot mint a stand-in request.
+
+#### Copilot adapter
+
+Copilot forwards UserPromptSubmit to the core human-turn hook even before a
+state file exists, so a first-use `/aidlc --guard-policy relaxed` or
+`/aidlc --guard-policy off` request can be recorded.
+Its human-sequence coordination marker still requires an existing state file.
 
 ### Shared Characteristics
 

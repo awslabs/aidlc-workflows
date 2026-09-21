@@ -38,7 +38,9 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  clearGuardSwitchRequest,
   readAllAuditShards,
+  readGuardSwitchRequest,
   readIntentRegistry,
   writePlanApprovalLegacyOffer,
   writeActiveDirectiveMarker,
@@ -317,6 +319,39 @@ function runIdeStdin(
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
   };
+}
+
+function submitGuardSwitchTurn(projectDir: string, sessionId: string, prompt: string): void {
+  const payload = JSON.stringify({
+    session_id: sessionId,
+    hook_event_name: "UserPromptSubmit",
+    cwd: projectDir,
+    prompt,
+  });
+  for (const target of ["record-human-turn", "verb-intercept"]) {
+    const result = runIdeStdin(projectDir, target, payload);
+    expect(result.code, result.stderr).toBe(0);
+  }
+}
+
+function preGuardSwitchCommand(
+  projectDir: string,
+  sessionId: string,
+  command: string,
+  envOverrides: NodeJS.ProcessEnv = {},
+) {
+  return runIdeStdin(projectDir, "terminal-command-guard", JSON.stringify({
+    session_id: sessionId,
+    hook_event_name: "PreToolUse",
+    cwd: projectDir,
+    tool_name: "execute_pwsh",
+    tool_input: {
+      command,
+      cwd: projectDir,
+      run_in_background: false,
+      timeout: null,
+    },
+  }), envOverrides);
 }
 
 /** Exercise the hidden `aidlc engine adapter kiro-ide` dispatcher route rather than
@@ -992,6 +1027,157 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       );
       expect(nonTerminal.code).toBe(0);
       expect(nonTerminal.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d1: IDE 1.0.242 empty prompt records the first shell fence switch", () => {
+    const dir = scratchProject(true);
+    const session = "sess_first_fence_switch";
+    try {
+      const submitted = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: session,
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "",
+      }));
+      expect(submitted.code, submitted.stderr).toBe(0);
+      const result = preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off");
+      expect(result.code, result.stderr).toBe(0);
+      expect(readGuardSwitchRequest(dir, session)).toMatchObject({
+        session,
+        intentId: "00000000-0000-7000-8000-000000000001",
+        switches: [{ key: "guard.plan-approval", value: "off" }],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d2: later AIDLC calls cannot replace or recreate the turn's first switch", () => {
+    const dir = scratchProject(true);
+    const session = "sess_later_fence_switch";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off");
+      const first = readGuardSwitchRequest(dir, session);
+      expect(first?.switches).toEqual([{ key: "guard.plan-approval", value: "off" }]);
+      preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off");
+      expect(readGuardSwitchRequest(dir, session)).toEqual(first);
+      clearGuardSwitchRequest(dir, session);
+      preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off");
+      expect(readGuardSwitchRequest(dir, session)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d3: a non-empty prompt clears the previous turn's stand-in eligibility", () => {
+    const dir = scratchProject(true);
+    const session = "sess_visible_prompt_switch";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const payload = JSON.stringify({
+        session_id: session,
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "Explain what the plan-approval check does",
+      });
+      // Exercise the opposite submit-hook order as well.
+      for (const target of ["verb-intercept", "record-human-turn"]) {
+        const result = runIdeStdin(dir, target, payload);
+        expect(result.code, result.stderr).toBe(0);
+      }
+      preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off");
+      expect(readGuardSwitchRequest(dir, session)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d4: a strict first command records nothing and exhausts the turn's stand-in", () => {
+    const dir = scratchProject(true);
+    const session = "sess_strict_first_switch";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy strict");
+      expect(readGuardSwitchRequest(dir, session)).toBeNull();
+      preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off");
+      expect(readGuardSwitchRequest(dir, session)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d5: each new empty turn admits its first next or dispatcher config switch", () => {
+    const dir = scratchProject(true);
+    const session = "sess_new_turn_switch";
+    try {
+      for (const command of [
+        "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy relaxed build the service",
+        ".kiro/tools/aidlc.ts config set guard-policy relaxed",
+        '"C:\\Program Files\\bun.exe" .kiro\\tools\\aidlc.ts engine config set guard-policy relaxed',
+      ]) {
+        submitGuardSwitchTurn(dir, session, "");
+        const result = preGuardSwitchCommand(dir, session, command);
+        expect(result.code, result.stderr).toBe(0);
+        expect(readGuardSwitchRequest(dir, session)?.switches).toEqual([
+          { key: "guard-policy", value: "relaxed" },
+        ]);
+        clearGuardSwitchRequest(dir, session);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d6: non-AIDLC commands and invalid runners cannot mint a stand-in", () => {
+    const dir = scratchProject(true);
+    const session = "sess_invalid_runner_switch";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      for (const command of [
+        "echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+      ]) {
+        preGuardSwitchCommand(dir, session, command);
+        expect(readGuardSwitchRequest(dir, session)).toBeNull();
+      }
+      preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy relaxed");
+      expect(readGuardSwitchRequest(dir, session)?.switches).toEqual([
+        { key: "guard-policy", value: "relaxed" },
+      ]);
+      clearGuardSwitchRequest(dir, session);
+      submitGuardSwitchTurn(dir, session, "");
+      preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-get --guard-policy");
+      preGuardSwitchCommand(dir, session,
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off");
+      expect(readGuardSwitchRequest(dir, session)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d7: missing prompt evidence and unattended turns cannot mint a stand-in", () => {
+    const dir = scratchProject(true);
+    const session = "sess_missing_prompt_switch";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off";
+    try {
+      preGuardSwitchCommand(dir, session, command);
+      expect(readGuardSwitchRequest(dir, session)).toBeNull();
+      submitGuardSwitchTurn(dir, session, "");
+      preGuardSwitchCommand(dir, session, command, { AIDLC_UNATTENDED: "1" });
+      expect(readGuardSwitchRequest(dir, session)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -924,15 +924,8 @@ export async function run(
     }
 
     case "record-human-turn": {
-      // UserPromptSubmit: record HUMAN_TURN (human-presence gate). Same
-      // self-gate as the core record-human-turn hook: no workflow state, no scaffolding.
-      let stateContent: string;
-      try {
-        if (!existsSync(stateFilePath(projectDir))) return 0;
-        stateContent = readFileSync(stateFilePath(projectDir), "utf-8");
-      } catch {
-        return 0;
-      }
+      // Forward even before workflow state exists: the core hook records typed
+      // switches first and self-gates its HUMAN_TURN ledger write on state.
       runCore(
         "aidlc-record-human-turn.ts",
         JSON.stringify({
@@ -946,8 +939,12 @@ export async function run(
         }),
       );
       if (sessionId) {
-        try { recordCopilotHumanSequence(projectDir, stateContent, sessionId); }
-        catch { /* bounded coordination remains best effort */ }
+        try {
+          const statePath = stateFilePath(projectDir);
+          if (existsSync(statePath)) {
+            recordCopilotHumanSequence(projectDir, readFileSync(statePath, "utf-8"), sessionId);
+          }
+        } catch { /* bounded coordination remains best effort */ }
       }
       return 0;
     }
