@@ -1225,7 +1225,13 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 		const line = lines[index];
 		const content = firstContent(line.text);
 		// CommonMark §4.6: HTML blocks never continue lazily outside their container.
-		if (block === "html" && line.context !== blockContext) {
+		// Raw content may look like markers nested inside that same container.
+		if (
+			block === "html" &&
+			blockContext !== "" &&
+			line.context !== blockContext &&
+			!line.context.startsWith(`${blockContext}/`)
+		) {
 			block = "none";
 			htmlEnd = null;
 		}

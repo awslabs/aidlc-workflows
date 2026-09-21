@@ -976,6 +976,8 @@ describe("t247 claim-sources sensor", () => {
     ["an exited quoted processing instruction", "> <?php\n[Q1]: /url"],
     ["an exited quoted div block", "> <div>\n[Q1]: /url"],
     ["an exited list-item processing instruction", "- <?php\n[Q1]: /url"],
+    ["a root processing instruction containing marker-like text", "<?php\n- raw content\n?>\n[Q1]: /url"],
+    ["a quoted processing instruction containing marker-like text", "> <?php\n> - raw content\n> ?>\n[Q1]: /url"],
   ] as const) {
     test(`a reference definition after ${label} resolves document-wide`, () => {
       const dir = makeStageDir();
