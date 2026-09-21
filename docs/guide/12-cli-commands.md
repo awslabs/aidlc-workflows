@@ -1024,9 +1024,14 @@ through `aidlc config flags`.
 | `guard.reviewer-scope` / `--guard.reviewer-scope` | `on`, `off` | Guards Off / Guards On |
 
 The retired key `change-control` and the retired flag `--change-control` still
-resolve to `guard-policy` for one release and print one deprecation line. Naming
-both spellings in one command is refused when their values differ, and accepted
-when they agree.
+resolve to `guard-policy` for one release and print one deprecation line. On the
+`config-change` and `scope-change` utility paths, naming both spellings in one
+command is refused when their values differ, and accepted when they agree.
+In `orchestrate next`, the last of the two flags wins when both values are valid.
+In `validate-grid`, `--guard-policy` takes precedence over `--change-control`
+regardless of their order; the first occurrence of the chosen flag is used.
+Either flag overrides the scope object, where a string `guardPolicy` takes
+precedence over a string `changeControl`.
 
 For example, each line below is a single combined update:
 

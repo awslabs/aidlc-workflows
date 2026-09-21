@@ -666,7 +666,7 @@ Utilities:
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
   --guard-policy <value>  How far the guards stand aside for this piece of work (strict, relaxed, off); --change-control is its retired name
-  config set guard.<fence> <on|off>  Lower or restore one fence for this piece of work (plan-approval, review-freeze, state-transition, reviewer-scope, human-presence)
+  config set guard.<fence> <on|off>  Lower or restore one fence for this piece of work (plan-approval, review-freeze, state-transition, reviewer-scope); human presence has no per-work switch
   --sensors <on|off>  Enable or disable stage sensors for this intent
   --learnings <on|off>  Enable or disable the learnings ritual for this intent
   --summary-confirmation <on|off>  Enable or disable summary confirmation for this intent
@@ -8985,6 +8985,16 @@ function applyIntentSettings(
   });
   if (ccRequest?.source === "you" && changeControl !== null && changeControl !== "strict" && cc.memoryStrict !== null) {
     die(guardPolicyMemoryStrictRefusal(cc.memoryStrict));
+  }
+  if (cc.memoryStrict !== null) {
+    const loweredFence = fenceRequests.find((request) => request.value === "off");
+    if (loweredFence !== undefined) {
+      const section = cc.memoryStrict.heading.replace(/^## /, "");
+      die(
+        `Guard Policy is set to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
+          `so ${loweredFence.fence} cannot be turned off from chat. Edit that line to change it for everyone on this repo.`,
+      );
+    }
   }
 
   const audit: AuditEntryInput[] = [];

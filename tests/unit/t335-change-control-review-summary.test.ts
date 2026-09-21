@@ -433,6 +433,46 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(auditBlockField(rows[0].block, "Actor")).toBe("subagent");
   });
 
+  test("two live dispatches under one session lend no grant: the ambiguous stamp reads as the narrower authority", () => {
+    const proj = project("relaxed");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    const sessionId = "dispatch-shared-session";
+    // Dispatch A under a human grant, then the engine moves on and dispatch B
+    // is stamped with the instruction only. Both entries stay fresh.
+    markEngineTouch(proj);
+    markHumanTurn(proj);
+    const base = Math.floor(Date.now() / 1000) - 120;
+    utimesSync(engineTouchMarkerPath(proj), base, base);
+    utimesSync(humanTurnMarkerPath(proj), base + 60, base + 60);
+    const dispatch = (prompt: string) => runHook(join(HOOKS, "aidlc-deliver-stage-rules.ts"), proj, {
+      hook_event_name: "PreToolUse",
+      session_id: sessionId,
+      tool_name: "Task",
+      tool_input: { subagent_type: "general-purpose", prompt, run_in_background: true },
+    });
+    expect(dispatch("Revise the reviewed requirements.").code).toBe(0);
+    utimesSync(engineTouchMarkerPath(proj), base + 90, base + 90);
+    expect(dispatch("Continue the revision.").code).toBe(0);
+
+    const passed = runHook(FREEZE_HOOK, proj, {
+      hook_event_name: "PreToolUse",
+      session_id: sessionId,
+      agent_type: "general-purpose",
+      tool_name: "Write",
+      tool_input: { file_path: artifact(proj) },
+    });
+    expect(passed.code, passed.stderr).toBe(0);
+    const rows = readAuditShardEvents(proj).filter((entry) =>
+      entry.event === "GUARD_STOOD_ASIDE" &&
+      auditBlockField(entry.block, "Guard") === "review-freeze"
+    );
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Authority")).not.toBe("grant");
+    expect(auditBlockField(rows[0].block, "Grant")).not.toBe("dispatch-stamp");
+    expect(auditBlockField(rows[0].block, "Actor")).toBe("subagent");
+  });
+
   test("an acceptance that cannot be recorded refuses the transition instead of continuing", () => {
     const proj = project("relaxed");
     recordReadyReview(proj);

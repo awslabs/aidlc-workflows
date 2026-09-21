@@ -10,7 +10,7 @@ import {
   decideFence,
   guardStoodAsideLine,
   isClaudeCodeHookInput,
-  lowerFenceSentence,
+  fenceSwitchSentence,
   parseArgs,
   parseWorkspaceCommand,
   recordGuardStoodAside,
@@ -1021,21 +1021,26 @@ export async function run(input: string): Promise<number> {
     });
     return true;
   };
+  const agentType = parsed.agent_type?.trim() ||
+    (typeof parsed.tool_input?.subagent_type === "string"
+      ? parsed.tool_input.subagent_type.trim() : "");
   const verb = directStateTransition(parsed.tool_input?.command ?? "");
   if (verb !== null) {
     if (standAside(`aidlc-state.ts ${verb}`)) return 0;
+    const switchSentence = agentType.length === 0
+      ? fenceSwitchSentence(resolveProjectDirFromHook(import.meta.url), "state-transition")
+      : "";
     process.stderr.write(
       `Stage status cannot be changed with aidlc-state.ts ${verb} because that bypasses ` +
         "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
         "--stage <slug> --result " +
         "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
         "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
-        `${lowerFenceSentence("state-transition")}\n`,
+        `${switchSentence}\n`,
     );
     return 2;
   }
 
-  const agentType = parsed.agent_type?.trim() ?? "";
   if (agentType.length === 0) return 0;
   const delegatedCommand = delegatedLifecycleCommand(
     parsed.tool_input?.command ?? "",

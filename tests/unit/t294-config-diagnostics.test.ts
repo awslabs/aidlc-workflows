@@ -113,14 +113,20 @@ function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
+// The legacy Bedrock block sat among the shipped config's top-level keys with
+// its aws table last before the first table header. Insert a synthesized block
+// there, after developer_instructions and every other top-level key the current
+// shipped config carries (tool_output_token_limit), so no shipped key lands
+// inside the legacy table in TOML terms and the file models a real upgrade.
 function withLegacyCodexProviderBlock(config: string, block: string): string {
   const developerInstructions =
     /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m
       .exec(config);
-  if (!developerInstructions || developerInstructions.index === undefined) {
-    return block + config;
-  }
-  const insertion = developerInstructions.index + developerInstructions[0].length;
+  const from = developerInstructions
+    ? developerInstructions.index + developerInstructions[0].length
+    : 0;
+  const header = /^\[/m.exec(config.slice(from));
+  const insertion = header ? from + header.index : config.length;
   return config.slice(0, insertion) + block + config.slice(insertion);
 }
 
@@ -772,14 +778,16 @@ describe("t294 provider diagnostics", () => {
     );
     writeFileSync(
       codexPath,
-      `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
-        `# unavailable there; the market-research stage degrades gracefully). For\n` +
-        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
-        `# block.\n` +
-        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
-        `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
-        `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n` +
+      withLegacyCodexProviderBlock(
         legacyFrameworkConfig,
+        `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+          `# unavailable there; the market-research stage degrades gracefully). For\n` +
+          `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+          `# block.\n` +
+          `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+          `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+          `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n`,
+      ),
     );
     expect(providerIssues(codex, ".codex", "codex", record)
       .map((issue) => issue.id)).toContain("provider-codex-project-override");
@@ -794,11 +802,12 @@ describe("t294 provider diagnostics", () => {
     const customCodex = temp("aidlc-t294-custom-codex-");
     cpSync(join(DIST, "codex"), customCodex, { recursive: true });
     const customCodexPath = join(customCodex, ".codex", "config.toml");
-    const customConfig =
+    const customConfig = withLegacyCodexProviderBlock(
+      readFileSync(customCodexPath, "utf-8"),
       `model = "gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
-      `model_context_window = 262144\nmodel_reasoning_effort = "low"\n\n` +
-      `[model_providers.amazon-bedrock.aws]\nprofile = "dev"\nregion = "eu-west-1"\n\n` +
-      readFileSync(customCodexPath, "utf-8");
+        `model_context_window = 262144\nmodel_reasoning_effort = "low"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "dev"\nregion = "eu-west-1"\n\n`,
+    );
     writeFileSync(customCodexPath, customConfig);
     expect(providerIssues(customCodex, ".codex", "codex", record)).toEqual([
       expect.objectContaining({
@@ -2049,7 +2058,7 @@ describe("t294 config diagnostics CLI", () => {
       `[model_providers.amazon-bedrock.aws]\n` +
       `# Set to your AWS profile/region with Bedrock model access.\n` +
       `profile = "default"\nregion = "us-east-1"\n\n`;
-    writeFileSync(configPath, legacyProviderBlock + legacyFrameworkConfig);
+    writeFileSync(configPath, withLegacyCodexProviderBlock(legacyFrameworkConfig, legacyProviderBlock));
 
     const cleaned = run([
       "config",

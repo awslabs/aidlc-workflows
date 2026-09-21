@@ -599,6 +599,49 @@ describe("t334 (5) strict drift at the dispatch guard is a typed ask, not a wall
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
   }, 60000);
 
+  test("memory strict withholds the drift fence switch and names the governing file", () => {
+    const project = createProject("strict");
+    const memory = join(project, "aidlc", "spaces", "default", "memory", "project.md");
+    writeFileSync(memory, readFileSync(memory, "utf-8").replace(
+      "## Guard Policy\n", "## Guard Policy\n\nMode: strict\n",
+    ));
+    const questions = presentPlan(project);
+    startSession(project, "memory-strict-guard");
+    expect(decide(project, questions, "memory-strict-guard").code).toBe(0);
+    humanTurn(project, "memory-strict-guard");
+    expect(answer(project, questions, "memory-strict-guard").code).toBe(0);
+    writeFileSync(join(project, "src", "after.ts"), "export const after = 1;\n");
+
+    const guard = spawn([BUN, GUARD], project, JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Task",
+      tool_input: {
+        subagent_type: "aidlc-developer-agent",
+        prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}`,
+      },
+      cwd: project,
+    }));
+    expect(guard.code, guard.stderr).toBe(2);
+    const lines = guard.stderr.trim().split(/\r?\n/);
+    expect(lines[0]).toContain("1 file changed since this plan was approved: src/after.ts.");
+    expect(lines[0]).toContain(
+      `Guard Policy is held strict in ${memory}, so the plan-approval check cannot be turned off from chat; edit that file to change it for everyone on this repo.`,
+    );
+    expect(lines[0]).not.toContain("config set guard.plan-approval off");
+    const ask = JSON.parse(lines[lines.length - 1]) as {
+      kind: string;
+      ask_type: string;
+      remedies: Array<{ op: string }>;
+    };
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("guard-recovery");
+    expect(ask.remedies.map((remedy) => remedy.op)).toEqual([
+      "reapprove-plan", "show-plan-drift", "stop-here",
+    ]);
+    expect(validateDirective(ask).valid, JSON.stringify(validateDirective(ask))).toBe(true);
+    expect(acceptedRows(project)).toHaveLength(0);
+  }, 60000);
+
   test("the native fence switch the ask prints is admitted by the hook it lowers, and nothing near it is", () => {
     const project = createProject("strict");
     const questions = presentPlan(project);

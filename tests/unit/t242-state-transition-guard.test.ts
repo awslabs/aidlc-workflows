@@ -559,6 +559,35 @@ describe("t242 state-transition ownership guard", () => {
     expect(r.stderr).toContain("aidlc-orchestrate.ts report");
   });
 
+  test("direct state-tool refusals offer the switch only to the main session", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "bun .claude/tools/aidlc-state.ts gate-start feasibility" },
+    };
+    const env = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project };
+    const main = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify(payload),
+      encoding: "utf-8",
+      env,
+    });
+    expect(main.status).toBe(2);
+    expect(main.stderr).toContain("aidlc-orchestrate.ts report");
+    expect(main.stderr).toContain("config set guard.state-transition off");
+    const delegated = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ ...payload, agent_type: "aidlc-developer-agent" }),
+      encoding: "utf-8",
+      env,
+    });
+    expect(delegated.status).toBe(2);
+    expect(delegated.stderr).toContain("aidlc-orchestrate.ts report");
+    expect(delegated.stderr).not.toContain("config set guard.state-transition off");
+    expect(delegated.stderr).not.toContain("cannot be turned off from chat");
+  });
+
   test("the state CLI rejects every unowned lifecycle verb before dispatch", () => {
     const project = createTestProject();
     projects.push(project);

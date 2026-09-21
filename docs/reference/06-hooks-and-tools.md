@@ -251,15 +251,19 @@ The instruction covers the work it asks for, including the approval still pendin
 inside it; it does not cover the loop skipping one of its own steps.
 
 For the four switchable fences, the human still holds the key, and it still opens
-in one move. A fence that holds puts the switch in front of the person who met
-it, in whichever shape that refusal has: `review-freeze` builds a typed refusal with `fence` set, so
+in one move unless a memory layer holds Guard Policy strict. A fence that holds
+puts an available switch in front of the person who met it, in whichever shape
+that refusal has: `review-freeze` builds a typed refusal with `fence` set, so
 `evaluateGuardRefusal` appends `lowerFenceRemedy` (`op: "lower-fence"`) to the
 guard-recovery ask and choosing it writes the per-run switch; the other three
-fences refuse from `PreToolUse` with exit 2. Main-session refusals carry
-`lowerFenceSentence` on stderr; delegated-agent and reviewer-scope refusals keep
-their redirect without advertising a switch those agents cannot run. Either way
-it is a key the person turns deliberately rather than one that turns itself,
-and once turned nothing asks again for that piece of work.
+fences refuse from `PreToolUse` with exit 2. Main-session prose refusals use
+`fenceSwitchSentence`: it returns `lowerFenceSentence` when the switch is
+available, or names the memory file holding strict instead. Memory-held strict
+withholds the switch everywhere, including typed remedy lists. Plan-approval
+and direct state-tool refusals also withhold it from dispatched agents, as do
+delegated-agent and reviewer-scope redirects. Either way it is a key the person
+turns deliberately rather than one that turns itself, and once turned nothing
+asks again for that piece of work.
 Human-presence refusals instead say `This needs a fresh human turn: wait for the person to reply, then record it again.`
 They never advertise a switch.
 
@@ -314,12 +318,16 @@ of what that decision let through rather than the decision itself. And
 `recordGuardStoodAside` appends nothing at all when the intent has no audit
 ledger yet. On Kiro IDE
 against a project with no ledger, a stand-aside therefore leaves neither a line
-nor a row. `hold` refuses as before. Switchable-fence main-session refusals append
-`lowerFenceSentence`, one sentence naming `/aidlc config set guard.<fence> off`;
-delegated-agent and reviewer-scope refusals keep their redirect instead, without
-the switch sentence. The typed refusal's remedy list carries `lowerFenceRemedy`
-(`op: "lower-fence"`) LAST, after the remedies that let the workflow finish the
-step on its own.
+nor a row. `hold` refuses as before. Switchable-fence main-session refusals use
+`fenceSwitchSentence` to append `lowerFenceSentence`, naming
+`/aidlc config set guard.<fence> off`, only when memory does not hold strict.
+Memory-held strict withholds the switch everywhere; the prose refusal names
+the memory file to edit instead. An unreadable policy also withholds the switch.
+Plan-approval and direct state-tool refusals withhold both sentences from
+dispatched agents, keeping their redirect, as do delegated-agent and
+reviewer-scope refusals. When available, the typed refusal's remedy list carries
+`lowerFenceRemedy` (`op: "lower-fence"`) LAST, after the remedies that let the
+workflow finish the step on its own.
 
 **Security posture.** No policy value and no per-work switch removes an approval
 gate, alters a reviewer's verdict, deletes evidence, or lets an agent answer for

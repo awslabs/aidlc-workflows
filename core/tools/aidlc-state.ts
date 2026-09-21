@@ -88,7 +88,7 @@ import {
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
-  lowerFenceSentence,
+  fenceSwitchSentence,
   unattendedHumanPresenceHint,
   intentRepos,
   isAutonomousConstructionGate,
@@ -739,7 +739,7 @@ export function main(argv: string[]): void {
         "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
         // The tool-side twin of the state-transition fence: same invariant, same
         // way out, so the human is not told to go and find it.
-        lowerFenceSentence("state-transition"),
+        fenceSwitchSentence(resolveProjectDir(projectDir), "state-transition"),
     );
   }
 

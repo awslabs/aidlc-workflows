@@ -79,7 +79,8 @@ import {
   guardRefusalOutput,
   guardStoodAsideLine,
   harnessDir,
-  lowerFenceSentence,
+  fenceSwitchSentence,
+  memoryStrictHoldsGuardPolicy,
   PLAN_SOURCE_DRIFT_ATTEMPT,
   planSourceDriftRefusal,
   recordGuardStoodAside,
@@ -1116,6 +1117,8 @@ export async function run(input: string): Promise<number> {
     typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
   const guardedDispatch =
     DISPATCH_TOOLS.has(toolName) && subagentType === GUARDED_AGENT;
+  const dispatchedActor = (parsed.agent_type?.trim() ?? "").length > 0 ||
+    (!DISPATCH_TOOLS.has(toolName) && subagentType.trim().length > 0);
   if (SAFE_READ_TOOLS.has(toolName)) return 0;
   const mutationCapable =
     toolName === "Bash" ||
@@ -1124,6 +1127,7 @@ export async function run(input: string): Promise<number> {
   if (!guardedDispatch && !mutationCapable) return 0;
   const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
 
+  let state: string | null = null;
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
@@ -1147,7 +1151,13 @@ export async function run(input: string): Promise<number> {
         resolveGuardPolicy(projectDir, stateContent).value,
       );
       if (decision !== "ask") return null;
-      return planSourceDriftRefusal({ stateContent, unit, userMessage: reason });
+      return planSourceDriftRefusal({
+        stateContent,
+        unit,
+        userMessage: reason,
+        fenceSwitch: dispatchedActor || memoryStrictHoldsGuardPolicy(projectDir, stateContent)
+          ? "withhold" : "offer",
+      });
     } catch (buildError) {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(buildError));
       return null;
@@ -1164,7 +1174,7 @@ export async function run(input: string): Promise<number> {
   try {
     const statePath = stateFilePath(projectDir);
     if (!existsSync(statePath)) return 0; // no workflow - fail open
-    const state = readFileSync(statePath, "utf-8");
+    state = readFileSync(statePath, "utf-8");
     const currentStage = getField(state, "Current Stage") ?? "";
     const activeDirective = readActiveDirectiveMarker(projectDir, state);
     const durableStage = normalizeStageName(currentStage);
@@ -1411,7 +1421,7 @@ export async function run(input: string): Promise<number> {
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
       : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))} ${
-      lowerFenceSentence("plan-approval")
+      dispatchedActor ? "" : fenceSwitchSentence(projectDir, "plan-approval", state)
     }`;
   if (driftRefusal !== null) {
     // Same prose first line, then the guard-recovery ask as the last line: the

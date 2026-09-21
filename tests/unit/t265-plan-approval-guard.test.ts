@@ -1292,6 +1292,27 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("plan-approval mutation refusals offer the switch only to the main session", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      const payload = WRITE(join(proj, "src", "inline.ts"));
+      const main = runHook(proj, payload);
+      expect(main.code).toBe(2);
+      expect(main.stderr).toContain("Code generation cannot modify workspace path");
+      expect(main.stderr).toContain("config set guard.plan-approval off");
+      const delegated = runHook(proj, { ...payload, agent_type: "aidlc-developer-agent" });
+      expect(delegated.code).toBe(2);
+      expect(delegated.stderr).toContain("Code generation cannot modify workspace path");
+      expect(delegated.stderr).not.toContain("config set guard.plan-approval off");
+      expect(delegated.stderr).not.toContain("cannot be turned off from chat");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("zero-unit inline generation is refused before approval and allowed after approval", () => {
     const proj = scratchProject();
     try {

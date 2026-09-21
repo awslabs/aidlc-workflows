@@ -74,6 +74,7 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   loadStageGraph,
+  memoryStrictHoldsGuardPolicy,
   parseCheckboxes,
   reviewedArtifactUnit,
   readAllAuditShards,
@@ -395,6 +396,9 @@ export async function run(input: string): Promise<number> {
     // This refusal IS the fence holding, so the ask carries the switch that
     // lowers it for this piece of work beside the workflow's own remedies.
     fence: "review-freeze",
+    fenceSwitch: (parsed.agent_type?.trim() ?? "").length > 0 ||
+      (typeof parsed.tool_input?.subagent_type === "string" && parsed.tool_input.subagent_type.trim().length > 0) ||
+      memoryStrictHoldsGuardPolicy(projectDir, stateContent) ? "withhold" : "offer",
   });
   const guidance =
     evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??

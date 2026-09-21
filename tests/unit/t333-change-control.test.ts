@@ -39,6 +39,7 @@ import {
   CHANGE_CONTROL_FIELD,
   CHANGE_CONTROL_VALUES,
   fencesLoweredByPolicy,
+  fenceSwitchSentence,
   formatChangeControl,
   formatFence,
   formatGuardPolicy,
@@ -57,6 +58,7 @@ import {
   loadScopeMapping,
   memoryChangeControlDeclarations,
   memoryGuardPolicyDeclarations,
+  memoryStrictHoldsGuardPolicy,
   memorySectionBody,
   parseChangeControl,
   parseChangeControlStateLine,
@@ -607,6 +609,20 @@ describe("t333 (3) resolution precedence", () => {
     expect(() => resolveGuardPolicy(legacy.proj)).toThrow(
       `Invalid Change Control Mode "sometimes" in ${memoryFile(legacy.proj, "org")} (section: Change Control). Expected one of: strict, relaxed, off.`,
     );
+  });
+
+  test("an unreadable memory policy withholds the fence switch instead of failing open", () => {
+    const { proj, state } = project("enterprise");
+    const content = readFileSync(state, "utf-8");
+    expect(memoryStrictHoldsGuardPolicy(proj, content)).toBe(false);
+    expect(fenceSwitchSentence(proj, "plan-approval", content)).toContain("config set guard.plan-approval off");
+    const memory = memoryFile(proj, "project");
+    rmSync(memory);
+    mkdirSync(memory);
+    expect(memoryStrictHoldsGuardPolicy(proj, content)).toBe(true);
+    const sentence = fenceSwitchSentence(proj, "plan-approval", content);
+    expect(sentence).toContain("cannot be turned off from chat");
+    expect(sentence).not.toContain("config set guard.plan-approval off");
   });
 
   test("a state file without the line stays strict for intents created before the setting", () => {
@@ -1746,6 +1762,75 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(run(UTILITY, ["config-get", "guard.plan-approval"], proj, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
   });
 
+  test("memory strict refuses a fence-off config change before any setting changes", () => {
+    const { proj, state } = project("enterprise");
+    declareMemoryMode(proj, "project", "strict");
+    const before = readFileSync(state, "utf-8");
+    const refused = run(
+      UTILITY,
+      ["config-change", "--depth", "minimal", "--guard.plan-approval", "off"],
+      proj,
+      FENCE_ENV_CLEAR,
+    );
+    expect(refused.status, refused.stderr).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({
+      error: `Guard Policy is set to strict in ${memoryFile(proj, "project")} (section: Guard Policy), so plan-approval cannot be turned off from chat. Edit that line to change it for everyone on this repo.`,
+    });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(0);
+    expect(rowsOf(proj, "DEPTH_CHANGED")).toHaveLength(0);
+  });
+
+  test("the dispatcher cannot lower a fence held strict by memory", () => {
+    const { proj, state } = project("enterprise");
+    declareMemoryMode(proj, "project", "strict");
+    const before = readFileSync(state, "utf-8");
+    const refused = run(
+      join(AIDLC_SRC, "tools", "aidlc.ts"),
+      ["engine", "config", "set", "guard.plan-approval", "off"],
+      proj,
+      FENCE_ENV_CLEAR,
+    );
+    expect(refused.status, refused.stderr).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({
+      error: `Guard Policy is set to strict in ${memoryFile(proj, "project")} (section: Guard Policy), so plan-approval cannot be turned off from chat. Edit that line to change it for everyone on this repo.`,
+    });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(0);
+  });
+
+  test("scope-change refuses a fence-off request under memory strict before changing scope", () => {
+    const { proj, state } = project("enterprise");
+    declareMemoryMode(proj, "project", "strict");
+    const before = readFileSync(state, "utf-8");
+    const refused = run(
+      UTILITY,
+      ["scope-change", "--scope", "classic", "--guard.plan-approval", "off"],
+      proj,
+      FENCE_ENV_CLEAR,
+    );
+    expect(refused.status, refused.stderr).toBe(1);
+    expect(JSON.parse(refused.stderr)).toEqual({
+      error: `Guard Policy is set to strict in ${memoryFile(proj, "project")} (section: Guard Policy), so plan-approval cannot be turned off from chat. Edit that line to change it for everyone on this repo.`,
+    });
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(0);
+    expect(rowsOf(proj, "SCOPE_CHANGED")).toHaveLength(0);
+    expect(guardPolicyRows(proj)).toHaveLength(0);
+  });
+
+  test("memory strict allows an already-on fence without changing state or recording a row", () => {
+    const { proj, state } = project("enterprise");
+    declareMemoryMode(proj, "project", "strict");
+    const before = readFileSync(state, "utf-8");
+    const unchanged = run(UTILITY, ["config-change", "--guard.plan-approval", "on"], proj, FENCE_ENV_CLEAR);
+    expect(unchanged.status, unchanged.stderr).toBe(0);
+    expect(unchanged.stdout).toContain("Fence plan-approval is already on");
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(0);
+    expect(rowsOf(proj, "GUARD_RESTORED")).toHaveLength(0);
+  });
+
   test("config list names the eleven switchable settings in order", () => {
     const { proj } = project("classic");
     const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
@@ -1835,8 +1920,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 });
 
 describe("t333 (10) retired policy confirmation", () => {
-  const relaxedNotice = "Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed also lowers the plan-approval and review-freeze fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to confirm it, or 'guard policy strict' to keep them up; this notice repeats until you choose.";
-  const offNotice = "Guard Policy: off was carried over from this piece of work's retired Change Control line. Under Guard Policy, off also lowers the plan-approval, review-freeze, state-transition and reviewer-scope fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy off' to confirm it, or 'guard policy strict' to keep them up; this notice repeats until you choose.";
+  const relaxedNotice = "Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed now also lowers the plan-approval and review-freeze fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
+  const offNotice = "Guard Policy: off was carried over from this piece of work's retired Change Control line. Under Guard Policy, off now also lowers the plan-approval, review-freeze, state-transition and reviewer-scope fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy off' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
 
   test("next repeats the retired relaxed notice without changing state bytes", () => {
     const { proj, state } = project("classic");

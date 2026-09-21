@@ -22780,6 +22780,8 @@ export interface GuardRefusalInput {
   /** Set when this refusal IS a fence holding, so the way past it is offered
    *  beside the reasons the workflow can resolve on its own. */
   fence?: SwitchableGuardFence;
+  /** Withhold the switch when policy or the actor makes it unavailable. */
+  fenceSwitch?: "offer" | "withhold";
 }
 
 function guardLifecycleState(
@@ -22829,6 +22831,39 @@ export function lowerFenceSentence(fence: SwitchableGuardFence): string {
     `/aidlc config set ${guardFenceConfigKey(fence)} off. It is recorded, and it ` +
     "comes back on for the next piece of work."
   );
+}
+
+/** A policy read failure never advertises a switch that may be held strict. */
+export function memoryStrictHoldsGuardPolicy(
+  projectDir: string,
+  stateContent?: string | null,
+): boolean {
+  try {
+    return resolveGuardPolicy(projectDir, stateContent).memoryStrict !== null;
+  } catch {
+    return true;
+  }
+}
+
+/** Name the memory hold instead of offering a switch that chat cannot change. */
+export function fenceSwitchSentence(
+  projectDir: string,
+  fence: SwitchableGuardFence,
+  stateContent?: string | null,
+): string {
+  try {
+    const { memoryStrict } = resolveGuardPolicy(projectDir, stateContent);
+    if (memoryStrict === null) return lowerFenceSentence(fence);
+    return (
+      `Guard Policy is held strict in ${memoryStrict.path}, so the ${fence} check ` +
+      "cannot be turned off from chat; edit that file to change it for everyone on this repo."
+    );
+  } catch {
+    return (
+      `Guard Policy could not be read, so the ${fence} check cannot be turned off from chat; ` +
+      "fix the policy before trying again."
+    );
+  }
 }
 
 // --- Strict plan-source drift: an ask, not a wall ---------------------------
@@ -22900,7 +22935,14 @@ export function planSourceDriftRefusal(input: {
   stateContent: string;
   unit: string | null;
   userMessage: string;
+  fenceSwitch?: "offer" | "withhold";
 }): GuardRefusal {
+  const remedies = [
+    reapprovePlanRemedy(input.unit),
+    showPlanDriftRemedy(input.unit),
+    stopHereRemedy(),
+  ];
+  if (input.fenceSwitch !== "withhold") remedies.push(lowerFenceRemedy("plan-approval"));
   return {
     code: "PLAN_SOURCE_DRIFT",
     blockedAction: "code-generation-start",
@@ -22910,12 +22952,7 @@ export function planSourceDriftRefusal(input: {
     invariant:
       "Code is generated only from a plan approved against the source it will change.",
     userMessage: input.userMessage,
-    remedies: [
-      reapprovePlanRemedy(input.unit),
-      showPlanDriftRemedy(input.unit),
-      stopHereRemedy(),
-      lowerFenceRemedy("plan-approval"),
-    ].map((remedy) => ({ ...remedy, interaction: remedyInteraction(remedy) })),
+    remedies: remedies.map((remedy) => ({ ...remedy, interaction: remedyInteraction(remedy) })),
   };
 }
 
@@ -23201,7 +23238,9 @@ export function evaluateGuardRefusal(
   // The fence's own way out, always LAST: the workflow's own remedies come
   // first (letting it finish the step is nearly always the right answer), and
   // lowering the fence is the deliberate second choice.
-  if (input.fence !== undefined) remedies.push(lowerFenceRemedy(input.fence));
+  if (input.fence !== undefined && input.fenceSwitch !== "withhold") {
+    remedies.push(lowerFenceRemedy(input.fence));
+  }
 
   return {
     code: input.code,
@@ -30271,7 +30310,14 @@ function authorityStateText(projectDir: string): string {
  * The authority stamped on an in-flight dispatch, when this session is one.
  * "grant" is the only value that widens what a dispatched agent may do, so
  * anything else (no ledger, no entry, a malformed ledger) reads as unstamped.
+ * Dispatches are keyed by the harness session id, which every dispatch in one
+ * session shares, so several fresh entries can match. A grant is lent only
+ * when every matching stamp carries it: an ambiguous stamp narrows to the
+ * smallest authority among the matches rather than widening to a grant that
+ * may belong to another dispatch.
  */
+const AUTHORITY_COVER_RANK: Record<AuthorityCover, number> = { none: 0, instruction: 1, grant: 2 };
+
 function stampedDispatchAuthority(
   projectDir: string,
   sessionId?: unknown,
@@ -30280,11 +30326,14 @@ function stampedDispatchAuthority(
     const current = readSubagentInflightLedger(projectDir);
     if (!current.exists || current.malformed) return null;
     const identity = subagentSessionIdentity(sessionId);
-    const entries = freshSubagentEntries(current.entries, Date.now());
-    const entry = identity.valid
-      ? entries.find((candidate) => candidate.sessionId === identity.sessionId)
-      : undefined;
-    return entry?.authority ?? null;
+    if (!identity.valid) return null;
+    const stamped = freshSubagentEntries(current.entries, Date.now())
+      .filter((candidate) => candidate.sessionId === identity.sessionId)
+      .map((candidate) => candidate.authority ?? "none");
+    if (stamped.length === 0) return null;
+    return stamped.reduce((narrowest, cover) =>
+      AUTHORITY_COVER_RANK[cover] < AUTHORITY_COVER_RANK[narrowest] ? cover : narrowest
+    );
   } catch {
     return null;
   }
