@@ -42,11 +42,12 @@ export function assertE2eDiskSpace(path: string, additionalBytes = 0): void {
   }
 }
 
-function allocatedCopyBytes(path: string): number {
-  const stat = lstatSync(path);
+function allocatedCopyBytes(path: string, sourceRoot: string): number {
+  const stat = snapshotStat(sourceRoot, path);
+  if (!stat) throw new Error(`e2e snapshot source disappeared while sizing: ${path}`);
   if (stat.isSymbolicLink()) return 4096;
   if (!stat.isDirectory()) return Math.max(4096, Math.ceil(stat.size / 4096) * 4096);
-  return 4096 + readdirSync(path).reduce((sum, entry) => sum + allocatedCopyBytes(join(path, entry)), 0);
+  return 4096 + readdirSync(path).reduce((sum, entry) => sum + allocatedCopyBytes(join(path, entry), sourceRoot), 0);
 }
 
 /** Some applications discover .git markers even when Git rejects the marker.
@@ -116,6 +117,32 @@ function insideRoot(root: string, path: string): boolean {
   return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
+/** lstat of a descendant alone still follows ancestor links. Walk from the
+ * checkout before each size/copy access, allowing only a preserved leaf link. */
+function snapshotStat(sourceRoot: string, path: string) {
+  const root = resolve(sourceRoot);
+  const file = resolve(path);
+  if (!insideRoot(root, file)) throw new Error(`e2e snapshot path escapes checkout: ${path}`);
+  const parts = relative(root, file).split(sep).filter(Boolean);
+  let component = root;
+  for (let index = 0; ; index++) {
+    const stat = lstatSync(component, { throwIfNoEntry: false });
+    if (!stat) return undefined;
+    if (index === parts.length) {
+      if (stat.isSymbolicLink()) {
+        const target = readlinkSync(component);
+        if (isAbsolute(target) || win32.isAbsolute(target) || !insideRoot(root, resolve(dirname(component), target))) {
+          throw new Error(`e2e snapshot refuses a shared or escaping symlink: ${component}`);
+        }
+      }
+      return stat;
+    }
+    if (stat.isSymbolicLink()) throw new Error(`e2e snapshot refuses a symlink/reparse-point ancestor: ${component}`);
+    if (!stat.isDirectory()) throw new Error(`e2e snapshot ancestor is not a directory: ${component}`);
+    component = join(component, parts[index]);
+  }
+}
+
 /** Preserve link bytes without letting a private checkout alias a shared target. */
 async function copySnapshotEntry(from: string, to: string, sourceRoot: string): Promise<void> {
   await cp(from, to, {
@@ -123,14 +150,7 @@ async function copySnapshotEntry(from: string, to: string, sourceRoot: string): 
     dereference: false,
     verbatimSymlinks: true,
     filter(path) {
-      if (!lstatSync(path).isSymbolicLink()) return true;
-      const target = readlinkSync(path);
-      if (
-        isAbsolute(target) || win32.isAbsolute(target) ||
-        !insideRoot(sourceRoot, resolve(dirname(path), target))
-      ) {
-        throw new Error(`e2e snapshot refuses a shared or escaping symlink: ${relative(sourceRoot, path)}`);
-      }
+      if (!snapshotStat(sourceRoot, path)) throw new Error(`e2e snapshot source disappeared while copying: ${path}`);
       return true;
     },
   });
@@ -185,10 +205,10 @@ export async function prepareE2eWorkers(
     )).split("\0").filter((path) =>
       path !== "" && path !== "node_modules" && !path.startsWith("node_modules/"),
     ))];
-    const copyPaths = paths.filter((path) => lstatSync(resolve(source, path), { throwIfNoEntry: false }));
+    const copyPaths = paths.filter((path) => snapshotStat(source, resolve(source, path)));
     const generatedPaths = ["dist", "dist-release"].filter((path) => existsSync(join(source, path)));
     const copyBytes = [...copyPaths, ...generatedPaths].reduce(
-      (sum, path) => sum + allocatedCopyBytes(join(source, path)), 0,
+      (sum, path) => sum + allocatedCopyBytes(join(source, path), source), 0,
     );
     assertE2eDiskSpace(root, copyBytes * (count + 1));
     assertE2eDiskSpace(runDir);
@@ -211,7 +231,7 @@ export async function prepareE2eWorkers(
     await git(["read-tree", "HEAD"], snapshot);
     for (const path of paths) {
       const from = resolve(source, path);
-      if (!lstatSync(from, { throwIfNoEntry: false })) continue; // Keep dangling links; omit deleted files.
+      if (!snapshotStat(source, from)) continue; // Keep dangling links; omit deleted files.
       const destination = resolve(snapshot, path);
       if (!insideRoot(snapshot, destination)) {
         throw new Error(`e2e snapshot path escapes checkout: ${path}`);

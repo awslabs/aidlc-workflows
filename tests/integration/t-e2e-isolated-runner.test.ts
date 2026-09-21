@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -118,6 +118,52 @@ function matrixPlan(root: string, options: {
 }
 
 describe("isolated e2e runner contracts", () => {
+  test("isolated snapshots reject a tracked directory replaced by an external link before dispatch", async () => {
+    const external = scratch();
+    const witness = join(external, "executed");
+    const body = `import { test } from "bun:test"; import { writeFileSync } from "node:fs";
+test("external bytes must not execute", () => writeFileSync(${JSON.stringify(witness)}, "executed"));`;
+    const root = fixture({ "t-linked.test.ts": 'import "../../payload/test.ts";' });
+    const directory = join(root, "payload");
+    mkdirSync(directory);
+    writeFileSync(join(directory, "test.ts"), pass);
+    // Ignore the replacement link itself; cached descendants still remain in
+    // ls-files and must not bypass ancestor validation via a leaf-only lstat.
+    writeFileSync(join(root, ".gitignore"), `${readFileSync(join(root, ".gitignore"), "utf8")}payload\n`);
+    git(root, ["add", "-f", "payload"]);
+    git(root, ["-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+      "-c", "commit.gpgsign=false", "commit", "-qm", "tracked payload"]);
+    rmSync(directory, { recursive: true });
+    writeFileSync(join(external, "test.ts"), body);
+    symlinkSync(external, directory, process.platform === "win32" ? "junction" : "dir");
+    // Git still names payload/test.ts as an ordinary tracked descendant.
+    // The direct entry call proves rejection before any storage estimate/copy.
+    await expect(prepareE2eWorkers(root, scratch(), 1)).rejects.toThrow("payload");
+    const result = run(root, ["--isolated-e2e"]);
+    expect(result.code, result.output).not.toBe(0);
+    expect(result.output).toContain("symlink");
+    expect(result.output).toContain("payload");
+    expect(result.output).not.toContain("=== START t-linked.test.ts");
+    expect(existsSync(witness)).toBe(false);
+  }, 60_000);
+
+  test("relative in-tree fixture links remain links and execute only worker copies", () => {
+    const root = fixture({ "t-linked.test.ts": `import { test, expect } from "bun:test";
+import { readFileSync, readlinkSync, writeFileSync } from "node:fs";
+test("relative alias is private", () => {
+  expect(readlinkSync("alias.txt")).toBe("data.txt");
+  writeFileSync("alias.txt", "worker bytes");
+  expect(readFileSync("data.txt", "utf8")).toBe("worker bytes");
+});` });
+    writeFileSync(join(root, "data.txt"), "source bytes");
+    symlinkSync("data.txt", join(root, "alias.txt"), "file");
+    const result = run(root, ["--isolated-e2e"]);
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain("=== DONE t-linked.test.ts (PASS)");
+    expect(readlinkSync(join(root, "alias.txt"))).toBe("data.txt");
+    expect(readFileSync(join(root, "data.txt"), "utf8")).toBe("source bytes");
+  }, 60_000);
+
   test("copied runners reject missing platform-gated imports on every host", () => {
     const root = fixture({ "t-proof.test.ts": pass });
     rmSync(join(root, "tests/harness/tui-windows-private-file.ts"));
