@@ -4057,6 +4057,24 @@ function mergeBlock(
   };
 }
 
+function unchangedManagedBlockHash(
+  projectDir: string,
+  sourceRoot: string,
+  integration: ProjectionDescriptor["rootIntegrations"][number],
+): string | undefined {
+  const targetPath = join(projectDir, integration.path);
+  const merged = mergeBlock(
+    integration.path,
+    regularFile(targetPath) ? readFileSync(targetPath, "utf-8") : "",
+    readFileSync(join(sourceRoot, integration.path), "utf-8"),
+    integration.marker || basename(integration.path),
+    integration.legacySignatures?.wholeFileHashes,
+  );
+  return !merged.error && merged.currentHash && merged.currentHash === merged.nextHash
+    ? merged.currentHash
+    : undefined;
+}
+
 function addRuntimeDistributions(roots: string[], root: string): boolean {
   if (!existsSync(root)) return false;
   let added = false;
@@ -6550,22 +6568,18 @@ export async function main(
             const contribution = baseline?.rootContributions?.[integration.path];
             if (contribution?.policy === "managed-block") {
               if (integration.shared === "identical") {
-                const targetPath = join(projectDir, integration.path);
-                const merged = mergeBlock(
-                  integration.path,
-                  regularFile(targetPath) ? readFileSync(targetPath, "utf-8") : "",
-                  readFileSync(join(selected.root, integration.path), "utf-8"),
-                  integration.marker || basename(integration.path),
-                  integration.legacySignatures?.wholeFileHashes,
-                );
-                if (
-                  !merged.error && merged.currentHash &&
-                  contribution.hash === merged.currentHash &&
-                  merged.currentHash === merged.nextHash
-                ) continue;
+                const currentHash = unchangedManagedBlockHash(projectDir, selected.root, integration);
+                if (currentHash && contribution.hash === currentHash) continue;
               }
               throw new Error(
                 `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
+              );
+            } else if (
+              sibling.frameworkVersion !== undefined && baseline === null &&
+              !unchangedManagedBlockHash(projectDir, selected.root, integration)
+            ) {
+              throw new Error(
+                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} has lost its projection descriptor and ownership baseline; run aidlc config --harness ${sibling.distribution} first`,
               );
             }
           }

@@ -1365,6 +1365,58 @@ describe("t243 project initialization", () => {
     expect(readFileSync(join(project, "AGENTS.md"))).toEqual(agents);
   }, 60_000);
 
+  test("a refresh is refused while a stamped sibling has lost both its descriptor and baseline and the block would change", () => {
+    const project = temp("aidlc-t243-missing-ownership-refresh-");
+    mkdirSync(join(project, ".git"));
+    for (const [harness, source] of [["kiro", KIRO_RELEASES[0]], ["codex", CODEX_RELEASE]]) {
+      const initialized = run(INIT, [
+        "config", "--project-dir", project, "--from", source,
+        "--harness", harness, "--mcp", "none",
+      ], project);
+      expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    }
+    const agentsPath = join(project, "AGENTS.md");
+    const agents = readFileSync(agentsPath);
+    const siblingData = join(project, ".codex", "tools", "data");
+    rmSync(join(siblingData, "aidlc-projection.json"));
+    rmSync(join(siblingData, "aidlc-manifest.json"));
+    const source = temp("aidlc-t243-missing-ownership-refresh-source-");
+    cpSync(KIRO_RELEASES[0], source, { recursive: true });
+    const descriptorPath = join(source, ".kiro", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<{ path: string; shared?: string }>;
+    };
+    for (const integration of descriptor.rootIntegrations) {
+      if (integration.path === "AGENTS.md") delete integration.shared;
+    }
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    const sourceAgentsPath = join(source, "AGENTS.md");
+    writeFileSync(sourceAgentsPath, readFileSync(sourceAgentsPath, "utf-8") + "\nChanged release guidance.\n");
+
+    for (const extra of [[], ["--force"]]) {
+      const refreshed = run(INIT, [
+        "config", "--project-dir", project, "--from", source,
+        "--harness", "kiro", "--mcp", "none", ...extra,
+      ], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+      expect(refreshed.stdout).toContain("has lost its projection descriptor and ownership baseline");
+      expect(readFileSync(agentsPath)).toEqual(agents);
+    }
+
+    const unchanged = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0],
+      "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(unchanged.status, unchanged.stdout + unchanged.stderr).toBe(0);
+    expect(readFileSync(agentsPath)).toEqual(agents);
+    const restored = run(INIT, [
+      "config", "--project-dir", project, "--from", CODEX_RELEASE,
+      "--harness", "codex", "--mcp", "none",
+    ], project);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(readFileSync(agentsPath)).toEqual(agents);
+  }, 60_000);
+
   test("coexisting harnesses that both lost their descriptors are repaired one at a time from the same release", () => {
     const project = temp("aidlc-t243-repair-shared-descriptors-");
     mkdirSync(join(project, ".git"));
@@ -5073,7 +5125,7 @@ describe("t243 projection channel", () => {
           "sha256:1b8b3b4b10de3307a927429a676f5dd7440099a6d18859f603328b5ed239e6c7",
           "sha256:bf3077a6520e2735f618bad386858afc57edceaa791d98de7a6c269d71861e56",
           "sha256:55b31ba55f6e7ebc47fe76a00039e2ec16e020503fb63791cbd8665438ff32ac",
-          "sha256:3d619d02df1797bbb472fa04f7b80860f53a1e784da84455d42262b96bc62c0c",
+          "sha256:7a3a19981ba7a3c447b54eb0d0b1e96f8c9931687595967103cb5dfbb3c2b309",
         ],
       },
     };

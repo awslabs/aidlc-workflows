@@ -94,10 +94,12 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    ```
 
    `opencode.json` carries three load-bearing blocks: `skills.paths` (skill
-   discovery from `.aidlc/skills`), `instructions` (the method-tree include —
-   `/aidlc space <name>` re-points it), and permission rules for AIDLC bash
-   entrypoints plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you
-   merge into an existing `opencode.json` or `opencode.jsonc`, keep all three.
+   discovery from `.aidlc/skills`), `instructions` (both native onboarding at
+   `.aidlc/onboarding.md` and the method-tree glob — `/aidlc space <name>`
+   re-points only the glob), and permission rules for AIDLC bash entrypoints
+   plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you merge into an
+   existing `opencode.json` or `opencode.jsonc`, preserve all three blocks,
+   including both `instructions` entries.
    The adapter enforces the permission boundary: the target must be an entrypoint
    embedded from the packaged tree, invoked as one direct command with no
    chaining, redirection, expansion, or command substitution. Engine-code edits
