@@ -26,7 +26,7 @@
       "properties": {
         "status": {
           "type": "string",
-          "const": "complete"
+          "enum": ["complete", "failed"]
         }
       }
     },

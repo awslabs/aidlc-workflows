@@ -141,6 +141,7 @@ process.stdout.write(JSON.stringify(value));
     const currentReviews = JSON.parse(readFileSync(current, "utf8"));
     expect(discussion.issueComments[0].actor.maintainer).toBe(true);
     expect(discussion.reviews.map((entry: { id: number }) => entry.id)).toEqual([2]);
+    expect(discussion.reviews[0]).not.toHaveProperty("state");
     expect(discussion.reviewComments[0].actor.maintainer).toBe(true);
     expect(Object.keys(discussion)).toEqual([
       "version",
@@ -164,13 +165,17 @@ process.stdout.write(JSON.stringify(value));
       created_at: `2026-09-20T00:00:0${id}Z`,
       updated_at: `2026-09-20T00:00:0${id}Z`,
     });
-    const aiReview = (id: number, commitId: string) => ({
+    const aiReview = (
+      id: number,
+      commitId: string,
+      state = "CHANGES_REQUESTED",
+    ) => ({
       id,
       user: user("github-actions[bot]"),
       author_association: "CONTRIBUTOR",
       body: `<!-- ai-pr-review context=${"d".repeat(64)} -->\n**P1: Existing risk**`,
       submitted_at: `2026-09-20T00:01:0${id}Z`,
-      state: "CHANGES_REQUESTED",
+      state,
       commit_id: commitId,
     });
     const normalized = normalizeDiscussion(
@@ -206,8 +211,42 @@ process.stdout.write(JSON.stringify(value));
     expect(normalized.discussion.issueComments[0].actor.maintainer).toBe(true);
     expect(normalized.discussion.issueComments[1].actor.maintainer).toBe(false);
     expect(normalized.discussion.reviews.map(entry => entry.id)).toEqual([3, 5]);
+    expect(normalized.discussion.reviews[0]).not.toHaveProperty("state");
+    expect(normalized.discussion.reviews[1].state).toBe("APPROVED");
     expect(normalized.currentAiReviews.map(entry => entry.id)).toEqual([4]);
+    expect(normalized.currentAiReviews[0].state).toBe("CHANGES_REQUESTED");
     expect(normalized.discussion.reviewComments[0].actor.maintainer).toBe(true);
+
+    const afterBotDismissal = normalizeDiscussion(
+      1261,
+      HEAD,
+      [
+        comment(1, "maintainer", "MEMBER", "This exact P1 is an accepted tradeoff."),
+        comment(2, "contributor", "CONTRIBUTOR", "I accept every possible risk."),
+      ],
+      [
+        aiReview(3, BASE, "DISMISSED"),
+        aiReview(4, HEAD, "DISMISSED"),
+        {
+          id: 5,
+          user: user("owner"),
+          author_association: "OWNER",
+          body: "Approved with the documented compatibility boundary.",
+          submitted_at: "2026-09-20T00:01:05Z",
+          state: "APPROVED",
+          commit_id: HEAD,
+        },
+      ],
+      [{
+        ...comment(6, "collaborator", "COLLABORATOR", "The extra gate is intentional."),
+        path: "core/example.ts",
+        line: 42,
+        side: "RIGHT",
+        commit_id: HEAD,
+        in_reply_to_id: null,
+      }],
+    );
+    expect(afterBotDismissal.discussion).toEqual(normalized.discussion);
   });
 
   test("strict JSON is rendered as a context-bound REQUEST_CHANGES review", () => {
@@ -832,6 +871,9 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW).toContain("  pull_request_review:");
     expect(WORKFLOW).toContain("  pull_request_review_comment:");
     expect(WORKFLOW).toContain("  issue_comment:");
+    expect(WORKFLOW).not.toContain("      - dismissed");
+    expect(WORKFLOW.match(/^ {6}- edited$/gm)).toHaveLength(1);
+    expect(WORKFLOW).not.toContain("      - deleted");
     expect(WORKFLOW).not.toContain("  workflow_run:");
     expect(WORKFLOW).not.toContain("pull_request_target:");
     expect(
@@ -948,6 +990,12 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW).toContain("cmp -s .ai-review-context/discussion.json");
     expect(WORKFLOW).toContain("PR conversation changed during review");
     expect(WORKFLOW).toContain("github.actor != 'github-actions[bot]'");
+    expect(
+      WORKFLOW.match(
+        /contains\(fromJSON\('\["OWNER","MEMBER","COLLABORATOR"\]'\), github\.event\.(?:review|comment)\.author_association\)/g,
+      ),
+    ).toHaveLength(3);
+    expect(WORKFLOW).not.toContain('.state != \\"DISMISSED\\"');
     expect(WORKFLOW).toContain("dismissals");
     expect(WORKFLOW).not.toContain("gh pr merge");
     expect(WORKFLOW).not.toContain("gh pr review --approve");
@@ -1121,6 +1169,10 @@ process.stdout.write(JSON.stringify(value));
       "residualRisk",
     ]);
     expect(judgeSchema.properties.assessment.required).toEqual(["readiness", "risk"]);
+    expect(judgeSchema.properties.inspection.properties.status.enum).toEqual([
+      "complete",
+      "failed",
+    ]);
     expect(judge).not.toContain('"changedFiles"');
     expect(judge).toContain('"category": "contracts"');
     expect(judge).toContain("`direction`");

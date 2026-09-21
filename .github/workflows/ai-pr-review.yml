@@ -14,18 +14,12 @@ on:
   pull_request_review:
     types:
       - submitted
-      - edited
-      - dismissed
   pull_request_review_comment:
     types:
       - created
-      - edited
-      - deleted
   issue_comment:
     types:
       - created
-      - edited
-      - deleted
   workflow_dispatch:
     inputs:
       pr_number:
@@ -56,15 +50,18 @@ jobs:
           && github.event.pull_request.head.repo.full_name == github.repository)
       || (github.event_name == 'pull_request_review'
           && github.actor != 'github-actions[bot]'
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)
           && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository)
       || (github.event_name == 'pull_request_review_comment'
           && github.actor != 'github-actions[bot]'
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
           && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository)
       || (github.event_name == 'issue_comment'
           && github.event.issue.pull_request
-          && github.actor != 'github-actions[bot]')
+          && github.actor != 'github-actions[bot]'
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     environment: ai-pr-review
     timeout-minutes: 100
@@ -187,7 +184,7 @@ jobs:
 
           context_id="$(cat .ai-review-context/context-id.txt)"
           existing_record="$(gh api "repos/$REPO/pulls/$REQUESTED_PR/reviews" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=$context_id -->\"))) | [.id, .state] | @tsv" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=$context_id -->\"))) | [.id, .state] | @tsv" \
             | head -n1 || true)"
           existing_review=""
           existing_state=""
@@ -567,7 +564,7 @@ jobs:
 
           marker="<!-- ai-pr-review context=$CONTEXT_ID -->"
           existing_record="$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"$marker\"))) | [.id, .state] | @tsv" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and ((.body // \"\") | startswith(\"$marker\"))) | [.id, .state] | @tsv" \
             | head -n1 || true)"
           existing=""
           existing_state=""

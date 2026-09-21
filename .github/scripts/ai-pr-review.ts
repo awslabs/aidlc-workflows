@@ -280,13 +280,19 @@ export function normalizeDiscussion(
   const currentAiReviews = normalizedReviews.filter(
     entry => entry.kind === "ai-review" && entry.commitId === head,
   );
+  const stableReviews = normalizedReviews
+    .filter(entry => entry.kind !== "ai-review" || entry.commitId !== head)
+    .map(entry => {
+      if (entry.kind !== "ai-review") return entry;
+      const stableEntry = { ...entry };
+      delete stableEntry.state;
+      return stableEntry;
+    });
   const discussion: ReviewDiscussion = {
     version: 1,
     pullRequest,
     issueComments: issueCommentsRaw.map(value => commentEntry(value, "issue-comment")).sort(byTimeAndId),
-    reviews: normalizedReviews.filter(
-      entry => entry.kind !== "ai-review" || entry.commitId !== head,
-    ),
+    reviews: stableReviews,
     reviewComments: reviewCommentsRaw
       .map(value => commentEntry(value, "review-comment"))
       .sort(byTimeAndId),
