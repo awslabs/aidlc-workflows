@@ -159,7 +159,7 @@ error: WORKTREE_CREATED block at <ts> names an intent-scoped Bolt, but <owner> h
 error: malformed WORKTREE_CREATED block at <ts>: Worktree path is not the canonical directory <dir> of Bolt <name>
 ```
 
-The exit-code contract mirrors `verify`'s semantics: non-zero is the halt signal. The orchestrator treats any non-zero exit as "no worktree to render": it presents the same Retry/Skip/Abort question with the "Worktree at [path] on branch [branch_name]." clause replaced by one plain sentence per the voice contract (see the construction protocol's halt-and-ask paragraph). Surface an identity refusal rather than inventing a branch or path from the slug.
+The exit-code contract mirrors `verify`'s semantics: non-zero is the halt signal. The orchestrator treats any non-zero exit as "no worktree to render": it presents the same Retry/Skip/Abort question with the "Worktree at [path] on branch [branch_name]." clause replaced by a two-sentence voice-contract translation (what could not be shown and why, then the next step) (see the construction protocol's halt-and-ask paragraph). Surface an identity refusal rather than inventing a branch or path from the slug.
 
 ## JSON output shape (exit 0)
 
