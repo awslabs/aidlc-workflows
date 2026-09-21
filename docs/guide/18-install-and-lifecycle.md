@@ -748,6 +748,9 @@ A shared `AGENTS.md` block owned by a sibling from a different release is a
 conflict, not a deferred update. The error names the refresh order: refresh the
 selected harness from the same release as its sibling, or refresh the sibling
 from the selected release first.
+Cursor's manual-copy installer is single-harness (private `AIDLC CURSOR` markers,
+no `aidlc config` ownership baseline); multi-harness projects must add Cursor with
+`aidlc config --harness cursor` instead.
 
 `.gitignore` declares `shared: "union"`, so `aidlc config` writes one block combining every installed
 harness's shipped entries; extra entries appear under `# <harness> harness`.

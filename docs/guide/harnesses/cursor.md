@@ -73,6 +73,12 @@ then install that versioned projection:
 bun "$RUNTIME_ROOT/cursor/install.ts" your-project
 ```
 
+The copy installer is single-harness: its root sections use private
+`AIDLC CURSOR` markers and it does not write an `aidlc config` ownership
+baseline. Multi-harness projects must add Cursor with
+`aidlc config --harness cursor` instead; the copy installer refuses root
+blocks already managed by `aidlc config`.
+
 The installer preflights the full copy, refuses project-owned collisions,
 preserves `.cursor/.gitignore` and existing method memory, structurally
 merges `.cursor/hooks.json` and `.cursor/cli.json`, and adds marked AI-DLC

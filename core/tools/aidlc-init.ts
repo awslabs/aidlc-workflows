@@ -6547,7 +6547,23 @@ export async function main(
           const baseline = siblingBaseline(sibling);
           for (const integration of descriptor.rootIntegrations) {
             if (integration.policy !== "managed-block" || integration.shared === "union") continue;
-            if (baseline?.rootContributions?.[integration.path]?.policy === "managed-block") {
+            const contribution = baseline?.rootContributions?.[integration.path];
+            if (contribution?.policy === "managed-block") {
+              if (integration.shared === "identical") {
+                const targetPath = join(projectDir, integration.path);
+                const merged = mergeBlock(
+                  integration.path,
+                  regularFile(targetPath) ? readFileSync(targetPath, "utf-8") : "",
+                  readFileSync(join(selected.root, integration.path), "utf-8"),
+                  integration.marker || basename(integration.path),
+                  integration.legacySignatures?.wholeFileHashes,
+                );
+                if (
+                  !merged.error && merged.currentHash &&
+                  contribution.hash === merged.currentHash &&
+                  merged.currentHash === merged.nextHash
+                ) continue;
+              }
               throw new Error(
                 `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
               );

@@ -98,7 +98,7 @@ export function assertProjectionPathHasNoSymlinks(
 
 export function isSafeOnboardingPath(value: unknown, harnessDir: string): value is string {
   return typeof value === "string" && /^[A-Za-z0-9._\/-]+$/.test(value) &&
-    !value.split("/").includes("..") && !value.split("/").includes(".") &&
+    !value.split("/").some((segment) => segment === "" || segment === "." || segment === "..") &&
     value.startsWith(`${harnessDir}/`);
 }
 

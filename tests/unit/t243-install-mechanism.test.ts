@@ -1365,6 +1365,32 @@ describe("t243 project initialization", () => {
     expect(readFileSync(join(project, "AGENTS.md"))).toEqual(agents);
   }, 60_000);
 
+  test("coexisting harnesses that both lost their descriptors are repaired one at a time from the same release", () => {
+    const project = temp("aidlc-t243-repair-shared-descriptors-");
+    mkdirSync(join(project, ".git"));
+    const harnesses = [["kiro", ".kiro", KIRO_RELEASES[0]], ["codex", ".codex", CODEX_RELEASE]];
+    for (const [harness, , source] of harnesses) {
+      const initialized = run(INIT, [
+        "config", "--project-dir", project, "--from", source,
+        "--harness", harness, "--mcp", "none",
+      ], project);
+      expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    }
+    const agents = readFileSync(join(project, "AGENTS.md"));
+    for (const [, harnessDir] of harnesses) {
+      rmSync(join(project, harnessDir, "tools", "data", "aidlc-projection.json"));
+    }
+    for (const [harness, harnessDir, source] of harnesses) {
+      const refreshed = run(INIT, [
+        "config", "--project-dir", project, "--from", source,
+        "--harness", harness, "--mcp", "none",
+      ], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(join(project, "AGENTS.md"))).toEqual(agents);
+      expect(existsSync(join(project, harnessDir, "tools", "data", "aidlc-projection.json"))).toBe(true);
+    }
+  }, 60_000);
+
   test("coexisting harnesses restore missing projection descriptors one at a time", () => {
     const project = temp("aidlc-t243-restore-descriptors-");
     mkdirSync(join(project, ".git"));
@@ -5293,7 +5319,12 @@ describe("t243 projection channel", () => {
     if (process.platform !== "win32") {
       writeFileSync(join(source, ".codex", "onboarding\n.md"), "Unsafe onboarding path.\n");
     }
-    for (const onboarding of ["../etc/passwd", ".codex/onboarding\n.md"]) {
+    for (const onboarding of [
+      "../etc/passwd",
+      ".codex/onboarding\n.md",
+      ".codex//onboarding.md",
+      ".codex/onboarding.md/",
+    ]) {
       descriptor.onboarding = onboarding;
       writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
       const refused = run(INIT, [
