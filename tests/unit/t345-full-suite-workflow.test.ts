@@ -3,8 +3,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, PLATFORM_ONLY, type LiveFamily } from "../../scripts/ci-live-filter.ts";
+import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveRunnerArgs, PLATFORM_ONLY, type LiveFamily } from "../../scripts/ci-live-filter.ts";
 import { FULL_SUITE_JOBS, fullSuiteResult, type SuiteNeeds } from "../../scripts/ci-full-suite-result.ts";
+import { credentialProcessResponse } from "../../scripts/ci-aws-credential-process.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -55,11 +56,37 @@ function allSuccess(): SuiteNeeds {
 const identity = { sha: "a".repeat(40), runId: "123", runAttempt: "2" };
 
 describe("t345 complete nightly coverage", () => {
+  test("credential process returns AWS Version 1 credentials without accepting missing inputs", () => {
+    const env = {
+      AWS_ACCESS_KEY_ID: "test-access-key",
+      AWS_SECRET_ACCESS_KEY: "test-secret-key",
+      AWS_SESSION_TOKEN: "test-session-token",
+    };
+    const response = { Version: 1 as const, AccessKeyId: env.AWS_ACCESS_KEY_ID, SecretAccessKey: env.AWS_SECRET_ACCESS_KEY, SessionToken: env.AWS_SESSION_TOKEN };
+    expect(credentialProcessResponse(env)).toEqual(response);
+    const script = join(REPO_ROOT, "scripts/ci-aws-credential-process.ts");
+    const result = spawnSync(process.execPath, [script], { encoding: "utf8", env: { ...process.env, ...env } });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(response);
+    for (const key of Object.keys(env)) {
+      const missing: NodeJS.ProcessEnv = { ...process.env, ...env };
+      delete missing[key];
+      expect(() => credentialProcessResponse(missing)).toThrow(key);
+      const rejected = spawnSync(process.execPath, [script], { encoding: "utf8", env: missing });
+      expect(rejected.status).toBe(1);
+      expect(rejected.stdout).toBe("");
+      expect(rejected.stderr).toContain(key);
+      for (const secret of Object.values(env)) expect(rejected.stderr).not.toContain(secret);
+    }
+  });
+
   test("live families have every supported platform, opt-ins and strictness, without no-LLM", () => {
     const actual: string[] = [];
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
       if (!jobName.startsWith("live_")) continue;
-      for (const step of job.steps) expect(step.run ?? "").not.toContain("--no-llm");
+      for (const step of job.steps) {
+        expect(step.run ?? "").not.toMatch(/--(?:no-llm|unit|integration|e2e|isolated-e2e|bedrock-parallel|kiro-parallel|ide-parallel|require-coverage)\b/);
+      }
       for (const row of rows(job)) {
         const family = FAMILIES[row.family];
         expect(family, row.family).toBeDefined();
@@ -67,15 +94,56 @@ describe("t345 complete nightly coverage", () => {
         const run = job.steps.find((step) => step.run?.includes(`ci-live-filter.ts ${row.family} `));
         expect(run, `${jobName}/${row.family} command`).toBeDefined();
         expect({ ...job.env, ...run!.env }).toMatchObject(family.env);
-        expect(run!.run!.includes("--require-coverage")).toBe(family.requireCoverage);
         expect(run!.run).toContain("--platform ");
-        expect(run!.run).toContain("--filter \"$FILTER\"");
+        expect(run!.run).toContain("mapfile -t ARGS < <(");
+        expect(run!.run).toContain("--args)");
+        expect(run!.run).toContain(`bun tests/run-tests.ts --debug -P 4 "\${ARGS[@]}"`);
         expect(job["runs-on"].includes("self-hosted")).toBe(family.hosting === "self-hosted");
       }
     }
     const expected = Object.entries(FAMILIES).flatMap(([family, spec]) => spec.platforms.map((platform) => `${family}:${platform}`));
     expect(actual.sort()).toEqual(expected.sort());
   });
+
+  for (const [family, spec] of Object.entries(FAMILIES)) {
+    for (const platform of spec.platforms) {
+      test(`${family}/${platform} arguments select only populated tiers and produce the exact e2e plan`, () => {
+        const args = liveRunnerArgs(family as LiveFamily, platform);
+        const selected = classifyLiveFiles(REPO_ROOT).get(family as LiveFamily)!
+          .filter((file) => !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(platform));
+        const tiers = new Set(selected.map((file) => file.startsWith("plugins/") ? "integration" : file.split("/")[1]));
+        for (const tier of ["unit", "integration", "e2e"]) {
+          expect(args.includes(`--${tier}`)).toBe(tiers.has(tier));
+        }
+        expect(args.includes("--require-coverage")).toBe(spec.requireCoverage);
+        expect(args.at(-2)).toBe("--filter");
+        const regex = new RegExp(args.at(-1)!);
+        expect([...discoverLiveFiles(REPO_ROOT).keys()].filter((file) => aliases(file).some((alias) => regex.test(alias))).sort()).toEqual(selected);
+        if (args.includes("--e2e")) {
+          expect(args).toContain("--isolated-e2e");
+          if (spec.resources === "kiro") {
+            expect(args[args.indexOf("--kiro-parallel") + 1]).toBe("2");
+            expect(args[args.indexOf("--ide-parallel") + 1]).toBe("1");
+            expect(args).not.toContain("--bedrock-parallel");
+          } else {
+            expect(args[args.indexOf("--bedrock-parallel") + 1]).toBe("2");
+            expect(args).not.toContain("--kiro-parallel");
+            expect(args).not.toContain("--ide-parallel");
+          }
+          const result = spawnSync(process.execPath, [join(REPO_ROOT, "tests/run-tests.ts"), ...args, "--e2e-plan"], {
+            cwd: REPO_ROOT, encoding: "utf8", timeout: 15_000,
+          });
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+          const plan = JSON.parse(result.stdout) as { files: Array<{ file: string }> };
+          expect(plan.files.map(({ file }) => file).sort()).toEqual(selected.filter((file) => file.startsWith("tests/e2e/")));
+        } else {
+          for (const flag of ["--isolated-e2e", "--bedrock-parallel", "--kiro-parallel", "--ide-parallel"]) {
+            expect(args).not.toContain(flag);
+          }
+        }
+      }, 30_000);
+    }
+  }
 
   test("native obligations include macOS and the fail-closed result depends on every job", () => {
     expect(workflow.jobs.native_terminal.strategy?.matrix.include).toContainEqual({ job: "darwin-bun", runner: "macos-15", backend: "bun" });
@@ -161,6 +229,9 @@ describe("t345 complete nightly coverage", () => {
     const regex = new RegExp(result.stdout.trim());
     expect(regex.test("e2e-t-tui-journey-orientation.serial")).toBe(true);
     expect(regex.test("e2e-t-tui-journey-orientation-windows.serial")).toBe(false);
+    const emitted = spawnSync(process.execPath, [script, "multi-provider", "--platform", "linux", "--args"], { encoding: "utf8" });
+    expect(emitted.status, emitted.stderr).toBe(0);
+    expect(emitted.stdout.trim().split("\n")).toEqual(liveRunnerArgs("multi-provider", "linux"));
     for (const args of [["missing"], ["claude-tui", "--platform", "other"]]) {
       expect(spawnSync(process.execPath, [script, ...args]).status).toBe(2);
     }

@@ -180,7 +180,10 @@ SHA, run identity and every leg's result for 90 days; preview publication and
 stable tags require complete evidence. Tag a green nightly SHA or dispatch
 `preview-release.yml` first. `bun scripts/ci-live-filter.ts --list` shows the
 discovered partition; append `--platform linux|darwin|win32` to a family query
-for its exact platform filter. See
+for its exact platform filter. Add `--args` for one runner argument per line;
+the nightly workflow reads these into an array with `mapfile`, preserving the
+regex as one argument. Tiers follow the selected files, and isolated e2e/resource
+flags are emitted only when that family actually selects e2e files. See
 [required matrix jobs](../docs/reference/09-testing.md#required-jobs-across-platforms)
 and [nightly provisioning](../docs/reference/09-testing.md#nightly-full-suite-matrix-and-provisioning)
 for commands, receipt handling and environment requirements.

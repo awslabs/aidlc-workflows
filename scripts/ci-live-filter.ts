@@ -9,23 +9,24 @@ interface Family {
   platforms: readonly NodeJS.Platform[];
   hosting: "hosted" | "self-hosted" | "excluded";
   requireCoverage: boolean;
+  resources: "bedrock" | "kiro";
 }
 
 const hostedPlatforms = ["linux", "darwin", "win32"] as const;
 export const FAMILIES = {
-  "kiro-ide": { env: { AIDLC_KIRO_IDE_LIVE: "1" }, platforms: ["win32"], hosting: "self-hosted", requireCoverage: true },
-  "kiro-tui": { env: { AIDLC_KIRO_TUI_LIVE: "1", AIDLC_TUI_LIVE: "1" }, platforms: ["linux", "win32"], hosting: "self-hosted", requireCoverage: true },
-  "kiro-acp": { env: { AIDLC_KIRO_ACP_LIVE: "1" }, platforms: ["linux", "win32"], hosting: "self-hosted", requireCoverage: true },
-  codex: { env: { AIDLC_CODEX_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
-  opencode: { env: { AIDLC_OPENCODE_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
-  cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
-  copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true },
-  "claude-tui": { env: { AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
-  "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
-  "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false },
+  "kiro-ide": { env: { AIDLC_KIRO_IDE_LIVE: "1" }, platforms: ["win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
+  "kiro-tui": { env: { AIDLC_KIRO_TUI_LIVE: "1", AIDLC_TUI_LIVE: "1" }, platforms: ["linux", "win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
+  "kiro-acp": { env: { AIDLC_KIRO_ACP_LIVE: "1" }, platforms: ["linux", "win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
+  codex: { env: { AIDLC_CODEX_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
+  opencode: { env: { AIDLC_OPENCODE_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
+  cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
+  copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, resources: "bedrock" },
+  "claude-tui": { env: { AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
+  "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
+  "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false, resources: "bedrock" },
   "multi-provider": {
     env: { AIDLC_CLAUDE_SDK_LIVE: "1", AIDLC_TUI_LIVE: "1", AIDLC_CODEX_EXEC_LIVE: "1", AIDLC_OPENCODE_RUN_LIVE: "1", AIDLC_CURSOR_RUN_LIVE: "1", AIDLC_RELEASE_CONTRACT_LIVE: "1" },
-    platforms: ["linux"], hosting: "hosted", requireCoverage: false,
+    platforms: ["linux"], hosting: "hosted", requireCoverage: false, resources: "bedrock",
   },
 } as const satisfies Record<string, Family>;
 export type LiveFamily = keyof typeof FAMILIES;
@@ -105,14 +106,46 @@ export function liveFilter(files: readonly string[], platform?: NodeJS.Platform)
   return names.length === 0 ? "^(?!)$" : `^(?:${names.join("|")})$`;
 }
 
+/** Runner modes follow the selected files, never an assumed family tier layout. */
+export function liveRunnerArgs(family: LiveFamily, platform: NodeJS.Platform): string[] {
+  const spec: Family = FAMILIES[family];
+  if (!spec.platforms.includes(platform)) throw new Error(`${family} does not support ${platform}`);
+  const files = classifyLiveFiles(resolve(import.meta.dir, "..")).get(family)!
+    .filter((file) => !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(platform));
+  if (!files.length) throw new Error(`${family} has no selected files on ${platform}`);
+  const tiers = new Set(files.map((file) => file.startsWith("plugins/") ? "integration" : file.split("/")[1]));
+  const args = ["unit", "integration", "e2e"].filter((tier) => tiers.has(tier)).map((tier) => `--${tier}`);
+  if (tiers.has("e2e")) {
+    args.push("--isolated-e2e", ...(spec.resources === "kiro"
+      ? ["--kiro-parallel", "2", "--ide-parallel", "1"] : ["--bedrock-parallel", "2"]));
+  }
+  if (spec.requireCoverage) args.push("--require-coverage");
+  args.push("--filter", liveFilter(files));
+  return args;
+}
+
 if (import.meta.main) {
-  const [family, flag, platform, ...extra] = process.argv.slice(2);
-  if (extra.length || (flag !== undefined && (flag !== "--platform" || !["linux", "darwin", "win32"].includes(platform))) ||
-    (family !== "--list" && !Object.hasOwn(FAMILIES, family ?? ""))) {
-    console.error(`Usage: bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32]`);
+  try {
+    const [family, ...options] = process.argv.slice(2);
+    let platform: NodeJS.Platform | undefined;
+    let emitArgs = false;
+    for (let index = 0; index < options.length; index++) {
+      const option = options[index];
+      if (option === "--args" && !emitArgs) emitArgs = true;
+      else if (option === "--platform" && !platform && ["linux", "darwin", "win32"].includes(options[index + 1])) {
+        platform = options[++index] as NodeJS.Platform;
+      } else throw new Error(`invalid option: ${option}`);
+    }
+    if (family === "--list" && !emitArgs) {
+      console.log(JSON.stringify(Object.fromEntries(classifyLiveFiles(resolve(import.meta.dir, ".."))), null, 2));
+    } else if (Object.hasOwn(FAMILIES, family ?? "")) {
+      console.log(emitArgs
+        ? liveRunnerArgs(family as LiveFamily, platform ?? process.platform).join("\n")
+        : liveFilter(classifyLiveFiles(resolve(import.meta.dir, "..")).get(family as LiveFamily)!, platform));
+    } else throw new Error(`unknown family: ${family}`);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error(`Usage: bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--args]`);
     process.exitCode = 2;
-  } else {
-    const partition = classifyLiveFiles(resolve(import.meta.dir, ".."));
-    console.log(family === "--list" ? JSON.stringify(Object.fromEntries(partition), null, 2) : liveFilter(partition.get(family as LiveFamily)!, platform as NodeJS.Platform | undefined));
   }
 }

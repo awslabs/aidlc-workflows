@@ -917,6 +917,25 @@ it never hides a skipped case inside a selected file. Strict live legs use
 `--require-coverage`; mixed-provider and release-contract files retain their
 provider/platform-conditional cases and do not use that flag.
 
+Add `--args` to print the complete runner arguments, one per line. The script
+owns tier selection: it emits only tiers with selected files, enables
+`--isolated-e2e` and resource limits only when e2e files exist, and applies each
+family's strict-coverage policy. In particular, an integration-only mixed-provider
+selection does not launch an empty isolated e2e queue. The workflow preserves
+the filter as one argument rather than word-splitting it:
+
+```bash
+mapfile -t ARGS < <(bun scripts/ci-live-filter.ts multi-provider --platform linux --args)
+test "${#ARGS[@]}" -gt 0
+bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+```
+
+For a selection containing e2e files, append `--e2e-plan` to inspect its plan
+without executing tests. Do not append it to an integration-only or unit-only
+selection: that mode intentionally rejects an empty e2e selection. Deterministic
+`--no-llm` runs omit the closed Claude health preflight and record its file as
+skipped, without treating the deliberate skip as a prerequisite failure.
+
 Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-deterministic-<tier>-<OS>`, `full-suite-live-<family>-<OS>`, and
@@ -944,8 +963,11 @@ Provision these repository/environment settings before expecting a green run:
   Haiku 4.5 and their inference-profile destinations), `openai.gpt-5.5` in
   `us-east-2`, and opencode's default
   `amazon-bedrock/global.anthropic.claude-sonnet-4-6` in `us-east-1`.
-  The workflow writes the temporary OIDC credentials to the `codex` named AWS
-  profile with region `us-east-2`; Kiro instead uses its host login, without OIDC.
+  The workflow writes only a `codex` profile in `~/.aws/config`, with region
+  `us-east-2` and an absolute-path `credential_process` invoking
+  `scripts/ci-aws-credential-process.ts`. That process reads the temporary OIDC
+  credentials from its environment; no credentials file is written. Kiro instead
+  uses its host login, without OIDC.
 
 Claude Code and opencode npm versions are pinned in the workflow; update those
 pins deliberately after verifying the registry and compatibility. Cursor uses
