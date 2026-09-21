@@ -12,6 +12,4 @@ description = "Global allowlist"
 paths = [
     '''\.gitleaks-baseline\.json$''',
     '''uv\.lock$''',
-    # Redaction fixtures: this test intentionally contains secret-shaped literals that the log sanitizer must remove.
-    '''^tests/unit/t-ci-sanitize-logs\.test\.ts$''',
 ]
