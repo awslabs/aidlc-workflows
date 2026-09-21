@@ -763,6 +763,10 @@ describe("t238 build-binaries release builder", () => {
     } finally {
       rmSync(installFixture, { recursive: true, force: true });
     }
+    // Publish only a fully verified native layout. The runner owns this copy's
+    // lifetime; afterEach and per-file TMPDIR cleanup still remove our fixtures.
+    const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
+    if (compiledDir) cpSync(dirname(native.artifact), compiledDir, { recursive: true });
   }, 300_000);
 
   test("package-release emits one asset when native and the explicit host target match", () => {

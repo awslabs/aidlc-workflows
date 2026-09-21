@@ -176,7 +176,16 @@ function orchestrationProject(): string {
   return dir;
 }
 
+const COMPILED_COVERAGE_REQUIRED =
+  process.env.AIDLC_REQUIRE_COMPILED_COVERAGE === "1";
 function compiledBinary(): string | null {
+  const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
+  if (compiledDir) {
+    const artifact = join(compiledDir, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    return existsSync(artifact) ? realpathSync(artifact) : null;
+  }
+  // A shard must exercise this run's verified build, never a stale local one.
+  if (COMPILED_COVERAGE_REQUIRED) return null;
   const explicit = process.env.AIDLC_TEST_COMPILED_EXECUTABLE;
   if (explicit && existsSync(explicit)) return realpathSync(explicit);
   const results = join(REPO_ROOT, "build", "binaries", "build-results-native.json");
@@ -186,8 +195,6 @@ function compiledBinary(): string | null {
   return artifact && existsSync(artifact) ? realpathSync(artifact) : null;
 }
 const COMPILED_BINARY = compiledBinary();
-const COMPILED_COVERAGE_REQUIRED =
-  process.env.AIDLC_REQUIRE_COMPILED_COVERAGE === "1";
 
 function readAudit(dir: string): string {
   const auditDir = seededAuditDir(dir);

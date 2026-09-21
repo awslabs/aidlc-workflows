@@ -311,6 +311,45 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(r.out).toContain("RESULT: PASS");
   }, PER_TEST_TIMEOUT);
 
+  test("unit shards isolate compiled handoffs and fail when the producer did not run", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t05-compiled-"));
+    const trace = join(root, "handoff-path.txt");
+    const plant = join(TESTS_ROOT, "unit", "t248-t05-compiled-handoff.test.ts");
+    writeFileSync(plant, [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      plantedBunTestSource("records runner compiled handoff", `
+      const dir = process.env.AIDLC_TEST_COMPILED_DIR;
+      expect(dir).toBeDefined();
+      mkdirSync(dir!, { recursive: true });
+      writeFileSync(join(dir!, "handoff-probe"), "current run");
+      writeFileSync(${JSON.stringify(trace)}, dir!);
+      `),
+    ].join("\n"));
+    try {
+      const r = run([
+        "--unit", "--shard", "1/1", "--filter", "t248-t05-compiled-handoff|t249-copilot-adapter",
+      ], {
+        AIDLC_TEST_PACKAGE_READY: "1",
+        AIDLC_TEST_COMPILED_DIR: root,
+        // Even an existing executable cannot replace this shard's producer.
+        AIDLC_TEST_COMPILED_EXECUTABLE: process.execPath,
+        BUN_OPTIONS: "--test-name-pattern=records|0a:",
+      });
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain("=== DONE t248-t05-compiled-handoff.test.ts (PASS) ===");
+      expect(r.out).toContain("=== DONE t249-copilot-adapter.test.ts (FAIL) ===");
+      expect(r.out).toContain("(fail) t249 Copilot hook adapter (live-captured payload fixtures) > 0a:");
+      const compiledDir = readFileSync(trace, "utf8");
+      expect(compiledDir).not.toBe(root);
+      expect(existsSync(compiledDir)).toBe(false);
+      expect(existsSync(root)).toBe(true);
+    } finally {
+      rmSync(plant, { force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, PER_TEST_TIMEOUT);
+
   // --- 3. --parallel 1 ≡ serial on the smoke tier --------------------------
   // .sh compared the (Test files / Total assertions) summary lines between
   // `--smoke` and `--smoke --parallel 1`. (The .sh's `^Failed:` alternative

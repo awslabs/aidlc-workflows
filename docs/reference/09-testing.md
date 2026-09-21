@@ -521,6 +521,8 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use on Linux/Windows/macOS requires Bun >=1.3.14. |
 | `AIDLC_NODE_BIN` | Node on `PATH`, then the standard Windows install path | Executable override for the explicitly selected legacy Windows `node-pty` backend. |
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
+| `AIDLC_TEST_COMPILED_DIR` | `<runner log dir>/compiled` (runner-set) | Run-owned handoff from t238 to t249: the verified native `aidlc` / `aidlc.exe` plus adjacent `runtime/`. The runner replaces inherited values in every child, keeping the artifact outside per-file temp cleanup and isolated from other runs. |
+| `AIDLC_TEST_COMPILED_EXECUTABLE` | unset | Optional existing executable for direct, non-sharded t249 invocations without a runner handoff. Never a build destination; it cannot replace a missing sharded handoff. |
 | `AIDLC_TUI_SETTING_SOURCES` | `project` | Setting sources injected into live `claude` TUI launches. Use `default` or an empty value only for focused calibration that intentionally includes user/local Claude settings. |
 | `AIDLC_TUI_TRACE_POLL_MS` | `10000` | Minimum interval between `answer_gate_poll` snapshots in TUI NDJSON traces while a long journey is waiting for the next menu or disk terminator. |
 | `AIDLC_ACP_DIAGNOSTIC_TRACE` | unset | Set to `1` with ACP debug tracing to write a private `<trace>.protocol.ndjson` sidecar containing tool input/chunk events, session/turn identity, cancellation requests and aggregate input shapes. Excludes agent-prose events, prompt/auth RPC bodies and process environment. Tool inputs remain private diagnostic data. Limits: 1 MiB per event and 64 MiB per file; `diagnostic_incomplete` or `json_parse_error` means the capture cannot establish complete protocol evidence. |
@@ -1132,8 +1134,16 @@ tests regenerate `dist/` and can race tests that read generated files.
 
 The affinity list keeps cross-file prerequisites explicit. The native binary
 builder test currently runs before the Copilot compiled-adapter coverage in the
-same shard. Sharded unit execution requires that compiled coverage to resolve
-the producer's native build result, so a missing artifact fails instead of
-silently skipping the compiled cases. The smoke runner contract verifies that
-all four CI shards are non-empty, disjoint, cover the complete unit inventory,
-and preserve this ordering.
+same shard. After all native build/install assertions pass, t238 copies its
+verified executable and adjacent `runtime/` into the runner-owned
+`AIDLC_TEST_COMPILED_DIR`. Its private build/install fixtures are still removed
+after the test; the published copy lives until runner cleanup (or is retained
+with verbose logs). Each runner assigns a fresh handoff directory, so no shared
+`build/binaries` output is overwritten or borrowed from a prior run.
+Sharded unit execution requires t249 to resolve this handoff; a missing artifact
+fails instead of silently skipping the compiled cases, even when an explicit
+executable or an old repository build exists. Direct, non-sharded t249 runs can
+still opt into `AIDLC_TEST_COMPILED_EXECUTABLE` or a local native build result.
+The smoke runner contract verifies that all four CI shards are non-empty,
+disjoint, cover the complete unit inventory, preserve producer/consumer ordering,
+and fail compiled coverage when the producer is filtered out.

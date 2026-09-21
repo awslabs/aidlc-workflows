@@ -919,6 +919,8 @@ async function runBunTestFile(
   const env: NodeJS.ProcessEnv = {
     ...testGuardEnvironment({ ...process.env, ...context?.env }, args.guardProfile),
     AIDLC_TEST_NAME: base,
+    // Survives each file's private TMPDIR, but never crosses runner invocations.
+    AIDLC_TEST_COMPILED_DIR: join(logDir, "compiled"),
     AIDLC_MANAGED_SETTINGS_PATH: join(logDir, ".aidlc-managed-settings-absent.json"),
   };
   // Command-scope config outranks the isolated global file. Preserve its safety
