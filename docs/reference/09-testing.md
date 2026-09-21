@@ -1109,21 +1109,66 @@ Provision these repository/environment settings before expecting a green run:
   The AWS role's OIDC trust must be scoped to
   this repository's `environment:nightly-live` subject. Set `MaxSessionDuration`
   to at least six hours; each assumption requests 21,600 seconds.
-- Grant Bedrock invoke/stream access to the Claude aliases in
-  `harness/claude/settings.json` in `us-east-1` (Fable 5, Opus 4.8, Sonnet 4.6,
-  Haiku 4.5 and their inference-profile destinations), `openai.gpt-5.5` in
-  `us-east-2`, and opencode's default
-  `amazon-bedrock/global.anthropic.claude-sonnet-4-6` in `us-east-1`.
-  The workflow writes only a `codex` profile in `~/.aws/config`, with region
-  `us-east-2` and an absolute-path `credential_process` invoking
-  `scripts/ci-aws-credential-process.ts`. That process reads the temporary OIDC
-  credentials from its environment; no credentials file is written. Kiro CLI
-  instead uses its API key and Kiro IDE uses its host login, both without OIDC.
+- Grant Bedrock invoke/stream access to the CI-only model table in
+  `scripts/ci-credential-broker.ts`: Claude Fable 5, Opus 4.8, Sonnet 4.6 and
+  Haiku 4.5 inference profiles in `us-east-1`, opencode's Sonnet 4.6 default in
+  that region, and Codex `openai.gpt-5.5` through Bedrock Mantle in `us-east-2`.
+  The table pins the broker allowlist and Claude client aliases; shipped user
+  settings remain provider-neutral. Kiro uses its API key or IDE host login,
+  not AWS OIDC.
 
 Claude Code and opencode npm versions are pinned in the workflow; update those
 pins deliberately after verifying the registry and compatibility. Cursor uses
 its official Unix/native-Windows installer. CLI/authentication preflights fail
 loudly rather than letting absent substrates masquerade as passing live tests.
+
+#### Credential isolation and uploaded evidence
+
+Live models receive repository content and can invoke tools, so treat their
+shells and tool-result traces as untrusted sinks for credentials. The AWS action
+returns masked step outputs without exporting AWS credentials to subsequent
+steps. A trusted startup helper receives those values only in its own step env,
+sends JSON over stdin to a detached, environment-scrubbed broker process, and
+exits before live agents run. The broker stores credentials only in memory and
+performs signed STS `GetCallerIdentity` at startup; only its nonsecret account,
+ARN and loopback port leave the broker. There is no credential-returning route,
+credential process, credentials file or credential-bearing agent environment.
+
+The loopback proxy admits only the configured model IDs and
+`POST /model/<id>/(invoke|invoke-with-response-stream|converse|converse-stream)`
+(optionally under `/bedrock`), plus Codex Mantle
+`POST /openai/v1/responses` with `model: openai.gpt-5.5`. It removes client
+authentication headers and signs each upstream request; successful streams are
+forwarded byte-for-byte. Other routes are forbidden, redirects are not followed,
+and upstream error bodies are suppressed because AWS errors can echo signatures.
+
+Claude uses documented `ANTHROPIC_BEDROCK_BASE_URL` and
+`CLAUDE_CODE_SKIP_BEDROCK_AUTH=1`; its t19 preflight checks the broker's startup
+identity, followed by a real SDK turn. Codex 0.151.0 uses a provider `base_url`
+ending `/openai/v1`, verified against a loopback endpoint; the service-specific
+Bedrock Runtime override alone does **not** redirect Codex's Mantle traffic.
+Codex and opencode profiles contain only dummy `broker` keys. Opencode's documented
+provider `endpoint` override routes its AI SDK requests through the proxy.
+Codex shell policy excludes provider/broker/API/GitHub/Actions variables, and the
+runner strips CI control-plane credentials before launching any live test.
+
+This is credential separation, not a hostile same-user OS sandbox. Agents can
+still spend through the allowlisted proxy until the job timeout, so constrain
+IAM model permissions, quotas and runner access. A compromised same-user process
+could inspect another process's memory on hosts that permit it (notably Windows);
+stronger adversarial isolation requires separate OS identities or an external
+broker. Kiro and Cursor expose their API keys through environment variables by
+vendor design: enabling those variable-gated legs explicitly accepts exposure
+to the agent's own tool shells. They receive no AWS credentials.
+
+Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and
+is blocked if sanitization fails. Driver NDJSON, `sdk-drive*`, `tui-drive*` and
+`e2e-artifacts/**/traces` are deleted by default; setting repository variable
+`AIDLC_NIGHTLY_UPLOAD_TRACES=1` explicitly retains them. Remaining text is
+redacted for AWS key/credential assignments, Kiro keys, bearer tokens, broker-token
+labels and Anthropic keys; links are removed without following their targets.
+Redaction is defense in depth, not proof against encoded secrets or screenshots;
+retaining raw traces increases that residual risk.
 
 ## Kiro prompt-hook transport controls
 

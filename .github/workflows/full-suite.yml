@@ -124,8 +124,14 @@ jobs:
             console.log(`^(?:${names.join("|")})$`);
           ' "$RUNNER_TEMP/native-plan.json" "${{ matrix.job }}")
           bun tests/run-tests.ts --debug -P 4 --unit --integration --e2e --no-llm --isolated-e2e --filter "$TEST_MATRIX_FILTER" --matrix-plan "$RUNNER_TEMP/native-plan.json" --matrix-job "${{ matrix.job }}"
-      - name: "Upload diagnostic logs"
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
         if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: "full-suite-native-${{ matrix.job }}"
@@ -191,8 +197,14 @@ jobs:
       - name: "Run deterministic deep tiers"
         if: "matrix.tier == 'deep'"
         run: "bun tests/run-tests.ts --debug -P 4 --integration --e2e --no-llm --isolated-e2e"
-      - name: "Upload diagnostic logs"
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
         if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: "full-suite-deterministic-${{ matrix.tier }}-${{ runner.os }}"
@@ -258,6 +270,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: "${{ needs.plan.outputs.sha }}"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -276,32 +289,34 @@ jobs:
             opencode) npm install -g "opencode-ai@$OPENCODE_VERSION" ;;
           esac
       - name: "Assume nightly Bedrock role"
+        id: aws
+        if: "matrix.family != 'release-contract'"
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
           role-to-assume: "${{ secrets.AWS_NIGHTLY_TEST_ROLE_ARN }}"
           role-session-name: "aidlc-nightly-${{ matrix.family }}-${{ runner.os }}"
           role-duration-seconds: 21600
           aws-region: "${{ env.AWS_REGION }}"
-      - name: "Materialize Codex named profile"
-        if: "matrix.family == 'codex'"
+          output-credentials: true
+          output-env-credentials: false
+      # https://code.claude.com/docs/en/env-vars documents Bedrock base URL + skip-auth.
+      # Opencode endpoint support: https://opencode.ai/docs/providers/#amazon-bedrock
+      # Codex 0.151.0 honors provider base_url for Mantle (verified with a dummy-profile loopback probe).
+      - name: "Start credential-isolated Bedrock broker"
+        if: "matrix.family != 'release-contract'"
+        env:
+          BROKER_ACCESS_KEY_ID: "${{ steps.aws.outputs.aws-access-key-id }}"
+          BROKER_SECRET_ACCESS_KEY: "${{ steps.aws.outputs.aws-secret-access-key }}"
+          BROKER_SESSION_TOKEN: "${{ steps.aws.outputs.aws-session-token }}"
+        run: bun scripts/ci-start-credential-broker.ts ${{ matrix.family }}
+      - name: "Assert live runner has no AWS credentials"
         run: |
-          umask 077
-          mkdir -p "$HOME/.aws"
-          bun_bin="$(command -v bun)"
-          credential_script="$GITHUB_WORKSPACE/scripts/ci-aws-credential-process.ts"
-          if [ "$RUNNER_OS" = Windows ]; then
-            bun_bin="$(cygpath -m "$bun_bin")"
-            credential_script="$(cygpath -m "$credential_script")"
-          fi
-          printf '[profile codex]\nregion = us-east-2\ncredential_process = "%s" "%s"\n' "$bun_bin" "$credential_script" > "$HOME/.aws/config"
+          bun -e 'for (const key of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]) { if (process.env[key] !== undefined) throw new Error(`Unexpected credential environment: ${key}`); }'
       - name: "Require authenticated live substrates"
         run: |
-          aws sts get-caller-identity
           case "${{ matrix.family }}" in
             claude-*) claude --version ;;
-          esac
-          case "${{ matrix.family }}" in
-            codex) codex --version; aws sts get-caller-identity --profile codex --region us-east-2 ;;
+            codex) codex --version ;;
           esac
           case "${{ matrix.family }}" in
             opencode) opencode --version ;;
@@ -336,8 +351,14 @@ jobs:
           AIDLC_RELEASE_CONTRACT_LIVE: "1"
         run: |
           bun scripts/ci-live-filter.ts release-contract --platform ${{ matrix.platform }} --run -- --debug -P 4
-      - name: "Upload diagnostic logs"
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
         if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
@@ -416,8 +437,14 @@ jobs:
           KIRO_API_KEY: "${{ secrets.KIRO_API_KEY }}"
         run: |
           bun scripts/ci-live-filter.ts kiro-tui --platform ${{ matrix.platform }} --run -- --debug -P 4
-      - name: "Upload diagnostic logs"
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
         if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
@@ -487,8 +514,14 @@ jobs:
           AIDLC_KIRO_IDE_LIVE: "1"
         run: |
           bun scripts/ci-live-filter.ts kiro-ide --platform win32 --run -- --debug -P 4
-      - name: "Upload diagnostic logs"
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
         if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
@@ -546,8 +579,14 @@ jobs:
           CURSOR_API_KEY: "${{ secrets.CURSOR_API_KEY }}"
         run: |
           bun scripts/ci-live-filter.ts cursor --platform ${{ matrix.platform }} --run -- --debug -P 4
-      - name: "Upload diagnostic logs"
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
         if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: "full-suite-live-cursor-${{ runner.os }}"

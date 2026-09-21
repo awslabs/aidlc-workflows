@@ -3,14 +3,18 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveRunnerArgs, liveRunnerCommand, PLATFORM_ONLY, type LiveFamily } from "../../scripts/ci-live-filter.ts";
+import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, type LiveFamily } from "../../scripts/ci-live-filter.ts";
 import { FULL_SUITE_JOBS, fullSuiteResult, type SuiteNeeds } from "../../scripts/ci-full-suite-result.ts";
-import { credentialProcessResponse } from "../../scripts/ci-aws-credential-process.ts";
+import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
+import { brokerChildEnvironment } from "../../scripts/ci-start-credential-broker.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { setupCodexProject } from "../harness/exec-drive.ts";
+import { parse } from "smol-toml";
 
 interface Step {
   name?: string;
+  id?: string;
   shell?: string;
   uses?: string;
   if?: string;
@@ -98,29 +102,78 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("credential process returns AWS Version 1 credentials without accepting missing inputs", () => {
-    const env = {
-      AWS_ACCESS_KEY_ID: "test-access-key",
-      AWS_SECRET_ACCESS_KEY: "test-secret-key",
-      AWS_SESSION_TOKEN: "test-session-token",
+  test("credentialed startup is isolated from broker and agent environments", () => {
+    const source = {
+      PATH: "/bin", RUNNER_TRACKING_ID: "owned", GITHUB_ACTIONS: "true",
+      BROKER_ACCESS_KEY_ID: "real-access", BROKER_SECRET_ACCESS_KEY: "real-secret", BROKER_SESSION_TOKEN: "real-token",
+      AWS_ACCESS_KEY_ID: "real-access", AWS_SECRET_ACCESS_KEY: "real-secret", AWS_SESSION_TOKEN: "real-token",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc", GH_TOKEN: "github", GITHUB_TOKEN: "github",
+      ANTHROPIC_API_KEY: "anthropic", KIRO_API_KEY: "kiro", CURSOR_API_KEY: "cursor",
+      AIDLC_BROKER_URL: "http://127.0.0.1:1234", CLAUDE_CODE_SKIP_BEDROCK_AUTH: "1",
     };
-    const response = { Version: 1 as const, AccessKeyId: env.AWS_ACCESS_KEY_ID, SecretAccessKey: env.AWS_SECRET_ACCESS_KEY, SessionToken: env.AWS_SESSION_TOKEN };
-    expect(credentialProcessResponse(env)).toEqual(response);
-    const script = join(REPO_ROOT, "scripts/ci-aws-credential-process.ts");
-    const result = spawnSync(process.execPath, [script], { encoding: "utf8", env: { ...process.env, ...env } });
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual(response);
-    for (const key of Object.keys(env)) {
-      const missing: NodeJS.ProcessEnv = { ...process.env, ...env };
-      delete missing[key];
-      expect(() => credentialProcessResponse(missing)).toThrow(key);
-      const rejected = spawnSync(process.execPath, [script], { encoding: "utf8", env: missing });
-      expect(rejected.status).toBe(1);
-      expect(rejected.stdout).toBe("");
-      expect(rejected.stderr).toContain(key);
-      for (const secret of Object.values(env)) expect(rejected.stderr).not.toContain(secret);
+    expect(brokerChildEnvironment(source)).toEqual({ PATH: "/bin", RUNNER_TRACKING_ID: "owned", GITHUB_ACTIONS: "true" });
+    const agent = liveRunnerEnvironment(source);
+    for (const key of ["BROKER_ACCESS_KEY_ID", "BROKER_SECRET_ACCESS_KEY", "BROKER_SESSION_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY"]) {
+      expect(agent[key]).toBeUndefined();
+    }
+    expect(agent.KIRO_API_KEY).toBe("kiro");
+    expect(agent.CURSOR_API_KEY).toBe("cursor");
+    expect(agent.AIDLC_BROKER_URL).toBe(source.AIDLC_BROKER_URL);
+  });
+
+  test("Bedrock workflow hands credentials only to stdin broker startup, never a live step", () => {
+    const job = workflow.jobs.live_hosted;
+    const assume = job.steps.find((step) => step.name === "Assume nightly Bedrock role")!;
+    expect(assume.with).toMatchObject({ "output-credentials": true, "output-env-credentials": false });
+    const startup = job.steps.find((step) => step.name === "Start credential-isolated Bedrock broker")!;
+    expect(startup.run).toContain("ci-start-credential-broker.ts");
+    expect(startup.env?.BROKER_ACCESS_KEY_ID).toBe(`\${{ steps.aws.outputs.aws-access-key-id }}`);
+    expect(job.steps.find((step) => step.name === "Assert live runner has no AWS credentials")).toBeDefined();
+    for (const [name, live] of Object.entries(workflow.jobs)) {
+      if (!name.startsWith("live_")) continue;
+      for (const step of live.steps) {
+        for (const key of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AIDLC_BROKER_TOKEN"]) expect(step.env?.[key]).toBeUndefined();
+        if (step !== startup) expect(JSON.stringify(step.env ?? {})).not.toContain("steps.aws.outputs.");
+      }
     }
   });
+
+  test("all tests/logs uploads require successful sanitization even after test failure", () => {
+    for (const job of Object.values(workflow.jobs)) {
+      for (const [index, step] of job.steps.entries()) {
+        if (!step.uses?.startsWith("actions/upload-artifact@") || step.with?.path !== "tests/logs/") continue;
+        const sanitize = job.steps[index - 1];
+        expect(sanitize).toMatchObject({ id: "sanitize", if: `\${{ always() }}`, run: "bun scripts/ci-sanitize-logs.ts tests/logs" });
+        expect(step.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);
+      }
+    }
+  });
+
+  test("CI model allowlist and Codex profile preserve proxy routing without credential export", () => {
+    expect(CI_BEDROCK_MODELS.claude).toMatchObject({
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "global.anthropic.claude-fable-5[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "global.anthropic.claude-opus-4-8[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "global.anthropic.claude-sonnet-4-6[1m]",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    });
+    expect(CI_BEDROCK_MODELS.claude.ANTHROPIC_DEFAULT_SONNET_MODEL.replace("[1m]", "")).toBe(CI_BEDROCK_MODELS.opencode);
+    const previous = process.env.AIDLC_BROKER_URL;
+    process.env.AIDLC_BROKER_URL = "http://127.0.0.1:1234";
+    const project = setupCodexProject();
+    try {
+      const config = parse(readFileSync(join(project.home, "config.toml"), "utf8"));
+      expect(config.model).toBe(CI_BEDROCK_MODELS.codex);
+      expect(config.model_providers).toMatchObject({ "amazon-bedrock": { base_url: "http://127.0.0.1:1234/openai/v1" } });
+      expect(config.shell_environment_policy).toEqual({
+        exclude: ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"],
+        set: { AIDLC_RULES_DIR: ".codex/aidlc-rules" },
+      });
+    } finally {
+      if (previous === undefined) delete process.env.AIDLC_BROKER_URL;
+      else process.env.AIDLC_BROKER_URL = previous;
+      rmSync(project.root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test("live families have every supported platform, opt-ins and strictness, without no-LLM", () => {
     const actual: string[] = [];

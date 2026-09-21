@@ -70,8 +70,14 @@ describe("t19 preflight health (sdk live substrate)", () => {
   // get-caller-identity` exits 0 (Bedrock requires IAM auth). When the aws CLI
   // is absent we PASS-by-skip, mirroring the .sh's `aws CLI not found` SKIP.
   test(
-    "AWS credentials valid (aws sts get-caller-identity exits 0)",
+    "AWS identity verified by broker startup or aws sts get-caller-identity",
     () => {
+      if (process.env.AIDLC_BROKER_IDENTITY) {
+        const identity = JSON.parse(process.env.AIDLC_BROKER_IDENTITY) as { account: string; arn: string };
+        expect(identity.account).toMatch(/^\d{12}$/);
+        expect(identity.arn).toMatch(new RegExp(`^arn:aws:sts::${identity.account}:assumed-role/`));
+        return;
+      }
       const awsPresent = spawnSync("aws", ["--version"], { encoding: "utf8" }).status === 0;
       if (!awsPresent) {
         // .sh: `ok "AWS credentials valid # SKIP aws CLI not found"`.

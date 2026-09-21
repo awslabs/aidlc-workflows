@@ -197,6 +197,13 @@ the exact SHA and run/leg outcomes for 90 days; preview and stable publication
 require `passed: true` and warn about exclusions. Tag a passing nightly SHA, or
 dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired
 evidence even when an unchanged preview already exists.
+
+Enabling Kiro/Cursor accepts their vendor API keys being visible to agent tool
+shells. Bedrock families instead use an allowlisted signing proxy; no real AWS
+credentials reach their agent environments. Full-suite log uploads sanitize text
+and drop raw driver traces by default (`AIDLC_NIGHTLY_UPLOAD_TRACES=1` opts in to
+retention, with residual disclosure risk).
+
 `bun scripts/ci-live-filter.ts --list` shows the
 discovered partition; append `--platform linux|darwin|win32` to a family query
 for its exact platform filter. Add `--args` for one runner argument per line;

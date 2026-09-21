@@ -115,6 +115,16 @@ export function liveRunnerCommand(family: LiveFamily, platform: NodeJS.Platform,
   return [join(REPO_ROOT, "tests/run-tests.ts"), ...passthrough, ...liveRunnerArgs(family, platform)];
 }
 
+/** CI control-plane tokens and startup credentials are not agent capabilities. */
+export function liveRunnerEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...source };
+  if (env.GITHUB_ACTIONS !== "true") return env;
+  for (const key of Object.keys(env)) {
+    if (/^(?:BROKER_|ACTIONS_|GH_TOKEN$|GITHUB_TOKEN$|AWS_ACCESS_KEY_ID$|AWS_SECRET_ACCESS_KEY$|AWS_SESSION_TOKEN$|AWS_WEB_IDENTITY_TOKEN_FILE$|AWS_CONTAINER_CREDENTIALS_|AWS_BEARER_TOKEN_|ANTHROPIC_API_KEY$|ANTHROPIC_AUTH_TOKEN$)/i.test(key)) delete env[key];
+  }
+  return env;
+}
+
 if (import.meta.main) {
   try {
     const [family, ...options] = process.argv.slice(2);
@@ -138,6 +148,7 @@ if (import.meta.main) {
       if (mode === "run") {
         const command = liveRunnerCommand(family as LiveFamily, platform ?? process.platform, passthrough);
         const child = Bun.spawn([process.execPath, ...command], {
+          env: liveRunnerEnvironment(process.env),
           cwd: REPO_ROOT, stdin: "inherit", stdout: "inherit", stderr: "inherit",
         });
         process.exitCode = await child.exited;

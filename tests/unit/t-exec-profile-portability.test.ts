@@ -41,6 +41,10 @@ test("the generated Codex profile parses and trusts the exact native project pat
     expect(projects[project.proj]).toEqual({ trust_level: "trusted" });
     expect(config.model_provider).toBe("amazon-bedrock");
     expect(config.model).toBe("openai.gpt-5.5");
+    expect(config.shell_environment_policy).toEqual({
+      exclude: ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"],
+      set: { AIDLC_RULES_DIR: ".codex/aidlc-rules" },
+    });
     if (process.platform === "win32") expect(config.windows).toEqual({ sandbox: "elevated" });
     else expect(config.windows).toBeUndefined();
   } finally {
