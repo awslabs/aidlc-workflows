@@ -344,10 +344,11 @@ interface PreparedEmission {
     units?: string[];
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
     rules_bundle?: string; directive_sha256?: string;
-    // The steering payload behind the current part's receipt, stored so
-    // `continue <receipt>` can rebuild the next part without a self-describing
-    // token. Present only on load-steering markers.
+    // The steering payload behind the current part's receipt or the completed
+    // run-stage's route hint. Its local-key receipt authenticates stateless
+    // fallback routing independently of the receipt presented to `continue`.
     steering_payload?: SteeringTokenPayload;
+    steering_payload_receipt?: string;
     ask_type?: string;
     remedies?: Array<Pick<GuardRemedy, "op" | "action" | "operation" | "interaction">>;
   };
@@ -543,6 +544,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
           ? stateDigest(readFileSync(engineStateFilePath(route.codekbCtx.projectDir), "utf-8"))
           : sha256("")
       );
+    const runStagePayloadReceipt =
+      transported.kind === "run-stage" && preparedSteeringPayload && !isReadOnlyEngineProbe()
+        ? mintSteeringReceipt(preparedSteeringPayload, route.codekbCtx.projectDir).receipt
+        : null;
     marker = {
       kind: transported.kind,
       stage: transported.stage,
@@ -556,7 +561,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
             // code and its tests stay stable.
             continue_token: transported.receipt,
             ...(preparedSteeringPayload
-              ? { steering_payload: preparedSteeringPayload }
+              ? {
+                  steering_payload: preparedSteeringPayload,
+                  steering_payload_receipt: transported.receipt,
+                }
               : {}),
           }
         : {}),
@@ -571,7 +579,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
       // to route from); on a load-steering marker it is the current part's
       // payload as well.
       ...(transported.kind === "run-stage" && preparedSteeringPayload
-        ? { steering_payload: preparedSteeringPayload }
+        ? {
+            steering_payload: preparedSteeringPayload,
+            ...(runStagePayloadReceipt !== null
+              ? { steering_payload_receipt: runStagePayloadReceipt }
+              : {}),
+          }
         : {}),
       state_sha256: markerStateHash,
     };
@@ -9864,8 +9877,8 @@ function answerAsNext(
   }
   // A stateful workflow routes from its state file. A stateless route (an
   // explicit scope and stage, as the isolated stage-runner uses) has no state
-  // to read, so the route the delivery was minted for is replayed from the
-  // marker's payload instead.
+  // to read, so the route the delivery was minted for is replayed from an
+  // authenticated payload instead.
   const args =
     hint && !hint.a
       ? ["--scope", hint.c, "--stage", hint.s, ...(hint.x ? ["--single"] : [])]
@@ -9876,13 +9889,13 @@ function answerAsNext(
 // Resume deterministic rule delivery. The conductor presents the 8-character
 // receipt printed at the top of the part it just applied; the engine finds the
 // matching payload on the active-directive marker and rebuilds the next part
-// from current disk state. Anything else - a mistyped receipt, a receipt for a
-// part already consumed, a marker that has moved on to run-stage, no delivery
-// in flight, a workflow state or route that moved underneath - is answered
-// exactly as a bare `next` would answer it. That keeps the cursor at-most-once
-// (an old receipt can never re-deliver an earlier part, and a compacted
-// conductor that lost its parts restarts from part one) without ever handing
-// the conductor an error for a copying slip.
+// from current disk state. An unmatched receipt, consumed part, or changed
+// workflow restarts delivery as `next` would, using the state file when present.
+// A stateless restart needs an independently authenticated marker route hint;
+// if that hint is absent or edited, the runner must issue a fresh explicit
+// `next --scope <scope> --stage <stage>` instead of trusting the stored route.
+// Old receipts never skip parts, and a conductor that lost its parts restarts
+// from part one whenever the current route can be verified.
 function handleContinue(args: string[], projectDir: string | undefined): void {
   const receipt = (args[0] ?? "").trim();
   const pd = resolveProjectDir(projectDir);
@@ -9894,9 +9907,14 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   } catch {
     marker = null;
   }
-  // The marker's payload is the route hint for every fallback below, whether or
-  // not the presented receipt matches it (a run-stage marker carries one too).
+  // A fallback route hint needs its own local-key receipt, independent of the
+  // presented receipt. A run-stage marker carries that authenticated hint too.
   const hint = markerSteeringPayload(marker);
+  const trustedHint = hint !== null &&
+      typeof marker?.steering_payload_receipt === "string" &&
+      steeringPayloadAuthentic(pd, hint, marker.steering_payload_receipt)
+    ? hint
+    : null;
   const payload =
     args.length === 1 &&
     hint !== null &&
@@ -9929,7 +9947,17 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     if (isReadOnlyEngineProbe() && args.length === 1 && receipt.length > 0) {
       receiptToMatchAgainstRoute = receipt;
     }
-    answerAsNext(projectDir, hint);
+    if (liveState !== null) {
+      answerAsNext(projectDir, null);
+    } else if (trustedHint !== null) {
+      answerAsNext(projectDir, trustedHint);
+    } else {
+      emit(errorDirective(
+        "The receipt matched no current part and the stored route could not be verified. " +
+          "This stateless run must issue a fresh `next --scope <scope> --stage <stage>` " +
+          "(add `--single` if it was started as a single run).",
+      ));
+    }
     return;
   }
   activeStageValidityAdvisory =

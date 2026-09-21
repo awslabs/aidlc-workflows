@@ -28,6 +28,7 @@ import {
   getField,
   gitCommitSourceListing,
   isoTimestamp,
+  latestLedgerSession,
   latestMainWorkflowStageRunFloorForProject,
   legacyBoltName,
   legacyWorktreePath,
@@ -1738,34 +1739,7 @@ export function legacyPlanApprovalGuardState(
         "utf-8",
       )
       .digest("hex");
-    const allEntries = readAuditShardEvents(projectDir);
-    type Entry = (typeof allEntries)[number];
-    const latestCausal = (candidates: Entry[]): Entry | null => {
-      if (candidates.length === 0) return null;
-      let latestTimestamp = candidates[0].timestamp;
-      for (const candidate of candidates) {
-        if (candidate.timestamp > latestTimestamp) latestTimestamp = candidate.timestamp;
-      }
-      const atLatestTimestamp = candidates.filter(
-        (candidate) => candidate.timestamp === latestTimestamp,
-      );
-      if (new Set(atLatestTimestamp.map((candidate) => candidate.shard)).size !== 1) {
-        return null;
-      }
-      return atLatestTimestamp.reduce((latest, candidate) =>
-        candidate.pos > latest.pos ? candidate : latest
-      );
-    };
-    const latestSession = latestCausal(
-      allEntries.filter(
-        (entry) =>
-          entry.event === "SESSION_STARTED" ||
-          entry.event === "SESSION_RESUMED",
-      ),
-    );
-    const session = latestSession === null
-      ? null
-      : auditBlockField(latestSession.block, "Session");
+    const session = latestLedgerSession(projectDir);
     const challenge =
       session === null ? null : readPlanApprovalChallenge(projectDir, session);
     const response =

@@ -3393,6 +3393,22 @@ export interface PlanApprovalOverrideRequest {
   intentId: string;
 }
 
+export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}`;
+export interface GuardSwitch {
+  key: GuardSwitchKey;
+  value: "relaxed" | "off";
+}
+export interface GuardSwitchRequest {
+  version: 1;
+  session: string;
+  intentId: string;
+  requestedAt: string;
+  switches: GuardSwitch[];
+}
+export type GuardSwitchAuthority =
+  | { source: "recovery-selection" }
+  | { source: "typed-request"; session: string };
+
 export interface PlanApprovalRuntimeViolation {
   version: 1;
   markerRevision: number;
@@ -3970,6 +3986,72 @@ export function clearPlanApprovalOverrideRequest(
   session: string,
 ): void {
   const path = planApprovalOverridePath(projectDir, session);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Missing runtime state is already clear.
+  }
+}
+
+function guardSwitchRequestPath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `fence-switch-${segment}.json`)
+    : "";
+}
+
+export function recordTypedGuardSwitchRequest(
+  projectDir: string,
+  session: string,
+  promptText: string,
+): boolean {
+  const switches = parseTypedGuardSwitches(promptText);
+  if (switches.length === 0) return false;
+  const path = guardSwitchRequestPath(projectDir, session);
+  if (!path) throw new Error("Guard switch request requires a nonblank session");
+  const request: GuardSwitchRequest = {
+    version: 1,
+    session,
+    intentId: activeIntentUuid(projectDir) ?? "bare-space",
+    requestedAt: isoTimestamp(),
+    switches,
+  };
+  ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(path, `${JSON.stringify(request, null, 2)}\n`);
+  return true;
+}
+
+export function readGuardSwitchRequest(
+  projectDir: string,
+  session: string,
+): GuardSwitchRequest | null {
+  const value = readPlanApprovalRuntimeJson<GuardSwitchRequest>(
+    guardSwitchRequestPath(projectDir, session),
+    "Guard switch request",
+  );
+  return isPlainObject(value) &&
+      value.version === 1 &&
+      value.session === session &&
+      typeof value.intentId === "string" &&
+      value.intentId.length > 0 &&
+      typeof value.requestedAt === "string" &&
+      Number.isFinite(Date.parse(value.requestedAt)) &&
+      Array.isArray(value.switches) &&
+      value.switches.length > 0 &&
+      value.switches.every((entry: unknown) =>
+        isPlainObject(entry) &&
+        (entry.key === "guard-policy"
+          ? entry.value === "relaxed" || entry.value === "off"
+          : typeof entry.key === "string" && entry.key.startsWith("guard.") &&
+            isSwitchableGuardFence(entry.key.slice("guard.".length)) && entry.value === "off")
+      )
+    ? (value as GuardSwitchRequest)
+    : null;
+}
+
+export function clearGuardSwitchRequest(projectDir: string, session: string): void {
+  const path = guardSwitchRequestPath(projectDir, session);
   if (!path) return;
   try {
     unlinkSync(path);
@@ -5444,10 +5526,14 @@ export interface ActiveDirectiveMarker {
   remedies?: ActiveDirectiveGuardRemedy[];
   guard_recovery_response?: ActiveDirectiveGuardRecoveryResponse;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
-  // On a load-steering marker: the steering payload behind the current part's
-  // receipt (continue_token carries the 8-character receipt), so `continue`
-  // rebuilds the next part from disk. Opaque to this library.
+  // The steering payload behind the current part's receipt on a load-steering
+  // marker (continue_token carries that 8-character receipt), and the route hint
+  // behind a later unmatched `continue` on a run-stage marker, so `continue`
+  // rebuilds the next part from disk. Opaque to this library. The receipt
+  // beside it is the orchestrator's MAC of the payload under the local key: a
+  // payload whose fields were edited on disk no longer verifies and is not a route.
   steering_payload?: Record<string, unknown>;
+  steering_payload_receipt?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
   active_attempt?: ActiveDirectiveAttempt; resume?: ActiveDirectiveResume;
   event_sequence?: number; human_sequence?: number; engine_sequence?: number; conversation_sequence?: number;
@@ -6231,6 +6317,8 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
     if (contentSha256(parsed.continue_token) !== parsed.continue_token_sha256) return null;
   }
   if (parsed.steering_payload !== undefined && !isPlainObject(parsed.steering_payload)) return null;
+  if (parsed.steering_payload_receipt !== undefined &&
+    (typeof parsed.steering_payload_receipt !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(parsed.steering_payload_receipt))) return null;
   if (parsed.kind === "load-steering" &&
     (!Number.isInteger(parsed.part) || !Number.isInteger(parsed.parts) || (parsed.part as number) < 1 ||
       (parsed.part as number) > (parsed.parts as number) || parsed.continue_token === undefined)) return null;
@@ -6463,6 +6551,7 @@ export function writeActiveDirectiveMarker(
     rules_bundle?: string;
     directive_sha256?: string;
     steering_payload?: Record<string, unknown>;
+    steering_payload_receipt?: string;
     ask_type?: string;
     remedies?: ActiveDirectiveGuardRemedy[];
   },
@@ -6781,6 +6870,7 @@ export function writeActiveDirectiveMarker(
       guard_recovery_response: undefined,
       ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
       steering_payload: marker.steering_payload,
+      steering_payload_receipt: marker.steering_payload_receipt,
       delivery: "issued",
       needs_rehydrate: copilotOwned,
       ...(nextAttempt ? { active_attempt: nextAttempt } : {}),
@@ -7178,6 +7268,7 @@ export function advanceContinuationCursor(
     rules_bundle?: string;
     directive_sha256?: string;
     steering_payload?: Record<string, unknown>;
+    steering_payload_receipt?: string;
   },
   resultSha256: string,
   attemptId?: string,
@@ -7449,6 +7540,7 @@ export function advanceContinuationCursor(
         : { directive_sha256: undefined }),
       ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
       steering_payload: successor.steering_payload,
+      steering_payload_receipt: successor.steering_payload_receipt,
       delivery: "issued",
       needs_rehydrate: !base.owner_session?.startsWith("sessionless:"),
       ...(pending ? { active_attempt: matchingAttempt
@@ -7492,6 +7584,7 @@ export function invalidateActiveDirectiveContext(
         continue_token: undefined,
         continue_token_sha256: undefined,
         steering_payload: undefined,
+        steering_payload_receipt: undefined,
       },
       result: true,
     };
@@ -10656,6 +10749,35 @@ export function readAuditShardEvents(
     rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
   }
   return rows;
+}
+
+export function latestLedgerSession(projectDir: string): string | null {
+  const allEntries = readAuditShardEvents(projectDir);
+  type Entry = (typeof allEntries)[number];
+  const latestCausal = (candidates: Entry[]): Entry | null => {
+    if (candidates.length === 0) return null;
+    let latestTimestamp = candidates[0].timestamp;
+    for (const candidate of candidates) {
+      if (candidate.timestamp > latestTimestamp) latestTimestamp = candidate.timestamp;
+    }
+    const atLatestTimestamp = candidates.filter(
+      (candidate) => candidate.timestamp === latestTimestamp,
+    );
+    if (new Set(atLatestTimestamp.map((candidate) => candidate.shard)).size !== 1) {
+      return null;
+    }
+    return atLatestTimestamp.reduce((latest, candidate) =>
+      candidate.pos > latest.pos ? candidate : latest
+    );
+  };
+  const latestSession = latestCausal(
+    allEntries.filter(
+      (entry) =>
+        entry.event === "SESSION_STARTED" ||
+        entry.event === "SESSION_RESUMED",
+    ),
+  );
+  return latestSession === null ? null : auditBlockField(latestSession.block, "Session");
 }
 
 /**
@@ -30113,6 +30235,96 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
   if (policy === "off") return ["plan-approval", "review-freeze", "state-transition", "reviewer-scope"];
   if (policy === "relaxed") return ["plan-approval", "review-freeze"];
   return [];
+}
+
+// The fence switches a typed prompt names, read from its words: the slash flag
+// (`--guard-policy relaxed`, retired `--change-control`), the config form
+// (`guard-policy off`, `guard.plan-approval off`) and the confirmation words
+// (`guard policy relaxed`). `strict` and `on` raise, so they are never switches;
+// human presence has no switch. Trailing punctuation on a word is ignored so a
+// sentence ending in `relaxed.` still reads. One entry per key, last value wins.
+export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
+  const tokens = prompt.toLowerCase().split(/\s+/).map((token) => token.replace(/[.,;:!?)"'`]+$/, ""));
+  const switches = new Map<GuardSwitchKey, GuardSwitch>();
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    let value = tokens[i + 1];
+    let key: GuardSwitchKey;
+    if (
+      token === "--guard-policy" || token === "--change-control" ||
+      token === "guard-policy" || token === "change-control"
+    ) {
+      key = "guard-policy";
+    } else if (
+      (token === "guard" && value === "policy") ||
+      (token === "change" && value === "control")
+    ) {
+      key = "guard-policy";
+      value = tokens[i + 2];
+    } else {
+      const configKey = token.startsWith("--") ? token.slice(2) : token;
+      if (!configKey.startsWith("guard.")) continue;
+      const fence = configKey.slice("guard.".length);
+      if (!isSwitchableGuardFence(fence) || value !== "off") continue;
+      key = `guard.${fence}`;
+    }
+    if (value === "relaxed" || value === "off") switches.set(key, { key, value });
+  }
+  return [...switches.values()];
+}
+
+// Lowering needs the exact human selection: either the consumed guard-recovery
+// remedy for this fence or a typed request for this session and intent. A fresh
+// human turn alone says nothing about which fence or policy the person chose.
+export function guardSwitchAuthority(
+  projectDir: string,
+  stateContent: string | null,
+  wanted: GuardSwitch,
+  sessionId: string | null,
+): GuardSwitchAuthority | null {
+  if (process.env.AIDLC_UNATTENDED === "1") return null;
+  if (wanted.key.startsWith("guard.") && wanted.value === "off" && stateContent !== null) {
+    const marker = readActiveDirectiveMarker(projectDir, stateContent);
+    if (
+      marker?.version === 2 &&
+      marker.kind === "ask" &&
+      marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+      marker.delivery === "consumed" &&
+      marker.state_present === true &&
+      marker.needs_rehydrate === false &&
+      marker.guard_recovery_response?.status === "ready" &&
+      marker.guard_recovery_response.feedback_sha256 === undefined &&
+      marker.guard_recovery_response.selected_op === "lower-fence"
+    ) {
+      const selected = marker.remedies?.filter((remedy) => remedy.op === "lower-fence") ?? [];
+      if (
+        selected.length === 1 &&
+        selected[0].interaction === "command" &&
+        selected[0].operation?.kind === "lower-fence" &&
+        wanted.key === `guard.${selected[0].operation.fence}`
+      ) return { source: "recovery-selection" };
+    }
+  }
+  if (sessionId === null) return null;
+  const request = readGuardSwitchRequest(projectDir, sessionId);
+  return request !== null &&
+      request.intentId === (activeIntentUuid(projectDir) ?? "bare-space") &&
+      request.switches.some((entry) => entry.key === wanted.key && entry.value === wanted.value)
+    ? { source: "typed-request", session: sessionId }
+    : null;
+}
+
+export function guardSwitchRefusal(wanted: GuardSwitch, context: "config" | "intent-create"): string {
+  const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
+  if (wanted.key !== "guard-policy") {
+    const fence = wanted.key.slice("guard.".length);
+    return `Turning the ${fence} check off is the person's decision. It is accepted only when they typed \`/aidlc config set guard.${fence} off\` in this session or chose that remedy from the guard-recovery question. Ask them, and run this again after they do.${hint}`;
+  }
+  const value = wanted.value;
+  if (context === "intent-create") {
+    return `Creating this intent with Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`/aidlc --guard-policy ${value}\` in this session. Create it without the flag, or ask them and run this again after they do.${hint}`;
+  }
+  return `Setting Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`/aidlc --guard-policy ${value}\` in this session. Ask them, and run this again after they do.${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {

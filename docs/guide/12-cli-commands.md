@@ -1115,8 +1115,35 @@ you in one line, and continue. On the fences, `strict` leaves all five up,
 plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
 by the policy word.
 
-Setting `guard-policy relaxed` or `guard-policy off` from chat needs a fresh human turn newer than the engine's last directive, so the conductor cannot lower fences on its own and `AIDLC_UNATTENDED=1` refuses that lowering; scope defaults are not gated.
-Memory-held strict overrides both the policy word and any fence lowered earlier, which `/aidlc --status` shows as `on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch takes precedence.
+Setting `guard-policy relaxed` or `guard-policy off` from chat requires the
+person's exact typed switch, such as `/aidlc --guard-policy relaxed` or the
+confirmation words `guard policy relaxed` (use `off` for that value). The
+human-turn hook records the key and value for this session and intent; the setter
+consumes that request once after a successful write or an already-set no-op.
+An unrelated reply after an engine directive authorizes nothing, and
+`AIDLC_UNATTENDED=1` refuses lowering even if a typed request exists. Scope
+defaults are not gated. The machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`
+bypasses the typed-request check, but does not permit unattended lowering.
+Memory-held strict refuses first and overrides both the policy word and any
+fence lowered earlier, which `/aidlc --status` shows as
+`on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch
+takes precedence.
+
+Without the typed request, setting `relaxed` is refused with:
+
+> Setting Guard Policy relaxed lowers fences and is the person's decision. It is accepted only when they typed `/aidlc --guard-policy relaxed` in this session. Ask them, and run this again after they do.
+
+The same requirement applies to explicit `scope change --guard-policy relaxed|off`
+and `intent create --guard-policy relaxed|off`, including first-use slash
+commands before a workflow exists. The hook records the request before its
+state-file gate, and an unrelated composer approval does not withdraw it.
+Without the request, creation with `relaxed` is refused with:
+
+> Creating this intent with Guard Policy relaxed lowers fences and is the person's decision. It is accepted only when they typed `/aidlc --guard-policy relaxed` in this session. Create it without the flag, or ask them and run this again after they do.
+
+The `off` refusals use `off` in place of `relaxed`; unattended runs also receive
+the driver guidance. A guard-recovery selection can lower its named fence, not
+the policy word.
 
 No value removes a gate: the conductor must still ask every approval question;
 a lowered fence does not enforce that prose obligation. A reviewer's verdict
@@ -1135,7 +1162,8 @@ every `/aidlc` run announces a carried-over relaxed or off value; re-affirm with
 `next` writes nothing, and a retired strict line gets no notice. The value is
 committed with the intent, survives sessions, and is visible to teammates. The
 same setter repairs an invalid line and records the old text. A plain-chat request
-("stop asking me to re-approve when files change") uses the same route.
+such as "stop asking me to re-approve when files change" is not a switch: the
+person must type the policy choice before the conductor can apply it.
 For configuration and scope changes, the row's `Old Value` is the previously
 saved intent value (raw text if invalid; `strict` when no line existed), not
 the memory-effective value. Governed-checkpoint observations still record
@@ -1191,15 +1219,28 @@ switch, then per-work off unless memory holds strict, then per-work on, then the
 by default. Four of the five have a kill switch; `state-transition` has none,
 so the policy word and this switch are its only controls.
 
-Setting `guard.<fence> off` from chat needs a fresh human turn newer than the engine's last directive, so the conductor cannot lower a fence on its own and `AIDLC_UNATTENDED=1` refuses that lowering as the person's decision.
-Memory-held strict overrides a fence lowered earlier, which `/aidlc --status` shows as `on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch takes precedence.
+Setting `guard.<fence> off` from chat requires the person's exact selection:
+either they typed `/aidlc config set guard.<fence> off` in this session, or they
+chose the `lower-fence` remedy for that fence from an engine-published
+guard-recovery question. The setter reads the recorded key and value or the
+recorded remedy selection, not merely the arrival of a human message. A typed
+request is consumed after a successful write or an already-set no-op.
+`AIDLC_UNATTENDED=1` refuses lowering even with a recorded request; the
+machine-wide human-presence bypass skips the key only for an attended run.
+Memory-held strict refuses first and overrides a fence lowered earlier, which
+`/aidlc --status` shows as `on (guard policy strict (from <layer>.md))` unless a
+machine-wide kill switch takes precedence. Its persisted `Guards Off` entry
+remains and takes effect again only after the memory line no longer holds strict.
 
-A switch is the only thing that lowers a fence. Saying so in chat does not: the
-framework can tell that you spoke, not what you asked for, so a fence that opened
-on a keystroke would not be a fence. This command controls the four switchable
-fences, including any the policy word leaves up. A switchable fence's
-main-session refusal names the command; a human-presence refusal names no switch
-and says: `This needs a fresh human turn: wait for the person to reply, then record it again.`
+Without either selection, the Plan Approval setter refuses with:
+
+> Turning the plan-approval check off is the person's decision. It is accepted only when they typed `/aidlc config set guard.plan-approval off` in this session or chose that remedy from the guard-recovery question. Ask them, and run this again after they do.
+
+The other fence refusals substitute that fence's name; unattended runs also
+receive the driver guidance. This command controls the four switchable fences,
+including any the policy word leaves up. A switchable fence's main-session
+refusal names the command; a human-presence refusal names no switch and says:
+`This needs a fresh human turn: wait for the person to reply, then record it again.`
 
 Only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence.
 `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower

@@ -77,7 +77,6 @@ import {
   activeIntent,
   activeSpace,
   authoritativeProjectDescription,
-  authorityFor,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
@@ -92,6 +91,10 @@ import {
   GUARDS_ON_FIELD,
   type SwitchableGuardFence,
   type FenceSetting,
+  type GuardSwitch,
+  clearGuardSwitchRequest,
+  guardSwitchAuthority,
+  guardSwitchRefusal,
   guardFenceConfigKey,
   guardFenceFromConfigKey,
   guardPolicyStateField,
@@ -154,6 +157,7 @@ import {
   isTeamUnitOwnership,
   isPluginEnabled,
   isoTimestamp,
+  latestLedgerSession,
   isPackageJson,
   isValidRepoName,
   codekbDir,
@@ -6590,6 +6594,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   if (preflightMemoryStrict !== null && requestedChangeControl !== null && requestedChangeControl !== "strict") {
     die(guardPolicyMemoryStrictRefusal(preflightMemoryStrict));
   }
+  let spentSwitchSession: string | null = null;
+  if ((requestedChangeControl === "relaxed" || requestedChangeControl === "off") && !humanPresenceGuardDisabled()) {
+    const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
+    const authority = guardSwitchAuthority(
+      projectDir, null, wanted, initialSelection.sessionId ?? latestLedgerSession(projectDir),
+    );
+    if (authority === null) die(guardSwitchRefusal(wanted, "intent-create"));
+    if (authority.source === "typed-request") spentSwitchSession = authority.session;
+  }
   // A flat aidlc-docs/ layout is migrated into the DEFAULT space by the first
   // creation (below, under the lock). An explicit other space cannot be honored
   // on that same run, so refuse instead of silently creating somewhere else.
@@ -6841,6 +6854,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       requestedCeremony,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
+  if (spentSwitchSession !== null) clearGuardSwitchRequest(projectDir, spentSwitchSession);
 }
 
 // The scope→stage state-build half of creation: the workspace detection + state
@@ -8471,7 +8485,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     }
     // Apply against the original scope so previous settings and effective
     // output describe the state before this transaction.
-    const update = applyIntentSettings(projectDir, contentBefore, requested, { intent, space });
+    const update = applyIntentSettings(projectDir, contentBefore, requested, {
+      intent, space, sessionId: selection.sessionId ?? latestLedgerSession(projectDir),
+    });
     let content = update.content;
     const auditEntries = update.audit;
     let outputLines = update.lines;
@@ -8606,6 +8622,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       }
       writeStateFile(projectDir, setField(content, "Last Updated", isoTimestamp()), intent, space);
     }
+    if (update.spentSwitchSession !== null) clearGuardSwitchRequest(projectDir, update.spentSwitchSession);
     process.stdout.write(`${outputLines.join("\n")}\n`);
   }, intent, space);
 }
@@ -8932,8 +8949,8 @@ function applyIntentSettings(
   projectDir: string,
   content: string,
   requested: IntentSettingsRequest,
-  selection: { intent?: string; space?: string },
-): { content: string; audit: AuditEntryInput[]; lines: string[] } {
+  { sessionId = null, ...selection }: { intent?: string; space?: string; sessionId?: string | null },
+): { content: string; audit: AuditEntryInput[]; lines: string[]; spentSwitchSession: string | null } {
   const rawDepth = requested.depth?.value;
   const rawStrategy = requested["test-strategy"]?.value;
   const rawReview = requested.review?.value;
@@ -8999,16 +9016,22 @@ function applyIntentSettings(
     }
   }
 
-  const loweredFence = fenceRequests.find((request) => request.value === "off");
-  const loweredPolicy = ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off");
-  // The fence switch is the person's key, so it needs the same evidence an
-  // approval needs. The suite's fixture profile sets the presence skip; only
-  // production-profile tests exercise this key.
-  if ((loweredFence !== undefined || loweredPolicy) && !humanPresenceGuardDisabled() &&
-      authorityFor(projectDir, { stateContent: content }).covered !== "grant") {
-    die(loweredFence !== undefined
-      ? `Turning the ${loweredFence.fence} check off is the person's decision, and no human turn is newer than the engine's last directive. Ask them, and run this again after they reply.`
-      : `Setting Guard Policy ${changeControl} lowers fences and is the person's decision, and no human turn is newer than the engine's last directive. Ask them, and run this again after they reply.`);
+  const lowering: GuardSwitch[] = [];
+  for (const request of fenceRequests) {
+    if (request.source === "you" && request.value === "off") {
+      lowering.push({ key: `guard.${request.fence}`, value: "off" });
+    }
+  }
+  if (ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off")) {
+    lowering.push({ key: "guard-policy", value: changeControl });
+  }
+  let spentSwitchSession: string | null = null;
+  if (lowering.length > 0 && !humanPresenceGuardDisabled()) {
+    for (const wanted of lowering) {
+      const authority = guardSwitchAuthority(projectDir, content, wanted, sessionId);
+      if (authority === null) die(guardSwitchRefusal(wanted, "config"));
+      if (authority.source === "typed-request") spentSwitchSession = authority.session;
+    }
   }
 
   const audit: AuditEntryInput[] = [];
@@ -9133,7 +9156,7 @@ function applyIntentSettings(
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     lines.push(`${field} changed: ${oldDisplay} to ${line}`);
   }
-  return { content, audit, lines };
+  return { content, audit, lines, spentSwitchSession };
 }
 
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
@@ -9142,7 +9165,9 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   const space = selection.space;
   withAuditLock(projectDir, () => {
     const content = readConfigState(projectDir, { intent, space });
-    const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), { intent, space });
+    const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), {
+      intent, space, sessionId: selection.sessionId ?? latestLedgerSession(projectDir),
+    });
     if (update.content !== content) {
       if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
       // A retired-field rename with an unchanged value rewrites the line and
@@ -9150,6 +9175,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
       if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
       writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
     }
+    if (update.spentSwitchSession !== null) clearGuardSwitchRequest(projectDir, update.spentSwitchSession);
     process.stdout.write(`${update.lines.join("\n")}\n`);
   }, intent, space);
 }

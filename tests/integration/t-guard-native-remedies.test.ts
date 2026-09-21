@@ -268,6 +268,7 @@ class Fixture {
       AIDLC_HARNESS_NAME: harness.name,
       AIDLC_RUNTIME_ROOT: runtimeRoot,
       AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: "01995000-0995-7000-8000-000000000777",
       TMPDIR: scratch,
     }, `${dirname(BUN)}${delimiter}${process.env.PATH ?? ""}`);
     this.env = projection === "native"
@@ -893,7 +894,9 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(unchosen.status).not.toBe(0);
       expect(unchosen.stderr).toContain("is the person's decision");
       expect(p.state()).not.toContain("- **Guards Off**:");
-      succeeded(p.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "lower-fence" }));
+      succeeded(p.hook("record-human-turn", {
+        hook_event_name: "UserPromptSubmit", prompt: "/aidlc config set guard.plan-approval off",
+      }));
       const lowered = p.exact(lowerFence.command!);
       expect(lowered.status, lowered.stderr).toBe(0);
       expect(lowered.stdout).toContain("Fence plan-approval is off for this piece of work");

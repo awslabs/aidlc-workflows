@@ -8,8 +8,11 @@
 //
 // Presence remains the gate signal; the prompt payload also answers the single
 // active protected challenge (plan, verification command, policy, or checkpoint).
+// A typed prompt also records the exact fence switches requested in this session,
+// even before workflow state exists. Only a typed UserPromptSubmit opens this
+// request; the setter consumes it after the selected change succeeds.
 // appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
-// to gate, so the hook exits without writing (same self-gate as
+// to gate, so the hook skips ledger writes (same self-gate as
 // aidlc-session-start.ts) - otherwise every prompt in a project that carries the
 // harness shell but never ran the framework would scaffold and grow audit
 // shards. The gate fails open on an empty ledger, so skipping the mint there is
@@ -60,6 +63,7 @@ import {
   humanTurnMintAllowed,
   markHumanTurn,
   resolveProjectDirFromHook,
+  recordTypedGuardSwitchRequest,
   stateFilePath,
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
@@ -135,55 +139,65 @@ function extractQuestionText(value: unknown): string | null {
 export async function run(input: string): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
+  let sessionId = "";
+  let humanResponseText = "";
+  let questionText: string | null = null;
+  // The break-glass phrase counts only when the human TYPED it: the prompt
+  // text of a UserPromptSubmit payload that names no tool. A picked option
+  // (AskUserQuestion PostToolUse, Codex request_user_input, any adapter's
+  // picker payload) arrives under tool_response and never opens it.
+  let typedPrompt = "";
+  try {
+    const parsed = JSON.parse(input) as {
+      hook_event_name?: unknown;
+      tool_name?: unknown;
+      session_id?: unknown;
+      prompt?: unknown;
+      user_prompt?: unknown;
+      message?: unknown;
+      tool_response?: unknown;
+      toolResponse?: unknown;
+      tool_input?: unknown;
+      toolInput?: unknown;
+    };
+    if (typeof parsed.session_id === "string") sessionId = parsed.session_id.trim();
+    questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
+    for (const candidate of [
+      parsed.prompt,
+      parsed.user_prompt,
+      parsed.message,
+      parsed.tool_response,
+      parsed.toolResponse,
+    ]) {
+      const extracted = extractResponseText(candidate);
+      if (extracted) {
+        humanResponseText = extracted;
+        break;
+      }
+    }
+    if (
+      parsed.hook_event_name === "UserPromptSubmit" &&
+      typeof parsed.tool_name !== "string"
+    ) {
+      typedPrompt =
+        [parsed.prompt, parsed.user_prompt, parsed.message].find(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        ) ?? "";
+    }
+  } catch { /* presence still records without identity on legacy payloads */ }
+  // The fence switch the person typed is recorded before the state-file gate:
+  // a first-use `/aidlc --guard-policy relaxed <description>` arrives before
+  // any workflow exists, and the setter it leads to needs this record.
+  if (humanTurnMintAllowed() && sessionId && typedPrompt) {
+    try {
+      recordTypedGuardSwitchRequest(projectDir, sessionId, typedPrompt);
+    } catch {
+      // Fence switch bookkeeping must never block the human's turn.
+    }
+  }
   if (existsSync(stateFilePath(projectDir))) {
     if (humanTurnMintAllowed()) {
-      let sessionId = "";
-      let humanResponseText = "";
-      let questionText: string | null = null;
-      // The break-glass phrase counts only when the human TYPED it: the prompt
-      // text of a UserPromptSubmit payload that names no tool. A picked option
-      // (AskUserQuestion PostToolUse, Codex request_user_input, any adapter's
-      // picker payload) arrives under tool_response and never opens it.
-      let typedPrompt = "";
-      try {
-        const parsed = JSON.parse(input) as {
-          hook_event_name?: unknown;
-          tool_name?: unknown;
-          session_id?: unknown;
-          prompt?: unknown;
-          user_prompt?: unknown;
-          message?: unknown;
-          tool_response?: unknown;
-          toolResponse?: unknown;
-          tool_input?: unknown;
-          toolInput?: unknown;
-        };
-        if (typeof parsed.session_id === "string") sessionId = parsed.session_id.trim();
-        questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
-        for (const candidate of [
-          parsed.prompt,
-          parsed.user_prompt,
-          parsed.message,
-          parsed.tool_response,
-          parsed.toolResponse,
-        ]) {
-          const extracted = extractResponseText(candidate);
-          if (extracted) {
-            humanResponseText = extracted;
-            break;
-          }
-        }
-        if (
-          parsed.hook_event_name === "UserPromptSubmit" &&
-          typeof parsed.tool_name !== "string"
-        ) {
-          typedPrompt =
-            [parsed.prompt, parsed.user_prompt, parsed.message].find(
-              (value): value is string =>
-                typeof value === "string" && value.trim().length > 0,
-            ) ?? "";
-        }
-      } catch { /* presence still records without identity on legacy payloads */ }
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);

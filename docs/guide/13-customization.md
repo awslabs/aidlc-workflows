@@ -248,7 +248,7 @@ No shipped scope defaults to `off`; it is something you ask for. A composed scop
 
 1. **The scope file.** `guard_policy: strict | relaxed | off` in `scopes/aidlc-<name>.md` is the value every new intent on that scope starts with. Every shipped scope declares it; a scope file that declares none starts strict.
 2. **Memory.** A `## Guard Policy` section with one line, `Mode: strict`, in `aidlc/spaces/<space>/memory/org.md`, `team.md`, or `project.md` holds strict for everyone on the repo. It wins over the scope default and per-intent values. An explicit `--guard-policy relaxed`, `--guard-policy off`, or `/aidlc config set guard.<fence> off` is refused with a sentence naming the memory file, and none of the command's companion settings or scope change is applied. Turning a fence `on` remains allowed. `Mode: relaxed`, `Mode: off`, or an empty section changes nothing; any other value is a validation error naming the file and the three allowed values.
-3. **The intent.** `/aidlc --guard-policy strict|relaxed|off`, `/aidlc config set guard-policy <value>`, or a plain-chat request such as "stop asking me to re-approve when files change" uses the shared `config-change` setter for the running piece of work (`/aidlc --status` shows it as `Guard Policy: relaxed (set by you)`). It can be combined with the other setting flags in the same transaction.
+3. **The intent.** `/aidlc --guard-policy strict|relaxed|off`, `/aidlc config set guard-policy <value>`, or the typed confirmation words `guard policy relaxed|off` use the shared `config-change` setter for the running piece of work (`/aidlc --status` shows it as `Guard Policy: relaxed (set by you)`). Lowering requires that exact policy choice, not a paraphrase such as "stop asking me to re-approve when files change". It can be combined with the other setting flags in the same transaction.
 
 #### Where the value lives
 
@@ -277,29 +277,39 @@ A fence is a guard that refuses an action nothing asked for: no step the workflo
 /aidlc config set guard.plan-approval on
 ```
 
-Lowering a fence or the policy word from chat needs a fresh human turn: a message from the person newer than the engine's last directive. The conductor can act on what you just said, but can never lower a fence on its own; under `AIDLC_UNATTENDED=1` nothing lowers from chat, and the refusal says that lowering is the person's decision. Scope defaults are the framework's settings and do not need a human turn.
+Lowering a fence or the policy word from chat requires the person's exact selection. For a fence, type `/aidlc config set guard.<fence> off` yourself or choose that fence's `lower-fence` remedy from an engine-published guard-recovery question. For the policy word, type `/aidlc --guard-policy relaxed|off` or the confirmation words `guard policy relaxed|off`, choosing one value. The human-turn hook records a typed switch as a per-session, intent-bound request; the setter consumes it once after a successful write or an already-set no-op. A later typed switch replaces that request, while unrelated prompts leave it untouched. An unrelated reply after the engine's directive opens nothing.
+
+The same typed policy request is required for `intent create --guard-policy relaxed|off` and `scope change --guard-policy relaxed|off`. First-use slash flags are recorded before a state file exists, so a later composer approval does not erase the choice. Scope defaults are not gated. `AIDLC_UNATTENDED=1` refuses all lowering from chat, even with a recorded request. `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` bypasses the key for an attended run, not memory-held strict.
 
 If a memory file holds Guard Policy strict, `/aidlc config set guard.<fence> off` is refused with a sentence naming that file; edit its `Mode: strict` line to change it for everyone on the repo. Turning a fence `on` remains allowed.
 
-Memory-held strict also overrides a fence you lowered earlier. The persisted `Guards Off` entry stays in the intent, but `/aidlc --status` then shows `on (guard policy strict (from <layer>.md))` for that fence; a machine-wide kill switch still takes precedence.
+Memory-held strict also overrides a fence you lowered earlier. The persisted `Guards Off` entry stays in the intent, but `/aidlc --status` then shows `on (guard policy strict (from <layer>.md))` for that fence; the entry takes effect again only after the memory line no longer holds strict. A machine-wide kill switch still takes precedence.
 
 Switching one off writes `- **Guards Off**: plan-approval (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on removes it from that list and writes `GUARD_RESTORED`. Setting `on` also raises a policy-lowered fence, records `- **Guards On**: plan-approval (set by you)`, and writes `GUARD_RESTORED`. The lines name only the four switchable fences; a persisted human-presence entry is ignored. `/aidlc --status` prints a `Fences:` line with all five and where each setting came from. Precedence is the machine-wide kill switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on by default.
 
-A fence is lowered by a switch and by nothing else. Typing something in the session does not lower one, however clearly you meant it: the framework can tell that you spoke, but not what you asked for, and a fence that opened on any keystroke would be no fence at all. A switchable fence's main-session refusal names its switch, so opening it is one deliberate move rather than a guess about your intent. When memory holds Guard Policy strict, the refusal instead names the memory file and says to edit that file rather than offering a switch. A human-presence refusal names no switch: `This needs a fresh human turn: wait for the person to reply, then record it again.`
+The switch you type is what the setter reads; it does not infer a switch from a general request or from the fact that you replied. A switchable fence's main-session refusal names its switch, so opening it is one deliberate move rather than a guess about your intent. Without a recorded selection, the Plan Approval setter says:
+
+> Turning the plan-approval check off is the person's decision. It is accepted only when they typed `/aidlc config set guard.plan-approval off` in this session or chose that remedy from the guard-recovery question. Ask them, and run this again after they do.
+
+Without the typed policy request, setting `relaxed` says:
+
+> Setting Guard Policy relaxed lowers fences and is the person's decision. It is accepted only when they typed `/aidlc --guard-policy relaxed` in this session. Ask them, and run this again after they do.
+
+Other fence names and `off` use the corresponding name or value; unattended runs append the driver guidance. Memory-held strict refuses before checking for a selection and instead names the memory file to edit. A human-presence refusal names no switch: `This needs a fresh human turn: wait for the person to reply, then record it again.`
 
 Human presence is the strictest of the five. It is what makes your approval yours, so neither Guard Policy nor a per-work setting lowers it: only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` does. `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower the fence.
 
 ### Who asked for this: the authority chain
 
-Every action a guard sees is classified before anything is decided. Is it covered by something you said, by the workflow's own instruction, or by neither?
+Every action a guard sees is classified before anything is decided. Is it covered by a recorded human turn, by the workflow's own instruction, or by neither? This classification records who was working; it is separate from the exact switch selection that authorizes lowering.
 
-- **Your grant.** A message you sent after the workflow last told the agent what to do. It covers everything done to carry that message out, including work by any agent dispatched for it, and it lasts until the workflow issues its next instruction.
+- **Your grant.** A message you sent after the workflow last told the agent what to do. It classifies the conductor and agents dispatched for that turn until the workflow issues its next instruction; it does not authorize a fence or policy change.
 - **The workflow's instruction.** The stage the engine currently has in force. It covers the work that instruction asks for, whoever does it, including an approval still pending inside it. It does not cover the loop skipping one of its own steps, which is exactly what a fence notices.
 - **Neither.** Something outside the instruction with nothing from you since: the narrowest cover, and the one an unreadable signal falls back to.
 
 The question is never who is typing. A developer agent acts on the conductor's word and the conductor acts on yours, so authority flows down the chain: when the conductor dispatches an agent, the authority in force at that moment is stamped on the dispatch and the agent inherits it. An agent can never mint a grant for itself, and an unreadable signal narrows what is covered rather than widening it. The signals are ones the framework already keeps: the turn markers under `.aidlc-engine/` that record your last prompt against the workflow's last advancing command, the counters on the active-directive marker, and the dispatch stamp on the in-flight agent ledger.
 
-What this classification decides is the changed-input question above: under `strict`, a grant is what lets the framework ask you about the change instead of stopping and waiting for the next boundary. It does NOT lower a fence. Its other job is the record: every time a lowered fence lets something through, the audit row names the authority in force, so a reader can see who was working when it happened.
+This classification never lowers a fence or substitutes for a recorded switch selection. Its job is the evidence trail: every time a lowered fence lets something through, the audit row names the authority in force, so a reader can see who was working when it happened. A changed input under `strict` is asked about at the governed boundary regardless of this classification.
 
 ### What you see when a guard decides
 

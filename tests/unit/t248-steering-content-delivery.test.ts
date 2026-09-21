@@ -5,9 +5,9 @@
 // (rules_content) whenever run-stage plus rules fit the transport cap; a bundle
 // that does not fit is chunked into load-steering parts, each carrying an
 // 8-character receipt and the ready `continue` command ahead of its payload.
-// Any `continue` the engine cannot honour is answered exactly as a bare `next`
-// would be, never as an error. Optional persona/knowledge remains path-loaded
-// with actionable warnings.
+// An unmatched `continue` restarts from state or an authenticated stateless
+// route; an unverifiable stateless route requires a fresh explicit `next`.
+// Optional persona/knowledge remains path-loaded with actionable warnings.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -97,6 +97,7 @@ type Marker = {
   continue_token?: string;
   continue_token_sha256?: string;
   steering_payload?: Record<string, unknown>;
+  steering_payload_receipt?: string;
   cursor_harness?: string;
   owner_session?: string;
 };
@@ -914,6 +915,126 @@ describe("t248 deterministic steering delivery", () => {
     expect(answer.line).toBe(invoke(proj, "next", []).line);
   });
 
+  for (const kind of ["run-stage", "load-steering"] as const) {
+    test(`an edited stateless ${kind} route cannot redirect a mismatched receipt`, () => {
+      const proj = project();
+      if (kind === "load-steering") inflateOrg(proj);
+      const first = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]);
+      expect(first.directive.kind).toBe(kind);
+      const path = statelessMarkerPath(proj);
+      const marker = readMarker(path);
+      const payload = marker.steering_payload;
+      expectSteeringPayload(payload);
+      expect(marker.steering_payload_receipt).toMatch(RECEIPT_PATTERN);
+      expect(payload?.a).toBe(false);
+      const runtime = join(proj, "aidlc");
+
+      for (const changed of [{ s: "market-research" }, { c: "feature" }, { x: true }]) {
+        marker.steering_payload = { ...payload, ...changed };
+        writeFileSync(path, `${JSON.stringify(marker)}\n`, "utf-8");
+        const before = treeDigest(runtime);
+
+        const answer = invoke(proj, "continue", ["not-a-receipt"]).directive;
+        expect(answer.kind).toBe("error");
+        expect(answer.message).toBe(
+          "The receipt matched no current part and the stored route could not be verified. " +
+            "This stateless run must issue a fresh `next --scope <scope> --stage <stage>` " +
+            "(add `--single` if it was started as a single run).",
+        );
+        expect(treeDigest(runtime)).toEqual(before);
+      }
+    }, 30_000);
+  }
+
+  test("a legacy stateless marker without an authenticated route refuses unmatched receipts", () => {
+    const proj = project();
+    inflateOrg(proj);
+    const first = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]);
+    expect(first.directive.kind).toBe("load-steering");
+    const path = statelessMarkerPath(proj);
+    const marker = readMarker(path);
+    delete marker.steering_payload_receipt;
+    writeFileSync(path, `${JSON.stringify(marker)}\n`, "utf-8");
+    const before = treeDigest(join(proj, "aidlc"));
+
+    const answer = invoke(proj, "continue", ["not-a-receipt"]).directive;
+    expect(answer.kind).toBe("error");
+    expect(answer.message).toContain("the stored route could not be verified");
+    expect(treeDigest(join(proj, "aidlc"))).toEqual(before);
+  });
+
+  test("an edited stateful hint cannot override the state route for a mismatched receipt", () => {
+    const proj = statefulProject();
+    const first = invoke(proj, "next", []);
+    expect(first.directive.kind).toBe("run-stage");
+    expect(first.directive.stage).not.toBe("intent-capture");
+    const path = statefulMarkerPath(proj);
+    const marker = readMarker(path);
+    expectSteeringPayload(marker.steering_payload);
+    // Changing a to false used to make the fallback trust the edited route
+    // even though this workflow still has its own authoritative state file.
+    marker.steering_payload = {
+      ...marker.steering_payload,
+      a: false,
+      s: "intent-capture",
+      c: "mvp",
+      x: true,
+    };
+    writeFileSync(path, `${JSON.stringify(marker)}\n`, "utf-8");
+    const stateBefore = readFileSync(seededStateFile(proj), "utf-8");
+
+    const answer = invoke(proj, "continue", ["not-a-receipt"]);
+    expect(answer.directive.kind).toBe(first.directive.kind);
+    expect(answer.directive.stage).toBe(first.directive.stage);
+    expect(answer.line).toBe(invoke(proj, "next", []).line);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(stateBefore);
+  });
+
+  test("stateless run-stage markers authenticate the route after inline and chunked delivery", () => {
+    for (const chunked of [false, true]) {
+      const proj = project();
+      if (chunked) inflateOrg(proj);
+      const delivered = drive(proj);
+      expect(delivered.final.kind).toBe("run-stage");
+      const marker = readMarker(statelessMarkerPath(proj));
+      expect(marker.kind).toBe("run-stage");
+      expectSteeringPayload(marker.steering_payload);
+      expect(marker.steering_payload_receipt).toMatch(RECEIPT_PATTERN);
+      const key = Buffer.from(
+        readFileSync(join(proj, "aidlc", ".aidlc-sessions", ".aidlc-steering-token-key"), "utf-8").trim(),
+        "base64url",
+      );
+      expect(marker.steering_payload_receipt).toBe(receiptFor(marker.steering_payload, key));
+
+      const answer = invoke(proj, "continue", ["not-a-receipt"]);
+      expect(answer.line).toBe(chunked ? delivered.lines[0] : delivered.finalLine);
+      expect(answer.directive.stage).toBe(delivered.final.stage);
+      if (chunked) expect(answer.directive.part).toBe(1);
+    }
+  }, 60_000);
+
+  test("a stateless probe walks an authenticated route without publishing", () => {
+    const proj = project();
+    inflateOrg(proj);
+    const first = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]);
+    expect(first.directive.kind).toBe("load-steering");
+    expect(first.directive.parts ?? 0).toBeGreaterThan(1);
+    const before = treeDigest(join(proj, "aidlc"));
+    const probeEnv = { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" };
+    let current = first.directive;
+    let hops = 0;
+    while (current.kind === "load-steering") {
+      expect(current.part).toBe(hops + 1);
+      current = invoke(proj, "continue", [current.receipt ?? ""], probeEnv).directive;
+      hops += 1;
+      expect(hops).toBeLessThan(100);
+    }
+    expect(current.kind).toBe("run-stage");
+    expect(current.stage).toBe(first.directive.stage);
+    expect(first.directive.parts).toBe(hops);
+    expect(treeDigest(join(proj, "aidlc"))).toEqual(before);
+  }, 30_000);
+
   // Old property: a rule edited mid-delivery errored "rules changed ... Run a
   // fresh `next`". New property: the receipt names a bundle that no longer
   // exists, so the answer is part 1 of the CURRENT bundle under a new receipt,
@@ -1109,6 +1230,9 @@ describe("t248 deterministic steering delivery", () => {
     const args = ["--scope", "mvp", "--stage", "intent-capture"];
     const statelessFirst = invoke(stateless, "next", args);
     expect(statelessFirst.directive.kind).toBe("load-steering");
+    const marker = readMarker(statelessMarkerPath(stateless));
+    expect(marker.steering_payload_receipt).toBe(statelessFirst.directive.receipt);
+    expect(invoke(stateless, "continue", [statelessFirst.directive.receipt ?? ""]).directive.part).toBe(2);
     for (const wrong of [
       flipLastChar(statelessFirst.directive.receipt ?? ""),
       "not-a-receipt",

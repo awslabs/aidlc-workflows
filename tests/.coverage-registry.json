@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1118,
+    "total": 1125,
     "enumeratedByClass": {
-      "function": 795,
+      "function": 802,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -2259,6 +2259,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearGuardSwitchRequest",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:clearKiroIdeLegacyPlanApprovalHost",
       "minMechanism": "none",
       "coveredBy": [
@@ -3757,6 +3764,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardSwitchAuthority",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardSwitchRefusal",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardTerminalAskForRefusal",
       "minMechanism": "none",
       "coveredBy": [
@@ -4567,6 +4588,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:latestLedgerSession",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5705,6 +5733,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseTypedGuardSwitches",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseUnitSourceListing",
       "minMechanism": "none",
       "coveredBy": [
@@ -6088,6 +6123,13 @@
     {
       "unitClass": "function",
       "unitId": "function:readCurrentSessionId",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readGuardSwitchRequest",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -6515,6 +6557,13 @@
     {
       "unitClass": "function",
       "unitId": "function:recordHookDrop",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordTypedGuardSwitchRequest",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

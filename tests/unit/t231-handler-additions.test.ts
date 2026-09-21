@@ -4,17 +4,12 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  engineTouchMarkerPath,
-  humanTurnMarkerPath,
-  markEngineTouch,
-  markHumanTurn,
-} from "../../core/tools/aidlc-lib.ts";
-import {
+  AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
@@ -37,12 +32,15 @@ const NO_STATE_MESSAGE =
 const RENAME_NOTICE =
   "Change Control is now Guard Policy (--guard-policy, config key guard-policy, scope key guard_policy, " +
   "memory heading ## Guard Policy). The old names still work in this release and are removed in the next minor.";
+const FENCE_SESSION = "t231-fence-session";
 /** Every fence kill switch held at "0" so the test host's environment cannot lower a fence. */
 const FENCE_ENV_CLEAR = {
   AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
   AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "0",
   AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "0",
   AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+  AIDLC_SESSION_OVERRIDE: FENCE_SESSION,
+  AIDLC_UNATTENDED: "0",
 };
 
 function renameNotices(stream: string): number {
@@ -97,6 +95,18 @@ function run(cmd: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): RunR
   const stdout = result.stdout ?? "";
   const stderr = result.stderr ?? "";
   return { status: result.status ?? -1, stdout, stderr, out: stdout + stderr };
+}
+
+function recordHumanPrompt(project: string, prompt: string): void {
+  const result = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+    cwd: project,
+    env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: project },
+    input: JSON.stringify({
+      hook_event_name: "UserPromptSubmit", cwd: project, session_id: FENCE_SESSION, prompt,
+    }),
+    encoding: "utf-8",
+  });
+  expect(result.status, result.stderr).toBe(0);
 }
 
 function utility(args: string[], project: string, extraEnv: NodeJS.ProcessEnv = {}): RunResult {
@@ -170,11 +180,7 @@ describe("t231 config get/list/set handlers", () => {
 
   test("one config-change exposes all eleven settings through get and both list formats", () => {
     const project = stateProject();
-    markEngineTouch(project);
-    markHumanTurn(project);
-    const base = Math.floor(Date.now() / 1000) - 120;
-    utimesSync(engineTouchMarkerPath(project), base, base);
-    utimesSync(humanTurnMarkerPath(project), base + 60, base + 60);
+    recordHumanPrompt(project, "/aidlc --guard-policy relaxed --guard.state-transition off");
     const changed = utility([
       "config-change", "--depth", "minimal", "--test-strategy", "comprehensive",
       "--review", "advisory", "--guard-policy", "relaxed", "--sensors", "off",
@@ -283,11 +289,7 @@ describe("t231 config get/list/set handlers", () => {
     (fence) => {
       const project = stateProject();
       const key = `guard.${fence}`;
-      markEngineTouch(project);
-      markHumanTurn(project);
-      const base = Math.floor(Date.now() / 1000) - 120;
-      utimesSync(engineTouchMarkerPath(project), base, base);
-      utimesSync(humanTurnMarkerPath(project), base + 60, base + 60);
+      recordHumanPrompt(project, `/aidlc config set ${key} off`);
       const lowered = dispatcher(["engine", "config", "set", key, "off"], project, FENCE_ENV_CLEAR);
       expect(lowered.status, lowered.stderr).toBe(0);
       expect(stateField(project, "Guards Off")).toBe(`${fence} (set by you)`);

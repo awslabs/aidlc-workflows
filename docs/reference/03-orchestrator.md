@@ -387,6 +387,21 @@ sequenceDiagram
     O->>O: 6. Transition tasks, route to next stage
 ```
 
+### Steering continuation recovery
+
+Every stored `steering_payload` on a `load-steering` or `run-stage` marker has a
+`steering_payload_receipt`, the payload's MAC under the local key. Outside a
+tracked Copilot attempt, a `continue` receipt that matches no current part falls
+back to current routing. Stateful workflows route from their state file
+regardless of the marker's route hint. Stateless runs replay the stored scope,
+stage, and single-run flag only when the stored receipt verifies. Edited route
+fields, or a legacy marker without that receipt, supply no trusted route: with
+no state file, the engine returns an error directive saying the receipt matched
+no current part and the stored route could not be verified. Issue a fresh
+`next --scope <scope> --stage <stage>`, adding `--single` if it was a single run.
+A stale or superseded receipt under a tracked Copilot attempt keeps its error
+path. See [Rule delivery and the continuation cursor](06-hooks-and-tools.md#rule-delivery-and-the-continuation-cursor).
+
 ### Inline Execution
 
 Inline stages run directly in the orchestrator conversation. The user can interact with the stage in real time. Twenty-nine of 33 stages are inline; the other four are dispatched (practices-discovery and code-generation subagents, reverse-engineering pipeline, user-stories mob).

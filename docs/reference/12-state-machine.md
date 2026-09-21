@@ -538,16 +538,35 @@ relevant policy. An invalid memory `Mode:` is a validation error naming the file
 and the three allowed values when read; a governed check that meets no input
 change reads nothing.
 
-An explicit `--guard-policy relaxed` or `--guard-policy off` under a memory
-layer's `Mode: strict` refuses the entire command, including other setting flags
-and any scope change, and names the memory file. Explicit strict and unrelated
-settings remain allowed. Scope-owned Guard Policy and ceremony values follow the
-new scope even under that memory policy, which still controls the effective
-value. Changed stored values or sources are audited with scope provenance;
-explicit human overrides and absent legacy rows are preserved. Explicit Guard
-Policy and ceremony flags store `<value> (set by you)`. A same-value source
-change still counts as a change; `review adversarial` clears `Review Override`
-to an empty string.
+An explicit `--guard-policy relaxed`, `--guard-policy off`, or
+`--guard.<fence> off` under a memory layer's `Mode: strict` refuses the entire
+command, including other setting flags and any scope change, and names the
+memory file. Explicit strict, turning a fence `on`, and unrelated settings
+remain allowed. Memory-held strict also forces any previously lowered fence
+back on while that line stands, unless a machine-wide kill switch takes
+precedence. The persisted `Guards Off` entry remains and takes effect again
+only after the memory line no longer holds strict. Scope-owned Guard Policy
+and ceremony values follow the new scope even under that memory policy, which
+still controls the effective value. Changed stored values or sources are audited
+with scope provenance; explicit human overrides and absent legacy rows are
+preserved. Explicit Guard Policy and ceremony flags store `<value> (set by you)`.
+A same-value source change still counts as a change; `review adversarial`
+clears `Review Override` to an empty string.
+
+After the memory-strict check, every explicit fence or policy lowering in
+`config-change` or `scope-change` needs the person's exact recorded selection
+before any settings or scope changes are written. Policy lowering, including
+`intent create --guard-policy relaxed|off`, requires a typed switch such as
+`/aidlc --guard-policy relaxed` or `guard policy relaxed`, with the requested
+value. Fence lowering requires either `/aidlc config set guard.<fence> off`
+typed in that session or the matching recorded `lower-fence` recovery selection.
+The human-turn hook records a typed request before its state-file gate, bound
+to the session and active intent UUID or `bare-space`. A later typed switch
+replaces it; unrelated prompts, including composer approval, leave it intact.
+The successful setter, including an already-set no-op, consumes it once.
+An unrelated human turn opens nothing, and `AIDLC_UNATTENDED=1` never accepts
+lowering even with a request on disk. Scope defaults do not need this key;
+`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` bypasses it for an attended run.
 
 The retired spellings resolve for one release and are never written: the scope
 key `change_control`, the state field `Change Control` (renamed in place by
@@ -1034,6 +1053,19 @@ not an oversight: see the cache-layer projection the active directive binds to,
 and the contributor question in
 [`11-contributing.md`](11-contributing.md#authority-policy).
 
+**Continuation route hints are authenticated.** Every `load-steering` or
+`run-stage` marker that stores `steering_payload` also records
+`steering_payload_receipt`, the payload's MAC under the local key. Outside a
+tracked Copilot attempt, when `continue` matches no current part, a stateful
+workflow routes from its state file as a fresh `next` would, regardless of the
+stored hint. A stateless run replays the stored scope, stage, and single-run
+flag only when that recorded receipt verifies. Edited route fields or a legacy
+marker without the receipt supply no trusted route. With no state file and no
+verified route, an error directive says the receipt matched no current part
+and the stored route could not be verified, and asks for a fresh
+`next --scope <scope> --stage <stage>` with `--single` if it was a single run.
+Tracked Copilot attempts retain their stale-or-superseded receipt error path.
+
 ### Guard admission and recovery asks
 
 A refusal handled by shared guard admission returns a typed contract: the code,
@@ -1052,6 +1084,17 @@ is the one remedy a refusal adds LAST, and only when the refusal is a fence
 holding: it turns that single fence off for this piece of work through
 `config-change --guard.<fence> off`, so the way past a fence is printed beside
 the thing that stopped the human instead of living on a reference page.
+
+The setter accepts that remedy only as the person's recorded exact selection,
+not because a human spoke after the last engine directive. `guardSwitchAuthority`
+requires the active marker to bind current state (`state_present: true`), have
+`kind: "ask"`, `ask_type: "guard-recovery"`, `delivery: "consumed"`, and
+`needs_rehydrate: false`. Its `guard_recovery_response` must be `ready`, have no
+`feedback_sha256`, and select `lower-fence`; exactly one remedy with that `op`
+must carry `{ kind: "lower-fence", fence }` for the requested fence. The state
+write retires the marker's digest binding. This selection cannot lower the
+policy word. A typed per-session switch is the other authority, and memory-held
+strict and unattended refusals apply to both.
 
 **Operations and interaction.** Emitted remedies carry `interaction`, an
 `action` for presentation, `requiresHuman`, and `executableNow`. The conductor
@@ -1099,11 +1142,12 @@ verify`, both with `--unit <unit>` or `--stage-level`, identically in both insta
 modes apart from the prefix.
 
 The conductor must obtain human consent before aborting a Bolt. This
-conductor-prose-obtained consent remains the trust boundary: the Plan Approval
-hook's exact abort and fence-switch exceptions preserve source/native
-trusted-tool parity but do not authenticate consent. Direct refusal asks do not
-publish the selection marker used by the separately checked native restart
-continuation. A mistaken
+conductor-prose-obtained consent remains the abort trust boundary. The Plan
+Approval hook's exact abort and fence-switch exceptions preserve source/native
+trusted-tool parity; they do not themselves authenticate consent. The fence
+setter separately requires the exact typed switch or recorded recovery
+selection described above. A direct refusal without a published selection
+marker supplies no recovery-selection authority. A mistaken
 abort with the unchanged `--discard` argv now parks available files and review
 evidence rather than irretrievably deleting them. With a restorable descriptor, the
 returned `restore_operation` selects the exact saved slug, stamp, and repository,

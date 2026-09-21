@@ -528,7 +528,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
   productionTest("a refused verdict announces persisted acceptance so its retry does not lose the notice", () => {
     const p = new Journey("verdict-refusal-keeps-notice");
     succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
-    p.humanPrompt("Set Guard Policy relaxed");
+    p.humanPrompt("/aidlc --guard-policy relaxed");
     succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
     p.confirm();
     p.write(p.artifact, artifactBody());
@@ -552,7 +552,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
   productionTest("terminal review records relaxed summary acceptance and announces it once", () => {
     const p = new Journey("verdict-relaxed-acceptance");
     succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
-    p.humanPrompt("Set Guard Policy relaxed");
+    p.humanPrompt("/aidlc --guard-policy relaxed");
     succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
     const original = p.confirm();
     p.write(p.artifact, artifactBody());
@@ -577,7 +577,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
   productionTest("terminal review retains its pending request when relaxed acceptance cannot be recorded", () => {
     const p = new Journey("verdict-acceptance-ledger-failure");
     succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
-    p.humanPrompt("Set Guard Policy relaxed");
+    p.humanPrompt("/aidlc --guard-policy relaxed");
     succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
     p.confirm();
     p.write(p.artifact, artifactBody());
