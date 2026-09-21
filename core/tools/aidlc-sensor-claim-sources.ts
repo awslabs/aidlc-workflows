@@ -972,14 +972,6 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 	let listItem = 0;
 
 	for (const line of lines) {
-		const explicitList = explicitListContainer(line, listItem + 1);
-		if (explicitList) {
-			listItem++;
-			activeList = explicitList.active;
-			result.push(explicitList.line);
-			continue;
-		}
-
 		if (line.trim().length === 0) {
 			result.push({
 				text: line,
@@ -989,6 +981,8 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 			continue;
 		}
 
+		// A marker meeting the active item's content indent is nested in that
+		// item, not the start of a new list.
 		if (activeList) {
 			// Continue the deepest item whose raw requirements this line meets;
 			// inner items close when only an outer prefix matches.
@@ -1026,6 +1020,14 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 				});
 				continue;
 			}
+		}
+
+		const explicitList = explicitListContainer(line, listItem + 1);
+		if (explicitList) {
+			listItem++;
+			activeList = explicitList.active;
+			result.push(explicitList.line);
+			continue;
 		}
 
 		activeList = null;

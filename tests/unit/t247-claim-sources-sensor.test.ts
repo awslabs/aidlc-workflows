@@ -983,6 +983,8 @@ describe("t247 claim-sources sensor", () => {
     ["an exited inner quote in a list-item processing instruction", "- > <?php\n  [Q1]: /url"],
     ["an exited inline nested list-item HTML block", "- - item\n    <?php\n  [Q1]: /url"],
     ["an exited multiline nested list-item HTML block", "- item\n  - nested\n    <?php\n  [Q1]: /url"],
+    ["an outer-item div following a nested item", "- outer\n  - nested\n  <div>\n[Q1]: /url"],
+    ["an inner-item div following an indented nested marker", "- outer\n  - nested\n    <div>\n  [Q1]: /url"],
   ] as const) {
     test(`a reference definition after ${label} resolves document-wide`, () => {
       const dir = makeStageDir();
