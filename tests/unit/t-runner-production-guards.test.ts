@@ -17,6 +17,7 @@ import {
   RunnerArgsError,
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
+import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 
 // The runner sets the profile marker; a direct `bun test` launch has none to assert.
 const runnerTest = process.env[GUARD_PROFILE_ENV] === undefined ? test.skip : test;
@@ -136,6 +137,7 @@ function runnerFixture(files: Record<string, string>) {
     "tests/gen-coverage-registry.ts",
     "tests/harness/tui-runtime.ts",
     "tests/harness/tui-record-file.ts",
+    "tests/harness/tui-windows-private-file.ts",
     "tests/lib/e2e-plan.ts",
     "tests/lib/e2e-scheduler.ts",
     "tests/lib/e2e-workers.ts",
@@ -146,6 +148,7 @@ function runnerFixture(files: Record<string, string>) {
     mkdirSync(dirname(join(root, file)), { recursive: true });
     copyFileSync(join(REPO_ROOT, file), join(root, file));
   }
+  assertRunnerFixtureImports(root);
   for (const [file, source] of Object.entries(files)) {
     mkdirSync(dirname(join(root, "tests", file)), { recursive: true });
     writeFileSync(join(root, "tests", file), source);

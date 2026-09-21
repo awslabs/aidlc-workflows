@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { createE2eTemporaryRoot, prepareE2eWorkers } from "../lib/e2e-workers.ts";
 import { captureTestSource } from "../lib/test-source.ts";
 import { selectedTuiBackend } from "../harness/tui-runtime.ts";
+import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 
 const SOURCE = resolve(import.meta.dir, "../..");
 const roots: string[] = [];
@@ -40,6 +41,7 @@ function fixture(files: Record<string, string>): string {
   for (const path of [
     "tests/run-tests.ts", "tests/run-tests.sh", "tests/gen-coverage-registry.ts",
     "tests/harness/claude-gate.ts", "tests/harness/tui-runtime.ts", "tests/harness/tui-record-file.ts",
+    "tests/harness/tui-windows-private-file.ts",
     "tests/harness/runner-profile.ts",
     "tests/lib/bun-junit-to-meta.ts", "tests/lib/test-sharding.ts",
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
@@ -47,6 +49,7 @@ function fixture(files: Record<string, string>): string {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     copyFileSync(join(SOURCE, path), join(root, path));
   }
+  assertRunnerFixtureImports(root);
   mkdirSync(join(root, "tests", "e2e"), { recursive: true });
   for (const [name, body] of Object.entries(files)) writeFileSync(join(root, "tests", "e2e", name), body);
   writeFileSync(join(root, ".gitignore"), "tests/logs/\nnode_modules/\ndist/\ndist-release/\n");
@@ -115,6 +118,12 @@ function matrixPlan(root: string, options: {
 }
 
 describe("isolated e2e runner contracts", () => {
+  test("copied runners reject missing platform-gated imports on every host", () => {
+    const root = fixture({ "t-proof.test.ts": pass });
+    rmSync(join(root, "tests/harness/tui-windows-private-file.ts"));
+    expect(() => assertRunnerFixtureImports(root)).toThrow("imports missing");
+  });
+
   test("unfiltered deterministic deep tiers skip the closed Claude preflight without failing", () => {
     const root = fixture({ "t-deterministic.test.ts": pass });
     const integration = join(root, "tests", "integration");

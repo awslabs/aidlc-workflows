@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
 import { createE2eTemporaryRoot } from "../lib/e2e-workers.ts";
+import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
+import { readJUnitEvidence } from "../lib/e2e-plan.ts";
 
 const SOURCE = resolve(import.meta.dir, "../..");
 const roots: string[] = [];
@@ -34,11 +36,13 @@ async function fixture(files: Record<string, string>, preparing = false): Promis
   for (const path of [
     "tests/run-tests.ts", "tests/run-tests.sh", "tests/gen-coverage-registry.ts",
     "tests/harness/claude-gate.ts", "tests/harness/tui-runtime.ts", "tests/harness/tui-record-file.ts",
+    "tests/harness/tui-windows-private-file.ts",
     "tests/harness/runner-profile.ts",
   ]) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     cpSync(join(SOURCE, path), join(dir, path));
   }
+  assertRunnerFixtureImports(dir);
   for (const [path, body] of Object.entries(files)) {
     mkdirSync(dirname(join(dir, "tests", path)), { recursive: true });
     writeFileSync(join(dir, "tests", path), body);
@@ -296,7 +300,10 @@ test("owned descendant",async()=>{
         expect(existsSync(join(runner.log(), `${name}.junit.xml`))).toBe(true);
       }
       expect(readFileSync(join(runner.log(), "unit-t19.log"), "utf8")).toContain("UNIT_ONLY");
-      expect(readFileSync(join(runner.log(), "integration-t19.log"), "utf8")).toContain("integration preflight succeeds");
+      const preflight = readJUnitEvidence(readFileSync(join(runner.log(), "integration-t19.junit.xml"), "utf8"));
+      expect(preflight.complete).toBe(true);
+      if (!preflight.complete) throw new Error(preflight.error);
+      expect(preflight.testcases).toMatchObject([{ name: "integration preflight succeeds", outcome: "PASS" }]);
       expect(readFileSync(join(runner.log(), "failures.txt"), "utf8")).toContain("UNIT_ONLY");
       expect(readFileSync(join(runner.log(), "summary.txt"), "utf8")).toContain("Test files: 3");
       expect(existsSync(join(runner.log(), "t20.log"))).toBe(true);

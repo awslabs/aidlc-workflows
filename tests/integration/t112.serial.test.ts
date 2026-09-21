@@ -45,6 +45,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
+import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 const REAL_RUNNER = join(import.meta.dir, "..", "run-tests.sh");
 const REAL_RUNNER_TS = join(import.meta.dir, "..", "run-tests.ts");
 const REAL_PROFILE = join(import.meta.dir, "..", "harness", "runner-profile.ts");
@@ -54,6 +55,7 @@ const REAL_PLAN = join(import.meta.dir, "..", "lib", "e2e-plan.ts");
 const REAL_REGISTRY = join(import.meta.dir, "..", "gen-coverage-registry.ts");
 const REAL_PROCESS = join(import.meta.dir, "..", "lib", "e2e-process.ts");
 const REAL_RECORD = join(import.meta.dir, "..", "harness", "tui-record-file.ts");
+const REAL_WINDOWS_RECORD = join(import.meta.dir, "..", "harness", "tui-windows-private-file.ts");
 const REAL_WORKERS = join(import.meta.dir, "..", "lib", "e2e-workers.ts");
 const REAL_RUNTIME = join(import.meta.dir, "..", "harness", "tui-runtime.ts");
 
@@ -115,8 +117,10 @@ function driveRunner(
   copyFileSync(REAL_REGISTRY, join(testsDir, "gen-coverage-registry.ts"));
   copyFileSync(REAL_PROCESS, join(libDir, "e2e-process.ts"));
   copyFileSync(REAL_RECORD, join(harnessDir, "tui-record-file.ts"));
+  copyFileSync(REAL_WINDOWS_RECORD, join(harnessDir, "tui-windows-private-file.ts"));
   copyFileSync(REAL_WORKERS, join(libDir, "e2e-workers.ts"));
   copyFileSync(REAL_RUNTIME, join(harnessDir, "tui-runtime.ts"));
+  assertRunnerFixtureImports(root);
 
   // Distinct numeric stems keep glob ordering deterministic and avoid collisions
   // between the fail/pass families.

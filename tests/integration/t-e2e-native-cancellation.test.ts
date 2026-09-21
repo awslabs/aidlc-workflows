@@ -14,6 +14,8 @@ import { resolveTuiRuntime } from "../harness/tui-runtime.ts";
 import {
   cleanupE2eTransports, type E2eWorker, e2eWorkerEnvironment, finishE2eTemporaryFiles,
 } from "../lib/e2e-workers.ts";
+import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
+import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord } from "../harness/tui-record-file.ts";
 
 const SOURCE = resolve(import.meta.dir, "../..");
 const supported = process.platform === "linux" || process.platform === "win32";
@@ -213,10 +215,12 @@ function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witne
     "tests/harness/tui-bun-backend.ts", "tests/harness/tui-bun-process.ts",
     "tests/harness/tui-process-identity.ts", "tests/harness/tui-screen.ts",
     "tests/harness/tui-record-file.ts",
+    "tests/harness/tui-windows-private-file.ts",
   ]) {
     mkdirSync(dirname(join(fixture, path)), { recursive: true });
     copyFileSync(join(SOURCE, path), join(fixture, path));
   }
+  assertRunnerFixtureImports(fixture);
   let dependencies = SOURCE;
   while (!existsSync(join(dependencies, "node_modules"))) {
     if (dirname(dependencies) === dependencies) throw new Error("native cancellation test needs installed dependencies");
@@ -497,15 +501,17 @@ await createBunBackend({ fixtureCwd() {
     const value = await context("delayed-daemon");
     const session = "delayed-daemon";
     const paths = bunSessionPaths(session, value.env);
-    mkdirSync(paths.directory);
+    ensurePrivateRoot(paths.directory);
+    const directoryIdentity = privateDirectoryIdentity(paths.directory);
     // Reproduce the durable state left when a starter exits immediately after
     // spawning. Delay only daemon entry; all IPC, supervision and retirement use
     // the current native implementation and the published ownership token.
-    writeFileSync(paths.record, JSON.stringify({
+    publishTuiRecord(paths.record, {
       schema: 1, backend: "bun", session, token: randomUUID(), endpoint: paths.endpoint,
+      directoryIdentity,
       phase: "starting", cwd: value.env.TEMP, command: [process.execPath, target()],
       fixtureCwd: null, width: 80, height: 24,
-    }), { mode: 0o600 });
+    }, directoryIdentity);
     const ready = join(scratch(), "daemon-waiting");
     const release = join(scratch(), "release-daemon");
     const program = join(scratch(), "delayed-daemon.ts");
@@ -554,12 +560,14 @@ await runBunDaemon(${JSON.stringify(paths.directory)});
   test("unconfirmed published startup is bounded and prevents fixture deletion or reuse", async () => {
     const value = await context("unconfirmed");
     const paths = bunSessionPaths("unconfirmed", value.env);
-    mkdirSync(paths.directory);
+    ensurePrivateRoot(paths.directory);
+    const directoryIdentity = privateDirectoryIdentity(paths.directory);
     const record = {
       schema: 1, backend: "bun", session: "unconfirmed", token: randomUUID(),
+      directoryIdentity,
       endpoint: paths.endpoint, phase: "starting", cleanupComplete: false,
     };
-    writeFileSync(paths.record, JSON.stringify(record), { mode: 0o600 });
+    publishTuiRecord(paths.record, record, directoryIdentity);
     try {
       const began = Date.now();
       await expect(cleanupE2eTransports(value.worker, value.env)).rejects.toThrow("unconfirmed");
