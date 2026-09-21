@@ -988,7 +988,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
-  test("5b: subagent dispatch warns on incomplete rules (proceeds) and accepts exact rules", () => {
+  test("5b: subagent dispatch silently uses native preload for incomplete briefs and accepts exact rules", () => {
     const dir = scratchProject(true);
     try {
       cpSync(
@@ -1014,20 +1014,30 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         },
       });
 
-      // Incomplete brief: advisory warning, dispatch PROCEEDS (exit 0). A
-      // block-with-retry contract deadlocked live (byte-exact paste never
-      // converges); Kiro agents preload the memory tree natively, so the
-      // brief bundle is redundant defense there, not the delivery channel.
+      // Native preload is the delivery channel, so an incomplete brief is
+      // expected and silent. Its diagnostic is opt-in, not a retry warning.
       const incomplete = runAdapter(
         dir,
         "deliver-stage-rules",
         payload(basePrompt),
       );
       expect(incomplete.code, incomplete.stderr).toBe(0);
-      expect(incomplete.stderr).toContain(
-        "did not carry the active-stage rule bundle verbatim",
+      expect(incomplete.stdout).toBe("");
+      expect(incomplete.stderr).toBe("");
+      const debugLog = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "hook-debug.log");
+      const traced = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        payload(basePrompt),
+        [],
+        { AIDLC_HOOK_DEBUG: "1" },
       );
-      expect(incomplete.stderr).toContain("The dispatch proceeded");
+      expect(traced.code, traced.stderr).toBe(0);
+      expect(traced.stdout).toBe("");
+      expect(traced.stderr).toBe("");
+      expect(readFileSync(debugLog, "utf-8")).toContain(
+        'target="deliver-stage-rules" transport="native-preload"',
+      );
 
       const proposed = runDispatchCore(dir, payload(basePrompt));
       expect(proposed.code, proposed.stderr).toBe(0);
@@ -1049,6 +1059,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       );
       expect(complete.code, complete.stderr).toBe(0);
       expect(complete.stdout).toBe("");
+      expect(complete.stderr).toBe("");
 
       const direct = runAdapter(dir, "deliver-stage-rules", {
         ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
@@ -1056,9 +1067,8 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         tool_input: { name: "aidlc-product-agent", prompt: basePrompt },
       });
       expect(direct.code).toBe(0);
-      expect(direct.stderr).toContain(
-        "did not carry the active-stage rule bundle verbatim",
-      );
+      expect(direct.stdout).toBe("");
+      expect(direct.stderr).toBe("");
 
       const blankPrompt = runAdapter(dir, "deliver-stage-rules", {
         ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
@@ -1072,9 +1082,8 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         },
       });
       expect(blankPrompt.code, blankPrompt.stderr).toBe(0);
-      expect(blankPrompt.stderr).toContain(
-        "did not carry the active-stage rule bundle verbatim",
-      );
+      expect(blankPrompt.stdout).toBe("");
+      expect(blankPrompt.stderr).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

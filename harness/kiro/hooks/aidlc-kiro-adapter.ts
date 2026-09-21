@@ -48,6 +48,7 @@ import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
   hasOpenGate,
+  hookDebug,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
@@ -831,11 +832,10 @@ if (target === "review-freeze") {
 // converged). Kiro is also the ONE harness where the rules invariant already
 // holds without the brief: every delegated agent's config preloads the full
 // active memory tree via its `resources` glob, so the worker holds the rules
-// before it reads the brief. Run the shared augmenter as an OBSERVER: a
-// complete brief passes silently; an incomplete one proceeds WITH a warning
-// (visible in the transcript and traces), never a block. The strict rewrite
-// path stays on the harnesses that support updatedInput (Claude, Codex,
-// opencode).
+// before it reads the brief. Run the shared augmenter as an OBSERVER: complete
+// and preload-served incomplete briefs pass silently; the latter logs only
+// through opt-in hookDebug. Core exit 2 still blocks with repair guidance;
+// exit 3 remains an advisory. Other harnesses keep verbatim brief delivery.
 if (target === "deliver-stage-rules") {
   const dispatch = kiroDispatch(kiro);
   if (dispatch === null) return 0;
@@ -875,10 +875,11 @@ if (target === "deliver-stage-rules") {
     return 0;
   }
   if ((r.stdout?.toString().trim() ?? "") !== "") {
-    process.stderr.write(
-      "Advisory: the AIDLC subagent brief did not carry the active-stage rule bundle verbatim. " +
-        "The dispatch proceeded - Kiro agents preload the active memory tree natively - but keep " +
-        "briefs aligned with the delivered load-steering content.\n",
+    hookDebug(
+      projectDir,
+      "kiro-adapter",
+      "Incomplete brief served by native active-space memory preload",
+      { target, transport: "native-preload" },
     );
   }
   return 0;
