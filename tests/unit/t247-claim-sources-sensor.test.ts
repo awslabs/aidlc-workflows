@@ -967,6 +967,61 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings).toEqual([]);
   });
 
+  for (const [label, content] of [
+    ["a same-line HTML declaration", "<!DOCTYPE html>\n[Q1]: /url"],
+    ["an HTML declaration interrupting prose", "Some prose\n<!DOCTYPE html>\n[Q1]: /url"],
+    ["a multiline processing instruction", "<?php\n?>\n[Q1]: /url"],
+    ["an indented-code list item", "-     code\n[Q1]: /url"],
+    ["an exited block quote", "> prose\n2. [Q1]: /url"],
+  ] as const) {
+    test(`a reference definition after ${label} resolves document-wide`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\n${content}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "## Problem Statement: claim block has no source tag",
+      );
+    });
+  }
+
+  for (const [label, content] of [
+    ["a blank-terminated HTML block", "<div>\n[Q1]: /url\n</div>"],
+    ["a same-depth block quote", "> prose\n> 2. [Q1]: /url"],
+  ] as const) {
+    test(`a definition-shaped line in ${label} stays literal`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\n${content}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass, result.findings.join("\n")).toBe(true);
+      expect(result.findings).toEqual([]);
+    });
+  }
+
   // GFM §6.9: a table continues until a blank line or another block structure.
   test("a definition-shaped line directly under a table row is a table row, not a definition", () => {
     const dir = makeStageDir();

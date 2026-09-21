@@ -1000,6 +1000,13 @@ const HTML_BLOCK_RE = new RegExp(
 	`^(?:<(?:script|pre|style|textarea)(?:[ \\t>]|$)|<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:${HTML_BLOCK_TAGS})(?:[ \\t\\n\\f\\r\\/>]|$))`,
 	"i",
 );
+const HTML_FINITE_BLOCKS: ReadonlyArray<readonly [RegExp, RegExp]> = [
+	[/^<(?:script|pre|style|textarea)(?:[ \t>]|$)/i, /<\/(?:script|pre|style|textarea)>/i],
+	[/^<!--/, /-->/],
+	[/^<\?/, /\?>/],
+	[/^<!\[CDATA\[/, /\]\]>/],
+	[/^<![A-Za-z]/, />/],
+];
 
 function isThematicBreak(line: string): boolean {
 	const content = firstContent(line);
@@ -1208,11 +1215,19 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 	const definitionLines = new Set<number>();
 	let open = false;
 	let previousContext = "";
+	let htmlEnd: RegExp | null = null;
 
 	// CommonMark §4.7: a link reference definition cannot interrupt a paragraph.
 	// A definition-shaped line directly under prose is visible lazy continuation.
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
+		if (htmlEnd) {
+			if (htmlEnd.test(line.text)) {
+				htmlEnd = null;
+				open = false;
+			}
+			continue;
+		}
 		const content = firstContent(line.text);
 		if (content === null) {
 			open = false;
@@ -1229,7 +1244,7 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 				continuation =
 					ordered !== null &&
 					Number(ordered[1]) !== 1 &&
-					leadingQuoteDepth(line.context) <= leadingQuoteDepth(previousContext) &&
+					leadingQuoteDepth(line.context) === leadingQuoteDepth(previousContext) &&
 					!contextParts(previousContext).some((part) => part.startsWith("list#"));
 				if (!continuation) {
 					open = false;
@@ -1238,6 +1253,36 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			}
 		} else {
 			previousContext = line.context;
+		}
+
+		const rest = line.text.slice(content.index);
+		if (content.column <= 3) {
+			// CommonMark §4.6: kinds 1–5 end at their delimiter, not a blank line.
+			const finite = HTML_FINITE_BLOCKS.find(([start]) => start.test(rest));
+			if (finite) {
+				if (finite[1].test(rest.slice(1))) {
+					open = false;
+				} else {
+					htmlEnd = finite[1];
+				}
+				continue;
+			}
+			if (HTML_BLOCK_RE.test(rest)) {
+				open = true;
+				continue;
+			}
+			if (
+				!open &&
+				/^(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$/.test(rest)
+			) {
+				open = true;
+				continue;
+			}
+			const codeItem = /^(?:([-*+])|(\d{1,9})[.)]) {5,}\S/.exec(rest);
+			if (codeItem && (!open || codeItem[1] !== undefined || Number(codeItem[2]) === 1)) {
+				open = false;
+				continue;
+			}
 		}
 
 		if (!open) {
@@ -1253,7 +1298,6 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			}
 		}
 
-		const rest = line.text.slice(content.index);
 		if (
 			content.column <= 3 &&
 			(/^#{1,6}(?:[ \t]+|$)/.test(rest) ||
