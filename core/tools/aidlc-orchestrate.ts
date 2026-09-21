@@ -7876,7 +7876,22 @@ interface ReportFlags {
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
   overrideBlockingSensors?: boolean;
   unit?: string; // --unit <name>: required for team-owned per-unit gates
+  parseError?: string; // an argument report cannot act on (see parseReportFlags)
 }
+
+// Every argument report accepts. Listed in the refusal below so a mistyped
+// flag points at the real one instead of vanishing.
+const REPORT_FLAGS = [
+  "--result",
+  "--stage",
+  "--unit",
+  "--user-input",
+  "--reason",
+  "--reject-finding",
+  "--skeleton-stance",
+  "--single",
+  "--override-blocking-sensors",
+] as const;
 
 // Extract report's flags. --result is the verdict; --user-input carries the
 // exact offered choice, while --reason carries rejection feedback or an early
@@ -7884,8 +7899,23 @@ interface ReportFlags {
 // --skeleton-stance carries the conductor's classified walking-skeleton stance
 // (the classify round-trip): it does NOT commit a transition — it records the
 // stance so the next `next` resolves the deferred gate.
+//
+// Anything else is refused through parseError rather than dropped. A dropped
+// argument is the worst outcome available: a report carrying a mistyped flag
+// (or a flag whose value never arrived) would otherwise commit a DIFFERENT
+// transition than the one the operator wrote, silently — a rejection reported
+// without its feedback, or a per-unit gate closed against the wrong unit.
 function parseReportFlags(args: string[]): ReportFlags {
   const flags: ReportFlags = {};
+  // Keep the FIRST problem: it is the one the operator introduced.
+  const refuse = (message: string): void => {
+    flags.parseError ??= message;
+  };
+  const missingValue = (flag: string, value: string): void =>
+    refuse(
+      `report ${flag} requires ${value}, and none followed it. ` +
+        `Re-run the same report with the value supplied.`,
+    );
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--result" && i + 1 < args.length) {
@@ -7914,6 +7944,25 @@ function parseReportFlags(args: string[]): ReportFlags {
       flags.single = true;
     } else if (a === "--override-blocking-sensors") {
       flags.overrideBlockingSensors = true;
+    } else if (a === "--result") {
+      missingValue(a, "an outcome");
+    } else if (a === "--user-input") {
+      missingValue(a, "the offered choice, exactly as it was offered");
+    } else if (a === "--reason") {
+      missingValue(a, "the reason text");
+    } else if (a === "--reject-finding") {
+      missingValue(a, "a finding id");
+    } else if (a === "--skeleton-stance") {
+      missingValue(a, "<on|off|scope-dependent>");
+    } else if (a === "--stage") {
+      missingValue(a, "a stage name");
+    } else if (a === "--unit") {
+      missingValue(a, "a unit name");
+    } else if (a !== "--") {
+      refuse(
+        `report does not accept "${a}". It accepts ${REPORT_FLAGS.join(", ")}. ` +
+          `Rejection feedback belongs in --reason.`,
+      );
     }
   }
   return flags;
@@ -8749,6 +8798,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // a transition), so it always disqualifies the turn from the Stop hook's
   // conversational carve-out. See touchEngineMarker.
   touchEngineMarker(projectDir);
+
+  // An argument report cannot act on stops the report here, before any branch
+  // commits a transition. Refusing costs one corrected re-run; accepting the
+  // report with the argument dropped commits the wrong transition and the
+  // operator has no way to tell.
+  if (flags.parseError) {
+    emit(errorDirective(flags.parseError));
+    return;
+  }
 
   // Runtime state-version guard (see staleStateVersionError): `report` commits a
   // lifecycle transition, so a pre-v8 state must be refused here too — before any

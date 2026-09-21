@@ -284,6 +284,75 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
 });
 
 // ============================================================
+// ARGUMENT REFUSALS — report used to parse its flags with an if/else-if chain
+// that had no final else, so anything it did not recognise vanished without a
+// word and the report committed a DIFFERENT transition than the one that was
+// typed: a rejection with its feedback silently dropped, or a per-unit gate
+// closed against no unit at all. Every argument report cannot act on is now an
+// error directive, before anything commits.
+// ============================================================
+
+describe("t115 report refuses arguments it cannot act on", () => {
+  test("a mistyped flag is named in the refusal and points at the real one", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const stateBefore = readFileSync(statePath(p), "utf-8");
+    const eventsBefore = totalEvents(p);
+    const r = orchestrate(
+      ["report", "--result", "rejected", "--feedback", "the API section is thin"],
+      p,
+    );
+    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain('report does not accept \\"--feedback\\"');
+    expect(r.out).toContain("--reason");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    expect(totalEvents(p)).toBe(eventsBefore);
+  });
+
+  test("a recognised flag whose value never arrived is refused, not dropped", () => {
+    const cases: Array<[string[], string]> = [
+      [["report", "--result"], "report --result requires an outcome"],
+      [
+        ["report", "--result", "rejected", "--reason"],
+        "report --reason requires the reason text",
+      ],
+      [
+        ["report", "--result", "approved", "--user-input"],
+        "report --user-input requires the offered choice",
+      ],
+      [
+        ["report", "--result", "approved", "--stage"],
+        "report --stage requires a stage name",
+      ],
+      [
+        ["report", "--result", "approved", "--unit"],
+        "report --unit requires a unit name",
+      ],
+    ];
+    for (const [args, message] of cases) {
+      const p = projWithState("state-mid-ideation.md");
+      const stateBefore = readFileSync(statePath(p), "utf-8");
+      const r = orchestrate(args, p);
+      expect(r.out, args.join(" ")).toContain('"kind":"error"');
+      expect(r.out, args.join(" ")).toContain(message);
+      expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    }
+  });
+
+  test("a value that looks like a flag is still a value", () => {
+    // --reason "--feedback ..." is a legitimate rejection reason: only an
+    // ABSENT value is refused, otherwise quoting a flag name in feedback would
+    // become unreportable.
+    const p = projWithState("state-mid-ideation.md");
+    const r = orchestrate(
+      ["report", "--result", "rejected", "--reason", "--feedback was ignored"],
+      p,
+    );
+    expect(r.out).not.toContain("report does not accept");
+    expect(r.out).not.toContain("requires the reason text");
+  });
+});
+
+// ============================================================
 // ROUTED SKIP — report owns the justified [S] transition and the route after
 // it. Skip is deliberately resolved before artifact/per-unit/ensemble guards:
 // it is not a completion claim and never emits STAGE_COMPLETED.
