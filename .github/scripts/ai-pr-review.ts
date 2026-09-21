@@ -14,7 +14,6 @@ const MAX_REVIEW_BYTES = 100_000;
 const CURRENT_AI_REVIEWS_FILE = "current-ai-reviews.json";
 const DISCUSSION_FILE = "discussion.json";
 const AI_REVIEW_MARKER = "<!-- ai-pr-review context=";
-const AI_REVIEW_DECISION_MARKER = "<!-- ai-pr-review decision=";
 
 export type Priority = "P0" | "P1" | "P2" | "P3";
 export type FindingCategory =
@@ -26,53 +25,6 @@ export type FindingCategory =
   | "correctness";
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
 export type DiffSide = "LEFT" | "RIGHT";
-export type PullRequestDecision =
-  | { actor: "author"; action: "change"; rationale: string }
-  | { actor: "maintainer"; action: "merge"; rationale: string };
-export type ReviewLabelOutcome =
-  | "started"
-  | "reviewed-change"
-  | "reviewed-merge"
-  | "review-error";
-
-export interface ReviewLabelDefinition {
-  name: string;
-  color: string;
-  description: string;
-}
-
-export const REVIEW_LABELS: readonly ReviewLabelDefinition[] = [
-  {
-    name: "aida:reviewed",
-    color: "1F883D",
-    description: "AIDA successfully reviewed the latest PR state",
-  },
-  {
-    name: "aida:review-error",
-    color: "D1242F",
-    description: "AIDA could not produce a reliable review for the latest PR state",
-  },
-  {
-    name: "next:author",
-    color: "FBCA04",
-    description: "AIDA indicates the PR author needs to act next",
-  },
-  {
-    name: "next:maintainer",
-    color: "0969DA",
-    description: "AIDA indicates a maintainer needs to act next",
-  },
-  {
-    name: "action:change",
-    color: "D93F0B",
-    description: "AIDA indicates changes are required before the PR proceeds",
-  },
-  {
-    name: "action:merge",
-    color: "0E8A16",
-    description: "AIDA considers the PR ready for a maintainer merge decision",
-  },
-] as const;
 
 const FINDING_CATEGORIES: Array<{ value: FindingCategory; heading: string }> = [
   { value: "direction", heading: "Direction" },
@@ -184,7 +136,6 @@ export interface StructuredReview {
       rationale: string;
     };
   };
-  decision: PullRequestDecision;
   findings: Finding[];
   residualRisk: string;
 }
@@ -223,191 +174,6 @@ function gh(args: string[], executable = "gh"): unknown {
     maxBuffer: Number.POSITIVE_INFINITY,
     stdio: ["ignore", "pipe", "pipe"],
   }));
-}
-
-function ghRaw(
-  args: string[],
-  executable = "gh",
-  input?: string,
-): string {
-  return execFileSync(executable, args, {
-    encoding: "utf8",
-    input,
-    maxBuffer: Number.POSITIVE_INFINITY,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-}
-
-export function labelsForOutcome(outcome: ReviewLabelOutcome): string[] {
-  if (outcome === "started") return [];
-  if (outcome === "review-error") return ["aida:review-error"];
-  if (outcome === "reviewed-change") {
-    return ["aida:reviewed", "next:author", "action:change"];
-  }
-  return ["aida:reviewed", "next:maintainer", "action:merge"];
-}
-
-export function outcomeForLabels(labels: string[]): ReviewLabelOutcome {
-  const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
-  const actual = [...new Set(labels.filter(label => managed.has(label)))].sort();
-  for (const outcome of [
-    "review-error",
-    "reviewed-change",
-    "reviewed-merge",
-  ] as const) {
-    const expected = [...labelsForOutcome(outcome)].sort();
-    if (
-      actual.length === expected.length &&
-      actual.every((label, index) => label === expected[index])
-    ) {
-      return outcome;
-    }
-  }
-  return "started";
-}
-
-function pullLabels(pull: Record<string, unknown>): string[] {
-  return Array.isArray(pull.labels)
-    ? pull.labels.map((value, index) =>
-      text(record(value, `pull request labels[${index}]`).name)
-    )
-    : [];
-}
-
-function pullIsEligible(pull: Record<string, unknown>, expectedHead?: string): boolean {
-  const head = record(pull.head, "pull request head");
-  if (expectedHead !== undefined && head.sha !== expectedHead) return false;
-  return pull.state === "open" && pull.draft !== true;
-}
-
-function removeManagedLabels(
-  repository: string,
-  pullRequest: number,
-  labels: string[],
-  ghExecutable: string,
-): void {
-  const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
-  for (const label of labels) {
-    if (!managed.has(label)) continue;
-    ghRaw(
-      [
-        "api",
-        "--silent",
-        "--method",
-        "DELETE",
-        `repos/${repository}/issues/${pullRequest}/labels/${encodeURIComponent(label)}`,
-      ],
-      ghExecutable,
-    );
-  }
-}
-
-export function reconcileReviewLabels(
-  repository: string,
-  pullRequest: number,
-  outcome: ReviewLabelOutcome,
-  expectedHead?: string,
-  ghExecutable = "gh",
-): boolean {
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
-    throw new Error("repository must use owner/name format");
-  }
-  if (!Number.isInteger(pullRequest) || pullRequest < 1) {
-    throw new Error("pull request number must be a positive integer");
-  }
-  if (expectedHead !== undefined) assertSha(expectedHead, "expected head");
-
-  const readPull = (): Record<string, unknown> =>
-    record(
-      JSON.parse(ghRaw(["api", `repos/${repository}/pulls/${pullRequest}`], ghExecutable)),
-      "pull request",
-    );
-  if (!pullIsEligible(readPull(), expectedHead)) return false;
-
-  for (const definition of REVIEW_LABELS) {
-    const endpoint = `repos/${repository}/labels/${encodeURIComponent(definition.name)}`;
-    try {
-      ghRaw(["api", "--silent", endpoint], ghExecutable);
-    } catch {
-      try {
-        ghRaw(
-          ["api", "--method", "POST", `repos/${repository}/labels`, "--input", "-"],
-          ghExecutable,
-          `${JSON.stringify(definition)}\n`,
-        );
-      } catch {
-        // Another PR review can create the shared repository label between our
-        // GET and POST. Confirm that it now exists before continuing.
-        ghRaw(["api", "--silent", endpoint], ghExecutable);
-      }
-    }
-  }
-
-  const pullBeforeMutation = readPull();
-  if (!pullIsEligible(pullBeforeMutation, expectedHead)) {
-    removeManagedLabels(repository, pullRequest, pullLabels(pullBeforeMutation), ghExecutable);
-    return false;
-  }
-  const labels = pullLabels(pullBeforeMutation);
-  const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
-  const desired = new Set(labelsForOutcome(outcome));
-  for (const label of labels) {
-    if (!managed.has(label) || desired.has(label)) continue;
-    ghRaw(
-      [
-        "api",
-        "--silent",
-        "--method",
-        "DELETE",
-        `repos/${repository}/issues/${pullRequest}/labels/${encodeURIComponent(label)}`,
-      ],
-      ghExecutable,
-    );
-  }
-  const missing = [...desired].filter(label => !labels.includes(label));
-  if (missing.length > 0) {
-    ghRaw(
-      [
-        "api",
-        "--silent",
-        "--method",
-        "POST",
-        `repos/${repository}/issues/${pullRequest}/labels`,
-        "--input",
-        "-",
-      ],
-      ghExecutable,
-      `${JSON.stringify({ labels: missing })}\n`,
-    );
-  }
-
-  const pullAfterMutation = readPull();
-  if (!pullIsEligible(pullAfterMutation, expectedHead)) {
-    removeManagedLabels(repository, pullRequest, pullLabels(pullAfterMutation), ghExecutable);
-    return false;
-  }
-  return true;
-}
-
-export function currentReviewLabelOutcome(
-  repository: string,
-  pullRequest: number,
-  expectedHead?: string,
-  ghExecutable = "gh",
-): ReviewLabelOutcome {
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
-    throw new Error("repository must use owner/name format");
-  }
-  if (!Number.isInteger(pullRequest) || pullRequest < 1) {
-    throw new Error("pull request number must be a positive integer");
-  }
-  if (expectedHead !== undefined) assertSha(expectedHead, "expected head");
-  const pull = record(
-    JSON.parse(ghRaw(["api", `repos/${repository}/pulls/${pullRequest}`], ghExecutable)),
-    "pull request",
-  );
-  if (!pullIsEligible(pull, expectedHead)) return "started";
-  return outcomeForLabels(pullLabels(pull));
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -903,44 +669,6 @@ export function validateStructuredReview(
     };
   });
 
-  const decisionCandidate = record(candidate.decision, "decision");
-  const rationale = requiredText(decisionCandidate.rationale, "decision.rationale", 1000);
-  let decision: PullRequestDecision;
-  if (decisionCandidate.actor === "author" && decisionCandidate.action === "change") {
-    decision = { actor: "author", action: "change", rationale };
-  } else if (
-    decisionCandidate.actor === "maintainer" &&
-    decisionCandidate.action === "merge"
-  ) {
-    decision = { actor: "maintainer", action: "merge", rationale };
-  } else {
-    throw new Error("decision must be author/change or maintainer/merge");
-  }
-  const blocking = findings.some(
-    finding => finding.priority === "P0" || finding.priority === "P1",
-  );
-  if (decision.action === "merge" && blocking) {
-    throw new Error("decision maintainer/merge is invalid while P0 or P1 findings remain");
-  }
-  if (
-    decision.action === "merge" &&
-    (assessment.readiness.score < 4 || assessment.risk.score > 2)
-  ) {
-    throw new Error(
-      "decision maintainer/merge requires readiness at least 4 and risk at most 2",
-    );
-  }
-  if (
-    decision.action === "change" &&
-    findings.length === 0 &&
-    assessment.readiness.score >= 4 &&
-    assessment.risk.score <= 2
-  ) {
-    throw new Error(
-      "decision author/change requires a finding, readiness below 4, or risk above 2",
-    );
-  }
-
   const residualRisk = requiredText(candidate.residualRisk, "residualRisk", 1000);
   return {
     base: expectedBase,
@@ -948,7 +676,6 @@ export function validateStructuredReview(
     inspection,
     validation,
     assessment,
-    decision,
     findings,
     residualRisk,
   };
@@ -1024,7 +751,6 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
   }
   const lines = [
     `<!-- ai-pr-review context=${contextId} -->`,
-    `${AI_REVIEW_DECISION_MARKER}${review.decision.actor}/${review.decision.action} -->`,
     `Reviewed \`${review.head}\` against \`${review.base}\` and current repository behavior.`,
     "",
     `Inspection: ${review.inspection.changedFiles.length} changed ${
@@ -1042,12 +768,6 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     `Risk: **${review.assessment.risk.score}/5** — ${
       markdownText(review.assessment.risk.rationale)
     }`,
-    "",
-    `Decision required: **${
-      review.decision.action === "change"
-        ? "Author — make changes before this PR proceeds."
-        : "Maintainer — decide whether to merge this PR."
-    }** ${markdownText(review.decision.rationale)}`,
     "",
     "Validation performed:",
     ...review.validation.map(item => `- ${markdownText(item)}`),
@@ -1160,50 +880,11 @@ function main(): void {
     );
     const payload = renderReview(review, contextId);
     writeFileSync(output, `${JSON.stringify(payload, null, 2)}\n`);
-    if (args.includes("--decision-output")) {
-      writeFileSync(
-        argValue(args, "--decision-output"),
-        `${JSON.stringify(review.decision, null, 2)}\n`,
-      );
-    }
     process.stdout.write(`${payload.event}\n`);
     return;
   }
-  if (command === "labels") {
-    const expectedHead = args.includes("--expected-head")
-      ? argValue(args, "--expected-head")
-      : undefined;
-    const outcome = argValue(args, "--outcome");
-    if (
-      outcome !== "started" &&
-      outcome !== "reviewed-change" &&
-      outcome !== "reviewed-merge" &&
-      outcome !== "review-error"
-    ) {
-      throw new Error("label outcome is invalid");
-    }
-    const applied = reconcileReviewLabels(
-      argValue(args, "--repo"),
-      Number(argValue(args, "--pr")),
-      outcome,
-      expectedHead,
-    );
-    process.stdout.write(applied ? "applied\n" : "stale\n");
-    return;
-  }
-  if (command === "label-state") {
-    const expectedHead = args.includes("--expected-head")
-      ? argValue(args, "--expected-head")
-      : undefined;
-    process.stdout.write(`${currentReviewLabelOutcome(
-      argValue(args, "--repo"),
-      Number(argValue(args, "--pr")),
-      expectedHead,
-    )}\n`);
-    return;
-  }
   throw new Error(
-    "usage: ai-pr-review.ts build-discussion|build-context|validate|label-state|labels (run with --help in repository docs)",
+    "usage: ai-pr-review.ts build-discussion|build-context|validate (run with --help in repository docs)",
   );
 }
 
