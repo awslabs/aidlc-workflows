@@ -164,12 +164,12 @@ tests on their in-file SKIP path.
 Required platform/provider gates use `--require-coverage`: skipped cases,
 empty selections and missing executions fail. `coverage.json` records the
 effective inventory, including automatically required terminal preflights.
-Mixed-provider and release-contract suites contain intentional conditional
-cases and do not use strict coverage; their declared jobs must still succeed.
+Release-contract suites contain intentional platform-conditional cases and do
+not use strict coverage; live provider families require executed coverage.
 
 Nightly `preview-release.yml` calls the reusable `full-suite.yml`: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
-hosted Claude/Codex/opencode/release-contract and Linux mixed-provider suites,
+hosted Claude/Codex/opencode/release-contract suites,
 hosted Kiro ACP/TUI on Linux/macOS/Windows using `KIRO_API_KEY`, a dedicated
 self-hosted Windows Kiro IDE, plus opt-in Cursor legs. Copilot is excluded by
 account policy; there is no macOS Kiro IDE runner.
@@ -194,8 +194,10 @@ are reported in `excluded` and never block publication. `passed` requires all
 non-excluded legs to succeed; `complete` also requires no exclusions. Missing,
 failed, cancelled or enabled-but-skipped legs fail. `full-suite-result` retains
 the exact SHA and run/leg outcomes for 90 days; preview and stable publication
-require `passed: true` and warn about exclusions. Tag a passing nightly SHA or dispatch
-`preview-release.yml` first. `bun scripts/ci-live-filter.ts --list` shows the
+require `passed: true` and warn about exclusions. Tag a passing nightly SHA, or
+dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired
+evidence even when an unchanged preview already exists.
+`bun scripts/ci-live-filter.ts --list` shows the
 discovered partition; append `--platform linux|darwin|win32` to a family query
 for its exact platform filter. Add `--args` for one runner argument per line;
 the nightly workflow uses `--run -- --debug -P 4` to launch the runner directly

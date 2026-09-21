@@ -25,10 +25,6 @@ export const FAMILIES = {
   "claude-tui": { env: { AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
   "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
   "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false, resources: "bedrock" },
-  "multi-provider": {
-    env: { AIDLC_CLAUDE_SDK_LIVE: "1", AIDLC_TUI_LIVE: "1", AIDLC_CODEX_EXEC_LIVE: "1", AIDLC_OPENCODE_RUN_LIVE: "1", AIDLC_CURSOR_RUN_LIVE: "1", AIDLC_RELEASE_CONTRACT_LIVE: "1" },
-    platforms: ["linux"], hosting: "hosted", requireCoverage: false, resources: "bedrock",
-  },
 } as const satisfies Record<string, Family>;
 export type LiveFamily = keyof typeof FAMILIES;
 
@@ -50,11 +46,6 @@ export function discoverLiveFiles(root: string): Map<string, Set<AllowedLiveGate
       const file = `${directory}/${name}`;
       const code = codeView(readFileSync(join(root, file), "utf8"));
       const tokens = new Set(code.match(/\bAIDLC_[A-Z_]+_LIVE\b/g));
-      if (/\b(?:invokeHarness|liveGateFor)\s*\(/.test(code)) {
-        // These dispatchers choose their opt-in at runtime; the helper owns that mapping.
-        const helper = codeView(readFileSync(join(root, "tests/harness/plugin-kit.ts"), "utf8"));
-        for (const gate of helper.match(/\bAIDLC_[A-Z_]+_LIVE\b/g) ?? []) tokens.add(gate);
-      }
       const gates = new Set(TEST_MATRIX_LIVE_GATES.filter((gate) => tokens.has(gate) &&
         (directory !== "tests/unit" || gate === "AIDLC_RELEASE_CONTRACT_LIVE")));
       if (claude.has(file) || gates.size > 0) files.set(file, gates);
@@ -63,23 +54,17 @@ export function discoverLiveFiles(root: string): Map<string, Set<AllowedLiveGate
   return files;
 }
 
-/** Precedence assigns each discovered file once, including mixed-provider plugin suites. */
+/** Precedence assigns each file from its own live gates or derived Claude dependency. */
 export function classifyLiveFiles(root: string): Map<LiveFamily, string[]> {
   const claude = new Set(discoverClaudeRequiredTests(join(root, "tests")).map(({ file }) => file));
   const partition = new Map<LiveFamily, string[]>(Object.keys(FAMILIES).map((family) => [family as LiveFamily, []]));
   for (const [file, gates] of discoverLiveFiles(root)) {
     const families = (Object.keys(FAMILIES) as LiveFamily[]).filter((family) => {
-      if (family === "multi-provider") return false;
       // The first gate identifies the family; Kiro TUI also enables the shared TUI gate.
       const gate = Object.keys(FAMILIES[family].env)[0] as AllowedLiveGate;
       return gates.has(gate);
     });
-    const providers = new Set(families.filter((family) => family !== "release-contract")
-      .map((family) => family.split("-")[0]));
-    if (claude.has(file)) providers.add("claude");
-    let family: LiveFamily | undefined;
-    if (providers.size >= 3) family = "multi-provider";
-    else family = families.find((candidate) => candidate !== "claude-sdk" && candidate !== "release-contract");
+    let family: LiveFamily | undefined = families.find((candidate) => candidate !== "claude-sdk" && candidate !== "release-contract");
     family ??= claude.has(file) && basename(file).startsWith("t-tui-") ? "claude-tui" : undefined;
     family ??= claude.has(file) || gates.has("AIDLC_CLAUDE_SDK_LIVE") ? "claude-sdk" : undefined;
     family ??= "release-contract";

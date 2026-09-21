@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -368,6 +368,57 @@ async function runWorkflowStep(
 }
 
 describe("t332 preview publication pipeline", () => {
+  for (const scenario of ["preview", "renewal", "wrong-sha", "incomplete", "non-dispatch"] as const) {
+    test(`stable release evidence: ${scenario}`, async () => {
+      const workflow = Bun.YAML.parse(readFileSync(STABLE_RELEASE_WORKFLOW, "utf8")) as {
+        jobs: { validate: { steps: Array<{ name?: string; run?: string }> } };
+      };
+      const script = workflow.jobs.validate.steps.find((step) => step.name === "Require passing full-suite evidence")!.run!;
+      const root = mkdtempSync(join(tmpdir(), "aidlc-t332-evidence-"));
+      roots.push(root);
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      const shim = join(bin, "gh");
+      writeFileSync(shim, '#!/usr/bin/env bash\nexec bun "$FIXTURE_GH_SCRIPT" "$@"\n');
+      chmodSync(shim, 0o755);
+      const fakeGh = join(root, "gh.ts");
+      writeFileSync(fakeGh, [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'const args = process.argv.slice(2);',
+        'const records = JSON.parse(process.env.FIXTURE_RUNS!);',
+        'const flag = (name: string) => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1]; };',
+        'if (args[0] === "run" && args[1] === "list") {',
+        '  const fields = { "--workflow": "workflow", "--commit": "headSha", "--branch": "branch", "--event": "event", "--status": "status" };',
+        '  const selected = records.filter((row: Record<string, unknown>) => Object.entries(fields).every(([option, field]) => flag(option) === undefined || row[field] === flag(option)));',
+        '  console.log(selected.slice(0, Number(flag("--limit") ?? 20)).map((row: { id: number }) => row.id).join("\\n"));',
+        '} else if (args[0] === "run" && args[1] === "download" && flag("--name") === "full-suite-result") {',
+        '  const record = records.find((row: { id: number }) => String(row.id) === args[2]);',
+        '  if (!record?.artifact) process.exit(1);',
+        '  mkdirSync(flag("--dir")!, { recursive: true });',
+        '  writeFileSync(join(flag("--dir")!, "full-suite-result.json"), JSON.stringify(record.artifact));',
+        '} else process.exit(2);',
+      ].join("\n"));
+      const evidence = {
+        sha: scenario === "wrong-sha" ? "b".repeat(40) : SOURCE_A,
+        passed: scenario !== "incomplete", complete: scenario !== "incomplete",
+        excluded: [], legs: { live_hosted: scenario === "incomplete" ? "failure" : "success" },
+      };
+      const records = [
+        { id: 1, workflow: "preview-release.yml", headSha: SOURCE_A, branch: "main", event: "schedule", status: "success", artifact: scenario === "preview" ? evidence : null },
+        // workflow_dispatch's head is today's main; its artifact binds the older inputs.ref.
+        { id: 2, workflow: "full-suite.yml", headSha: "c".repeat(40), branch: "main", event: scenario === "non-dispatch" ? "workflow_call" : "workflow_dispatch", status: "success", artifact: evidence },
+      ];
+      const result = await runWorkflowStep(script, root, {
+        PATH: `${bin}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
+        FIXTURE_GH_SCRIPT: fakeGh, FIXTURE_RUNS: JSON.stringify(records), TAG_SHA: SOURCE_A, RUNNER_TEMP: root,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(scenario === "preview" || scenario === "renewal" ? 0 : 1);
+      if (scenario === "renewal") expect(result.stdout).toContain("missing or expired full-suite-result");
+      if (scenario !== "preview" && scenario !== "renewal") expect(result.stdout).toContain(`full-suite.yml on main with ref=${SOURCE_A}`);
+    }, 15_000);
+  }
+
   test("the tag message binds a preview to its source commit and parses back", () => {
     const message = previewTagMessage({
       version: PREVIEW_ID,

@@ -182,19 +182,12 @@ describe("t345 complete nightly coverage", () => {
       }
     }
     expect(exposed.sort()).toEqual([
-      "live_hosted/Require multi-provider Cursor credentials and executable",
-      "live_hosted/Run multi-provider",
       "live_kiro_api/Require Kiro API authentication",
       "live_kiro_api/Run kiro-acp",
       "live_kiro_api/Run kiro-tui",
       "live_cursor/Require Cursor credentials and executable",
       "live_cursor/Run cursor",
     ].sort());
-    const preflight = workflow.jobs.live_hosted.steps.find((step) => step.name === "Require multi-provider Cursor credentials and executable")!;
-    expect(preflight.if).toBe("matrix.family == 'multi-provider' && vars.AIDLC_NIGHTLY_CURSOR == '1'");
-    expect(preflight.env?.CURSOR_API_KEY).toBe(`\${{ secrets.CURSOR_API_KEY }}`);
-    const run = workflow.jobs.live_hosted.steps.find((step) => step.name === "Run multi-provider")!;
-    expect(run.env?.CURSOR_API_KEY).toBe(`\${{ vars.AIDLC_NIGHTLY_CURSOR == '1' && secrets.CURSOR_API_KEY || '' }}`);
     for (const step of workflow.jobs.live_cursor.steps.filter((step) => step.name?.startsWith("Require ") || step.name === "Run cursor")) {
       expect(step.env?.CURSOR_API_KEY).toBe(`\${{ secrets.CURSOR_API_KEY }}`);
     }
@@ -296,7 +289,9 @@ describe("t345 complete nightly coverage", () => {
     expect(flattened.sort()).toEqual(discovered);
     expect(new Set(flattened).size).toBe(flattened.length);
     for (const { file } of discoverClaudeRequiredTests()) expect(flattened).toContain(file);
-    expect(partition.get("multi-provider")).toContain("tests/integration/t300-plugin-kit.test.ts");
+    expect(partition.get("claude-sdk")).toContain("tests/integration/t300-plugin-kit.test.ts");
+    expect(Object.keys(FAMILIES)).not.toContain("multi-provider");
+    expect(FAMILIES["claude-sdk"].requireCoverage).toBe(true);
     expect(partition.get("claude-tui")).toContain("tests/integration/t-e2e-isolated-runner.test.ts");
     expect(flattened).not.toContain("tests/unit/t-e2e-plan.test.ts");
     expect(flattened).not.toContain("tests/unit/t-test-matrix.test.ts");
@@ -326,7 +321,7 @@ describe("t345 complete nightly coverage", () => {
     ]);
   });
 
-  test("new provider files and plugin dispatchers are classified without filename lists", () => {
+  test("plugin helpers do not claim providers beyond each test file's own opt-ins", () => {
     const root = mkdtempSync(join(tmpdir(), "full-suite-discovery-"));
     const put = (file: string, code: string) => {
       mkdirSync(dirname(join(root, file)), { recursive: true });
@@ -338,12 +333,13 @@ describe("t345 complete nightly coverage", () => {
       put("tests/integration/t-new.test.ts", `const enabled = process.env.${gate("codex")};`);
       put("tests/unit/t-fixture.test.ts", `const fixture = "process.env.${gate("kiro-ide")}";`);
       put("tests/unit/t-release.test.ts", `const enabled = process.env.${gate("release-contract")};`);
-      put("tests/harness/plugin-kit.ts", readFileSync(join(REPO_ROOT, "tests/harness/plugin-kit.ts"), "utf8"));
-      put("plugins/new/tests/plugin.test.ts", 'invokeHarness(project, harness, "status");');
+      put("plugins/new/tests/plugin.test.ts", `const enabled = process.env.${gate("claude-sdk")}; invokeHarness(project, "claude", "status");`);
+      put("plugins/new/tests/gate-contract.test.ts", 'liveGateFor(harness); invokeHarness(project, harness, "status");');
       const partition = classifyLiveFiles(root);
       expect(partition.get("kiro-tui")).toEqual(["tests/e2e/t-new.test.ts"]);
       expect(partition.get("codex")).toEqual(["tests/integration/t-new.test.ts"]);
-      expect(partition.get("multi-provider")).toEqual(["plugins/new/tests/plugin.test.ts"]);
+      expect(partition.get("claude-sdk")).toEqual(["plugins/new/tests/plugin.test.ts"]);
+      expect([...partition.values()].flat()).not.toContain("plugins/new/tests/gate-contract.test.ts");
       expect(partition.get("release-contract")).toEqual(["tests/unit/t-release.test.ts"]);
       expect([...partition.values()].flat()).not.toContain("tests/unit/t-fixture.test.ts");
       const regex = new RegExp(liveFilter(partition.get("codex")!));
@@ -361,9 +357,9 @@ describe("t345 complete nightly coverage", () => {
     const regex = new RegExp(result.stdout.trim());
     expect(regex.test("e2e-t-tui-journey-orientation.serial")).toBe(true);
     expect(regex.test("e2e-t-tui-journey-orientation-windows.serial")).toBe(false);
-    const emitted = spawnSync(process.execPath, [script, "multi-provider", "--platform", "linux", "--args"], { encoding: "utf8" });
+    const emitted = spawnSync(process.execPath, [script, "release-contract", "--platform", "linux", "--args"], { encoding: "utf8" });
     expect(emitted.status, emitted.stderr).toBe(0);
-    expect(emitted.stdout.trim().split("\n")).toEqual(liveRunnerArgs("multi-provider", "linux"));
+    expect(emitted.stdout.trim().split("\n")).toEqual(liveRunnerArgs("release-contract", "linux"));
     for (const args of [["missing"], ["claude-tui", "--platform", "other"], ["copilot", "--run", "--", "--e2e-plan"], ["codex", "--args", "--run"]]) {
       expect(spawnSync(process.execPath, [script, ...args]).status).toBe(2);
     }

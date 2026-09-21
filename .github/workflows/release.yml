@@ -56,13 +56,16 @@ jobs:
         run: |
           set -euo pipefail
           tag_sha="$TAG_SHA"
-          runs="$(gh run list --workflow preview-release.yml --commit "$tag_sha" --status success --json databaseId --jq '.[].databaseId')"
+          preview_runs="$(gh run list --workflow preview-release.yml --commit "$tag_sha" --status success --limit 100 --json databaseId --jq '.[].databaseId')"
+          # A manual full-suite run tests inputs.ref, not necessarily its workflow head SHA.
+          # Trust only main's workflow_dispatch runs and bind their artifact to tag_sha below.
+          renewal_runs="$(gh run list --workflow full-suite.yml --branch main --event workflow_dispatch --status success --limit 100 --json databaseId --jq '.[].databaseId')"
           accepted=false
-          for run in $runs; do
+          for run in $preview_runs $renewal_runs; do
             evidence="$RUNNER_TEMP/full-suite-evidence-$run"
             mkdir -p "$evidence"
             if ! gh run download "$run" --name full-suite-result --dir "$evidence"; then
-              echo "Preview run $run: missing full-suite-result artifact"
+              echo "Evidence run $run: missing or expired full-suite-result artifact"
               continue
             fi
             result="$evidence/full-suite-result.json"
@@ -74,11 +77,11 @@ jobs:
               accepted=true
               break
             fi
-            echo "Preview run $run: wrong source or failing full-suite legs"
+            echo "Evidence run $run: wrong source or failing full-suite legs"
             jq '{sha, passed, complete, excluded, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
           done
           if [ "$accepted" != true ]; then
-            echo "::error::No successful preview has passing full-suite-result evidence for $tag_sha. Missing/failing legs are listed above; no artifact means every leg is unproven. Tag a passing nightly SHA or dispatch preview-release.yml first."
+            echo "::error::No successful preview or full-suite dispatch has passing full-suite-result evidence for $tag_sha. Missing/failing legs are listed above; no artifact means every leg is unproven. Renew evidence by dispatching full-suite.yml on main with ref=$tag_sha."
             exit 1
           fi
 

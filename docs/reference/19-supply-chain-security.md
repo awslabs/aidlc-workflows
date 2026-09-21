@@ -16,9 +16,10 @@ the release unless all of these conditions hold:
 - the checked-out commit is the tag target;
 - the tag target is contained in `main`;
 - the tag equals `v` plus the version in `core/tools/aidlc-version.ts`;
-- a successful `preview-release.yml` run exists for the exact tag SHA and its
-  `full-suite-result` artifact has `.passed == true` (declared exclusions are
-  reported as warnings, not release blockers).
+- a successful `preview-release.yml` run for the exact tag SHA, or a successful
+  main-branch `workflow_dispatch` run of `full-suite.yml`, supplies a
+  `full-suite-result` artifact with that exact `.sha` and `.passed == true`
+  (declared exclusions are reported as warnings, not release blockers).
 
 Feature, fix, documentation, refactor, and test PRs do not update release
 metadata. The release-preparation PR summarizes the user-visible changes merged
@@ -133,6 +134,13 @@ gate.
 2. Wait for (or dispatch) `preview-release.yml` on the intended release SHA while
    it is `main`'s tip, and confirm the `full-suite-result` artifact records that
    exact SHA with `.passed == true`.
+   If its evidence is missing or expired, dispatch `full-suite.yml` on `main`
+   with `ref=<sha>` to renew it without republishing an unchanged preview;
+   confirm the new artifact has the intended `.sha` and `.passed == true`.
+
+   ```bash
+   gh workflow run full-suite.yml --ref main -f 'ref=<intended-release-sha>'
+   ```
 3. Create and push the matching tag from that verified commit (do not advance
    to a newer `main` tip without obtaining fresh preview evidence):
 

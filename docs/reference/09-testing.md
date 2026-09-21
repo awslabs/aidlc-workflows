@@ -435,7 +435,7 @@ from disk reds the gate.
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request | Deterministic gate | `ci.yml`: contract checks + smoke + unit shards + native-terminal units on Linux/macOS/Windows + production guards | GitHub Actions |
 | Nightly preview / manual preview dispatch | Enabled deep-tier matrix | `preview-release.yml` calls `full-suite.yml` for deterministic integration/e2e on Linux/macOS/Windows and enabled live families; disabled families are reported | GitHub Actions |
-| Stable tag | Exact-source evidence | `release.yml` requires a successful preview's `full-suite-result` with the tag SHA and `passed: true`; exclusions are warned | GitHub Actions |
+| Stable tag | Exact-source evidence | `release.yml` requires a successful preview or main-branch full-suite dispatch artifact with the tag SHA and `passed: true`; exclusions are warned | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
@@ -443,9 +443,10 @@ By maintainer decision on 2026-09-21, `main` is not production: PR CI remains th
 fast gate listed above, while deterministic and live deep tiers gate the preview
 stage in `full-suite.yml`, called by `preview-release.yml`.
 
-Tag the SHA of a green nightly for a stable release, or dispatch
-`preview-release.yml` on `main` first. A deterministic PR gate alone is not
-stable-release evidence.
+Tag the SHA of a green nightly for a stable release, or dispatch `full-suite.yml`
+on `main` with `ref=<sha>` to produce or renew exact-SHA evidence. This also works
+when an unchanged preview would skip publication. A deterministic PR gate alone
+is not stable-release evidence.
 
 ## Stubs
 
@@ -760,7 +761,10 @@ prepared.
 Relative symlinks retain their original targets, including dangling links, so
 writing through a fixture alias stays inside that worker. Snapshot preparation
 rejects absolute links and links that escape the source root; the shared
-dependency directory is an explicit exception. Relative IDE seed paths and
+dependency directory is an explicit exception. Tracked descendants are checked
+component by component before sizing or copying; a symlink or junction in an
+ancestor position is refused rather than followed, even when its leaf appears
+to be a regular file. Relative IDE seed paths and
 path-valued executable overrides resolve against the source checkout before the
 worker starts. The IDE still copies the seed into its private profile.
 
@@ -1007,9 +1011,13 @@ already be an ancestor of `origin/main` before installing dependencies or
 dispatching source-executing jobs. All matrix legs check out the authorized
 immutable SHA. `preview-release.yml` calls it after the normal CI gate and cannot
 publish unless every non-excluded leg passes. Stable releases download
-`full-suite-result` from successful preview runs for the exact tag SHA and require
-`passed: true`; declared exclusions produce warnings but do not block publication.
-An expired, missing, wrong-source or failed artifact blocks publication.
+`full-suite-result` from successful preview runs or main-branch `workflow_dispatch`
+runs of `full-suite.yml`, requiring the artifact's `sha` to equal the tag SHA and
+`passed: true`; declared exclusions warn but do not block publication. Missing,
+expired, wrong-source or failed evidence blocks publication. To renew evidence
+for an unchanged SHA, dispatch `full-suite.yml` on `main` with `ref=<sha>`; unlike
+the preview publisher, this always runs the suite even when a preview already
+exists. Release validation searches the newest 100 successful runs of each source.
 
 The declared coverage is:
 
@@ -1018,7 +1026,7 @@ The declared coverage is:
   macOS arm64/Bun (`macos-15`), and Windows/Bun and node-pty. Hosted Windows
   supplies Node; Bun installs the pinned dependencies and native addon.
 - Claude SDK, Claude TUI, Codex, opencode and release-endpoint contracts on
-  hosted Linux/macOS/Windows; mixed-provider plugin suites on hosted Linux.
+  hosted Linux/macOS/Windows, including Claude plugin invocation in the strict SDK leg.
 - Kiro ACP and TUI on hosted Linux/macOS/Windows through `KIRO_API_KEY`, without
   AWS OIDC. Kiro IDE remains on a dedicated, logged-in self-hosted Windows desktop;
   API-key authentication is CLI-only. No macOS Kiro IDE host exists.
@@ -1027,24 +1035,24 @@ The declared coverage is:
 
 `scripts/ci-live-filter.ts --list` prints the discovered family partition.
 `bun scripts/ci-live-filter.ts claude-tui --platform linux` prints an anchored
-runner filter. Discovery includes integration/e2e live gates, the derived
-Claude substrate list, plugin dispatchers' own gate mapping, and the unit
-release-contract opt-in. Unit gate-fixture tests are deterministic, not live
-families. `PLATFORM_ONLY` declares separately selectable Windows-only files;
-it never hides a skipped case inside a selected file. Strict live legs use
-`--require-coverage`; mixed-provider and release-contract files retain their
-provider/platform-conditional cases and do not use that flag.
+runner filter. Discovery uses each file's own integration/e2e live gate variables,
+the derived Claude substrate list, and the unit release-contract opt-in; using a
+generic plugin helper does not claim coverage for every provider it supports.
+Unit gate-fixture tests are deterministic, not live families. `PLATFORM_ONLY`
+declares separately selectable Windows-only files; it never hides a skipped case
+inside a selected file. All live provider legs use `--require-coverage`;
+release-contract files retain platform-conditional cases and do not use that flag.
 
 Add `--args` to print the complete runner arguments, one per line. The script
 owns tier selection: it emits only tiers with selected files, enables
 `--isolated-e2e` and resource limits only when e2e files exist, and applies each
-family's strict-coverage policy. In particular, an integration-only mixed-provider
-selection does not launch an empty isolated e2e queue. The workflow uses `--run`
+family's strict-coverage policy. An integration-only or unit-only selection does
+not launch an empty isolated e2e queue. The workflow uses `--run`
 to spawn the runner directly from the repository root, preserving each argument
 without shell word splitting or Bash-version-specific builtins:
 
 ```bash
-bun scripts/ci-live-filter.ts multi-provider --platform linux --run -- --debug -P 4
+bun scripts/ci-live-filter.ts claude-sdk --platform linux --run -- --debug -P 4
 ```
 
 For a selection containing e2e files, append `--e2e-plan` to inspect its plan

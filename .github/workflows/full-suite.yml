@@ -255,9 +255,6 @@ jobs:
           - family: release-contract
             runner: windows-latest
             platform: win32
-          - family: multi-provider
-            runner: ubuntu-latest
-            platform: linux
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -270,25 +267,14 @@ jobs:
       - name: "Install pinned family CLIs"
         run: |
           case "${{ matrix.family }}" in
-            claude-*|multi-provider) npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" ;;
+            claude-*) npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" ;;
           esac
           case "${{ matrix.family }}" in
-            codex|multi-provider) npm install -g "@openai/codex@$CODEX_VERSION" ;;
+            codex) npm install -g "@openai/codex@$CODEX_VERSION" ;;
           esac
           case "${{ matrix.family }}" in
-            opencode|multi-provider) npm install -g "opencode-ai@$OPENCODE_VERSION" ;;
+            opencode) npm install -g "opencode-ai@$OPENCODE_VERSION" ;;
           esac
-      - name: "Install Cursor agent on Unix"
-        if: "matrix.family == 'multi-provider' && vars.AIDLC_NIGHTLY_CURSOR == '1' && (runner.os != 'Windows')"
-        run: |
-          curl https://cursor.com/install -fsS | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: "Install Cursor agent on Windows"
-        if: "matrix.family == 'multi-provider' && vars.AIDLC_NIGHTLY_CURSOR == '1' && (runner.os == 'Windows')"
-        shell: powershell
-        run: |
-          irm 'https://cursor.com/install?win32=true' | iex
-          "$env:LOCALAPPDATA\cursor-agent" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: "Assume nightly Bedrock role"
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
@@ -297,7 +283,7 @@ jobs:
           role-duration-seconds: 21600
           aws-region: "${{ env.AWS_REGION }}"
       - name: "Materialize Codex named profile"
-        if: "matrix.family == 'codex' || matrix.family == 'multi-provider'"
+        if: "matrix.family == 'codex'"
         run: |
           umask 077
           mkdir -p "$HOME/.aws"
@@ -312,21 +298,14 @@ jobs:
         run: |
           aws sts get-caller-identity
           case "${{ matrix.family }}" in
-            claude-*|multi-provider) claude --version ;;
+            claude-*) claude --version ;;
           esac
           case "${{ matrix.family }}" in
-            codex|multi-provider) codex --version; aws sts get-caller-identity --profile codex --region us-east-2 ;;
+            codex) codex --version; aws sts get-caller-identity --profile codex --region us-east-2 ;;
           esac
           case "${{ matrix.family }}" in
-            opencode|multi-provider) opencode --version ;;
+            opencode) opencode --version ;;
           esac
-      - name: "Require multi-provider Cursor credentials and executable"
-        if: "matrix.family == 'multi-provider' && vars.AIDLC_NIGHTLY_CURSOR == '1'"
-        env:
-          CURSOR_API_KEY: "${{ secrets.CURSOR_API_KEY }}"
-        run: |
-          test -n "$CURSOR_API_KEY"
-          agent --version
       - name: "Run claude-sdk"
         if: "matrix.family == 'claude-sdk'"
         env:
@@ -357,18 +336,6 @@ jobs:
           AIDLC_RELEASE_CONTRACT_LIVE: "1"
         run: |
           bun scripts/ci-live-filter.ts release-contract --platform ${{ matrix.platform }} --run -- --debug -P 4
-      - name: "Run multi-provider"
-        if: "matrix.family == 'multi-provider'"
-        env:
-          AIDLC_CLAUDE_SDK_LIVE: "1"
-          AIDLC_TUI_LIVE: "1"
-          AIDLC_CODEX_EXEC_LIVE: "1"
-          AIDLC_OPENCODE_RUN_LIVE: "1"
-          AIDLC_CURSOR_RUN_LIVE: "1"
-          AIDLC_RELEASE_CONTRACT_LIVE: "1"
-          CURSOR_API_KEY: "${{ vars.AIDLC_NIGHTLY_CURSOR == '1' && secrets.CURSOR_API_KEY || '' }}"
-        run: |
-          bun scripts/ci-live-filter.ts multi-provider --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Upload diagnostic logs"
         if: "${{ always() }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
