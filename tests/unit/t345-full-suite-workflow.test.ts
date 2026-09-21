@@ -79,7 +79,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("native obligations include macOS and the fail-closed result depends on every job", () => {
     expect(workflow.jobs.native_terminal.strategy?.matrix.include).toContainEqual({ job: "darwin-bun", runner: "macos-15", backend: "bun" });
-    expect(workflow.jobs.result.if).toBe("${{ always() }}");
+    expect(workflow.jobs.result.if).toBe(`\${{ always() }}`);
     expect([...(workflow.jobs.result.needs as string[])].sort()).toEqual(Object.keys(workflow.jobs).filter((name) => name !== "result").sort());
     expect(Object.keys(workflow.jobs).filter((name) => name !== "result").sort()).toEqual([...FULL_SUITE_JOBS].sort());
     for (const job of Object.values(workflow.jobs)) {
