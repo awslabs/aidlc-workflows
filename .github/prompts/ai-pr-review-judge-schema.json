@@ -146,6 +146,7 @@
       "required": [
         "priority",
         "category",
+        "origin",
         "title",
         "evidence",
         "problem",
@@ -167,6 +168,10 @@
             "workflow-state",
             "correctness"
           ]
+        },
+        "origin": {
+          "type": "string",
+          "enum": ["current-change", "late-discovery"]
         },
         "title": {
           "type": "string",

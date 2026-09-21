@@ -125,7 +125,20 @@ AIDA's PR review ends with an advisory next decision. `author/change` means the
 author should address the reported gaps. `maintainer/merge` means the review
 found no blocking issue and considers the PR ready for a maintainer's merge
 decision; AIDA does not approve or merge the PR. The merge decision requires no
-P0 or P1 finding, readiness of at least 4/5, and risk of at most 2/5.
+P0 or P1 finding. P2 and P3 remain advisory, and readiness and risk explain the
+assessment without changing the requested action.
+
+The first AIDA review covers the complete PR. After another commit, AIDA checks
+the previous findings against the current head and reviews the exact commit
+range added since its last review. A new finding against unchanged PR code is
+identified as a late discovery. Only a grounded P0 or P1 late discovery can
+change the next action back to `author/change`; P2 and P3 remain advisory.
+
+PRs that change AIDA's reviewer workflow, prompts, schema, or implementation are
+judged by the reviewer controls from the default branch. The proposed
+model-facing prompts and schema also run as a non-authoritative shadow review
+for comparison. Shadow output cannot publish a review, set labels, or choose
+the next action.
 
 Every PR review includes a User Experience section before its UX assessment.
 For user-visible changes, it explains the affected user, the previous and

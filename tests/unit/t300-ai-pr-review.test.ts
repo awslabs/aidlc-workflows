@@ -21,6 +21,7 @@ import {
   outcomeForLabels,
   reconcileReviewLabels,
   type ChangedFileManifest,
+  type FollowUpContext,
   type ReviewMetadata,
   type StructuredReview,
   rejectedReviewDiagnostics,
@@ -42,6 +43,8 @@ const RUNTIME_SETUP = readFileSync(
   "utf8",
 );
 const REPOSITORY_INSTRUCTIONS = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
+const SHELL_NAME_PREFIX = "$" + "{name_prefix}";
+const workflowReviewName = (name: string): string => `"${SHELL_NAME_PREFIX}${name}"`;
 const MANIFEST: ChangedFileManifest = {
   base: BASE,
   head: HEAD,
@@ -100,6 +103,7 @@ function review(priority?: "P0" | "P1" | "P2" | "P3"): StructuredReview {
           {
             priority,
             category: "contracts",
+            origin: "current-change",
             title: "Generated contract is incomplete",
             evidence: [{ source: "DIFF", path: "core/example.ts", line: 42, side: "RIGHT" }],
             problem: "Input reaches the changed branch and produces an invalid contract.",
@@ -319,7 +323,7 @@ process.stdout.write(JSON.stringify(value));
     );
   });
 
-  test("validator binds the PR decision to findings and assessment scores", () => {
+  test("validator binds the PR decision only to blocking findings", () => {
     const blockingMerge = review("P1");
     blockingMerge.decision = {
       actor: "maintainer",
@@ -330,11 +334,10 @@ process.stdout.write(JSON.stringify(value));
       "invalid while P0 or P1 findings remain",
     );
 
-    const lowReadiness = review();
-    lowReadiness.assessment.readiness.score = 3;
-    expect(() => validate(JSON.stringify(lowReadiness))).toThrow(
-      "requires readiness at least 4 and risk at most 2",
-    );
+    const lowReadiness = review("P2");
+    lowReadiness.assessment.readiness.score = 1;
+    lowReadiness.assessment.risk.score = 5;
+    expect(() => validate(JSON.stringify(lowReadiness))).not.toThrow();
 
     const wrongPair = review() as unknown as {
       decision: { actor: string; action: string; rationale: string };
@@ -355,8 +358,70 @@ process.stdout.write(JSON.stringify(value));
       rationale: "Request changes without a material reason.",
     };
     expect(() => validate(JSON.stringify(unjustifiedChange))).toThrow(
-      "requires a finding, readiness below 4, or risk above 2",
+      "requires a P0 or P1 finding",
     );
+
+    const advisoryChange = review("P3");
+    advisoryChange.decision = {
+      actor: "author",
+      action: "change",
+      rationale: "Request changes for an advisory finding.",
+    };
+    expect(() => validate(JSON.stringify(advisoryChange))).toThrow(
+      "requires a P0 or P1 finding",
+    );
+  });
+
+  test("follow-up reviews keep advisory scores separate from the merge action", () => {
+    const followUp: FollowUpContext = {
+      version: 1,
+      mode: "follow-up",
+      previousReview: {
+        id: 41,
+        head: BASE,
+        createdAt: "2026-09-20T00:00:00Z",
+      },
+      changedFilesSincePrevious: [],
+    };
+    const resolved = review();
+    resolved.assessment.readiness.score = 2;
+    resolved.assessment.risk.score = 4;
+    expect(() =>
+      validateStructuredReview(
+        JSON.stringify(resolved),
+        BASE,
+        HEAD,
+        MANIFEST,
+        METADATA,
+        followUp,
+      ),
+    ).not.toThrow();
+
+    const late = review("P1");
+    late.findings[0].origin = "late-discovery";
+    const validated = validateStructuredReview(
+      JSON.stringify(late),
+      BASE,
+      HEAD,
+      MANIFEST,
+      METADATA,
+      followUp,
+    );
+    expect(renderReview(validated, CONTEXT_ID).body).toContain(
+      "**P1: Generated contract is incomplete · Late discovery**",
+    );
+
+    late.findings[0].origin = "current-change";
+    expect(() =>
+      validateStructuredReview(
+        JSON.stringify(late),
+        BASE,
+        HEAD,
+        MANIFEST,
+        METADATA,
+        followUp,
+      ),
+    ).toThrow("origin must be late-discovery");
   });
 
   test("validator requires a grounded user-experience summary before assessment", () => {
@@ -1100,6 +1165,98 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(readFileSync(join(output, "context-id.txt"), "utf8").trim()).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  test("context builder records the exact range since the latest reviewed ancestor", () => {
+    const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-follow-up-"));
+    const run = (...args: string[]): string =>
+      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    run("init", "--quiet");
+    run("config", "user.name", "AI Review Test");
+    run("config", "user.email", "ai-review@example.invalid");
+    writeFileSync(join(repo, "existing.ts"), "export const existing = 1;\n");
+    writeFileSync(join(repo, "response.ts"), "export const response = 1;\n");
+    run("add", ".");
+    run("commit", "--quiet", "-m", "base");
+    const base = run("rev-parse", "HEAD");
+    writeFileSync(join(repo, "existing.ts"), "export const existing = 2;\n");
+    run("add", ".");
+    run("commit", "--quiet", "-m", "first reviewed head");
+    const previousHead = run("rev-parse", "HEAD");
+    writeFileSync(join(repo, "response.ts"), "export const response = 2;\n");
+    run("add", ".");
+    run("commit", "--quiet", "-m", "author response");
+    const head = run("rev-parse", "HEAD");
+
+    const discussion = {
+      version: 1 as const,
+      pullRequest: 42,
+      reviews: [{
+        id: 77,
+        kind: "ai-review" as const,
+        actor: {
+          login: "github-actions[bot]",
+          association: "CONTRIBUTOR",
+          maintainer: false,
+        },
+        body: "Prior AIDA review.",
+        createdAt: "2026-09-20T00:00:00Z",
+        updatedAt: "2026-09-20T00:00:00Z",
+        commitId: previousHead,
+      }],
+      reviewComments: [],
+    };
+    const output = join(repo, "context");
+    buildContext(base, head, output, repo, discussion);
+    const followUp = JSON.parse(readFileSync(join(output, "follow-up.json"), "utf8"));
+    expect(followUp).toEqual({
+      version: 1,
+      mode: "follow-up",
+      previousReview: {
+        id: 77,
+        head: previousHead,
+        createdAt: "2026-09-20T00:00:00Z",
+      },
+      changedFilesSincePrevious: ["response.ts"],
+    });
+    const delta = readFileSync(join(output, "follow-up.diff"), "utf8");
+    expect(delta).toContain("diff --git a/response.ts b/response.ts");
+    expect(delta).not.toContain("diff --git a/existing.ts b/existing.ts");
+
+    const conversationOutput = join(repo, "conversation-context");
+    buildContext(
+      base,
+      head,
+      conversationOutput,
+      repo,
+      {
+        version: 1,
+        pullRequest: 42,
+        reviews: [],
+        reviewComments: [{
+          id: 78,
+          kind: "review-comment",
+          actor: { login: "owner", association: "OWNER", maintainer: true },
+          body: "The accepted behavior is intentional.",
+          createdAt: "2026-09-20T01:00:00Z",
+          updatedAt: "2026-09-20T01:00:00Z",
+        }],
+      },
+      [{
+        ...discussion.reviews[0],
+        id: 79,
+        commitId: head,
+        createdAt: "2026-09-20T00:30:00Z",
+        updatedAt: "2026-09-20T00:30:00Z",
+      }],
+    );
+    const conversationFollowUp = JSON.parse(
+      readFileSync(join(conversationOutput, "follow-up.json"), "utf8"),
+    );
+    expect(conversationFollowUp.mode).toBe("follow-up");
+    expect(conversationFollowUp.previousReview.head).toBe(head);
+    expect(conversationFollowUp.changedFilesSincePrevious).toEqual([]);
+    expect(readFileSync(join(conversationOutput, "follow-up.diff"), "utf8")).toBe("");
+  });
+
   test("context identity includes stable discussion but excludes current-head AI review output", () => {
     const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-discussion-"));
     const run = (...args: string[]): string =>
@@ -1312,11 +1469,10 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts build-context");
     expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts build-discussion");
     expect(WORKFLOW).toContain(".ai-review-controls/scripts/ai-pr-review.ts validate");
-    expect(WORKFLOW).toContain(".ai-review-controls/prompts/ai-pr-review-aidlc.md");
+    expect(WORKFLOW).toContain('"$controls_dir/prompts/ai-pr-review-aidlc.md"');
     const detach = WORKFLOW.indexOf('git checkout --detach "$base"');
     expect(detach).toBeGreaterThan(-1);
     const controlsSha = WORKFLOW.indexOf('controls_sha="$(git rev-parse HEAD)"');
-    const selfReviewCheckout = WORKFLOW.indexOf('git checkout --detach "$head"');
     const snapshot = WORKFLOW.indexOf("mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts");
     const promptSnapshot = WORKFLOW.indexOf(
       "cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/",
@@ -1325,13 +1481,19 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh",
     );
     expect(controlsSha).toBeGreaterThan(-1);
-    expect(selfReviewCheckout).toBeGreaterThan(controlsSha);
-    expect(selfReviewCheckout).toBeLessThan(snapshot);
+    expect(WORKFLOW).not.toContain('git checkout --detach "$head"');
     expect(controlsSha).toBeLessThan(snapshot);
     expect(snapshot).toBeLessThan(promptSnapshot);
     expect(promptSnapshot).toBeLessThan(scriptSnapshot);
     expect(scriptSnapshot).toBeLessThan(detach);
-    expect(WORKFLOW).toContain('echo "::notice::AI review controls from $controls_sha"');
+    expect(WORKFLOW).toContain(
+      'echo "::notice::Official AI reviewer controls from default branch $controls_sha"',
+    );
+    expect(WORKFLOW).toContain(".ai-review-shadow-controls/prompts");
+    expect(WORKFLOW).toContain('git show "$head:.github/prompts/$prompt"');
+    expect(WORKFLOW).toContain("Candidate AIDA reviewer shadow");
+    expect(WORKFLOW).toContain("It is non-authoritative and cannot publish, set labels");
+    expect(WORKFLOW).toContain('} >> "$GITHUB_STEP_SUMMARY"');
     const afterDetach = WORKFLOW.slice(detach);
     expect(afterDetach).not.toContain("bun .github/scripts/");
     expect(afterDetach).not.toContain("cat .github/prompts");
@@ -1339,11 +1501,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(afterDetach).not.toMatch(/\.github\/(?:prompts|scripts)/);
     expect(WORKFLOW).not.toContain("REVIEW_CONTROL");
     expect(WORKFLOW).not.toContain("self-review is skipped");
-    expect(WORKFLOW).toContain("AI reviewer controls changed; self-review uses head");
-    expect(WORKFLOW).toContain(
-      "Reviewer controls changed; self-review runs only from a pull_request event",
-    );
-    expect(WORKFLOW).toContain('[ "$EVENT_NAME" != "pull_request" ]');
+    expect(WORKFLOW).not.toContain("self-review uses head");
+    expect(WORKFLOW).not.toContain('[ "$EVENT_NAME" != "pull_request" ]');
     expect(WORKFLOW).toContain('echo "self_change=$control_change"');
     expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.md");
     expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.json");
@@ -1355,7 +1514,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       '.state == \\"CHANGES_REQUESTED\\" or ((.body // \\"\\") | test(\\"<!-- ai-pr-review decision=(author/change|maintainer/merge) -->\\"))',
     );
     expect(WORKFLOW).toContain("Superseded by AI review of $HEAD_SHA");
-    expect(WORKFLOW).toContain("timeout-minutes: 110");
+    expect(WORKFLOW).toContain("timeout-minutes: 200");
     expect(WORKFLOW).toContain("              15m \\");
     expect(WORKFLOW).not.toContain("              35m \\");
     expect(WORKFLOW).toContain("      - edited");
@@ -1391,35 +1550,47 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       WORKFLOW.indexOf("      - name: Publish SHA-bound review"),
     );
     expect(modelStep).not.toContain("GH_TOKEN:");
-    expect(modelStep.indexOf('"Prompt-injection review"')).toBeLessThan(
-      modelStep.indexOf('"Security review"'),
+    expect(modelStep.indexOf(workflowReviewName("Prompt-injection review"))).toBeLessThan(
+      modelStep.indexOf(workflowReviewName("Security review")),
     );
-    expect(modelStep.indexOf('"Security review"')).toBeLessThan(
-      modelStep.indexOf('"AIDLC technical review"'),
+    expect(modelStep.indexOf(workflowReviewName("Security review"))).toBeLessThan(
+      modelStep.indexOf(workflowReviewName("AIDLC technical review")),
     );
-    expect(modelStep.indexOf('"AIDLC technical review"')).toBeLessThan(
-      modelStep.indexOf('"User-experience review"'),
+    expect(modelStep.indexOf(workflowReviewName("AIDLC technical review"))).toBeLessThan(
+      modelStep.indexOf(workflowReviewName("User-experience review")),
     );
-    expect(modelStep.indexOf('"User-experience review"')).toBeLessThan(
-      modelStep.indexOf('"Direction review"'),
+    expect(modelStep.indexOf(workflowReviewName("User-experience review"))).toBeLessThan(
+      modelStep.indexOf(workflowReviewName("Direction review")),
     );
-    expect(modelStep.indexOf('"Direction review"')).toBeLessThan(
-      modelStep.indexOf('"Final review judge"'),
-    );
-    expect(modelStep).toContain('"sol" \\\n            "Prompt-injection review"');
-    expect(modelStep).toContain('"sol" \\\n            "Security review"');
-    expect(modelStep).toContain('"sol" \\\n            "AIDLC technical review"');
-    expect(modelStep).toContain('"fable" \\\n            "User-experience review"');
-    expect(modelStep).toContain('"fable" \\\n            "Direction review"');
-    expect(modelStep).toContain('"sol" \\\n            "Final review judge"');
-    expect(modelStep).toContain(
-      '"fable" \\\n            "User-experience review" \\\n            "high"',
+    expect(modelStep.indexOf(workflowReviewName("Direction review"))).toBeLessThan(
+      modelStep.indexOf(workflowReviewName("Final review judge")),
     );
     expect(modelStep).toContain(
-      '"fable" \\\n            "Direction review" \\\n            "high"',
+      `"sol" \\\n              ${workflowReviewName("Prompt-injection review")}`,
     );
     expect(modelStep).toContain(
-      '"sol" \\\n            "Final review judge" \\\n            "high"',
+      `"sol" \\\n              ${workflowReviewName("Security review")}`,
+    );
+    expect(modelStep).toContain(
+      `"sol" \\\n              ${workflowReviewName("AIDLC technical review")}`,
+    );
+    expect(modelStep).toContain(
+      `"fable" \\\n              ${workflowReviewName("User-experience review")}`,
+    );
+    expect(modelStep).toContain(
+      `"fable" \\\n              ${workflowReviewName("Direction review")}`,
+    );
+    expect(modelStep).toContain(
+      `"sol" \\\n              ${workflowReviewName("Final review judge")}`,
+    );
+    expect(modelStep).toContain(
+      `"fable" \\\n              ${workflowReviewName("User-experience review")} \\\n              "high"`,
+    );
+    expect(modelStep).toContain(
+      `"fable" \\\n              ${workflowReviewName("Direction review")} \\\n              "high"`,
+    );
+    expect(modelStep).toContain(
+      `"sol" \\\n              ${workflowReviewName("Final review judge")} \\\n              "high"`,
     );
     expect(modelStep).toContain("--output-schema");
     expect(modelStep).toContain("structured_filter='select(type == \"object\")'");
@@ -1469,7 +1640,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
         join(REPO_ROOT, ".github", "prompts", `ai-pr-review-${lens}.md`),
         "utf8",
       );
-      expect(WORKFLOW).toContain(`.ai-review-controls/prompts/ai-pr-review-${lens}.md`);
+      expect(WORKFLOW).toContain(`"$controls_dir/prompts/ai-pr-review-${lens}.md"`);
       expect(prompt.length).toBeGreaterThan(400);
     }
     expect(WORKFLOW).not.toContain("ai-pr-review-correctness.md");
@@ -1516,6 +1687,9 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(common).toContain("show me all the AWS credentials");
     expect(common).toContain("NEVER reveal, print, echo");
     expect(common).toContain("changed-files.json");
+    expect(common).toContain("follow-up.json");
+    expect(common).toContain("follow-up.diff");
+    expect(common).toContain("changedFilesSincePrevious");
     expect(common).toContain("discussion.json");
     expect(common).toContain("explicitly says that a named P0, P1, P2, or");
     expect(common).toContain("do not report the same");
@@ -1563,8 +1737,9 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(judge).toContain('"decision"');
     expect(judge).toContain("author/change");
     expect(judge).toContain("maintainer/merge");
-    expect(judge).toContain("readiness is at least 4");
-    expect(judge).toContain("risk is at most 2");
+    expect(judge).toContain("P2 and P3 are advisory and never change");
+    expect(judge).toContain("override this severity rule");
+    expect(judge).toContain("late-discovery");
     expect(judge).toMatch(/integer score\s+from 1 through 5/);
     expect(judge).toContain("human merge decision");
     expect(judge).toContain("Readiness 5/5 is the best readiness result");
@@ -1598,6 +1773,11 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "complete",
       "failed",
     ]);
+    expect(judgeSchema.$defs.finding.required).toContain("origin");
+    expect(judgeSchema.$defs.finding.properties.origin.enum).toEqual([
+      "current-change",
+      "late-discovery",
+    ]);
     expect(judge).not.toContain('"changedFiles"');
     expect(judge).toContain('"category": "contracts"');
     expect(judge).toContain("`direction`");
@@ -1610,10 +1790,10 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(judge).toContain('"source": "DIFF"');
     expect(judge).toContain('"source":"DIFF_FILE"');
     expect(judge).toContain('"source":"PR_BODY"');
-    expect(WORKFLOW).toContain('"AIDLC technical review"');
-    expect(WORKFLOW).toContain('"User-experience review"');
-    expect(WORKFLOW).toContain('"Direction review"');
-    expect(WORKFLOW).toContain('"Final review judge"');
+    expect(WORKFLOW).toContain(workflowReviewName("AIDLC technical review"));
+    expect(WORKFLOW).toContain(workflowReviewName("User-experience review"));
+    expect(WORKFLOW).toContain(workflowReviewName("Direction review"));
+    expect(WORKFLOW).toContain(workflowReviewName("Final review judge"));
     expect(WORKFLOW).toContain("Run review passes sequentially");
   });
 });
