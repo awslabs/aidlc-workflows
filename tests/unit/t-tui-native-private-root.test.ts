@@ -75,7 +75,7 @@ describe("native private namespace", () => {
     expect(() => publishTuiRecord(f.file, f.record, f.identity)).toThrow("directory identity mismatch");
   });
 
-  test("publication refuses a directory replaced after opening its temporary record", () => {
+  test.skipIf(process.platform === "win32")("publication refuses a directory replaced after opening its temporary record", () => {
     const f = fixture();
     const open = fs.openSync;
     let swapped = false;
@@ -87,6 +87,49 @@ describe("native private namespace", () => {
         ensurePrivateRoot(f.directory);
       }
       return fd;
+    }) as typeof fs.openSync);
+    try {
+      expect(() => publishTuiRecord(f.file, { ...f.record, token: "new" }, f.identity)).toThrow("directory identity mismatch");
+      expect(fs.existsSync(f.file)).toBe(false);
+      expect(JSON.parse(fs.readFileSync(join(`${f.directory}-old`, "session.json"), "utf8"))).toEqual(f.record);
+    } finally { hook.mockRestore(); }
+  });
+
+  test.skipIf(process.platform !== "win32")("Windows blocks directory replacement while the publication handle is open", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    let attempted = false;
+    let replacementError: unknown;
+    const hook = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+      const fd = open(...args);
+      if (String(args[0]).endsWith(".tmp") && !attempted) {
+        attempted = true;
+        try { fs.renameSync(f.directory, `${f.directory}-old`); }
+        catch (error) { replacementError = error; }
+      }
+      return fd;
+    }) as typeof fs.openSync);
+    try {
+      const next = { ...f.record, token: "new" };
+      publishTuiRecord(f.file, next, f.identity);
+      expect(replacementError).toMatchObject({ code: "EPERM" });
+      expect(fs.existsSync(`${f.directory}-old`)).toBe(false);
+      expect(readPrivateRecord(f.directory, f.file)).toEqual(next);
+    } finally { hook.mockRestore(); }
+  });
+
+  test("publication refuses a directory replaced before opening its temporary record", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    let swapped = false;
+    const hook = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+      // No file handle pins the directory yet, so Windows also permits this race.
+      if (String(args[0]).endsWith(".tmp") && !swapped) {
+        swapped = true;
+        fs.renameSync(f.directory, `${f.directory}-old`);
+        ensurePrivateRoot(f.directory);
+      }
+      return open(...args);
     }) as typeof fs.openSync);
     try {
       expect(() => publishTuiRecord(f.file, { ...f.record, token: "new" }, f.identity)).toThrow("directory identity mismatch");
