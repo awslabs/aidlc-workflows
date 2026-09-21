@@ -38,10 +38,12 @@ not the PR description:
   conversation.
 - Classify a finding as `current-change` when at least one cited diff path is
   in `changedFilesSincePrevious`, or when it is grounded only in current PR
-  metadata. Classify it as `late-discovery` when all cited diff paths are
-  outside that set. A late P0 or P1 must explain why the unchanged defect is
-  severe enough to change the requested action and identify it plainly as a
-  late discovery. Late P2 and P3 findings remain advisory.
+  metadata. When all cited diff paths are outside that set, use `retained` if
+  the exact title appears in `previousReview.findingTitles`; otherwise use
+  `late-discovery`. Keep a retained finding's title unchanged. A late P0 or P1
+  must explain why the unchanged defect is severe enough to change the
+  requested action and identify it plainly as a late discovery. Retained and
+  late P2 and P3 findings remain advisory.
 
 Use exactly one category for each surviving finding:
 
@@ -191,7 +193,7 @@ mode-only, pure rename, or other change with no line hunks may instead use
 `{"source":"DIFF_FILE","path":"exact/changed/path"}`. The validator rejects
 file-level evidence when changed-line evidence exists. Put related unchanged
 locations in the problem text, not the evidence array. Order findings P0 through
-P3. Every finding must include `origin` as `current-change` or
-`late-discovery`, following `follow-up.json`. If no finding survives, return an
-empty `findings` array. Never emit an approval claim or say that AIDA merged
+P3. Every finding must include `origin` as `current-change`, `retained`, or
+`late-discovery`, following `follow-up.json`. If no finding survives, return
+an empty `findings` array. Never emit an approval claim or say that AIDA merged
 the PR.

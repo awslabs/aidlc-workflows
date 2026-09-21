@@ -171,7 +171,7 @@
         },
         "origin": {
           "type": "string",
-          "enum": ["current-change", "late-discovery"]
+          "enum": ["current-change", "retained", "late-discovery"]
         },
         "title": {
           "type": "string",

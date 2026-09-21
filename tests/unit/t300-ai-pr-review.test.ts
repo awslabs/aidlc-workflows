@@ -43,8 +43,7 @@ const RUNTIME_SETUP = readFileSync(
   "utf8",
 );
 const REPOSITORY_INSTRUCTIONS = readFileSync(join(REPO_ROOT, "AGENTS.md"), "utf8");
-const SHELL_NAME_PREFIX = "$" + "{name_prefix}";
-const workflowReviewName = (name: string): string => `"${SHELL_NAME_PREFIX}${name}"`;
+const workflowReviewName = (name: string): string => `"${name}"`;
 const MANIFEST: ChangedFileManifest = {
   base: BASE,
   head: HEAD,
@@ -380,6 +379,7 @@ process.stdout.write(JSON.stringify(value));
         id: 41,
         head: BASE,
         createdAt: "2026-09-20T00:00:00Z",
+        findingTitles: ["Generated contract is incomplete"],
       },
       changedFilesSincePrevious: [],
     };
@@ -399,6 +399,7 @@ process.stdout.write(JSON.stringify(value));
 
     const late = review("P1");
     late.findings[0].origin = "late-discovery";
+    late.findings[0].title = "New contract defect";
     const validated = validateStructuredReview(
       JSON.stringify(late),
       BASE,
@@ -408,7 +409,7 @@ process.stdout.write(JSON.stringify(value));
       followUp,
     );
     expect(renderReview(validated, CONTEXT_ID).body).toContain(
-      "**P1: Generated contract is incomplete · Late discovery**",
+      "**P1: New contract defect · Late discovery**",
     );
 
     late.findings[0].origin = "current-change";
@@ -422,6 +423,30 @@ process.stdout.write(JSON.stringify(value));
         followUp,
       ),
     ).toThrow("origin must be late-discovery");
+
+    const retained = review("P1");
+    retained.findings[0].origin = "retained";
+    expect(() =>
+      validateStructuredReview(
+        JSON.stringify(retained),
+        BASE,
+        HEAD,
+        MANIFEST,
+        METADATA,
+        followUp,
+      ),
+    ).not.toThrow();
+    expect(renderReview(
+      validateStructuredReview(
+        JSON.stringify(retained),
+        BASE,
+        HEAD,
+        MANIFEST,
+        METADATA,
+        followUp,
+      ),
+      CONTEXT_ID,
+    ).body).toContain("**P1: Generated contract is incomplete · Retained**");
   });
 
   test("validator requires a grounded user-experience summary before assessment", () => {
@@ -1214,6 +1239,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
         id: 77,
         head: previousHead,
         createdAt: "2026-09-20T00:00:00Z",
+        findingTitles: [],
       },
       changedFilesSincePrevious: ["response.ts"],
     });
@@ -1280,9 +1306,28 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     buildContext(base, head, output, repo);
     const initial = readFileSync(join(output, "context-id.txt"), "utf8");
 
-    writeFileSync(join(output, "current-ai-reviews.json"), '[{"body":"new bot review"}]\n');
+    writeFileSync(
+      join(output, "current-ai-reviews.json"),
+      `${JSON.stringify([{
+        id: 90,
+        kind: "ai-review",
+        actor: {
+          login: "github-actions[bot]",
+          association: "CONTRIBUTOR",
+          maintainer: false,
+        },
+        body: `<!-- ai-pr-review context=${"e".repeat(64)} -->\n**P1: Existing defect**`,
+        createdAt: "2026-09-20T02:00:00Z",
+        updatedAt: "2026-09-20T02:00:00Z",
+        commitId: head,
+      }])}\n`,
+    );
     buildContext(base, head, output, repo);
     expect(readFileSync(join(output, "context-id.txt"), "utf8")).toBe(initial);
+    const currentHeadFollowUp = JSON.parse(
+      readFileSync(join(output, "follow-up.json"), "utf8"),
+    );
+    expect(currentHeadFollowUp.previousReview.findingTitles).toEqual(["Existing defect"]);
 
     writeFileSync(join(output, "discussion.json"), '{"comments":["all conversation","outsider reply"]}\n');
     buildContext(base, head, output, repo);
@@ -1489,11 +1534,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW).toContain(
       'echo "::notice::Official AI reviewer controls from default branch $controls_sha"',
     );
-    expect(WORKFLOW).toContain(".ai-review-shadow-controls/prompts");
-    expect(WORKFLOW).toContain('git show "$head:.github/prompts/$prompt"');
-    expect(WORKFLOW).toContain("Candidate AIDA reviewer shadow");
-    expect(WORKFLOW).toContain("It is non-authoritative and cannot publish, set labels");
-    expect(WORKFLOW).toContain('} >> "$GITHUB_STEP_SUMMARY"');
+    expect(WORKFLOW).not.toContain(".ai-review-shadow-controls");
+    expect(WORKFLOW).not.toContain("Candidate AIDA reviewer shadow");
     const afterDetach = WORKFLOW.slice(detach);
     expect(afterDetach).not.toContain("bun .github/scripts/");
     expect(afterDetach).not.toContain("cat .github/prompts");
@@ -1503,10 +1545,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW).not.toContain("self-review is skipped");
     expect(WORKFLOW).not.toContain("self-review uses head");
     expect(WORKFLOW).not.toContain('[ "$EVENT_NAME" != "pull_request" ]');
-    expect(WORKFLOW).toContain('echo "self_change=$control_change"');
-    expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.md");
-    expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.json");
-    expect(WORKFLOW).toContain('git diff --name-only "$base...$head"');
+    expect(WORKFLOW).not.toContain("self_change");
+    expect(WORKFLOW).toContain("cp .github/prompts/ai-pr-review-*");
     expect(WORKFLOW).not.toContain('git diff --name-only "$base" "$head"');
     expect(WORKFLOW).toContain("Finalize existing SHA-bound review");
     expect(WORKFLOW).toContain('if [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]');
@@ -1514,7 +1554,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       '.state == \\"CHANGES_REQUESTED\\" or ((.body // \\"\\") | test(\\"<!-- ai-pr-review decision=(author/change|maintainer/merge) -->\\"))',
     );
     expect(WORKFLOW).toContain("Superseded by AI review of $HEAD_SHA");
-    expect(WORKFLOW).toContain("timeout-minutes: 200");
+    expect(WORKFLOW).toContain("timeout-minutes: 110");
     expect(WORKFLOW).toContain("              15m \\");
     expect(WORKFLOW).not.toContain("              35m \\");
     expect(WORKFLOW).toContain("      - edited");
@@ -1776,6 +1816,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(judgeSchema.$defs.finding.required).toContain("origin");
     expect(judgeSchema.$defs.finding.properties.origin.enum).toEqual([
       "current-change",
+      "retained",
       "late-discovery",
     ]);
     expect(judge).not.toContain('"changedFiles"');

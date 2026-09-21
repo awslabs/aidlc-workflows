@@ -56,7 +56,7 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     environment: ai-pr-review
-    timeout-minutes: 200
+    timeout-minutes: 110
     permissions:
       contents: read
       id-token: write
@@ -130,19 +130,6 @@ jobs:
             exit 1
           fi
 
-          control_change=false
-          while IFS= read -r path; do
-            case "$path" in
-              .github/workflows/ai-pr-review.yml|\
-              .github/scripts/ai-pr-review.ts|\
-              .github/scripts/prepare-ai-review-runtime.sh|\
-              .github/prompts/ai-pr-review-*.md|\
-              .github/prompts/ai-pr-review-*.json)
-                control_change=true
-                break
-                ;;
-            esac
-          done < <(git diff --name-only "$base...$head")
           # pulls/<n>.base.sha can lag the default branch; controls must match
           # the workflow revision that runs them, not the immutable review base.
           controls_sha="$(git rev-parse HEAD)"
@@ -151,24 +138,6 @@ jobs:
           cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh \
             .ai-review-controls/scripts/
           echo "::notice::Official AI reviewer controls from default branch $controls_sha"
-
-          if [ "$control_change" = "true" ]; then
-            mkdir -p .ai-review-shadow-controls/prompts
-            for prompt in \
-              ai-pr-review-common.md \
-              ai-pr-review-candidates.md \
-              ai-pr-review-prompt-injection.md \
-              ai-pr-review-security.md \
-              ai-pr-review-aidlc.md \
-              ai-pr-review-user-experience.md \
-              ai-pr-review-direction.md \
-              ai-pr-review-judge.md \
-              ai-pr-review-judge-schema.json; do
-              git show "$head:.github/prompts/$prompt" \
-                > ".ai-review-shadow-controls/prompts/$prompt"
-            done
-            echo "::notice::Candidate AIDA prompts from $head will run as a non-authoritative shadow"
-          fi
 
           git checkout --detach "$base"
           mkdir -p .ai-review-context
@@ -215,7 +184,6 @@ jobs:
             echo "existing_state=$existing_state"
             echo "head=$head"
             echo "pr=$REQUESTED_PR"
-            echo "self_change=$control_change"
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
 
@@ -458,7 +426,6 @@ jobs:
           run_review_suite() {
             local controls_dir="$1"
             local final_dir="$2"
-            local name_prefix="$3"
             local prompt_injection_prompt
             local security_prompt
             local aidlc_prompt
@@ -481,7 +448,7 @@ jobs:
             )"
             run_model \
               "sol" \
-              "${name_prefix}Prompt-injection review" \
+              "Prompt-injection review" \
               "medium" \
               50000 \
               ".ai-review-lenses/prompt-injection.md" \
@@ -500,7 +467,7 @@ jobs:
             )"
             run_model \
               "sol" \
-              "${name_prefix}Security review" \
+              "Security review" \
               "medium" \
               50000 \
               ".ai-review-lenses/security.md" \
@@ -519,7 +486,7 @@ jobs:
             )"
             run_model \
               "sol" \
-              "${name_prefix}AIDLC technical review" \
+              "AIDLC technical review" \
               "high" \
               50000 \
               ".ai-review-lenses/aidlc.md" \
@@ -538,7 +505,7 @@ jobs:
             )"
             run_model \
               "fable" \
-              "${name_prefix}User-experience review" \
+              "User-experience review" \
               "high" \
               50000 \
               ".ai-review-lenses/user-experience.md" \
@@ -557,7 +524,7 @@ jobs:
             )"
             run_model \
               "fable" \
-              "${name_prefix}Direction review" \
+              "Direction review" \
               "high" \
               50000 \
               ".ai-review-lenses/direction.md" \
@@ -577,7 +544,7 @@ jobs:
             judge_schema="$(jq -c . "$controls_dir/prompts/ai-pr-review-judge-schema.json")"
             run_model \
               "sol" \
-              "${name_prefix}Final review judge" \
+              "Final review judge" \
               "high" \
               100000 \
               "$final_dir/review.md" \
@@ -587,8 +554,7 @@ jobs:
 
           run_review_suite \
             ".ai-review-controls" \
-            ".ai-pr-review-final" \
-            ""
+            ".ai-pr-review-final"
 
           event="$(bun .ai-review-controls/scripts/ai-pr-review.ts validate \
             --base "$BASE_SHA" \
@@ -603,37 +569,6 @@ jobs:
           decision="$(jq -r '"\(.actor)/\(.action)"' \
             .ai-pr-review-final/decision.json)"
           echo "decision=$decision" >> "$GITHUB_OUTPUT"
-
-          if [ "${{ steps.context.outputs.self_change }}" = "true" ]; then
-            mv .ai-review-lenses .ai-review-official-lenses
-            if run_review_suite \
-              ".ai-review-shadow-controls" \
-              ".ai-pr-review-shadow" \
-              "Candidate shadow "; then
-              if bun .ai-review-controls/scripts/ai-pr-review.ts validate \
-                --base "$BASE_SHA" \
-                --head "$HEAD_SHA" \
-                --context-id "${{ steps.context.outputs.context_id }}" \
-                --input .ai-pr-review-shadow/review.md \
-                --manifest .ai-review-context/changed-files.json \
-                --metadata .ai-review-context/pr.json \
-                --output .ai-pr-review-shadow/review.json \
-                --decision-output .ai-pr-review-shadow/decision.json >/dev/null; then
-                {
-                  echo "## Candidate AIDA reviewer shadow"
-                  echo
-                  echo "This output used the proposed model-facing prompts and schema. It is non-authoritative and cannot publish, set labels, or choose the next action."
-                  echo
-                  jq -r '.body' .ai-pr-review-shadow/review.json
-                } >> "$GITHUB_STEP_SUMMARY"
-                echo "::notice::Candidate AIDA reviewer shadow completed"
-              else
-                echo "::warning::Candidate AIDA reviewer shadow output failed official validation"
-              fi
-            else
-              echo "::warning::Candidate AIDA reviewer shadow did not complete"
-            fi
-          fi
 
       - name: Publish SHA-bound review
         id: publish

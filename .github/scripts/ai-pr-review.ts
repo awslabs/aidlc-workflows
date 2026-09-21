@@ -164,6 +164,7 @@ export interface FollowUpContext {
     id: number;
     head: string;
     createdAt: string;
+    findingTitles: string[];
   } | null;
   changedFilesSincePrevious: string[];
 }
@@ -171,7 +172,7 @@ export interface FollowUpContext {
 export interface Finding {
   priority: Priority;
   category: FindingCategory;
-  origin: "current-change" | "late-discovery";
+  origin: "current-change" | "retained" | "late-discovery";
   title: string;
   evidence: FindingEvidence[];
   problem: string;
@@ -678,7 +679,9 @@ function contextDigest(root: string): string {
       if (
         contextPath === "context-id.txt" ||
         contextPath === CURRENT_AI_REVIEWS_FILE ||
-        contextPath === DISCUSSION_FILE
+        contextPath === DISCUSSION_FILE ||
+        contextPath === FOLLOW_UP_FILE ||
+        contextPath === "follow-up.diff"
       ) continue;
       const stats = statSync(path);
       if (stats.isDirectory()) visit(path);
@@ -719,6 +722,12 @@ function previousReviewedHead(
     });
 }
 
+function findingTitles(body: string): string[] {
+  return [...body.matchAll(/^\*\*P[0-3]: (.+)\*\*$/gm)]
+    .map(match => match[1].replace(/ · Late discovery$/, "").trim())
+    .filter(Boolean);
+}
+
 function followUpContext(
   outputDir: string,
   head: string,
@@ -756,6 +765,7 @@ function followUpContext(
       id: previous.id,
       head: previous.commitId,
       createdAt: previous.createdAt,
+      findingTitles: findingTitles(previous.body),
     },
     changedFilesSincePrevious: [
       ...new Set(changed.flatMap(file => [file.previousPath, file.path].filter(Boolean) as string[])),
@@ -1006,6 +1016,7 @@ export function validateStructuredReview(
     }
     if (
       finding.origin !== "current-change" &&
+      finding.origin !== "retained" &&
       finding.origin !== "late-discovery"
     ) {
       throw new Error(`findings[${index}].origin is invalid`);
@@ -1056,21 +1067,25 @@ export function validateStructuredReview(
       return { source: "DIFF", path, line, side };
     });
     const latestPaths = new Set(followUp?.changedFilesSincePrevious ?? []);
-    const isLateDiscovery = followUp?.mode === "follow-up" &&
+    const outsideLatestChange = followUp?.mode === "follow-up" &&
       evidence.some(item => item.source === "DIFF" || item.source === "DIFF_FILE") &&
       evidence.every(item =>
         item.source !== "DIFF" && item.source !== "DIFF_FILE"
           ? true
           : !latestPaths.has(item.path)
       );
-    const expectedOrigin = isLateDiscovery ? "late-discovery" : "current-change";
+    const title = requiredText(finding.title, `findings[${index}].title`, 160);
+    const retained = outsideLatestChange &&
+      (followUp?.previousReview?.findingTitles ?? []).includes(title);
+    const expectedOrigin = outsideLatestChange
+      ? retained ? "retained" : "late-discovery"
+      : "current-change";
     if (finding.origin !== expectedOrigin) {
       throw new Error(
         `findings[${index}].origin must be ${expectedOrigin} for the reviewed commit range`,
       );
     }
 
-    const title = requiredText(finding.title, `findings[${index}].title`, 160);
     if (/[\r\n]/.test(title)) throw new Error(`findings[${index}].title must be one line`);
     return {
       priority,
@@ -1227,7 +1242,11 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     lines.push(
       "",
       `**${finding.priority}: ${markdownText(finding.title)}${
-        finding.origin === "late-discovery" ? " · Late discovery" : ""
+        finding.origin === "retained"
+          ? " · Retained"
+          : finding.origin === "late-discovery"
+          ? " · Late discovery"
+          : ""
       }**`,
       "",
       `Evidence: ${finding.evidence
