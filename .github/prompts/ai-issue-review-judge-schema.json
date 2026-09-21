@@ -1,0 +1,226 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "issue",
+    "contextId",
+    "inspection",
+    "validation",
+    "assessment",
+    "findings",
+    "residualRisk"
+  ],
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "contextId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "inspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "failed"]
+        }
+      }
+    },
+    "validation": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readiness", "risk"],
+      "properties": {
+        "readiness": {
+          "$ref": "#/$defs/assessment"
+        },
+        "risk": {
+          "$ref": "#/$defs/assessment"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "residualRisk": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    }
+  },
+  "$defs": {
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "rationale"],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "category",
+        "title",
+        "evidence",
+        "concern",
+        "impact",
+        "suggestedIssueChange"
+      ],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["blocking-question", "recommendation"]
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "intent",
+            "direction",
+            "user-experience",
+            "scope",
+            "feasibility",
+            "risks"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "concern": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 3000
+        },
+        "impact": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "suggestedIssueChange": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "evidence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "quote"],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": ["ISSUE_TITLE", "ISSUE_BODY"]
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "path", "quote"],
+          "properties": {
+            "source": {
+              "const": "REPOSITORY"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "issue", "quote"],
+          "properties": {
+            "source": {
+              "const": "EXISTING_ISSUE"
+            },
+            "issue": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "comment", "author", "quote"],
+          "properties": {
+            "source": {
+              "const": "ISSUE_COMMENT"
+            },
+            "comment": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "author": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        }
+      ]
+    }
+  }
+}

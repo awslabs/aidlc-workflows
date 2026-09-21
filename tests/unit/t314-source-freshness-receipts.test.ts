@@ -57,6 +57,8 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  reviewedSourceRefPrefix,
+  worktreePath,
   boltSlugForUnit,
   auditBlockField,
   gitCommitSourceListing,
@@ -72,6 +74,7 @@ import {
   workspaceSourcePathIsExcluded,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   FIXTURES_DIR,
   cleanupTestProject,
@@ -2706,7 +2709,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
   }
 
   function wtPath(proj: string, unit: string): string {
-    return join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+    return worktreePath(proj, fixtureIntentId8(proj), unit);
   }
 
   function ensureDagUnit(proj: string, unit: string): void {
@@ -2935,7 +2938,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         "-C",
         proj,
         "for-each-ref",
-        "refs/aidlc/reviewed-source/external-link/",
+        reviewedSourceRefPrefix(fixtureIntentId8(proj), "external-link"),
       ],
       { encoding: "utf-8" },
     );
@@ -3472,7 +3475,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(readAllAuditShards(proj)).not.toMatch(
       /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: subdirty/,
     );
-    const refs = spawnSync("git", ["-C", proj, "for-each-ref", "refs/aidlc/reviewed-source/subdirty/"], {
+    const refs = spawnSync("git", ["-C", proj, "for-each-ref", reviewedSourceRefPrefix(fixtureIntentId8(proj), "subdirty")], {
       encoding: "utf-8",
     });
     expect(refs.status).toBe(0);
@@ -4755,7 +4758,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(audit).toMatch(/\*\*Source Commit\*\*: [0-9a-f]{40}/);
     const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(audit)?.[1];
     if (!sourceCommit) throw new Error("convergence row did not carry Source Commit");
-    const retainedRef = `refs/aidlc/reviewed-source/bar/${sourceCommit}`;
+    const retainedRef = `${reviewedSourceRefPrefix(fixtureIntentId8(proj), "bar")}${sourceCommit}`;
     const retained = spawnSync("git", ["-C", proj, "rev-parse", "--verify", retainedRef], {
       encoding: "utf-8",
     });
@@ -4862,7 +4865,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const audit = readAllAuditShards(proj);
     const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(audit)?.[1];
     if (!sourceCommit) throw new Error("convergence row did not carry Source Commit");
-    const retainedRef = `refs/aidlc/reviewed-source/drop/${sourceCommit}`;
+    const retainedRef = `${reviewedSourceRefPrefix(fixtureIntentId8(proj), "drop")}${sourceCommit}`;
     expect(spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef]).status).toBe(0);
 
     const discarded = spawnSync(BUN, [

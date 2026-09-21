@@ -25,6 +25,7 @@ type HarnessCapabilities = {
     mode: "manifest" | "emit";
     fills: string;
     dist: string;
+    harnessDist: string;
   };
   rootFiles: readonly string[];
   skillsRoot: string;
@@ -54,6 +55,7 @@ const HARNESS_CAPABILITIES = {
       mode: "manifest",
       fills: "onboarding.fills.ts",
       dist: ".claude/CLAUDE.md",
+      harnessDist: ".claude/CLAUDE.md",
     },
     rootFiles: [".gitignore", ".mcp.json"],
     skillsRoot: ".claude/skills",
@@ -69,9 +71,10 @@ const HARNESS_CAPABILITIES = {
   codex: {
     harnessDir: ".codex",
     onboarding: {
-      mode: "emit",
+      mode: "manifest",
       fills: "onboarding.fills.ts",
       dist: "AGENTS.md",
+      harnessDist: ".codex/onboarding.md",
     },
     rootFiles: [".gitignore", "AGENTS.md"],
     skillsRoot: ".agents/skills",
@@ -90,6 +93,7 @@ const HARNESS_CAPABILITIES = {
       mode: "manifest",
       fills: "onboarding.fills.ts",
       dist: "AGENTS.md",
+      harnessDist: "AGENTS.md",
     },
     rootFiles: [".gitignore", "AGENTS.md"],
     skillsRoot: ".github/skills",
@@ -108,6 +112,7 @@ const HARNESS_CAPABILITIES = {
       mode: "manifest",
       fills: "onboarding.fills.ts",
       dist: "AGENTS.md",
+      harnessDist: ".cursor/rules/aidlc-onboarding.mdc",
     },
     rootFiles: [".gitignore", "AGENTS.md", "install.ts"],
     skillsRoot: ".cursor/skills",
@@ -126,6 +131,7 @@ const HARNESS_CAPABILITIES = {
       mode: "manifest",
       fills: "onboarding.fills.ts",
       dist: "AGENTS.md",
+      harnessDist: ".kiro/steering/aidlc-onboarding.md",
     },
     rootFiles: [".gitignore", "AGENTS.md"],
     skillsRoot: ".kiro/skills",
@@ -147,6 +153,7 @@ const HARNESS_CAPABILITIES = {
       mode: "manifest",
       fills: "onboarding.fills.ts",
       dist: "AGENTS.md",
+      harnessDist: ".aidlc/onboarding.md",
     },
     rootFiles: [".gitignore", "AGENTS.md", "opencode.json"],
     skillsRoot: ".aidlc/skills",
@@ -173,6 +180,7 @@ export type ShippedHarness = {
   skillsRoot: string;
   onboardingFills: string;
   onboardingDist: string;
+  harnessOnboardingDist: string;
 };
 
 function discoverManifestNames(): string[] {
@@ -240,6 +248,12 @@ function validateManifest(
     if (dist !== capabilities.onboarding.dist) {
       fail(name, `onboarding dist "${capabilities.onboarding.dist}" != manifest "${dist}"`);
     }
+    const harnessDist = onboarding.harnessDst
+      ? `${manifest.harnessDir}/${onboarding.harnessDst}`
+      : dist;
+    if (harnessDist !== capabilities.onboarding.harnessDist) {
+      fail(name, `harness onboarding "${capabilities.onboarding.harnessDist}" != manifest "${harnessDist}"`);
+    }
   } else if (onboarding || !manifest.emit) {
     fail(name, "emitted onboarding requires onboarding:null and an emit function");
   }
@@ -266,7 +280,7 @@ function validateManifest(
     (capabilities.memoryInclude === "claude-import") !==
       manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
     (capabilities.memoryInclude === "codex-env") !==
-      (capabilities.onboarding.mode === "emit") ||
+      (manifest.orchestratorSkillPath === ".agents/skills/aidlc/SKILL.md") ||
     (capabilities.memoryInclude === "opencode-instructions") !==
       manifest.harnessFiles.some((file) => file.dst === "opencode.json") ||
     (capabilities.memoryInclude === "copilot-agents-md") !==
@@ -320,12 +334,14 @@ export const HARNESS_MATRIX: readonly ShippedHarness[] = discoveredNames.map((ra
   const engineRoot = join(distRoot, manifest.harnessDir);
   const onboardingFills = join(authoredRoot, capabilities.onboarding.fills);
   const onboardingDist = join(distRoot, capabilities.onboarding.dist);
+  const harnessOnboardingDist = join(distRoot, capabilities.onboarding.harnessDist);
   const skillsRoot = join(distRoot, capabilities.skillsRoot);
   for (const [label, path] of [
     ["dist root", distRoot],
     ["engine root", engineRoot],
     ["onboarding fills", onboardingFills],
     ["onboarding dist", onboardingDist],
+    ["harness onboarding dist", harnessOnboardingDist],
     ["skills root", skillsRoot],
   ]) {
     if (!existsSync(path)) fail(name, `${label} is missing: ${path}`);
@@ -341,6 +357,7 @@ export const HARNESS_MATRIX: readonly ShippedHarness[] = discoveredNames.map((ra
     skillsRoot,
     onboardingFills,
     onboardingDist,
+    harnessOnboardingDist,
   };
 });
 

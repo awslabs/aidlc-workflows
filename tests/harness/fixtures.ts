@@ -39,6 +39,7 @@ import { createRequire } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type * as AidlcLib from "../../core/tools/aidlc-lib.ts";
 import { seedCustomHarness } from "./custom-harness.ts";
 import type { ShippedHarnessName } from "./harness-matrix.ts";
 
@@ -55,15 +56,9 @@ export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 // resolve the seeded paths via seededRecordDir()/seededStateFile() below (or
 // import recordDirFor from sdk-drive.ts) instead of hardcoding aidlc-docs/.
 export const DEFAULT_SPACE = "default";
-// The seeded default intent's uuid (canonical UUIDv7 shape). The record dir name
-// is `<slug>-<id8>` where id8 = idSuffix(uuid) = the trailing 16 hex chars (dashes
-// stripped) — the SAME derivation the runtime uses to join an intents.json row to
-// its dir (aidlc-lib.ts idSuffix/listIntents). Deriving DEFAULT_RECORD_DIR from
-// the uuid keeps the row and the dir consistent BY CONSTRUCTION, so the seeded
-// fixture models a layout the runtime can actually produce (a hand-kept suffix had
-// drifted: uuid …8000-000000000001 → idSuffix `8000000000000001`, not the literal
-// `0000000000000001` the dir used, so listIntents()/updateIntentStatus() never
-// matched the row to its dir).
+// Retain the seeded record's historical 16-hex directory suffix; the registry's
+// explicit dirName joins it to the UUID. Bolt names use the independent 8-hex
+// idSuffix(uuid), resolved by fixtureIntentId8 rather than this record dirname.
 export const DEFAULT_INTENT_UUID = "00000000-0000-7000-8000-000000000001";
 const DEFAULT_RECORD_ID8 = DEFAULT_INTENT_UUID.replace(/-/g, "").slice(-16);
 export const DEFAULT_RECORD_DIR = `fixture-${DEFAULT_RECORD_ID8}`;
@@ -281,6 +276,17 @@ export function intentsDirOf(proj: string, space = DEFAULT_SPACE): string {
  */
 export function seededRecordDir(proj: string, space = DEFAULT_SPACE): string {
   return join(intentsDirOf(proj, space), DEFAULT_RECORD_DIR);
+}
+
+/** Resolve the active fixture intent through the same registry identity as Bolt tools. */
+export function fixtureIntentId8(projectDir: string, intent?: string, space?: string): string {
+  const lib = requireHere(
+    "../../core/tools/aidlc-lib.ts",
+  ) as typeof AidlcLib;
+  const selection = lib.resolveWorkflowSelection(projectDir, { intent, space });
+  const uuid = lib.intentUuidForSelection(projectDir, selection);
+  if (!uuid) throw new Error(`Fixture intent has no registry identity: ${projectDir}`);
+  return lib.idSuffix(uuid);
 }
 
 /** The seeded space-level codekb directory for a repository. */
@@ -571,6 +577,8 @@ export function setupWorktreeFixture(): string {
   // anchor under aidlc/spaces/default/intents/<record>/ instead of a flat
   // aidlc-docs/ tree.
   seedWorkspaceShell(proj);
+  // Bolt creation requires a selected registry intent; cursors ignore stateless records.
+  writeFileSync(seededStateFile(proj), "# AI-DLC State\n", "utf-8");
   return proj;
 }
 

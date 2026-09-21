@@ -370,7 +370,7 @@ After restoration succeeds, announce the returned restored path plainly:
 **SAY:** "I restored the previous attempt at [returned restored path]."
 This does not resume the old attempt or make its review current.
 
-The orchestrator runs `{{INVOKE}} engine worktree info --slug <slug>` to obtain the worktree `<path>` and `<branch_name>` deterministically before composing the halt-and-ask question. See `SKILL.md` § "Halt-and-ask failure handling" for the full tool-call sequence and the `worktree-info-schema.md` knowledge file for the JSON contract.
+The orchestrator runs `{{INVOKE}} engine worktree info --slug <slug>` to obtain the worktree `<path>`, `<branch_name>`, and `intent_id8` deterministically before composing the halt-and-ask question. `info` validates the audited `Branch name` and `Worktree path` against the canonical Bolt identity for the selected intent and returns canonical values (`bolt-<id8>_<slug>` for new Bolts, legacy `bolt-<slug>` for pre-upgrade ones), so `path` and `branch_name` are validated display values, not free text from the audit. Interpolate them exactly as returned; never reconstruct the branch from the slug. On any non-zero exit, render the same Retry/Skip/Abort question below with the "Worktree at [path] on branch [branch_name]." clause replaced by a voice-contract translation — one plain sentence naming what could not be shown and why, then one naming the next step (for example "I couldn't confirm this Bolt's worktree from the audit record, so I'm not showing a path or branch. You can still choose Retry, Skip, or Abort below."); never quote a branch or path from the audit or build one from the slug yourself, and leave the refusal text in the tool result. See [Bolt identity](../../knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity) for the JSON and naming contract.
 
 ```question
 prompt: "Bolt [Z] failed during code generation: [short error]. Worktree at [path] on branch [branch_name]. How would you like to proceed?"
@@ -478,12 +478,17 @@ a human stop for the repair; autonomy does not waive it.
 boundary token (`<event>:<timestamp>#<ordinal>` over workflow start, jump,
 rejection, and stage start boundaries). Each `SWARM_UNIT_CONVERGED` row must
 match the current token, so prior-attempt rows no longer count and all units
-re-dispatch by default. Before `prepare`, check for worktrees or
-`bolt-<slug>` branches left by the prior attempt (a crash or a halt-and-ask
-mid-swarm leaves them in place): `prepare` hard-errors on collision, and
+re-dispatch by default. Before `prepare`, use `worktree list` and `worktree info`
+to identify the selected intent's worktrees and branches left by the prior
+attempt (a crash or a halt-and-ask mid-swarm leaves them in place):
+`prepare` hard-errors on collision, and
 `finalize` refuses a unit without the current attempt's prepare stamp, so
 discard the stale worktrees/branches before a fresh `prepare` — never adopt
-them into the new attempt. Discard parks each attempt; its snapshot remains
+them into the new attempt. Discard only the selected intent's Bolts: matching
+Unit slugs in another intent are not stale siblings, and cleanup refuses a
+branch checked out at a foreign worktree path (surface the owner path rather
+than deleting it).
+Discard parks each attempt; its snapshot remains
 recoverable with `{{INVOKE}} engine worktree restore --slug <slug>` in a
 separate restored checkout, never as current-attempt evidence. Do not spend a worker turn per unit: after
 `prepare`, run

@@ -80,10 +80,12 @@ describe("t148 dist/kiro file structure", () => {
     for (const p of ["ideation", "inception", "construction", "operation"]) {
       expect(existsSync(mem("phases", `${p}.md`))).toBe(true);
     }
-    // steering/ ships, because it carries the active-memory pointer - but it must
-    // hold ONLY that pointer, not the retired in-harness rule layers.
+    // steering/ ships exactly two files: the active-memory pointer and the native
+    // onboarding #1268 moved here. Neither is a copy of the retired in-harness rule
+    // layers, and nothing else may appear - that is what this inventory pins.
     expect(readdirSync(join(K, "steering")).sort()).toEqual([
       "aidlc-active-memory.md",
+      "aidlc-onboarding.md",
     ]);
   });
 
@@ -91,6 +93,7 @@ describe("t148 dist/kiro file structure", () => {
     for (const f of [
       "skills/aidlc/SKILL.md",
       "skills/aidlc/question-rendering.md",
+      "steering/aidlc-onboarding.md",
       "hooks/aidlc-kiro-adapter.ts",
       "agents/aidlc.md",
       "agents/aidlc-developer-agent.md",
@@ -116,6 +119,9 @@ describe("t148 dist/kiro file structure", () => {
     const path = join(K, "steering", "aidlc-active-memory.md");
     const steering = readFileSync(path, "utf-8");
     expect(steering).toMatch(/^---\ninclusion: always\n---/);
+    // Upstream added this against the retired kiro-ide dist (`KI`). One row ships now,
+    // so the same contract is asserted on the Kiro dist this branch builds.
+    expect(frontmatter(join(K, "steering", "aidlc-onboarding.md"))).toBe("inclusion: always");
     for (const file of [
       "org.md",
       "team.md",

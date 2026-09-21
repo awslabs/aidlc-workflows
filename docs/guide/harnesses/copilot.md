@@ -11,6 +11,11 @@ every distribution — only the shell differs. The source/development tree is
 **generated** into ignored local `dist/copilot/` from `core/` +
 `harness/copilot/` by `bun scripts/package.ts copilot`; never hand-edit it.
 
+The full onboarding remains in the root `AGENTS.md`: Copilot-specific setup
+and the live `@`-import block for method files, followed by neutral project
+guidance. Copilot's managed root block stays exclusive, not shared with harnesses
+that ship the neutral-only block. Keep those imports when merging project instructions.
+
 ## Layout: the engine dir and the .github shell
 
 - **`.aidlc/`** — the AIDLC engine tree (tools, hooks + the Copilot adapter,

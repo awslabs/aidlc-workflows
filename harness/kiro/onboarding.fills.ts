@@ -1,17 +1,22 @@
 // harness/kiro/onboarding.fills.ts — the Kiro row's onboarding-doc fills.
 // One row serves Kiro IDE and Kiro CLI, so this text must not name one of them
-// as if it were the harness. It renders into the shipped AGENTS.md, which is
+// as if it were the harness. It renders into the native onboarding file, which is
 // always loaded - a false sentence here is read every session.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/kiro/AGENTS.md (project root). {{HARNESS_DIR}} → .kiro and the
-// rules/ → steering/ rename are applied by the packager transform afterwards.
+// The packager fills core/templates/onboarding-harness.md into
+// dist/kiro/.kiro/steering/aidlc-onboarding.md, loaded by agent resources.
+// The root AGENTS.md stays neutral, identical to the other sharing harnesses.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
 const fills: OnboardingFills = {
   invoke: "/aidlc",
   slots: {
-    title_block: `# Project Name <!-- Replace with your project name -->
+    // Kiro IDE reads `.kiro/steering/*.md` only with this frontmatter; the CLI
+    // reaches the same file through the aidlc agent's steering resource glob,
+    // which already loads aidlc-active-memory.md carrying the identical block.
+    frontmatter: "---\ninclusion: always\n---",
+
+    title_block: `# AI-DLC on Kiro
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro harness** (Kiro IDE or Kiro CLI). The workspace shell ships in \`.kiro/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 
@@ -26,8 +31,6 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     structure_extra: "",
 
-    guide_pointer: `The Kiro-specific guide (install, what differs, the live journey test) is \`docs/guide/harnesses/kiro.md\`. This install ships the workspace shell only and carries no \`docs/\` tree: every \`docs/…\` path cited here, and in the shipped skills, protocols, and tools, names a file in the AI-DLC Workflows repository rather than one beside you.`,
-
     sections_before_resumption: `## What's different on this harness
 
 This is the same AI-DLC core that ships to every harness: the same ordered steps, the same approval gates, and the same written record of what was decided, rendered onto Kiro. On Kiro:
@@ -38,11 +41,11 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - Session-end and pre-compaction audit events (\`SESSION_ENDED\`, \`SESSION_COMPACTED\`) are not emitted — Kiro's \`Stop\` trigger fires at the end of every turn, not at conversation close, so there is no genuine session-end moment to hook.
 - **MCP servers**: two ship in \`.kiro/settings/mcp.json\` — \`context7\` and \`aws-knowledge-mcp-server\`, both keyless HTTP and both disabled by default. Flip \`"disabled": false\` on each server you want to enable. This row ships no uvx launcher: an entry that spawns a local process from a floating package version is a heavier default than a row serving both surfaces wants, and the knowledge server covers the AWS documentation case over plain HTTP. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. All 14 delegated personas opt in through \`includeMcpJson: true\` plus \`@<server>\` tool grants; the conductor gets none.
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between Claude Code and Kiro installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
+
+The Kiro-specific guide (install, what differs, the live journey test) is \`docs/guide/harnesses/kiro.md\`. This install ships the workspace shell only and carries no \`docs/\` tree: every \`docs/…\` path cited here, and in the shipped skills, protocols, and tools, names a file in the AI-DLC Workflows repository rather than one beside you.
 `,
 
     sections_after_resumption: "",
-
-    gitignore_extra: "",
   },
 };
 

@@ -152,6 +152,7 @@ const manifest: HarnessManifest = {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
+      shared: "identical",
       legacySignatures: {
         wholeFileHashes: [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -192,8 +193,14 @@ const manifest: HarnessManifest = {
           "sha256:68be79dc053e88931557484ef37b7f63248cddcf02cb44db89c5bd2522980967",
           "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
+          // The retired row's own pre-neutral variant (#1268 made the root block
+          // harness-neutral). It shipped from harness/kiro-ide/manifest.ts, which this
+          // branch deletes, so the unified row has to keep recognizing it.
+          "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
           // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
           "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
         ],
       },
     },
@@ -288,12 +295,8 @@ const manifest: HarnessManifest = {
     lines: personaFrontmatter(agent),
   })),
 
-  // AGENTS.md renders from the shared skeleton with Kiro's fills, at the project
-  // root (outside .kiro/). The {{HARNESS_DIR}} → .kiro substitution + rules/ →
-  // steering/ rename run on it like any core .md. Replaces the hand-forked
-  // harness/kiro/AGENTS.md (which had drifted to "two harnesses" + missing the
-  // Documentation/Automated-Testing sections the skeleton now supplies for free).
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  // Neutral root guidance is shared; native setup is loaded through agent resources.
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 
   // rules/ → steering/ (applied after the token substitution, anchored).
   rulesRename: "steering",

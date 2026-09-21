@@ -35,7 +35,7 @@
 // FIXTURE DISCIPLINE: each case builds a self-contained temp project via
 // createTestProject() + seedStateFile() (the .ts analogues of the .sh's
 // make_project, which cp'd state-construction.md into aidlc-docs/) and removes
-// it after. The runtime-graph.json + .aidlc/worktrees/bolt-<slug>/ layout is
+// it after. The runtime-graph.json + intent-scoped worktree layout is
 // test-specific so it is written inline (the .sh wrote it inline too). NOTHING
 // is written under tests/fixtures/**.
 
@@ -44,7 +44,9 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  fixtureIntentId8,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   cleanupTestProject,
@@ -82,7 +84,7 @@ let projDir = "";
 //   - fresh temp project with aidlc-docs/aidlc-state.md seeded from
 //     state-construction.md (createTestProject + seedStateFile).
 //   - mainGraph !== null  -> write main aidlc-docs/runtime-graph.json bytes.
-//   - slug !== null       -> pre-create .aidlc/worktrees/bolt-<slug>/aidlc-docs/
+//   - slug !== null       -> pre-create the canonical worktree's intent record
 //     and byte-copy main state into it (simulating what state-fork populates).
 function makeProject(slug: string | null, mainGraph: string | null): string {
   const proj = createTestProject();
@@ -106,17 +108,11 @@ function makeProject(slug: string | null, mainGraph: string | null): string {
 
 // The worktree mirror's per-intent record dir.
 function wtRecordDir(proj: string, slug: string): string {
-  return join(
-    proj,
-    ".aidlc",
-    "worktrees",
-    `bolt-${slug}`,
-    "aidlc",
-    "spaces",
-    DEFAULT_SPACE,
-    "intents",
-    DEFAULT_RECORD_DIR,
-  );
+  return join(worktreePath(proj, fixtureIntentId8(proj), slug), "aidlc",
+  "spaces",
+  DEFAULT_SPACE,
+  "intents",
+  DEFAULT_RECORD_DIR,);
 }
 
 // wt_fragment_path analogue (t96:88-90) — under the worktree mirror record.

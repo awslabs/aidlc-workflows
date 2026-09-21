@@ -9,6 +9,12 @@ files, protocols, knowledge, sensors, scopes, and rules — is byte-shared acros
 every harness; only the shell (skills, agent surfaces, hook wiring, activation)
 differs.
 
+Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`. Its
+`inclusion: always` frontmatter loads it in the IDE, and the conductor agent's
+steering resource glob loads the same file on the CLI. The root `AGENTS.md` block
+is harness-neutral and byte-shared with the other harnesses that declare it, so a
+Kiro install can sit beside one of them whenever their engine directories differ.
+
 > [!IMPORTANT]
 > **Run AI-DLC on Kiro with Claude Opus 4.8.** The conductor drives a
 > multi-step ritual per stage — clarifying questions, artifact generation, a

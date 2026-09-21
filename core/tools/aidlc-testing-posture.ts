@@ -29,6 +29,8 @@ import {
   gitCommitSourceListing,
   isoTimestamp,
   latestMainWorkflowStageRunFloorForProject,
+  legacyBoltName,
+  legacyWorktreePath,
   maximalAttemptEvents,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   clearPlanApprovalChallenge,
@@ -55,6 +57,7 @@ import {
   renderChangedPaths,
   governedChangeControl,
   resolveBoltDag,
+  resolveBoltIdentity,
   resolveAuditWorktreePath,
   resolveConstructionRepo,
   resolveChangeControl,
@@ -79,7 +82,6 @@ import {
   workspaceSourceFailureSuffix,
   workspaceSourceFingerprint,
   workspaceSourceState,
-  worktreePath,
   writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
   writeBufferAtomic,
@@ -2758,7 +2760,9 @@ function approvalWorktreeProvenance(parentDir: string, childDir: string, unit: s
   const parent = realpathSync(parentDir);
   const child = realpathSync(childDir);
   const slug = boltSlugForUnit(unit);
-  if (parent === child || approvalPathKey(worktreePath(parent, slug)) !== approvalPathKey(child)) {
+  const selection = resolveWorkflowSelection(parent);
+  const identity = resolveBoltIdentity(parent, slug, selection);
+  if (parent === child || approvalPathKey(identity.dir) !== approvalPathKey(child)) {
     throw new Error("Approval delegation requires the parent's canonical Unit worktree.");
   }
   assertNoSymlinkInChainOrThrow(parent, relative(parent, childDir));
@@ -2791,12 +2795,12 @@ function approvalWorktreeProvenance(parentDir: string, childDir: string, unit: s
   const floor = latestMainWorkflowStageRunFloorForProject(parent, CODE_GENERATION_STAGE);
   if (!recordedPath || approvalPathKey(resolveAuditWorktreePath(parent, recordedPath)) !== approvalPathKey(child) ||
     approvalPathKey(worktreeApprovalGit(child, ["rev-parse", "--show-toplevel"])) !== approvalPathKey(child) ||
-    worktreeApprovalGit(child, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/bolt-${slug}` ||
+    worktreeApprovalGit(child, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${identity.branch}` ||
     common !== childCommon || repo.repo !== meta.repoSelector ||
     (meta.gitCommonDirHash !== commonHash &&
       (typeof meta.gitCommonDir !== "string" || approvalPathKey(meta.gitCommonDir) !== common)) ||
     meta.swarmFloor !== floor ||
-    auditBlockField(creation.block, "Branch name") !== `bolt-${slug}` ||
+    auditBlockField(creation.block, "Branch name") !== identity.branch ||
     auditBlockField(creation.block, "Intent record") !== meta.intentRecord ||
     auditBlockField(creation.block, "Repo") !== (repo.repo ?? "-") ||
     auditBlockField(creation.block, "Swarm Unit") !== unit ||
@@ -2888,7 +2892,9 @@ function discardedWorktreeApproval(
     const repo = resolveConstructionRepo(parent, repoName ?? undefined);
     if (repo.repo !== repoName || approvalPathKey(repo.cwd) !== approvalPathKey(repoCwd)) return null;
     const slug = boltSlugForUnit(unit);
-    const slot = worktreePath(parent, slug);
+    const selection = resolveWorkflowSelection(parent);
+    const identity = resolveBoltIdentity(parent, slug, selection);
+    const slot = identity.dir;
     assertNoSymlinkInChainOrThrow(parent, relative(parent, slot));
     // Discard has removed the final path component. Resolve the existing
     // parent and reject symlink chains instead of realpath-ing the absent slot.
@@ -2896,12 +2902,17 @@ function discardedWorktreeApproval(
       const key = resolve(path).replaceAll("\\", "/");
       return process.platform === "win32" ? key.toLowerCase() : key;
     };
+    const slotKey = pathKey(slot);
+    const legacySlotKey = pathKey(legacyWorktreePath(parent, slug));
     const namesSlot = (row: AuditShardEvent): boolean => {
       const recorded = auditBlockField(row.block, "Worktree path");
       if (!recorded) return false;
       const resolved = resolveAuditWorktreePath(parent, recorded);
       assertNoSymlinkInChainOrThrow(parent, relative(parent, resolved));
-      return pathKey(resolved) === pathKey(slot);
+      // A Bolt discarded under its legacy name can be re-created namespaced;
+      // only these two slots in this checkout may share that recovery evidence.
+      const key = pathKey(resolved);
+      return key === slotKey || key === legacySlotKey;
     };
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(parent, undefined, undefined, unreadable);
@@ -2922,8 +2933,12 @@ function discardedWorktreeApproval(
     if (dag.state !== "ok" || !intentRecord || floor.startsWith("AMBIGUOUS:")) return null;
     const matchesCreation = (row: AuditShardEvent): boolean => {
       const batch = auditBlockField(row.block, "Swarm Batch");
+      const recordedPath = auditBlockField(row.block, "Worktree path");
+      const branch = recordedPath && pathKey(resolveAuditWorktreePath(parent, recordedPath)) === legacySlotKey
+        ? legacyBoltName(slug)
+        : identity.branch;
       return namesSlot(row) &&
-        auditBlockField(row.block, "Branch name") === `bolt-${slug}` &&
+        auditBlockField(row.block, "Branch name") === branch &&
         auditBlockField(row.block, "Intent record") === intentRecord &&
         auditBlockField(row.block, "Repo") === (repoName ?? "-") &&
         auditBlockField(row.block, "Swarm Unit") === unit &&

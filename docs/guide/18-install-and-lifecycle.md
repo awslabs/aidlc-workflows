@@ -250,12 +250,14 @@ customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
 without a default.
 
-Recommended defaults state the bundle on the option line. Customization walks
-Harness, Model provider, Model effort preset, Plugins, MCP servers, and settings
-layer. Every numbered prompt has a bracketed default, invalid input re-asks in
-place, and each answer is echoed. A check-your-answers table accepts Enter to
-apply or a step number to edit. No files are written before that final gate.
-After apply, gerund receipts name the project files and settings layer,
+Recommended defaults preserve the harness's current model provider.
+Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
+servers, and the model-preset settings layer. The provider step offers keeping
+the current provider first and Amazon Bedrock second. Every numbered prompt has
+a bracketed default, invalid input re-asks in place, and each answer is echoed.
+A check-your-answers table accepts Enter to apply or a step number to edit. No
+files are written before that final gate. After apply, gerund receipts name the
+project files and model-preset settings layer,
 genuinely blocking actions follow, then the wizard prints the exact harness
 launch and first workflow command.
 
@@ -298,7 +300,7 @@ interactive wizard.
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
 | `--force` | Replace locally modified framework-owned files and managed blocks where that policy permits |
 | `--yes` | Confirm an otherwise unrecognized target directory or a section mutation; it does not imply MCP consent or choose a section answer |
-| `--json` | Emit one result object with counts, actions, and `data.planToken` |
+| `--json` | Emit one result object with counts, actions, `data.notes`, and `data.planToken` |
 | `--quiet` | Emit one summary or remediation line |
 | `--no-color` | Disable color output |
 
@@ -446,23 +448,14 @@ Kiro IDE has no required separate CLI.
 
 ### Provider Diagnostics
 
-`aidlc config providers` records provider answers for this project install. The
-interactive section offers only the two answers that have distinct effects for
-the harness in front of you. `amazon-bedrock` records the region and profile the
-harness should use, and leads on every harness whose models AI-DLC can point at
-Bedrock. The second answer is `unchanged` on every harness the section asks,
-recording nothing and keeping what is already in place. Kiro is not asked at
-all because model access comes with it. The shipped fallback
-bytes remain valid when this section has never run.
-
-`other` is available as `--provider other --acknowledge` but is not offered
-interactively. Nothing reads a recorded `other`: its only effect is a
-`non-bedrock-provider-configuration` reminder that `--acknowledge` immediately
-clears, and declining that acknowledgement did exactly what `unchanged` does,
-so it duplicated the second answer by a longer route. Existing `other` records
-stay valid.
+`aidlc config providers` records provider answers for this project install.
+Keeping the provider already configured in the harness is the default answer.
+Amazon Bedrock is an explicit opt-in. Kiro is not asked because
+model access comes with Kiro. `other` remains available for a manually configured
+provider and carries an acknowledgement reminder.
 
 ```bash
+aidlc config providers --provider current --yes
 aidlc config providers --provider amazon-bedrock \
   --region us-east-1 --profile default --yes
 aidlc config providers --show --json
@@ -470,6 +463,8 @@ aidlc config providers --check
 aidlc config providers --mark-done bedrock-model-access --yes
 aidlc config providers --reset --yes
 ```
+
+`--region`, `--profile`, and `--opencode-default` apply only when the recorded or selected provider is `amazon-bedrock`.
 
 Credential detection is offline only. It inspects AWS environment variables,
 `~/.aws/config`, `~/.aws/credentials`, role and container credential variables,
@@ -480,8 +475,10 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 
 | Harness | Recorded answer application |
 |---------|-----------------------------|
-| Claude Code | Writes `AWS_REGION` and optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
-| Codex CLI | Writes profile and region in `[model_providers.amazon-bedrock.aws]` without changing model or effort keys |
+| Claude Code | Enables Bedrock and writes `AWS_REGION` plus optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
+| Codex CLI | Records the choice and instructs the user to keep provider, credentials, and model in `~/.codex/config.toml` |
+| Kiro CLI | No provider answer; model access comes with Kiro |
+| Kiro IDE | No provider answer; model access comes with Kiro |
 | opencode | Offers to write `provider.amazon-bedrock.options.region/profile` to `opencode.json`; `--opencode-default yes|no` records the answer |
 | GitHub Copilot | Records acknowledgement of the manual BYOK environment setup |
 | Cursor | Records acknowledgement of the manual provider and model-picker setup |
@@ -489,9 +486,20 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 Bedrock model access and IAM permission verification cannot be automated
 offline. The record therefore carries named pending actions. `--show` lists
 them, `--check` stays non-zero while they are pending, and
-`--mark-done <id>` records completion. A custom non-Bedrock provider is recorded with
-`--provider other --acknowledge`; it records the choice without silently
-editing provider bytes.
+`--mark-done <id>` records completion. Codex provider setup remains explicitly
+self-attested after completion because the effective user configuration and
+alternate credential channels cannot be resolved offline; `--check` returns
+success with that warning instead of describing the setup as verified.
+`--provider current` preserves the harness's configured provider and removes
+only Bedrock values AI-DLC can attribute to its shipped defaults or the previous
+record from Claude, Codex, or opencode project files. Customized Claude model
+aliases are preserved. A customized legacy Codex Bedrock block is also preserved;
+`--check` reports a warning when it still names that provider instead of calling
+the configuration clean. `--provider other` records a manually configured
+non-Bedrock provider and reports that setup as pending until `--acknowledge` is
+supplied. `--reset` removes exact legacy AI-DLC Bedrock defaults or values written
+for the previous recorded answer from Claude, Codex, and opencode project files;
+unproven values are preserved.
 
 The question is worded for the harness in front of you, so each install offers
 the two paths that actually exist for it:
@@ -499,7 +507,7 @@ the two paths that actually exist for it:
 | Harness | `amazon-bedrock` records |
 |---------|--------------------------|
 | Claude Code | the AWS region and profile in `settings.json`, and the AWS MCP region in `.mcp.json` when present |
-| Codex CLI | the AWS region and profile in `config.toml` |
+| Codex CLI | the AWS region and profile in the project record, then guides user-level provider setup in `$CODEX_HOME/config.toml` |
 | OpenCode | the AWS region and profile, and offers to write them to `opencode.json` |
 | GitHub Copilot | that you set the Copilot BYOK provider variables yourself |
 | Cursor | that you configure the provider in Cursor yourself |
@@ -519,21 +527,22 @@ retired launcher registry has it replaced by this one when the project never edi
 it, and reported as a conflict when it did. `--reset` leaves the file alone either
 way.
 
-Every other harness is Bedrock-oriented, so Bedrock leads and absent AWS
-credentials are never read as evidence that you are on your own subscription.
-Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
-which AI-DLC tracks as a pending action rather than performs.
+Every other harness asks whether to keep its current provider or opt in to
+Amazon Bedrock. Keeping the current provider is the default, including when AWS
+credentials are detected. Copilot and Cursor reach Bedrock through their own
+BYOK or provider settings, which AI-DLC tracks as a pending action rather than
+performs.
 
 On Kiro, `--check` says no answer is needed and exits zero even with a legacy
 record. On every other unrecorded section it names that state instead of
 reporting a verified answer, and still exits zero because the shipped fallback
 bytes remain valid.
 
-On a Bedrock-oriented harness `unchanged` is always the second answer, and it
-becomes the default once something is recorded, so re-entering the section never
-silently rewrites a region or profile you already set. It names what it keeps,
-records nothing, and still reaches the mark-done prompts, so a pending action
-can be cleared without re-answering.
+On these harnesses `keep current` is the first answer and the default.
+`amazon-bedrock` is the second answer. Re-entering the section with the recorded
+answer preserves it: Bedrock keeps its region and profile unless you explicitly
+replace them, while `other` keeps its pending manual-setup action. Pending
+actions can still be completed with `--mark-done`.
 
 ### Trust Diagnostics
 
@@ -718,20 +727,58 @@ Locally modified framework-owned files conflict against the prior baseline.
 edits to hand-authored orchestrator prose. It does not claim unrelated
 project content.
 
+Provider, scope, and model answers preserve project-owned fields in
+`.claude/settings.json` and `.codex/config.toml`. The Claude
+`companyAnnouncements`, `permissions`, `statusLine`, and `hooks` keys remain
+framework-owned. The Codex `[shell_environment_policy]`,
+`[sandbox_workspace_write]`, `[agents]`, `[features]`, `[tools]`, and `[tui]`
+tables also remain framework-owned. Local edits to those entries conflict
+against the baseline, and `--force` restores the shipped entries while
+retaining unrelated project-owned fields. An explicit `--from` selects that
+source instead of the project's copy.
+
+`opencode.json` provider answers edit their attributed keys in place. An
+ordinary release refresh still applies the whole-file ownership policy.
+
 ### Root Integrations and Ownership
 
 | Surface | Harnesses | Policy |
 |---------|-----------|--------|
 | `.gitignore` | All | Own one marked AI-DLC block containing the union of installed harnesses' shipped entries; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
-| `AGENTS.md` | Kiro, Codex, OpenCode | Own one marked onboarding block; preserve project instructions |
+| `AGENTS.md` | Kiro, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
 | `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
-| `opencode.json` | OpenCode | Whole-file ownership; an unknown existing file is a conflict |
+| `opencode.json` | OpenCode | Record-only answers edit the current file in place; ordinary release refresh still requires an unchanged file baseline or exact shipped signature |
 
 **More than one harness in a project.** Harnesses may coexist when their engine
-directories differ and they do not share an exclusive managed block (`AGENTS.md`
-today)—effectively Claude Code plus one other harness. `.gitignore` declares
-`shared: "union"`, so `aidlc config` writes one block combining every installed
+directories differ and they do not share an exclusive managed block. `AGENTS.md`
+is neutral and byte-identical (`shared: "identical"`) across Kiro CLI, Kiro IDE,
+Codex, Cursor, and OpenCode, so any of those with distinct engine directories
+may coexist. Codex's harness-specific onboarding is injected through
+`developer_instructions` in the project `.codex/config.toml` when the project is
+trusted, with `.codex/onboarding.md` as its readable copy.
+Claude Code may coexist with any other harness. Copilot's `AGENTS.md`
+stays exclusive: pairing it with another harness that ships that block is refused
+with `cannot coexist in one project`, regardless of which is installed first.
+Kiro CLI and Kiro IDE still share `.kiro/`, and OpenCode and Copilot share `.aidlc/`,
+so those pairs cannot coexist. For an older installed harness whose root block
+is not shared, the `predates shared onboarding` error suggests refreshing it with
+`aidlc config --harness <name>` first. This is a hint for an older sibling, not a
+promise that refreshing enables coexistence: if it still refuses afterwards,
+the sibling's block is exclusive. Copilot's block stays exclusive after refresh.
+A refresh source that no longer
+declares `AGENTS.md` shared is also refused while another installed harness shares
+it: `refusing to refresh <harness> from a release whose AGENTS.md is not shared`.
+Use a release that declares the block shared; `--force` cannot bypass this guard.
+A shared `AGENTS.md` block owned by a sibling from a different release is a
+conflict, not a deferred update. The error names the refresh order: refresh the
+selected harness from the same release as its sibling, or refresh the sibling
+from the selected release first.
+Cursor's manual-copy installer is single-harness (private `AIDLC CURSOR` markers,
+no `aidlc config` ownership baseline); multi-harness projects must add Cursor with
+`aidlc config --harness cursor` instead.
+
+`.gitignore` declares `shared: "union"`, so `aidlc config` writes one block combining every installed
 harness's shipped entries; extra entries appear under `# <harness> harness`.
 Adding a harness combines an unchanged sibling-owned block when that sibling's
 shipped block copy is available (`merge (combined with <harness>)`); older
@@ -746,8 +793,8 @@ lookalikes remain ambiguous and are refused.
 
 `--force` can replace a modified, baseline-owned managed block or managed
 harness file. It cannot adopt ambiguous unmarked content, overwrite a
-user-owned JSON value, or replace an unowned or locally modified whole-file
-integration such as `opencode.json`. Malformed JSON, malformed or duplicate
+user-owned JSON value, or replace an unowned or locally modified `opencode.json`
+during an ordinary release refresh. Malformed JSON, malformed or duplicate
 markers, non-regular-file targets, and retired owned content whose integrity
 cannot be proved are hard conflicts.
 

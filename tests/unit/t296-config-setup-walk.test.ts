@@ -181,7 +181,7 @@ describe("t296 first-run config setup walk", () => {
     expect(records.trust).toBeNull();
   }, 60_000);
 
-  test("a Bedrock-oriented harness gets the model-preset step's unchanged answer", () => {
+  test("a Bedrock-oriented harness defaults to keeping the current provider", () => {
     const path = project("aidlc-t296-walk-unchanged-");
     const env = hookPathEnv("aidlc", true, {
       AWS_ACCESS_KEY_ID: "test-access",
@@ -191,39 +191,68 @@ describe("t296 first-run config setup walk", () => {
     // model-preset step first, and its output would be scored by the
     // no-vendor-names assertions below that only the provider menu owns.
     expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
-    // 2 = unchanged, which records nothing and keeps what is in place.
     const result = run(
       ["config", "providers", "--project-dir", path, "--harness", "claude"],
       path,
       env,
-      "2\n",
+      "1\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    // Bedrock names what it writes for THIS harness. There is no `builtin` here:
-    // Claude Code does not serve its own models, and naming a vendor would be a
-    // guess, since it also runs on Vertex.
     expect(result.stdout).toContain(
-      "1. amazon-bedrock   records the AWS region and profile in settings.json",
+      "1. keep current     inherit the provider already configured in the harness (default)",
     );
     expect(result.stdout).toContain(
-      "2. unchanged        records no provider answer and keeps existing settings;",
+      "2. amazon-bedrock   write the AWS region and profile to settings.json",
     );
-    expect(result.stdout).toContain("new projects use the shipped fallback");
     expect(result.stdout).not.toContain("builtin");
-    // `other` is flag-only now: nothing read a recorded `other`, and declining
-    // its acknowledgement did exactly what `unchanged` does. Match the numbered
-    // answer and the old acknowledgement prompt, not any word containing "other".
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
+      .toEqual(expect.objectContaining({ provider: "current" }));
     expect(result.stdout).not.toMatch(/\d\. other\b/);
     expect(result.stdout).not.toContain("Using other provider setup");
     for (const vendor of ["Anthropic", "OpenAI", "Vertex", "subscription"]) {
       expect(result.stdout).not.toContain(vendor);
     }
     expect(result.stdout).toContain(
-      "Keeping existing settings unchanged; no provider answer recorded.",
+      "Keeping the current harness provider; attributable AI-DLC Bedrock overrides will be removed when present, and other provider settings will be kept.",
     );
     expect(result.stdout).not.toContain("Manual provider setup complete?");
-    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toBeNull();
   }, 90_000);
+
+  test("provider re-entry preserves a recorded other answer and its pending action", () => {
+    const path = project("aidlc-t296-walk-other-");
+    const env = hookPathEnv("aidlc", true);
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    const dataPath = join(path, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "other",
+      acknowledged: true,
+      pendingActions: [{
+        id: "non-bedrock-provider-configuration",
+        status: "pending",
+      }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    const result = run(
+      ["config", "providers", "--project-dir", path, "--harness", "claude"],
+      path,
+      env,
+      "1\n\ny\n",
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("recorded: other; default");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toEqual({
+      schemaVersion: 1,
+      provider: "other",
+      acknowledged: true,
+      pendingActions: [{
+        id: "non-bedrock-provider-configuration",
+        status: "pending",
+      }],
+    });
+  }, 60_000);
 
   test("Kiro's providers section asks nothing and records nothing", () => {
     const path = project("aidlc-t296-walk-kiro-managed-");
@@ -460,7 +489,7 @@ describe("t296 first-run config setup walk", () => {
       scaffoldArgs(path),
       path,
       env,
-      "\nproject\n1\nbalanced\n\nus-west-2\ndev\ny\n",
+      "\nproject\n1\nbalanced\n2\nus-west-2\ndev\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Setup check - 2 of 8 sections need you.");
@@ -533,6 +562,60 @@ describe("t296 first-run config setup walk", () => {
       "Full diagnostics: bun .claude/tools/aidlc.ts config runtime --show",
     );
   }, 60_000);
+
+  test("re-entering a recorded Bedrock answer preserves its defaults and pending state", () => {
+    const path = project("aidlc-t296-recorded-bedrock-");
+    const env = hookPathEnv("aidlc", true, {
+      AWS_ACCESS_KEY_ID: "test-access",
+      AWS_SECRET_ACCESS_KEY: "test-secret",
+      AWS_REGION: "us-east-2",
+    });
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    expect(run([
+      "config",
+      "models",
+      "--project-dir",
+      path,
+      "--project",
+      "--preset",
+      "balanced",
+      "--yes",
+    ], path, env).status).toBe(0);
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      path,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "eu-west-1",
+      "--profile",
+      "team",
+      "--yes",
+    ], path, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const beforeRecord = readConfigDiagnosticRecords(join(path, ".claude")).providers;
+    const settingsPath = join(path, ".claude", "settings.json");
+    const beforeSettings = readFileSync(settingsPath);
+
+    const walked = run(
+      ["config", "--project-dir", path],
+      path,
+      env,
+      "\n\n\n\n\n",
+    );
+    expect(walked.status, walked.stdout + walked.stderr).toBe(0);
+    expect(walked.stdout).toContain(
+      "2. amazon-bedrock   write the AWS region and profile to settings.json (recorded: eu-west-1, team; default)",
+    );
+    expect(walked.stdout).toContain("Provider [2]:");
+    expect(walked.stdout).toContain("AWS region [eu-west-1]:");
+    expect(walked.stdout).toContain("AWS profile [team]:");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
+      .toEqual(beforeRecord);
+    expect(readFileSync(settingsPath)).toEqual(beforeSettings);
+  }, 90_000);
 
   test("non-TTY human output is byte-identical to the pre-walk completion", () => {
     const path = project("aidlc-t296-nontty-snapshot-");

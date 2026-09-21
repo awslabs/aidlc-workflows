@@ -228,6 +228,16 @@ later work. Legacy swarm settlement retains its existing stage gate.
 `SWARM_COMPLETED` closes the batch. Serial inline work uses its Unit lifecycle
 and checkpoint receipts.
 
+Each new Bolt worktree is `.aidlc/worktrees/bolt-<id8>_<slug>` on branch
+`bolt-<id8>_<slug>`. The intent registry UUID suffix `<id8>` is shared with
+Unit claims, so parallel intents can reuse Unit slugs without sharing branches
+or retained/parked refs. Creation refuses an intent without a registry UUID;
+adopt or re-create the intent before Construction. See
+[Bolt identity](../../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for naming and the provenance checks that let pre-upgrade legacy Bolts finish
+without creating new Bolts in the old shape. Cleanup refuses a branch checked
+out at another worktree path and preserves that owner's branch and refs.
+
 Before initial protected prepare, all Units undergo a read-only preflight of
 current approval and committed, reproducible parent application source. This
 applies to legacy autonomy and new checkpoints. An uncommitted approved source
@@ -254,11 +264,13 @@ parks tracked and non-ignored untracked files and reviewed source refs, then
 removes the live checkout and branch. After obtaining the human's selection,
 execute the returned abort command unchanged. When present, the abort result's
 `restore_operation` has route `worktree` and exact args selecting the saved
-stamp and repository (`--repo <name>` or `--repo .`). On a human
+slug, stamp, and repository (`--repo <name>` or `--repo .`), followed by
+`--intent <record-dir-name> --space <space>` so recovery stays bound to that
+intent after the active intent changes. On a human
 restore request, invoke `{{INVOKE}} engine worktree <args...>` with each listed
 arg passed exactly as a separate argv argument, never joined into a shell
-command. Restoration recovers files in `.aidlc/restored/bolt-<slug>-<stamp>` on
-`restore/bolt-<slug>-<stamp>`, without overwriting a new live Bolt or reviving the
+command. Restoration recovers files in `.aidlc/restored/bolt-<id8>_<slug>-<stamp>` on
+`restore/bolt-<id8>_<slug>-<stamp>`, without overwriting a new live Bolt or reviving the
 old attempt's review authority. `restore_hint` is optional human display text
 only, not execution input. If safe rendering fails, the hint is omitted and
 `restore_hint_error` explains why while the operation remains. Offer restoration
@@ -268,7 +280,9 @@ exclusions: no working files were saved, restore refuses, and doctor offers
 purge only.
 The [recovery walkthrough](../../guide/15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
 explains what was set aside, the exclusions, exact restore selection, and
-informational doctor listings and purge options.
+informational doctor listings and purge options. Legacy restores retain the
+legacy name and require the selected intent's exact `WORKTREE_DISCARDED`
+`Parked ref` provenance.
 
 ---
 

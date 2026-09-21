@@ -95,6 +95,7 @@ import {
   withdrawProtectedQuestions,
   constructionCheckpointsApply,
   boltSlugForUnit,
+  BoltIdentityError,
   filterProducesByKind,
   filteredRawIndexEntries,
   findAllEvents,
@@ -102,6 +103,7 @@ import {
   isRegularFile,
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
+  legacyBoltIdentity,
   maximalAttemptEvents,
   parseArgs,
   parseRefsList,
@@ -121,6 +123,7 @@ import {
   reviewedSourceRef,
   resolveAuditWorktreePath,
   resolveBoltDag,
+  resolveBoltIdentity,
   resolveConstructionRepo,
   resolveProjectDir,
   resolveWorkflowSelection,
@@ -137,7 +140,6 @@ import {
   verificationCommandDetails,
   VERIFICATION_COMMAND_RECOVERY,
   worktreeAuditFilePath,
-  worktreePath,
   worktreeRuntimeGraphPath,
   workspaceSourceEmbeddedGitPaths,
   workspaceSourceFingerprint as worktreeSourceFingerprint,
@@ -149,6 +151,8 @@ import {
   writeBufferAtomic,
   writeStateFile,
   type AuditShardEvent,
+  type BoltIdentity,
+  type WorkflowSelection,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
@@ -331,16 +335,16 @@ function requiresCodeGenerationApproval(state: string): boolean {
       getField(state, "Construction Execution")?.trim() === "swarm");
 }
 
-// Compute a unit's stateless verdict from on-disk state alone. Re-derives the
-// worktree path from (projectDir, unit) — no stored handle — so check and
-// finalize agree without sharing state.
+// Compute a unit's stateless verdict using its selected intent's worktree so
+// check and finalize agree without sharing state.
 function verdictFor(
   unit: string,
   projectDir: string,
+  identity: BoltIdentity,
   checkCmd: string,
   testFile?: string
 ): Verdict {
-  const wt = worktreePath(projectDir, swarmBoltSlug(unit));
+  const wt = identity.dir;
   if (!existsSync(wt)) {
     return { exists: false, converged: false, tampered: false };
   }
@@ -438,13 +442,14 @@ function reviewerRequirement(projectDir: string): ReviewerRequirement {
 function reviewerReceiptError(
   projectDir: string,
   unit: string,
+  identity: BoltIdentity,
   stage: string,
   reviewer: string,
   reviewClass: "adversarial" | "advisory",
   maxIterations: number,
 ): ReceiptCheck {
-  const boltSlug = swarmBoltSlug(unit);
-  const wt = worktreePath(projectDir, boltSlug);
+  const boltSlug = identity.slug;
+  const wt = identity.dir;
   const creationRows = readAuditShardEvents(projectDir)
     .filter(
       (row) =>
@@ -729,12 +734,12 @@ function reviewerReceiptError(
 }
 
 function captureReviewedRecordSnapshot(
-  projectDir: string,
+  identity: BoltIdentity,
   unit: string,
   stage: NonNullable<ReturnType<typeof resolveStage>>,
   receipt: ReceiptCheck,
 ): { snapshot?: ReviewedRecordSnapshot; error?: string } {
-  const wt = worktreePath(projectDir, swarmBoltSlug(unit));
+  const wt = identity.dir;
   const artifacts = reviewArtifactBytesSnapshot(wt, stage, unit, {
     requireRequiredArtifacts: true,
     captureBytes: true,
@@ -1438,12 +1443,11 @@ function initializedSubmoduleSourceError(
 }
 
 function bindReviewedSource(
-  projectDir: string,
-  unit: string,
+  identity: BoltIdentity,
   fingerprint: string,
   recoveryBudget: NewGitlinkRecoveryBudget,
 ): { binding?: SourceBinding; error?: string } {
-  const wt = worktreePath(projectDir, unit);
+  const wt = identity.dir;
   const idx = join(tmpdir(), `aidlc-swarm-source-${process.pid}-${randomUUID().slice(0, 8)}`);
   // commit-tree is an internal snapshot operation, not a user-authored commit.
   // Give it a framework-owned identity so finalize does not depend on ambient
@@ -1585,14 +1589,17 @@ function bindReviewedSource(
     }
     const tree = git(["write-tree"]);
     if (tree.status !== 0 || !tree.stdout.trim()) return { error: "cannot write the reviewed source tree" };
-    const commit = git(["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", `Reviewed source for Bolt ${unit}`]);
+    const commit = git(["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", `Reviewed source for Bolt ${identity.slug}`]);
     if (commit.status !== 0 || !commit.stdout.trim()) return { error: "cannot create the immutable reviewed-source commit" };
     const after = worktreeSourceFingerprint(wt);
     if (after === null || after !== fingerprint) {
       return { error: "source-fingerprint mismatch while binding the reviewed source; re-run the reviewer" };
     }
     const commitSha = commit.stdout.trim();
-    const retained = git(["update-ref", reviewedSourceRef(unit, commitSha), commitSha]);
+    const ref = identity.legacy
+      ? `${identity.reviewedSourceRefPrefix}${commitSha}`
+      : reviewedSourceRef(identity.intentId8, identity.slug, commitSha);
+    const retained = git(["update-ref", ref, commitSha]);
     if (retained.status !== 0) {
       return { error: "cannot retain the immutable reviewed-source commit" };
     }
@@ -1847,14 +1854,14 @@ function resumeMissingPathKey(path: string): string {
 
 function resumeCreationMatches(
   pd: string, row: AuditShardEvent, batch: string, unit: string,
-  attempt: SwarmAttemptStamp, repoName: string | null,
+  identity: BoltIdentity, attempt: SwarmAttemptStamp, repoName: string | null,
 ): boolean {
   const path = auditBlockField(row.block, "Worktree path");
   const recordPrefix = relativeRecordDir(pd);
-  const slug = swarmBoltSlug(unit);
+  const slug = identity.slug;
   return recordPrefix !== null && row.event === "WORKTREE_CREATED" &&
     auditBlockField(row.block, "Bolt slug") === slug &&
-    auditBlockField(row.block, "Branch name") === `bolt-${slug}` &&
+    auditBlockField(row.block, "Branch name") === identity.branch &&
     auditBlockField(row.block, "Intent record") === recordPrefix &&
     auditBlockField(row.block, "Repo") === (repoName ?? "-") &&
     auditBlockField(row.block, "Swarm Unit") === unit &&
@@ -1862,15 +1869,15 @@ function resumeCreationMatches(
     auditBlockField(row.block, "Swarm Stage") === attempt.stage &&
     auditBlockField(row.block, "Swarm Run floor") === attempt.floor &&
     path !== null &&
-    resumeMissingPathKey(resolveAuditWorktreePath(pd, path)) === resumeMissingPathKey(worktreePath(pd, slug));
+    resumeMissingPathKey(resolveAuditWorktreePath(pd, path)) === resumeMissingPathKey(identity.dir);
 }
 
 function currentDiscardedSwarmSlot(
-  pd: string, batch: string, unit: string, attempt: SwarmAttemptStamp,
+  pd: string, batch: string, unit: string, identity: BoltIdentity, attempt: SwarmAttemptStamp,
   repoName: string | null, rows: AuditShardEvent[],
 ): AuditShardEvent | null {
-  const slug = swarmBoltSlug(unit);
-  if (existsSync(worktreePath(pd, slug))) return null;
+  const slug = identity.slug;
+  if (existsSync(identity.dir)) return null;
   const creation = latestResumeRow(rows.filter((row) => row.event === "WORKTREE_CREATED" &&
     auditBlockField(row.block, "Bolt slug") === slug));
   const discard = latestResumeRow(rows.filter((row) => row.event === "WORKTREE_DISCARDED" &&
@@ -1878,17 +1885,25 @@ function currentDiscardedSwarmSlot(
   const started = latestResumeRow(rows.filter((row) => row.event === "BOLT_STARTED" &&
     auditBlockField(row.block, "Bolt slug") === slug));
   const path = discard && auditBlockField(discard.block, "Worktree path");
-  return creation && discard && path &&
-    resumeCreationMatches(pd, creation, batch, unit, attempt, repoName) &&
-    auditBlockField(discard.block, "Reason") === "agent-discard" &&
-    resumeMissingPathKey(resolveAuditWorktreePath(pd, path)) === resumeMissingPathKey(worktreePath(pd, slug)) &&
-    attemptEventDefinitelyBefore(creation, discard) &&
-    (started === null || attemptEventDefinitelyBefore(started, discard))
+  if (!creation || !discard || !path ||
+    auditBlockField(discard.block, "Reason") !== "agent-discard" ||
+    !attemptEventDefinitelyBefore(creation, discard) ||
+    (started !== null && !attemptEventDefinitelyBefore(started, discard))) return null;
+  const discardedPath = resumeMissingPathKey(resolveAuditWorktreePath(pd, path));
+  let slot = identity;
+  if (discardedPath !== resumeMissingPathKey(slot.dir)) {
+    // Native discard may precede the namespace upgrade. Both lifecycle rows
+    // must still identify the same slot and this intent's exact swarm attempt.
+    slot = legacyBoltIdentity(pd, identity.intentId8, slug);
+    if (discardedPath !== resumeMissingPathKey(slot.dir)) return null;
+  }
+  return !existsSync(slot.dir) &&
+    resumeCreationMatches(pd, creation, batch, unit, slot, attempt, repoName)
     ? discard : null;
 }
 
 function validateSwarmResume(
-  pd: string, batch: string, unit: string, attempt: SwarmAttemptStamp,
+  pd: string, batch: string, unit: string, identity: BoltIdentity, attempt: SwarmAttemptStamp,
   repoCwd: string, repoName: string | null,
 ): SwarmResume {
   const state = readStateFile(pd);
@@ -1917,8 +1932,8 @@ function validateSwarmResume(
     throw new Error(`${unit}: resume requires a current, explicit swarm-batch Request Changes for this intent and attempt.`);
   }
   const revision = checkpointRevision(rejection);
-  const slug = swarmBoltSlug(unit);
-  const worktree = worktreePath(pd, slug);
+  const slug = identity.slug;
+  const worktree = identity.dir;
   const recordPrefix = relativeRecordDir(pd);
   if (!recordPrefix) throw new Error(`${unit}: active intent record is unavailable.`);
   assertNoSymlinkInChainOrThrow(realpathSync(pd), relative(pd, worktree));
@@ -1948,7 +1963,7 @@ function validateSwarmResume(
       auditBlockField(row.block, "Source Commit") === auditBlockField(merged.block, "Source Commit") &&
       attemptEventDefinitelyBefore(row, merged)));
     const matchingCreation = (row: AuditShardEvent): boolean =>
-      resumeCreationMatches(pd, row, batch, unit, attempt, repoName);
+      resumeCreationMatches(pd, row, batch, unit, identity, attempt, repoName);
     const landedCreation = converged && latestResumeRow(rows.filter((row) =>
       matchingCreation(row) && attemptEventDefinitelyBefore(row, converged)));
     if (!creation || !matchingCreation(creation) || !merged || !converged || !landedCreation ||
@@ -1966,7 +1981,7 @@ function validateSwarmResume(
     if (needsDiscard) {
       // The old landing remains the source anchor, but it cannot by itself
       // authorize replacing a subsequently created/prepared worker.
-      const discard = currentDiscardedSwarmSlot(pd, batch, unit, attempt, repoName, rows);
+      const discard = currentDiscardedSwarmSlot(pd, batch, unit, identity, attempt, repoName, rows);
       if (!discard || !attemptEventDefinitelyBefore(rejection, discard)) {
         throw new Error(`${unit}: a missing prepared revision requires a matching native discard after its latest creation and start; preserve remaining work and finish the documented abort/discard before retrying.`);
       }
@@ -1989,7 +2004,7 @@ function validateSwarmResume(
   assertNoSymlinkInChainOrThrow(realpathSync(worktree), relative(worktree, metaPath));
   const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "preserved worktree metadata").toString("utf-8"));
   const recordedPath = creation && auditBlockField(creation.block, "Worktree path");
-  const branch = `bolt-${slug}`;
+  const branch = identity.branch;
   const rootCommon = resumePathKey(resolve(repoCwd, resumeGit(repoCwd, ["rev-parse", "--git-common-dir"])));
   const childCommon = resumePathKey(resolve(worktree, resumeGit(worktree, ["rev-parse", "--git-common-dir"])));
   const commonHash = createHash("sha256").update(rootCommon).digest("hex");
@@ -2109,9 +2124,22 @@ function releasePreparationRegistration(pd: string, unit: string): void {
   });
 }
 
+function resolveSwarmSelection(projectDir: string, flags: Record<string, string>): WorkflowSelection {
+  const ambient = resolveWorkflowSelection(projectDir);
+  if (flags.intent === undefined && flags.space === undefined) return ambient;
+  const explicit = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
+  // State, approval, and audit helpers follow the session workflow, so an
+  // explicit selector cannot redirect only the Bolt side of a swarm operation.
+  if (explicit.space !== ambient.space || explicit.intent !== ambient.intent) {
+    fail(`swarm commands follow the session's active workflow (${ambient.space}/${ambient.intent}); switch to ${explicit.space}/${explicit.intent} instead of passing --intent/--space`);
+  }
+  return ambient;
+}
+
 function handlePrepare(rest: string[]): void {
   const { flags } = parseArgs(rest);
   const projectDir = resolveProjectDir(flags["project-dir"]);
+  const selected = resolveSwarmSelection(projectDir, flags);
 
   if (!flags.batch || !/^[1-9][0-9]*$/.test(flags.batch)) {
     fail("prepare requires --batch <positive integer>");
@@ -2210,7 +2238,16 @@ function handlePrepare(rest: string[]): void {
   }
   const resumes = new Map<string, SwarmResume>();
   const discardedPreparations = new Map<string, { discardedSha256: string; approvedBaseCommit?: string }>();
-  const selected = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
+  const identities = new Map<string, BoltIdentity>();
+  const identityErrors = new Map<string, string>();
+  for (const unit of units) {
+    try {
+      identities.set(unit, resolveBoltIdentity(projectDir, swarmBoltSlug(unit), selected));
+    } catch (error) {
+      if (!(error instanceof BoltIdentityError)) throw error;
+      identityErrors.set(unit, error.message);
+    }
+  }
   if (resumeExisting) {
     if (!selected.intent || relativeRecordDir(projectDir, selected.intent, selected.space) !== relativeRecordDir(projectDir)) {
       fail("--resume-existing must target the active intent and space");
@@ -2218,7 +2255,8 @@ function handlePrepare(rest: string[]): void {
     try {
       withAuditLock(projectDir, () => {
         for (const unit of units) {
-          resumes.set(unit, validateSwarmResume(projectDir, flags.batch, unit, attempt, repoCwd, repoName));
+          if (identityErrors.has(unit)) continue;
+          resumes.set(unit, validateSwarmResume(projectDir, flags.batch, unit, identities.get(unit)!, attempt, repoCwd, repoName));
         }
       });
     } catch (error) {
@@ -2236,7 +2274,8 @@ function handlePrepare(rest: string[]): void {
     const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
     if (unreadable.length) fail("prepare cannot recover discarded workers from unreadable audit evidence");
     for (const unit of units) {
-      const discard = currentDiscardedSwarmSlot(projectDir, flags.batch, unit, attempt, repoName, rows);
+      if (identityErrors.has(unit)) continue;
+      const discard = currentDiscardedSwarmSlot(projectDir, flags.batch, unit, identities.get(unit)!, attempt, repoName, rows);
       if (!discard) continue;
       const discardedSha256 = checkpointRevision(discard);
       const approvedBaseCommit = codeGenerationDiscardedBase(
@@ -2252,6 +2291,7 @@ function handlePrepare(rest: string[]): void {
       // Validate the entire batch before the first fork or generation receipt.
       // An approved dirty parent is not a reproducible worktree base.
       for (const unit of units) {
+        if (identityErrors.has(unit)) continue;
         if (!resumes.has(unit) || resumes.get(unit)!.recreate) {
           const resume = resumes.get(unit) ?? discardedPreparations.get(unit);
           validateCodeGenerationForkApproval(
@@ -2267,6 +2307,7 @@ function handlePrepare(rest: string[]): void {
   if (requiresPlanApproval) {
     try {
       for (const unit of units) {
+        if (identityErrors.has(unit)) continue;
         swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
       }
     } catch (error) {
@@ -2298,9 +2339,15 @@ function handlePrepare(rest: string[]): void {
   // anchors to the same repo — an inferred lone repo is passed explicitly too, so
   // create/merge/discard never re-resolve to a different repo than prepare chose.
   const repoArgs = repoName ? ["--repo", repoName] : [];
-  const resumeSelectors = resumeExisting ? ["--intent", selected.intent!, "--space", selected.space] : [];
+  const workflowSelectors = selected.intent ? ["--intent", selected.intent, "--space", selected.space] : [];
   for (const unit of units) {
     const boltSlug = swarmBoltSlug(unit);
+    const identityError = identityErrors.get(unit);
+    if (identityError !== undefined) {
+      prepared.push({ unit, ok: false, error: `worktree create failed: ${identityError}` });
+      continue;
+    }
+    const identity = identities.get(unit)!;
     const resume = resumes.get(unit);
     const discarded = resume ?? discardedPreparations.get(unit);
     if (resume && !resume.recreate) {
@@ -2308,14 +2355,14 @@ function handlePrepare(rest: string[]): void {
       try {
         if (!resume.alreadyResumed) {
           const checked = withAuditLock(projectDir, () =>
-            validateSwarmResume(projectDir, flags.batch, unit, attempt, repoCwd, repoName));
+            validateSwarmResume(projectDir, flags.batch, unit, identity, attempt, repoCwd, repoName));
           if (checked.revision !== resume.revision) throw new Error(`${unit}: checkpoint revision changed before resume`);
           writeResumeJournal(projectDir, checked);
           archive = archiveSwarmResume(checked);
           if (checked.recovering) releasePreparationRegistration(projectDir, unit);
           const started = runTool("aidlc-bolt.ts", [
             "start", "--worktree", "--slug", boltSlug, "--batch", flags.batch, "--name", unit,
-            ...repoArgs, ...resumeSelectors,
+            ...repoArgs, ...workflowSelectors,
           ], projectDir);
           if (!started.ok) throw new Error(`resume Bolt start failed: ${started.stderr.trim() || started.stdout.trim()}`);
           bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit, checked.discardedSha256);
@@ -2340,14 +2387,14 @@ function handlePrepare(rest: string[]): void {
       try {
         withAuditLock(projectDir, () => {
           if (resume) {
-            const checked = validateSwarmResume(projectDir, flags.batch, unit, attempt, repoCwd, repoName);
+            const checked = validateSwarmResume(projectDir, flags.batch, unit, identity, attempt, repoCwd, repoName);
             if (!checked.recreate || checked.discardedSha256 !== discardedSha256 ||
               checked.approvedBaseCommit !== discarded?.approvedBaseCommit) {
               throw new Error(`${unit}: discarded revision authority changed before recreation`);
             }
           } else {
             const rows = readAuditShardEvents(projectDir);
-            const checked = currentDiscardedSwarmSlot(projectDir, flags.batch, unit, attempt, repoName, rows);
+            const checked = currentDiscardedSwarmSlot(projectDir, flags.batch, unit, identity, attempt, repoName, rows);
             if (!checked || checkpointRevision(checked) !== discardedSha256 ||
               currentCheckpointRejection(rows, flags.batch, unit, attempt.floor) ||
               (codeGenerationDiscardedBase(projectDir, unit, repoCwd, repoName, discardedSha256) ?? undefined) !== discarded?.approvedBaseCommit) {
@@ -2385,6 +2432,7 @@ function handlePrepare(rest: string[]): void {
         "--swarm-floor",
         attempt.floor,
         ...repoArgs,
+        ...workflowSelectors,
       ],
       projectDir
     );
@@ -2417,7 +2465,7 @@ function handlePrepare(rest: string[]): void {
     }
     const started = runTool(
       "aidlc-bolt.ts",
-      ["start", "--worktree", "--slug", boltSlug, "--batch", flags.batch, "--name", unit, ...repoArgs],
+      ["start", "--worktree", "--slug", boltSlug, "--batch", flags.batch, "--name", unit, ...repoArgs, ...workflowSelectors],
       projectDir
     );
     if (!started.ok) {
@@ -2492,15 +2540,23 @@ function handlePrepare(rest: string[]): void {
 function handleCheck(rest: string[]): void {
   const { positional, flags } = parseArgs(rest);
   const projectDir = resolveProjectDir(flags["project-dir"]);
+  const selection = resolveSwarmSelection(projectDir, flags);
 
   const unit = positional[0] ?? flags.unit;
   if (!unit) {
     fail("check requires a unit name (positional `check <unit>` or --unit <unit>)");
   }
-  swarmBoltSlug(unit);
+  const boltSlug = swarmBoltSlug(unit);
+  let identity: BoltIdentity;
+  try {
+    identity = resolveBoltIdentity(projectDir, boltSlug, selection);
+  } catch (error) {
+    if (error instanceof BoltIdentityError) fail(error.message);
+    throw error;
+  }
   const check = swarmCheckCommand(projectDir, flags["check-cmd"], "check");
 
-  const verdict = verdictFor(unit, projectDir, check.command, flags["test-file"]);
+  const verdict = verdictFor(unit, projectDir, identity, check.command, flags["test-file"]);
   if (!verdict.exists) {
     fail(`no worktree for unit "${unit}" — run \`prepare\` first`);
   }
@@ -2536,6 +2592,7 @@ function handleCheck(rest: string[]): void {
 function handleFinalize(rest: string[]): void {
   const { positional, flags } = parseArgs(rest);
   const projectDir = resolveProjectDir(flags["project-dir"]);
+  const selection = resolveSwarmSelection(projectDir, flags);
 
   const batch = flags.batch ?? positional[0];
   if (!batch || !/^[1-9][0-9]*$/.test(batch)) {
@@ -2547,6 +2604,7 @@ function handleFinalize(rest: string[]): void {
   // The universe of units in the batch; defaults to the claimed set when the
   // conductor passes only --claimed (then declined-unit accounting is a no-op).
   const allUnits = flags.units ? splitCsv(flags.units) : claimed.slice();
+  const workflowSelectors = selection.intent ? ["--intent", selection.intent, "--space", selection.space] : [];
   const dag = resolveBoltDag(projectDir, flags.intent, flags.space);
   if (dag.state !== "ok") fail("finalize requires a current resolved Unit DAG");
   const currentStage = (getField(readStateFile(projectDir), "Current Stage") ?? "")
@@ -2611,12 +2669,20 @@ function handleFinalize(rest: string[]): void {
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
   const recoveryBudget = newGitlinkRecoveryBudget();
   for (const unit of allUnits) {
+    let identity: BoltIdentity;
+    try {
+      identity = resolveBoltIdentity(projectDir, swarmBoltSlug(unit), selection);
+    } catch (error) {
+      if (error instanceof BoltIdentityError) fail(error.message);
+      throw error;
+    }
     if (claimedSet.has(unit)) {
-      const verdict = verdictFor(unit, projectDir, check.command, testFile);
+      const verdict = verdictFor(unit, projectDir, identity, check.command, testFile);
       const preparedAttempt = preparedSwarmAttempt(
         projectDir,
         batch,
         unit,
+        identity,
       );
       if (!preparedAttempt) {
         results.push({
@@ -2664,6 +2730,7 @@ function handleFinalize(rest: string[]): void {
             ? reviewerReceiptError(
                 projectDir,
                 unit,
+                identity,
                 review.stage,
                 review.reviewer,
                 review.reviewClass,
@@ -2680,7 +2747,7 @@ function handleFinalize(rest: string[]): void {
         } else {
           const captured = stageDefinition
             ? captureReviewedRecordSnapshot(
-                projectDir,
+                identity,
                 unit,
                 stageDefinition,
                 receipt,
@@ -2688,8 +2755,7 @@ function handleFinalize(rest: string[]): void {
             : { error: `cannot resolve stage "${currentStage}"` };
           const bound = receipt.sourceFingerprint
             ? bindReviewedSource(
-                projectDir,
-                swarmBoltSlug(unit),
+                identity,
                 receipt.sourceFingerprint,
                 recoveryBudget,
               )
@@ -2761,10 +2827,10 @@ function handleFinalize(rest: string[]): void {
       mergeFailures.push({ unit, detail: recordMergeError });
       continue;
     }
-    runTool("aidlc-bolt.ts", ["release-merge", "--slug", boltSlug], projectDir);
+    runTool("aidlc-bolt.ts", ["release-merge", "--slug", boltSlug, ...workflowSelectors], projectDir);
     const merged = runTool(
       "aidlc-bolt.ts",
-      ["complete", "--merge", "--slug", boltSlug, "--batch", batch, "--name", unit],
+      ["complete", "--merge", "--slug", boltSlug, "--batch", batch, "--name", unit, ...workflowSelectors],
       projectDir
     );
     if (!merged.ok) {
@@ -2876,6 +2942,7 @@ function preparedSwarmAttempt(
   projectDir: string,
   batch: string,
   unit: string,
+  identity: BoltIdentity,
 ): SwarmAttemptStamp | null {
   const rows = readAuditShardEvents(projectDir);
   const matching = rows.filter((event) => {
@@ -2927,16 +2994,17 @@ function preparedSwarmAttempt(
     }
     return stamps.values().next().value ?? null;
   }
-  return legacyPreparedSwarmAttempt(projectDir, batch, unit);
+  return legacyPreparedSwarmAttempt(projectDir, batch, unit, identity);
 }
 
 function legacyPreparedSwarmAttempt(
   projectDir: string,
   batch: string,
   unit: string,
+  identity: BoltIdentity,
 ): SwarmAttemptStamp | null {
-  const boltSlug = swarmBoltSlug(unit);
-  const wt = worktreePath(projectDir, boltSlug);
+  const boltSlug = identity.slug;
+  const wt = identity.dir;
   const recordPrefix = relativeRecordDir(projectDir);
   const wtState = worktreeStateFilePath(wt, recordPrefix);
   const wtAudit = worktreeAuditFilePath(wt, recordPrefix, projectDir);

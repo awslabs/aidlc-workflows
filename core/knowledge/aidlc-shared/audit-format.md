@@ -253,15 +253,20 @@ Emitted only during Phase 3 (Construction). See `stage-protocol.md` Terminology 
 
 Emitted during Phase 3 (Construction) when Bolts run inside per-Bolt git worktrees. Worktree primitive emits `WORKTREE_*`; state fork/merge subcommands emit `STATE_*`; audit fork/merge subcommands emit `AUDIT_*`.
 
-`Worktree path` values are project-relative (`.aidlc/worktrees/bolt-<slug>`) in
-new rows. Readers resolve them against the project root and remain compatible
-with legacy absolute values.
+New `Worktree path` values are project-relative
+(`.aidlc/worktrees/bolt-<id8>_<slug>`); `Branch name` records
+`bolt-<id8>_<slug>` verbatim. Readers resolve paths against the project root and
+remain compatible with legacy absolute values and provenance-matched legacy
+Bolts. `Bolt slug` stays the bare human/audit identifier. `<id8>` is the same
+intent registry UUID suffix used by Unit claims; retained source refs use
+`refs/aidlc/reviewed-source/<id8>/<slug>/<commit>`. See
+[Bolt identity](worktree-info-schema.md#bolt-identity) for naming and legacy policy.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `WORKTREE_CREATED` | Per-Bolt git worktree created from main on Bolt start | Timestamp, Bolt slug, project-relative Worktree path, Branch name, Base branch, Base commit, Base Source Listing (`sha256:<hash>` over the raw-aware source listing computed from the immutable base before the audit-first create), Repo (recorded selector or `-` for the workspace root), optional Intent record and Swarm Unit/Batch/Stage/Run floor provenance | `tools/aidlc-worktree.ts` (`create`) |
 | `WORKTREE_MERGED` | Bolt's worktree merged back to main on gate approval | Timestamp, Bolt slug, Worktree path, Target branch, Strategy | `tools/aidlc-worktree.ts` (`merge`) |
-| `WORKTREE_DISCARDED` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission, then live checkout and branch removed | Timestamp, Bolt slug, Worktree path, Repo (recorded selector or `-` for the workspace root), Reason, Parked ref (namespace prefix), Parked commit (snapshot commit marked by `<parked ref>/snapshot`, remaining branch tip marked by `<parked ref>/branch-tip`, or `-` when no commit could be parked; legacy unmarked heads are snapshots only when the commit author is `AI-DLC <aidlc@localhost>` and its subject starts with `aidlc: parked bolt-<slug> at `) | `tools/aidlc-worktree.ts` (`discard`) |
+| `WORKTREE_DISCARDED` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<id8>/<slug>/<stamp>/` before audit emission, then live checkout and branch removed | Timestamp, Bolt slug, Worktree path, Repo (recorded selector or `-` for the workspace root), Reason, Parked ref (namespace prefix), Parked commit (snapshot commit marked by `<parked ref>/snapshot`, remaining branch tip marked by `<parked ref>/branch-tip`, or `-` when no commit could be parked; legacy unmarked heads are snapshots only when the commit author is `AI-DLC <aidlc@localhost>` and its subject starts with `aidlc: parked bolt-<slug> at `) | `tools/aidlc-worktree.ts` (`discard`) |
 | `STATE_FORKED` | State file forked to worktree on Bolt start | Timestamp, Bolt slug, Worktree path, Source state hash, Target state hash, optional Attempt Generation (team Unit claim) | `tools/aidlc-state.ts` (`fork`) |
 | `STATE_MERGED` | Worktree's state merged back to main state on gate approval | Timestamp, Bolt slug, Worktree path, Source state hash, Target state hash, Conflict resolution | `tools/aidlc-state.ts` (`merge`) |
 | `AUDIT_FORKED` | Audit log forked to worktree on Bolt start (audit-of-intent — emit precedes the byte-copy) | Timestamp, Bolt slug, Source Audit Hash, Fork Boundary, optional Attempt Generation (team Unit claim) | `tools/aidlc-audit.ts` (`audit-fork`) |

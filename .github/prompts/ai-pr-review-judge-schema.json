@@ -1,0 +1,170 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "base",
+    "head",
+    "inspection",
+    "validation",
+    "assessment",
+    "findings",
+    "residualRisk"
+  ],
+  "properties": {
+    "base": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "inspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "failed"]
+        }
+      }
+    },
+    "validation": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readiness", "risk"],
+      "properties": {
+        "readiness": {
+          "$ref": "#/$defs/assessment"
+        },
+        "risk": {
+          "$ref": "#/$defs/assessment"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "residualRisk": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    }
+  },
+  "$defs": {
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "rationale"],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "priority",
+        "category",
+        "title",
+        "evidence",
+        "problem",
+        "impact",
+        "requiredCorrection"
+      ],
+      "properties": {
+        "priority": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"]
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "direction",
+            "user-experience",
+            "security",
+            "contracts",
+            "workflow-state",
+            "correctness"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "problem": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 3000
+        },
+        "impact": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "requiredCorrection": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["DIFF", "DIFF_FILE", "PR_TITLE", "PR_BODY"]
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"]
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
+    }
+  }
+}

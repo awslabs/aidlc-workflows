@@ -32,16 +32,28 @@
 //
 // 3 .sh asserts -> 3 equal counterparts + STRONGER additions: the guard is
 // pre-audit, so we also assert NO WORKTREE_CREATED row for the slug landed in
-// the sibling's audit.md and NO bolt-demo worktree dir was created (the .sh's
+// the sibling's audit.md and NO Bolt worktree dir was created (the .sh's
 // "pre-audit check" intent, which it only documented in its header comment).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import {
+  boltName,
+  createIntent,
+  reviewedSourceRef,
+  reviewedSourceRefPrefix,
+  workspaceSourceFingerprint,
+  worktreePath,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
@@ -93,6 +105,8 @@ function addOutsideWorktree(fixture: string): { outside: string; featureHead: st
 /** Add a real sibling worktree at <fixture>/<relativePath> on a new branch,
  *  mirroring the .sh's nested-worktree setup. */
 function addSibling(fixture: string, relativePath: string, branch: string): string {
+  git(fixture, "add", "--", "aidlc");
+  git(fixture, "commit", "-qm", "seed aidlc workspace shell");
   const sibling = join(fixture, relativePath);
   const r = spawnSync(
     "git",
@@ -109,26 +123,29 @@ function addSibling(fixture: string, relativePath: string, branch: string): stri
 
 interface CliResult {
   status: number;
+  stdout: string;
   out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
 }
 
-/** Spawn `bun aidlc-worktree.ts create ... --project-dir <p>` from cwd=<cwd>. */
-function create(cwd: string, projectDir: string, args: string[]): CliResult {
+/** Spawn a worktree subcommand at the process boundary from the given checkout. */
+function worktree(cwd: string, projectDir: string, args: string[]): CliResult {
   const res = spawnSync(
     BUN,
-    [TOOL, "create", ...args, "--project-dir", projectDir],
+    [TOOL, ...args, "--project-dir", projectDir],
     { cwd, encoding: "utf-8" },
   );
   return {
     status: res.status ?? -1,
+    stdout: res.stdout ?? "",
     out: `${res.stdout ?? ""}${res.stderr ?? ""}`,
   };
 }
 
-/** Count `**Bolt slug**: <slug>` rows across the seeded record's audit shards
- *  (audit/*.md). The sibling worktree never carries the record (it's seeded after
- *  the fixture's seed commit, so it doesn't travel), so its shard dir is absent →
- *  [] — exactly the negative the guard-fires-pre-audit assertion wants. */
+function create(cwd: string, projectDir: string, args: string[]): CliResult {
+  return worktree(cwd, projectDir, ["create", ...args]);
+}
+
+/** Count Bolt slug rows across the selected fixture record's audit shards. */
 function boltSlugRows(dir: string): string[] {
   const auditDir = seededAuditDir(dir);
   let names: string[];
@@ -148,7 +165,42 @@ function boltSlugRows(dir: string): string[] {
 }
 
 const wtPath = (dir: string, slug: string): string =>
-  join(dir, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(dir, fixtureIntentId8(dir), slug);
+
+/** Model post-landing partial cleanup: durable authority exists but branch/refs remain. */
+function seedPostLandingCleanup(fixture: string, slug: string, id8: string): string {
+  const dir = worktreePath(fixture, id8, slug);
+  const sourceCommit = git(dir, "rev-parse", "HEAD").trim();
+  const openingFingerprint = workspaceSourceFingerprint(fixture, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+  if (openingFingerprint === null) throw new Error("Cannot fingerprint merge fixture");
+  const attempt = {
+    "Unit name": slug,
+    "Batch number": "1",
+    Stage: "code-generation",
+    "Run floor": "unstarted#0",
+    "Source Commit": sourceCommit,
+    Repo: "-",
+  };
+  git(fixture, "update-ref", reviewedSourceRef(id8, slug, sourceCommit), sourceCommit);
+  appendAuditEntry("SWARM_UNIT_CONVERGED", attempt, fixture, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+  appendAuditEntry("WORKTREE_MERGED", {
+    "Bolt slug": slug,
+    "Worktree path": relative(fixture, dir).replaceAll("\\", "/"),
+    "Target branch": "main",
+    Strategy: "rebase",
+  }, fixture, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+  git(fixture, "merge", "--ff-only", boltName(id8, slug));
+  const landedFingerprint = workspaceSourceFingerprint(fixture, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+  if (landedFingerprint === null) throw new Error("Cannot fingerprint landed source");
+  appendAuditEntry("SWARM_SOURCE_MERGED", {
+    ...attempt,
+    "Merge commit": sourceCommit,
+    "Previous Source Fingerprint": openingFingerprint,
+    "Source Fingerprint": landedFingerprint,
+  }, fixture, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+  git(fixture, "worktree", "remove", "--force", dir);
+  return sourceCommit;
+}
 
 describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibling-rejection.sh, plan 3)", () => {
   test("1-3: create from inside a sibling worktree is rejected pre-audit with the main-checkout error", () => {
@@ -163,7 +215,7 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(r.out).toContain("inside another worktree's tracked tree"); // T3
 
     // STRONGER: the guard fires BEFORE the audit emit, so nothing landed in
-    // either checkout's audit, and no bolt-demo worktree dir was created.
+    // either checkout's audit, and no Bolt worktree directory was created.
     expect(boltSlugRows(sibling)).not.toContain("demo");
     expect(boltSlugRows(fixture)).not.toContain("demo");
     expect(existsSync(wtPath(sibling, "demo"))).toBe(false);
@@ -207,20 +259,21 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
   }, 30000);
 
-  // #1252: #567 makes the shared-branch collision reachable from two outside/main
-  // checkouts. The second intent cannot create a Bolt with the same Unit slug.
-  // The refusal must name the owner so a human can tell which intent holds the Bolt.
-  test("6: create is refused when another worktree already holds bolt-<slug>, naming that worktree", () => {
+  // Both checkouts select the SAME registry intent: its branch remains unique
+  // within this clone and the refusal must identify the worktree holding it.
+  test("6: the same intent cannot create its same-slug Bolt in two worktrees", () => {
     const fixture = freshFixture();
     // emitError only records ERROR_LOGGED when the record has a state file.
     writeFileSync(seededStateFile(fixture), "- **Current Stage**: code-generation\n", "utf-8");
     const { outside } = addOutsideWorktree(fixture);
-    const r1 = create(outside, outside, ["--slug", "demo", "--base", "feature-x"]);
+    const selectors = ["--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE];
+    const branch = boltName(fixtureIntentId8(fixture), "demo");
+    const r1 = create(outside, outside, ["--slug", "demo", "--base", "feature-x", ...selectors]);
     expect(r1.status, r1.out).toBe(0);
 
-    const r2 = create(fixture, fixture, ["--slug", "demo", "--base", "main"]);
+    const r2 = create(fixture, fixture, ["--slug", "demo", "--base", "main", ...selectors]);
     expect(r2.status).not.toBe(0);
-    expect(r2.out).toContain("Branch already exists: bolt-demo");
+    expect(r2.out).toContain(`Branch already exists: ${branch}`);
     expect(r2.out).toContain(`checked out at ${wtPath(outside, "demo")}`);
     expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
 
@@ -232,7 +285,65 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
       .map((name) => readFileSync(join(auditDir, name), "utf-8"))
       .join("\n");
     expect(auditText).toContain("**Event**: ERROR_LOGGED");
-    expect(auditText).toContain("Branch already exists: bolt-demo (checked out in another worktree of this repository)");
+    expect(auditText).toContain(`Branch already exists: ${branch} (checked out in another worktree of this repository)`);
     expect(auditText).not.toContain(outside);
   }, 30000);
+
+  test("7: different intents in two worktrees share a slug without sharing cleanup authority", () => {
+    const fixture = freshFixture();
+    const { outside } = addOutsideWorktree(fixture);
+    const intentB = createIntent(outside, "other-intent", DEFAULT_SPACE);
+    const idA = fixtureIntentId8(fixture, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    const idB = fixtureIntentId8(outside, intentB.dirName, DEFAULT_SPACE);
+    const slug = "demo";
+    const a = create(fixture, fixture, ["--slug", slug, "--base", "main", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE]);
+    const b = create(outside, outside, ["--slug", slug, "--base", "feature-x", "--intent", intentB.dirName, "--space", DEFAULT_SPACE]);
+    expect(a.status, a.out).toBe(0);
+    expect(b.status, b.out).toBe(0);
+    expect(idA).not.toBe(idB);
+    const listedA = worktree(fixture, fixture, ["list"]);
+    const listedB = worktree(outside, outside, ["list"]);
+    expect(listedA.status, listedA.out).toBe(0);
+    expect(listedB.status, listedB.out).toBe(0);
+    expect(JSON.parse(listedA.stdout).worktrees).toEqual([expect.objectContaining({
+      slug, intent_id8: idA, legacy: false,
+      branch: boltName(idA, slug), worktree_path: worktreePath(fixture, idA, slug),
+    })]);
+    expect(JSON.parse(listedB.stdout).worktrees).toEqual([expect.objectContaining({
+      slug, intent_id8: idB, legacy: false,
+      branch: boltName(idB, slug), worktree_path: worktreePath(outside, idB, slug),
+    })]);
+
+    const bHead = git(outside, "rev-parse", boltName(idB, slug)).trim();
+    const bBase = git(outside, "rev-parse", "main").trim();
+    for (const commit of [bHead, bBase]) {
+      git(outside, "update-ref", reviewedSourceRef(idB, slug, commit), commit);
+    }
+    const bRefsBefore = git(outside, "for-each-ref", "--format=%(refname)%09%(objectname)", reviewedSourceRefPrefix(idB, slug));
+    expect(bRefsBefore.split("\n").filter(Boolean).sort()).toEqual([
+      `${reviewedSourceRef(idB, slug, bHead)}\t${bHead}`,
+      `${reviewedSourceRef(idB, slug, bBase)}\t${bBase}`,
+    ].sort());
+    const aDir = worktreePath(fixture, idA, slug);
+    writeFileSync(join(aDir, "intent-a.txt"), "intent A source\n");
+    git(aDir, "add", "--", "intent-a.txt");
+    git(aDir, "commit", "-qm", "intent A source");
+    const landed = seedPostLandingCleanup(fixture, slug, idA);
+    expect(git(fixture, "rev-parse", "main").trim()).toBe(landed);
+    expect(readFileSync(join(fixture, "intent-a.txt"), "utf-8")).toBe("intent A source\n");
+    expect(existsSync(aDir)).toBe(false);
+
+    const retried = worktree(fixture, fixture, [
+      "merge", "--slug", slug, "--target", "main", "--strategy", "squash",
+      "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE,
+    ]);
+    expect(retried.status, retried.out).toBe(0);
+    expect(JSON.parse(retried.stdout).cleanup_reconciled).toBe(true);
+    expect(git(fixture, "rev-parse", "main").trim()).toBe(landed);
+    expect(spawnSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${boltName(idA, slug)}`], { cwd: fixture }).status).toBe(1);
+    expect(git(fixture, "for-each-ref", "--format=%(refname)", reviewedSourceRefPrefix(idA, slug))).toBe("");
+    expect(existsSync(worktreePath(outside, idB, slug))).toBe(true);
+    expect(git(outside, "rev-parse", boltName(idB, slug)).trim()).toBe(bHead);
+    expect(git(outside, "for-each-ref", "--format=%(refname)%09%(objectname)", reviewedSourceRefPrefix(idB, slug))).toBe(bRefsBefore);
+  }, 60000);
 });
