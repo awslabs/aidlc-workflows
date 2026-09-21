@@ -12,6 +12,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 const MAX_CHANGED_FILES = 500;
 const MAX_REVIEW_BYTES = 100_000;
 const CURRENT_AI_REVIEWS_FILE = "current-ai-reviews.json";
+const DISCUSSION_FILE = "discussion.json";
 const AI_REVIEW_MARKER = "<!-- ai-pr-review context=";
 
 export type Priority = "P0" | "P1" | "P2" | "P3";
@@ -300,12 +301,24 @@ export function normalizeDiscussion(
   return { discussion, currentAiReviews };
 }
 
+export function authoritativeDiscussion(discussion: ReviewDiscussion): ReviewDiscussion {
+  return {
+    ...discussion,
+    issueComments: discussion.issueComments.filter(entry => entry.actor.maintainer),
+    reviews: discussion.reviews.filter(
+      entry => entry.actor.maintainer || entry.kind === "ai-review",
+    ),
+    reviewComments: discussion.reviewComments.filter(entry => entry.actor.maintainer),
+  };
+}
+
 export function buildDiscussion(
   repository: string,
   pullRequest: number,
   head: string,
   output: string,
   currentAiOutput: string,
+  identityOutput?: string,
   ghExecutable = "gh",
 ): void {
   const issueComments = paginatedRecords(
@@ -329,6 +342,12 @@ export function buildDiscussion(
   );
   writeFileSync(output, `${JSON.stringify(normalized.discussion, null, 2)}\n`);
   writeFileSync(currentAiOutput, `${JSON.stringify(normalized.currentAiReviews, null, 2)}\n`);
+  if (identityOutput) {
+    writeFileSync(
+      identityOutput,
+      `${JSON.stringify(authoritativeDiscussion(normalized.discussion), null, 2)}\n`,
+    );
+  }
 }
 
 function safeRepoPath(path: string): string {
@@ -411,7 +430,11 @@ function contextDigest(root: string): string {
     for (const entry of readdirSync(directory).sort()) {
       const path = join(directory, entry);
       const contextPath = relative(root, path);
-      if (contextPath === "context-id.txt" || contextPath === CURRENT_AI_REVIEWS_FILE) continue;
+      if (
+        contextPath === "context-id.txt" ||
+        contextPath === CURRENT_AI_REVIEWS_FILE ||
+        contextPath === DISCUSSION_FILE
+      ) continue;
       const stats = statSync(path);
       if (stats.isDirectory()) visit(path);
       else {
@@ -839,6 +862,7 @@ function main(): void {
       argValue(args, "--head"),
       argValue(args, "--output"),
       argValue(args, "--current-ai-output"),
+      args.includes("--identity-output") ? argValue(args, "--identity-output") : undefined,
     );
     return;
   }

@@ -29,10 +29,6 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: ai-pr-review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
-  cancel-in-progress: true
-
 env:
   CODEX_VERSION: 0.151.0
   CLAUDE_CODE_VERSION: 2.1.267
@@ -62,6 +58,9 @@ jobs:
           && github.event.issue.pull_request
           && github.actor != 'github-actions[bot]'
           && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    concurrency:
+      group: ai-pr-review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     environment: ai-pr-review
     timeout-minutes: 100
@@ -174,7 +173,8 @@ jobs:
             --pr "$REQUESTED_PR" \
             --head "$head" \
             --output .ai-review-context/discussion.json \
-            --current-ai-output .ai-review-context/current-ai-reviews.json
+            --current-ai-output .ai-review-context/current-ai-reviews.json \
+            --identity-output .ai-review-context/discussion-identity.json
           jq '{number, state, merged, title, body: (.body // ""), draft, base: {sha: .base.sha, ref: .base.ref}, head: {sha: .head.sha, ref: .head.ref, repo: .head.repo.full_name}, user: .user.login}' \
             <<<"$pr_json" > .ai-review-context/pr.json
           bun .ai-review-controls/scripts/ai-pr-review.ts build-context \
@@ -556,9 +556,12 @@ jobs:
             --pr "$PR_NUMBER" \
             --head "$HEAD_SHA" \
             --output /tmp/current-discussion.json \
-            --current-ai-output /tmp/current-ai-reviews.json
-          if ! cmp -s .ai-review-context/discussion.json /tmp/current-discussion.json; then
-            echo "::error::PR conversation changed during review"
+            --current-ai-output /tmp/current-ai-reviews.json \
+            --identity-output /tmp/current-discussion-identity.json
+          if ! cmp -s \
+            .ai-review-context/discussion-identity.json \
+            /tmp/current-discussion-identity.json; then
+            echo "::error::Authoritative PR conversation changed during review"
             exit 1
           fi
 
@@ -600,13 +603,16 @@ jobs:
             --pr "$PR_NUMBER" \
             --head "$HEAD_SHA" \
             --output /tmp/latest-discussion.json \
-            --current-ai-output /tmp/latest-ai-reviews.json
-          if ! cmp -s .ai-review-context/discussion.json /tmp/latest-discussion.json; then
+            --current-ai-output /tmp/latest-ai-reviews.json \
+            --identity-output /tmp/latest-discussion-identity.json
+          if ! cmp -s \
+            .ai-review-context/discussion-identity.json \
+            /tmp/latest-discussion-identity.json; then
             if [ "$EVENT" = "REQUEST_CHANGES" ] && [ -n "$published" ]; then
               gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$published/dismissals" \
-                -f message="Dismissed because the PR conversation changed during publication" >/dev/null
+                -f message="Dismissed because the authoritative PR conversation changed during publication" >/dev/null
             fi
-            echo "::error::PR conversation changed during publication"
+            echo "::error::Authoritative PR conversation changed during publication"
             exit 1
           fi
 

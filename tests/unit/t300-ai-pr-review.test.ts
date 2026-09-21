@@ -15,6 +15,7 @@ import { join } from "node:path";
 import {
   buildDiscussion,
   buildContext,
+  authoritativeDiscussion,
   normalizeDiscussion,
   type ChangedFileManifest,
   type ReviewMetadata,
@@ -99,6 +100,7 @@ describe("t300 adversarial AI PR review", () => {
     const bin = join(root, "bin");
     const output = join(root, "discussion.json");
     const current = join(root, "current-ai-reviews.json");
+    const identity = join(root, "discussion-identity.json");
     mkdirSync(bin);
     const fakeGh = join(bin, "gh");
     writeFileSync(fakeGh, `#!/usr/bin/env bun
@@ -136,9 +138,10 @@ if (args.includes("issues/42/comments")) {
 process.stdout.write(JSON.stringify(value));
 `);
     chmodSync(fakeGh, 0o755);
-    buildDiscussion("acme/repo", 42, HEAD, output, current, fakeGh);
+    buildDiscussion("acme/repo", 42, HEAD, output, current, identity, fakeGh);
     const discussion = JSON.parse(readFileSync(output, "utf8"));
     const currentReviews = JSON.parse(readFileSync(current, "utf8"));
+    const identityDiscussion = JSON.parse(readFileSync(identity, "utf8"));
     expect(discussion.issueComments[0].actor.maintainer).toBe(true);
     expect(discussion.reviews.map((entry: { id: number }) => entry.id)).toEqual([2]);
     expect(discussion.reviews[0]).not.toHaveProperty("state");
@@ -151,6 +154,7 @@ process.stdout.write(JSON.stringify(value));
       "reviewComments",
     ]);
     expect(currentReviews.map((entry: { id: number }) => entry.id)).toEqual([3]);
+    expect(identityDiscussion).toEqual(discussion);
   });
 
   test("discussion identifies maintainer authority and separates current-head AI reviews", () => {
@@ -247,6 +251,11 @@ process.stdout.write(JSON.stringify(value));
       }],
     );
     expect(afterBotDismissal.discussion).toEqual(normalized.discussion);
+
+    const identity = authoritativeDiscussion(normalized.discussion);
+    expect(identity.issueComments.map(entry => entry.id)).toEqual([1]);
+    expect(identity.reviews.map(entry => entry.id)).toEqual([3, 5]);
+    expect(identity.reviewComments.map(entry => entry.id)).toEqual([6]);
   });
 
   test("strict JSON is rendered as a context-bound REQUEST_CHANGES review", () => {
@@ -763,7 +772,8 @@ process.stdout.write(JSON.stringify(value));
     const head = run("rev-parse", "HEAD");
     const output = join(repo, "context");
     mkdirSync(output, { recursive: true });
-    writeFileSync(join(output, "discussion.json"), '{"comments":["accepted"]}\n');
+    writeFileSync(join(output, "discussion.json"), '{"comments":["all conversation"]}\n');
+    writeFileSync(join(output, "discussion-identity.json"), '{"comments":["accepted"]}\n');
     writeFileSync(join(output, "current-ai-reviews.json"), "[]\n");
     buildContext(base, head, output, repo);
     const initial = readFileSync(join(output, "context-id.txt"), "utf8");
@@ -772,7 +782,14 @@ process.stdout.write(JSON.stringify(value));
     buildContext(base, head, output, repo);
     expect(readFileSync(join(output, "context-id.txt"), "utf8")).toBe(initial);
 
-    writeFileSync(join(output, "discussion.json"), '{"comments":["accepted","new human reply"]}\n');
+    writeFileSync(join(output, "discussion.json"), '{"comments":["all conversation","outsider reply"]}\n');
+    buildContext(base, head, output, repo);
+    expect(readFileSync(join(output, "context-id.txt"), "utf8")).toBe(initial);
+
+    writeFileSync(
+      join(output, "discussion-identity.json"),
+      '{"comments":["accepted","new maintainer decision"]}\n',
+    );
     buildContext(base, head, output, repo);
     expect(readFileSync(join(output, "context-id.txt"), "utf8")).not.toBe(initial);
   });
@@ -882,6 +899,11 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW).toContain("AI review is disabled for forks");
     expect(WORKFLOW).not.toContain("github.event.workflow_run");
     expect(WORKFLOW).toContain("permissions: {}");
+    expect(WORKFLOW.indexOf("\nconcurrency:\n")).toBe(-1);
+    expect(WORKFLOW).toContain("    concurrency:");
+    expect(WORKFLOW.indexOf("    concurrency:")).toBeGreaterThan(
+      WORKFLOW.indexOf("  review:"),
+    );
     expect(WORKFLOW).toContain("persist-credentials: false");
     expect(WORKFLOW).toContain("id-token: write");
     expect(WORKFLOW).toContain("AWS_AI_PR_REVIEW_ROLE_ARN");
@@ -987,8 +1009,8 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW).toContain("existing_state");
     expect(WORKFLOW).toContain("is a draft; AI review waits for ready_for_review");
     expect(WORKFLOW).toContain("cmp -s .ai-review-context/pr.json");
-    expect(WORKFLOW).toContain("cmp -s .ai-review-context/discussion.json");
-    expect(WORKFLOW).toContain("PR conversation changed during review");
+    expect(WORKFLOW).toContain(".ai-review-context/discussion-identity.json");
+    expect(WORKFLOW).toContain("Authoritative PR conversation changed during review");
     expect(WORKFLOW).toContain("github.actor != 'github-actions[bot]'");
     expect(
       WORKFLOW.match(
