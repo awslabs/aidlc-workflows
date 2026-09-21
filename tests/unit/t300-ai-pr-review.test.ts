@@ -847,6 +847,69 @@ process.stdout.write(JSON.stringify(value));
     expect(evidenceText).toContain("asset.bin");
   });
 
+  test("judge evidence bounds oversized unchanged files to cited lines", () => {
+    const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-related-evidence-"));
+    const run = (...args: string[]): string =>
+      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    run("init", "--quiet");
+    run("config", "user.name", "AI Review Test");
+    run("config", "user.email", "ai-review@example.invalid");
+    const citedLines = Array.from(
+      { length: 6_000 },
+      (_, index) => `cited-${index + 1}-${"x".repeat(80)}`,
+    );
+    const uncitedLines = Array.from(
+      { length: 6_000 },
+      (_, index) => `uncited-${index + 1}-${"y".repeat(80)}`,
+    );
+    writeFileSync(join(repo, "large-cited.md"), citedLines.join("\n"));
+    writeFileSync(join(repo, "large-uncited.md"), uncitedLines.join("\n"));
+    writeFileSync(join(repo, "changed.ts"), "export const value = 1;\n");
+    run("add", ".");
+    run("commit", "--quiet", "-m", "base");
+    const base = run("rev-parse", "HEAD");
+
+    writeFileSync(join(repo, "changed.ts"), "export const value = 2;\n");
+    run("add", "changed.ts");
+    run("commit", "--quiet", "-m", "head");
+    const head = run("rev-parse", "HEAD");
+
+    const context = join(repo, "context");
+    buildContext(base, head, context, repo);
+    writeFileSync(join(context, "pr.json"), '{"number":1}\n');
+    writeFileSync(join(context, "discussion.json"), '{"reviews":[],"reviewComments":[]}\n');
+    writeFileSync(join(context, "current-ai-reviews.json"), "[]\n");
+    const reports = join(repo, "reports");
+    mkdirSync(reports);
+    writeFileSync(
+      join(reports, "correctness.md"),
+      "Check `large-cited.md:3000` and the unsupported `large-uncited.md` claim.\n",
+    );
+    const evidence = join(repo, "judge-evidence.txt");
+    execFileSync(process.execPath, [
+      join(REPO_ROOT, ".github", "scripts", "build-ai-review-evidence.ts"),
+      "pr",
+      "--base",
+      base,
+      "--head",
+      head,
+      "--context",
+      context,
+      "--reports",
+      reports,
+      "--output",
+      evidence,
+    ], { cwd: repo });
+
+    const evidenceText = readFileSync(evidence, "utf8");
+    expect(evidenceText).toContain('"contentMode": "cited-line-excerpts"');
+    expect(evidenceText).toContain("cited-3000-");
+    expect(evidenceText).not.toContain("cited-1-");
+    expect(evidenceText).toContain('"contentMode": "metadata-only"');
+    expect(evidenceText).toContain("No valid cited line was supplied");
+    expect(evidenceText).not.toContain("uncited-3000-");
+  });
+
   test("context builder accepts large files, diffs, and aggregate snapshots", () => {
     const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-large-context-"));
     const run = (...args: string[]): string =>

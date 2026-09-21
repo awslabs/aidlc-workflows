@@ -877,7 +877,9 @@ describe("t301 AI issue intent review", () => {
     expect(JUDGE_PROMPT).toContain("regular tracked files in the trusted base revision");
     expect(JUDGE_PROMPT).toContain("Never cite `.ai-issue-review-*` artifacts");
     expect(JUDGE_PROMPT).toContain("current-aida-review.json");
-    expect(COMMON_PROMPT).toContain("name that path in");
+    expect(COMMON_PROMPT).toContain("name its exact");
+    expect(COMMON_PROMPT).toContain("`path:line`");
+    expect(COMMON_PROMPT).toContain("metadata only");
     expect(DIRECTION_PROMPT).toContain("orchestrator speaks as a colleague");
     expect(DIRECTION_PROMPT).toContain("token cost");
     expect(DIRECTION_PROMPT).toContain("bug-verification.json");

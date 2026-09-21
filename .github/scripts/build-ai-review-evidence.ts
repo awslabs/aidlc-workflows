@@ -11,7 +11,15 @@ import { basename, join, resolve } from "node:path";
 
 const MAX_EVIDENCE_BYTES = 2_000_000;
 const MAX_TEXT_FILE_BYTES = 400_000;
+const MAX_RELATED_EXCERPT_BYTES = 300_000;
+const RELATED_EXCERPT_CONTEXT_LINES = 80;
 const TRUSTED_CONTRACTS = ["AGENTS.md", "CONTRIBUTING.md", "README.md"];
+
+interface RepositoryReference {
+  path: string;
+  ranges: Array<{ start: number; end: number }>;
+  hasUnlocatedCitation: boolean;
+}
 
 function argValue(args: string[], name: string): string {
   const index = args.indexOf(name);
@@ -104,12 +112,14 @@ class EvidenceWriter {
   }
 }
 
-function candidateRepositoryPaths(reportsDir: string): string[] {
-  const paths = new Set<string>();
+function candidateRepositoryReferences(reportsDir: string): RepositoryReference[] {
+  const references = new Map<string, RepositoryReference>();
   for (const file of readdirSync(reportsDir).filter(file => file.endsWith(".md")).sort()) {
     const report = readFileSync(join(reportsDir, file), "utf8");
     for (const match of report.matchAll(/`([^`\r\n]+)`/g)) {
-      const candidate = match[1].trim().replace(/:(?:\d+)(?:-\d+)?$/, "");
+      const rawCandidate = match[1].trim();
+      const location = rawCandidate.match(/^(.*):(\d+)(?:-(\d+))?$/);
+      const candidate = location?.[1] ?? rawCandidate;
       if (
         candidate.length > 0 &&
         candidate.length <= 500 &&
@@ -117,11 +127,88 @@ function candidateRepositoryPaths(reportsDir: string): string[] {
         !candidate.split("/").includes("..") &&
         /^[A-Za-z0-9._/+-]+$/.test(candidate)
       ) {
-        paths.add(candidate);
+        const reference = references.get(candidate) ?? {
+          path: candidate,
+          ranges: [],
+          hasUnlocatedCitation: false,
+        };
+        if (location) {
+          const start = Number(location[2]);
+          const end = Number(location[3] ?? location[2]);
+          if (
+            Number.isSafeInteger(start) &&
+            Number.isSafeInteger(end) &&
+            start > 0 &&
+            end >= start
+          ) {
+            reference.ranges.push({ start, end });
+          } else {
+            reference.hasUnlocatedCitation = true;
+          }
+        } else {
+          reference.hasUnlocatedCitation = true;
+        }
+        references.set(candidate, reference);
       }
     }
   }
-  return [...paths].sort();
+  return [...references.values()]
+    .map(reference => ({
+      ...reference,
+      ranges: reference.ranges.sort((left, right) =>
+        left.start - right.start || left.end - right.end
+      ),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function relatedTextEvidence(content: Buffer, reference: RepositoryReference): string {
+  const text = textContent(content);
+  if (text === null) throw new Error("relatedTextEvidence requires UTF-8 text");
+  const lines = text.split("\n");
+  const windows = reference.ranges
+    .filter(range => range.start <= lines.length)
+    .map(range => ({
+      start: Math.max(1, range.start - RELATED_EXCERPT_CONTEXT_LINES),
+      end: Math.min(lines.length, range.end + RELATED_EXCERPT_CONTEXT_LINES),
+    }))
+    .reduce<Array<{ start: number; end: number }>>((merged, window) => {
+      const previous = merged.at(-1);
+      if (previous && window.start <= previous.end + 1) {
+        previous.end = Math.max(previous.end, window.end);
+      } else {
+        merged.push(window);
+      }
+      return merged;
+    }, []);
+  const metadata = {
+    binary: false,
+    oversized: true,
+    bytes: content.byteLength,
+    sha256: createHash("sha256").update(content).digest("hex"),
+    textFileLimit: MAX_TEXT_FILE_BYTES,
+    citedRanges: reference.ranges,
+    hasUnlocatedCitation: reference.hasUnlocatedCitation,
+    contentMode: windows.length > 0 ? "cited-line-excerpts" : "metadata-only",
+    note: windows.length > 0
+      ? "Only bounded excerpts around valid cited lines are supplied. Other content is unavailable to the judge."
+      : "No valid cited line was supplied. File content is unavailable and cannot support a finding.",
+  };
+  let evidence = `${JSON.stringify(metadata, null, 2)}\n`;
+  for (const window of windows) {
+    const excerpt = [
+      `----- lines ${window.start}-${window.end} of ${lines.length} -----`,
+      lines.slice(window.start - 1, window.end).join("\n"),
+      "",
+    ].join("\n");
+    if (Buffer.byteLength(evidence + excerpt) > MAX_RELATED_EXCERPT_BYTES) {
+      evidence +=
+        "----- additional cited-line excerpt omitted because the bounded excerpt limit was reached -----\n";
+      break;
+    }
+    evidence += excerpt;
+  }
+  return evidence;
 }
 
 function addTrustedFiles(
@@ -131,11 +218,27 @@ function addTrustedFiles(
   changedPaths: Set<string>,
   cwd: string,
 ): void {
-  const candidates = new Set([...TRUSTED_CONTRACTS, ...candidateRepositoryPaths(reportsDir)]);
-  for (const path of [...candidates].sort()) {
-    if (changedPaths.has(path) || path.startsWith(".ai-")) continue;
-    const content = trackedRegularBlob(base, path, cwd);
-    if (content) writer.add(`trusted base file ${base}:${path}`, content);
+  const references = new Map(
+    candidateRepositoryReferences(reportsDir).map(reference => [reference.path, reference]),
+  );
+  for (const path of TRUSTED_CONTRACTS) {
+    if (!references.has(path)) {
+      references.set(path, { path, ranges: [], hasUnlocatedCitation: true });
+    }
+  }
+  for (const reference of [...references.values()].sort((left, right) =>
+    left.path.localeCompare(right.path)
+  )) {
+    if (changedPaths.has(reference.path) || reference.path.startsWith(".ai-")) continue;
+    const content = trackedRegularBlob(base, reference.path, cwd);
+    if (!content) continue;
+    const text = textContent(content);
+    writer.add(
+      `trusted base file ${base}:${reference.path}`,
+      text !== null && content.byteLength > MAX_TEXT_FILE_BYTES
+        ? relatedTextEvidence(content, reference)
+        : content,
+    );
   }
 }
 

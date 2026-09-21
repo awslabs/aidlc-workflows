@@ -113,8 +113,11 @@ tools. They receive a deterministic immutable evidence bundle capped at
 2,000,000 bytes, with individual text files capped at 400,000 bytes. The bundle
 contains changed PR evidence or issue context, prior AIDA continuity, trusted
 base contracts, and tracked base files cited by specialist passes. Binary
-content is represented by its byte length and SHA-256 digest. Evidence creation
-fails explicitly when a text or aggregate limit is exceeded.
+content is represented by its byte length and SHA-256 digest. Oversized
+unchanged files use bounded excerpts around cited lines; citations without a
+valid line supply metadata only and cannot support a finding. Evidence creation
+fails explicitly when required changed text or aggregate evidence exceeds a
+limit.
 
 ## Contributing via Pull Requests
 

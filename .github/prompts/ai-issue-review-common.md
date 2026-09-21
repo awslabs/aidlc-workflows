@@ -63,10 +63,12 @@ Every candidate must identify a concrete gap, cite an exact quote from the
 issue, its conversation, a trusted repository file, or an existing issue title,
 and propose a specific improvement to the current proposal. Separate:
 
-When a candidate relies on a trusted repository file, name that path in
-backticks in the specialist report. The final no-tool judge receives an
-immutable base copy of tracked paths cited this way and discards claims whose
-supporting repository source was not supplied.
+When a candidate relies on a trusted repository file, name its exact
+`path:line` or `path:start-end` location in backticks in the specialist report.
+The final no-tool judge receives an immutable base copy of tracked paths cited
+this way. Oversized files are represented by bounded excerpts around cited
+lines; an oversized path cited without a valid line supplies metadata only.
+The judge discards claims whose supporting repository source was not supplied.
 
 - `blocking-question`: a human decision or missing requirement that prevents a
   responsible planning or implementation decision.

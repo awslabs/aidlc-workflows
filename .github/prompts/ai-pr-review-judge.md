@@ -16,9 +16,11 @@ bundle to find the upstream guard, unreachable caller,
 type invariant, compensating behavior, test coverage, unchanged authoritative
 source, or mistaken line interpretation that makes it invalid. Re-derive every
 surviving finding from the supplied base/head files plus SHA-anchored diff. If a
-candidate depends on an unchanged file absent from the bundle, discard that
-candidate as unverified. Do not preserve a candidate merely because another
-model assigned it a high priority.
+candidate depends on an unchanged file absent from the bundle, or on content
+outside a supplied oversized-file excerpt, discard that candidate as
+unverified. Metadata-only records prove file identity and size, not the claimed
+behavior. Do not preserve a candidate merely because another model assigned it
+a high priority.
 
 Then close coverage gaps across all categories. Review the code that exists,
 not the PR description:
@@ -82,9 +84,12 @@ reachable disclosure or privilege crossing.
 
 Inspection is a publication gate. The evidence bundle contains every changed
 path, the SHA-anchored diff, complete changed text files within the documented
-size boundary, explicit binary metadata, and the unchanged tracked files cited
-by specialists. Bundle creation fails before judgment if text or aggregate
-evidence exceeds its declared limit. Inspect the entire bundle. Return
+size boundary, explicit binary metadata, and either complete unchanged tracked
+files cited by specialists or bounded excerpts around their cited lines.
+Oversized unchanged files cited without a valid line contain metadata only and
+cannot support a finding. Bundle creation fails before judgment if required
+changed text or aggregate evidence exceeds its declared limit. Inspect the
+entire bundle. Return
 `inspection.status` as `"complete"` only after all supplied changed-file
 evidence is inspected. Return `"failed"` when the bundle itself reports a gap
 or required changed-file evidence is missing. Record non-blocking validation
