@@ -987,6 +987,10 @@ describe("t247 claim-sources sensor", () => {
     ["an inner-item div following an indented nested marker", "- outer\n  - nested\n    <div>\n  [Q1]: /url"],
     ["nested bullet sibling prose", "- outer\n  - child prose\n  - [Q1]: /url"],
     ["nested ordered sibling prose", "1. outer\n   1. child prose\n   2. [Q1]: /url"],
+    ["a start-one nested item interrupting prose", "- prose\n  1. [Q1]: /url"],
+    ["a start-one nested item after rejected continuation", "- prose\n  2. more\n  1. [Q1]: /url"],
+    ["a marker-only bullet sibling", "- prose\n*\n  [Q1]: /url"],
+    ["a marker-only setext underline", "Some prose\n-\n  [Q1]: /url"],
   ] as const) {
     test(`a reference definition after ${label} resolves document-wide`, () => {
       const dir = makeStageDir();
@@ -1017,6 +1021,9 @@ describe("t247 claim-sources sensor", () => {
     ["an uninterrupted quoted div block", "> <div>\n> [Q1]: /url"],
     ["an uninterrupted inner quote in a list-item processing instruction", "- > <?php\n  > [Q1]: /url"],
     ["an uninterrupted inline nested list-item HTML block", "- - item\n    <?php\n    [Q1]: /url"],
+    ["a non-one nested item under prose", "- prose\n  2. [Q1]: /url"],
+    ["consecutive rejected nested items", "- prose\n  2. more\n  3. [Q1]: /url"],
+    ["a marker-only bullet under prose", "Some prose\n*\n  [Q1]: /url"],
   ] as const) {
     test(`a definition-shaped line in ${label} stays literal`, () => {
       const dir = makeStageDir();

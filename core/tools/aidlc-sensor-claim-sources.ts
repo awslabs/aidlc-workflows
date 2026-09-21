@@ -743,11 +743,9 @@ function visibleHtmlText(text: string): string {
 // two nest in either order and to any depth. Taking one of each off would read
 // `> - [Q1]: url` and miss the equally valid `- > [Q1]: url`, so the markers
 // come off until the line stops changing. Five or more spaces after a list
-// marker start an indented code block inside the item rather than content, so
-// the marker only comes off for a run of one to four — and four spaces of
-// remaining indentation is an indented code block too, which the caller's
-// column test rejects.
-type ContainerStep = { kind: "quote" } | { kind: "indent"; columns: number; item: string };
+// marker leave at least four columns of indented-code content. A marker-only
+// item requires one column after its marker for content on following lines.
+type ContainerStep = { kind: "quote" } | { kind: "indent"; columns: number; item: string; marker: string };
 
 interface ContainerLine {
 	text: string;
@@ -771,14 +769,19 @@ function containerLine(line: string, allocateItem: () => string): ContainerLine 
 		if (isThematicBreak(stripped)) {
 			return { text: stripped, context: context.join("/"), steps };
 		}
-		const list = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(
+		const list = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! )| (?= {4})|$)/.exec(
 			stripped,
 		);
 		if (list) {
 			const item = allocateItem();
 			stripped = stripped.slice(list[0].length);
 			context.push(item);
-			steps.push({ kind: "indent", columns: textColumns(list[0]), item });
+			steps.push({
+				kind: "indent",
+				columns: textColumns(list[0]) + (/[ \t]$/.test(list[0]) ? 0 : 1),
+				item,
+				marker: list[0].trim(),
+			});
 			continue;
 		}
 		return { text: stripped, context: context.join("/"), steps };
@@ -841,13 +844,16 @@ function contextParts(context: string): string[] {
 	return context.length > 0 ? context.split("/") : [];
 }
 
-function leadingQuoteDepth(context: string): number {
-	let depth = 0;
-	for (const part of contextParts(context)) {
-		if (part !== "quote") break;
-		depth++;
+function sharedSteps(a: ContainerStep[], b: ContainerStep[]): number {
+	let shared = 0;
+	while (shared < a.length && shared < b.length) {
+		const left = a[shared];
+		const right = b[shared];
+		if (left.kind !== right.kind) break;
+		if (left.kind === "indent" && right.kind === "indent" && left.item !== right.item) break;
+		shared++;
 	}
-	return depth;
+	return shared;
 }
 
 function textColumns(text: string): number {
@@ -943,12 +949,17 @@ function explicitListContainer(
 	if (isThematicBreak(text)) return null;
 
 	const marker =
-		/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(text);
+		/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! )| (?= {4})|$)/.exec(text);
 	if (!marker) return null;
 	const after = containerLine(text.slice(marker[0].length), allocateItem);
 	const steps: ContainerStep[] = [
 		...before.map((): ContainerStep => ({ kind: "quote" })),
-		{ kind: "indent", columns: textColumns(marker[0]), item: listItem },
+		{
+			kind: "indent",
+			columns: textColumns(marker[0]) + (/[ \t]$/.test(marker[0]) ? 0 : 1),
+			item: listItem,
+			marker: marker[0].trim(),
+		},
 		...after.steps,
 	];
 	return {
@@ -1254,6 +1265,8 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 	const definitionLines = new Set<number>();
 	let block: "none" | "paragraph" | "html" = "none";
 	let blockContext = "";
+	let blockSteps: ContainerStep[] = [];
+	let rejectedItem: string | null = null;
 	let htmlEnd: RegExp | null = null;
 	let htmlSteps: ContainerStep[] = [];
 
@@ -1269,39 +1282,58 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			const inside = stripContainerSteps(visibleLines[index], htmlSteps);
 			if (inside === null) {
 				block = "none";
+				rejectedItem = null;
 				htmlEnd = null;
 			} else {
 				if (htmlEnd ? htmlEnd.test(inside.text) : inside.blank) {
 					block = "none";
+					rejectedItem = null;
 					htmlEnd = null;
 				}
 				continue;
 			}
 		}
 		if (content === null) {
+			// CommonMark §5.2: empty items cannot interrupt paragraphs, except
+			// sibling items; a lone hyphen also closes prose as a setext underline.
+			if (block === "paragraph" && !continuesContext(line.context, blockContext)) {
+				const shared = sharedSteps(blockSteps, line.steps);
+				const added = line.steps[shared];
+				if (added?.kind === "indent") {
+					if (added.marker !== "-" && shared === blockSteps.length) {
+						rejectedItem = added.item;
+						continue;
+					}
+				}
+			}
 			block = "none";
+			rejectedItem = null;
 			continue;
 		}
 		let continuation = false;
 		if (block === "paragraph") {
 			if (!continuesContext(line.context, blockContext)) {
-				const raw = visibleLines[index].replace(/^(?: {0,3}> ?)+/, "");
-				const ordered = /^ {0,3}(\d{1,9})[.)](?:\t| {1,4}(?! ))/.exec(raw);
-				// CommonMark §5.3: a list interrupts a paragraph only when it is a bullet
-				// list or starts at 1; a new block quote always interrupts. Our flat
-				// containers treat a marker after in-list prose as a sibling item.
-				continuation =
-					ordered !== null &&
-					Number(ordered[1]) !== 1 &&
-					leadingQuoteDepth(line.context) === leadingQuoteDepth(blockContext) &&
-					!contextParts(blockContext).some((part) => part.startsWith("list#"));
+				const shared = sharedSteps(blockSteps, line.steps);
+				const added = line.steps[shared];
+				// CommonMark §5.3: a new nested ordered list interrupts only at 1;
+				// leaving the paragraph's container always allows a new item.
+				if (added?.kind === "indent") {
+					const digits = /^\d+/.exec(added.marker);
+					const start = digits === null ? null : Number(digits[0]);
+					continuation = added.item === rejectedItem ||
+						(shared === blockSteps.length && start !== null && start !== 1);
+					if (continuation) rejectedItem = added.item;
+				}
 				if (!continuation) {
 					block = "none";
+					rejectedItem = null;
 					blockContext = line.context;
+					blockSteps = line.steps;
 				}
 			}
 		} else {
 			blockContext = line.context;
+			blockSteps = line.steps;
 		}
 
 		const rest = line.text.slice(content.index);
@@ -1311,8 +1343,10 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			if (finite) {
 				if (finite[1].test(rest.slice(1))) {
 					block = "none";
+					rejectedItem = null;
 				} else {
 					block = "html";
+					rejectedItem = null;
 					htmlSteps = line.steps;
 					htmlEnd = finite[1];
 				}
@@ -1323,13 +1357,9 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 				(block === "none" && HTML_INLINE_TAG_LINE_RE.test(rest))
 			) {
 				block = "html";
+				rejectedItem = null;
 				htmlSteps = line.steps;
 				htmlEnd = null;
-				continue;
-			}
-			const codeItem = /^(?:([-*+])|(\d{1,9})[.)]) {5,}\S/.exec(rest);
-			if (codeItem && (block === "none" || codeItem[1] !== undefined || Number(codeItem[2]) === 1)) {
-				block = "none";
 				continue;
 			}
 		}
@@ -1343,6 +1373,7 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 				}
 				index = definition.endLine;
 				blockContext = lines[index].context;
+				blockSteps = lines[index].steps;
 				continue;
 			}
 		}
@@ -1354,17 +1385,11 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 				(block === "paragraph" && /^(?:=+|-+)[ \t]*$/.test(rest)))
 		) {
 			block = "none";
+			rejectedItem = null;
 			continue;
 		}
-		// CommonMark §5.2: a marker-only line starts an empty list item whose
-		// content begins on the next line. It opens a container, not a paragraph,
-		// and cannot interrupt an open paragraph (then it is continuation text).
-		if (
-			block === "none" &&
-			content.column <= 3 &&
-			/^(?:[-*+]|\d{1,9}[.)])[ \t]*$/.test(rest)
-		) continue;
 		if (block === "none" && content.column > 3) continue;
+		if (block !== "paragraph") rejectedItem = null;
 		block = "paragraph";
 	}
 
