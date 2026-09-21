@@ -750,21 +750,26 @@ function visibleHtmlText(text: string): string {
 interface ContainerLine {
 	text: string;
 	context: string;
+	quotes: number;
+	indent: number;
 }
 
 function containerLine(line: string): ContainerLine {
 	let stripped = line;
 	const context: string[] = [];
+	let quotes = 0;
+	let indent = 0;
 	for (;;) {
 		const quote = /^ {0,3}> ?/.exec(stripped);
 		if (quote) {
 			stripped = stripped.slice(quote[0].length);
 			context.push("quote");
+			if (indent === 0) quotes++;
 			continue;
 		}
 		// CommonMark gives thematic breaks precedence over list markers.
 		if (isThematicBreak(stripped)) {
-			return { text: stripped, context: context.join("/") };
+			return { text: stripped, context: context.join("/"), quotes, indent };
 		}
 		const list = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(
 			stripped,
@@ -772,9 +777,10 @@ function containerLine(line: string): ContainerLine {
 		if (list) {
 			stripped = stripped.slice(list[0].length);
 			context.push("list");
+			indent += textColumns(list[0]);
 			continue;
 		}
-		return { text: stripped, context: context.join("/") };
+		return { text: stripped, context: context.join("/"), quotes, indent };
 	}
 }
 
@@ -929,6 +935,8 @@ function explicitListContainer(
 			context: [...before, listContext, ...contextParts(after.context)].join(
 				"/",
 			),
+			quotes: before.length,
+			indent: textColumns(marker[0]) + after.indent,
 		},
 		active: {
 			beforeQuotes: before.length,
@@ -957,7 +965,12 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 		}
 
 		if (line.trim().length === 0) {
-			result.push({ text: line, context: activeList?.listContext ?? "" });
+			result.push({
+				text: line,
+				context: activeList?.listContext ?? "",
+				quotes: activeList?.beforeQuotes ?? 0,
+				indent: activeList?.contentIndent ?? 0,
+			});
 			continue;
 		}
 
@@ -967,6 +980,8 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 				result.push({
 					text: "",
 					context: [...quoted.contexts, activeList.listContext].join("/"),
+					quotes: activeList.beforeQuotes,
+					indent: activeList.contentIndent,
 				});
 				continue;
 			}
@@ -982,6 +997,8 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 						activeList.listContext,
 						...contextParts(after.context),
 					].join("/"),
+					quotes: activeList.beforeQuotes,
+					indent: activeList.contentIndent + after.indent,
 				});
 				continue;
 			}
@@ -1218,29 +1235,30 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 	let block: "none" | "paragraph" | "html" = "none";
 	let blockContext = "";
 	let htmlEnd: RegExp | null = null;
+	let htmlQuotes = 0;
+	let htmlIndent = 0;
 
 	// CommonMark §4.7: a link reference definition cannot interrupt a paragraph.
 	// A definition-shaped line directly under prose is visible lazy continuation.
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
 		const content = firstContent(line.text);
-		// CommonMark §4.6: HTML blocks never continue lazily outside their container.
-		// Raw content may look like markers nested inside that same container.
-		if (
-			block === "html" &&
-			blockContext !== "" &&
-			line.context !== blockContext &&
-			!line.context.startsWith(`${blockContext}/`)
-		) {
-			block = "none";
-			htmlEnd = null;
-		}
 		if (block === "html") {
-			if (htmlEnd ? htmlEnd.test(line.text) : content === null) {
+			// CommonMark §4.6: HTML never continues lazily. It continues only while
+			// its container's raw quote markers and indentation are present; what
+			// the raw content looks like as Markdown is irrelevant.
+			const quoted = stripLeadingQuotes(visibleLines[index], htmlQuotes);
+			const blank = quoted !== null && /^[ \t]*$/.test(quoted.text);
+			if (quoted === null || (!blank && stripIndentColumns(quoted.text, htmlIndent) === null)) {
 				block = "none";
 				htmlEnd = null;
+			} else {
+				if (htmlEnd ? htmlEnd.test(quoted.text) : blank) {
+					block = "none";
+					htmlEnd = null;
+				}
+				continue;
 			}
-			continue;
 		}
 		if (content === null) {
 			block = "none";
@@ -1277,7 +1295,8 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 					block = "none";
 				} else {
 					block = "html";
-					blockContext = line.context;
+					htmlQuotes = line.quotes;
+					htmlIndent = line.indent;
 					htmlEnd = finite[1];
 				}
 				continue;
@@ -1287,7 +1306,8 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 				(block === "none" && HTML_INLINE_TAG_LINE_RE.test(rest))
 			) {
 				block = "html";
-				blockContext = line.context;
+				htmlQuotes = line.quotes;
+				htmlIndent = line.indent;
 				htmlEnd = null;
 				continue;
 			}
