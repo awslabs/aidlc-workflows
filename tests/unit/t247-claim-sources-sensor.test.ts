@@ -859,27 +859,29 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings).toEqual([]);
   });
 
-  test("an ordered list starting at one can interrupt a paragraph with a definition", () => {
-    const dir = makeStageDir();
-    replaceInFile(
-      dir,
-      "intent-statement.md",
-      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
-      "This is an unsupported assertion. [Q1]",
-    );
-    replaceInFile(
-      dir,
-      "intent-statement.md",
-      "## Review",
-      "## Review\n\nSome prose\n1. [Q1]: /url",
-    );
+  for (const marker of ["1.", "01.", "0001)"]) {
+    test(`an ordered list starting at one with '${marker}' can interrupt a paragraph with a definition`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\nSome prose\n${marker} [Q1]: /url`,
+      );
 
-    const result = run(dir);
-    expect(result.pass).toBe(false);
-    expect(result.findings.join("\n")).toContain(
-      "## Problem Statement: claim block has no source tag",
-    );
-  });
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "## Problem Statement: claim block has no source tag",
+      );
+    });
+  }
 
   // GFM §6.9: a table continues until a blank line or another block structure.
   test("a definition-shaped line directly under a table row is a table row, not a definition", () => {

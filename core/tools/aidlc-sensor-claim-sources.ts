@@ -1218,7 +1218,7 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			// as sibling items instead.
 			open =
 				ordered !== null &&
-				ordered[1] !== "1" &&
+				Number(ordered[1]) !== 1 &&
 				!contextParts(previousContext).some((part) => part.startsWith("list#"));
 		}
 		previousContext = line.context;
