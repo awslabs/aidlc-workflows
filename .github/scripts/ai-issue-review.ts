@@ -12,6 +12,10 @@ import { resolve, sep } from "node:path";
 const MAX_REVIEW_BYTES = 100_000;
 const MAX_COMMENT_BYTES = 65_536;
 const MAX_CATALOG_ENTRIES = 200;
+const MAX_CONVERSATION_ENTRIES = 50;
+const MAX_CONVERSATION_BODY_CHARACTERS = 8_000;
+const MAX_AIDA_REVIEW_CHARACTERS = 40_000;
+const AI_ISSUE_REVIEW_MARKER = "<!-- ai-issue-review issue=";
 
 export type FindingLevel = "blocking-question" | "recommendation";
 export type FindingCategory =
@@ -46,10 +50,36 @@ export interface IssueCatalogEntry {
   labels: string[];
 }
 
+export interface IssueConversationEntry {
+  id: number;
+  actor: {
+    login: string;
+    association: string;
+    maintainer: boolean;
+  };
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IssueConversation {
+  version: 1;
+  issue: number;
+  comments: IssueConversationEntry[];
+}
+
+export interface CurrentAidaReview {
+  id: number;
+  body: string;
+  updatedAt: string;
+}
+
 export interface IssueContext {
   base: string;
   issue: IssueMetadata;
   catalog: IssueCatalogEntry[];
+  conversation: IssueConversation;
+  currentAidaReview: CurrentAidaReview | null;
   contextId: string;
 }
 
@@ -70,10 +100,18 @@ export interface ExistingIssueEvidence {
   quote: string;
 }
 
+export interface IssueCommentEvidence {
+  source: "ISSUE_COMMENT";
+  comment: number;
+  author: string;
+  quote: string;
+}
+
 export type FindingEvidence =
   | IssueMetadataEvidence
   | RepositoryEvidence
-  | ExistingIssueEvidence;
+  | ExistingIssueEvidence
+  | IssueCommentEvidence;
 
 export interface Finding {
   level: FindingLevel;
@@ -196,12 +234,93 @@ export function canonicalCatalog(value: unknown, currentIssue: number): IssueCat
   return catalog.sort((left, right) => left.number - right.number);
 }
 
-function contextDigest(base: string, issue: IssueMetadata, catalog: IssueCatalogEntry[]): string {
+function boundedConversationBody(value: unknown): string {
+  const body = text(value);
+  if (body.length <= MAX_CONVERSATION_BODY_CHARACTERS) return body;
+  const half = Math.floor(MAX_CONVERSATION_BODY_CHARACTERS / 2);
+  return `${body.slice(0, half)}\n...[comment truncated]...\n${body.slice(-half)}`;
+}
+
+export function canonicalConversation(
+  value: unknown,
+  issue: number,
+): IssueConversation {
+  if (!Array.isArray(value)) throw new Error("issue conversation must be an array");
+  const comments = value
+    .map((entry, index): IssueConversationEntry | null => {
+      const candidate = record(entry, `issue conversation[${index}]`);
+      const user = candidate.user && typeof candidate.user === "object" &&
+          !Array.isArray(candidate.user)
+        ? candidate.user as Record<string, unknown>
+        : {};
+      const login = text(user.login) || "[deleted]";
+      const body = boundedConversationBody(candidate.body);
+      if (login === "github-actions[bot]" && body.startsWith(AI_ISSUE_REVIEW_MARKER)) {
+        return null;
+      }
+      const association = text(candidate.author_association).toUpperCase();
+      return {
+        id: positiveInteger(candidate.id, `issue conversation[${index}].id`),
+        actor: {
+          login,
+          association,
+          maintainer: ["OWNER", "MEMBER", "COLLABORATOR"].includes(association),
+        },
+        body,
+        createdAt: text(candidate.created_at),
+        updatedAt: text(candidate.updated_at),
+      };
+    })
+    .filter((entry): entry is IssueConversationEntry => entry !== null)
+    .sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id - right.id
+    )
+    .slice(-MAX_CONVERSATION_ENTRIES);
+  return { version: 1, issue, comments };
+}
+
+export function canonicalCurrentAidaReview(
+  value: unknown,
+  issue: number,
+): CurrentAidaReview | null {
+  if (!Array.isArray(value)) throw new Error("issue comments must be an array");
+  const marker = `${AI_ISSUE_REVIEW_MARKER}${issue} -->`;
+  const reviews = value
+    .map((entry, index): CurrentAidaReview | null => {
+      const candidate = record(entry, `issue comments[${index}]`);
+      const user = candidate.user && typeof candidate.user === "object" &&
+          !Array.isArray(candidate.user)
+        ? candidate.user as Record<string, unknown>
+        : {};
+      const body = text(candidate.body);
+      if (text(user.login) !== "github-actions[bot]" || !body.startsWith(marker)) {
+        return null;
+      }
+      return {
+        id: positiveInteger(candidate.id, `issue comments[${index}].id`),
+        body: body.slice(0, MAX_AIDA_REVIEW_CHARACTERS),
+        updatedAt: text(candidate.updated_at),
+      };
+    })
+    .filter((entry): entry is CurrentAidaReview => entry !== null)
+    .sort((left, right) =>
+      left.updatedAt.localeCompare(right.updatedAt) || left.id - right.id
+    );
+  return reviews.at(-1) ?? null;
+}
+
+function contextDigest(
+  base: string,
+  issue: IssueMetadata,
+  catalog: IssueCatalogEntry[],
+  conversation: IssueConversation,
+): string {
   const hash = createHash("sha256");
   for (const [name, value] of [
     ["base", base],
     ["issue", JSON.stringify(issue)],
     ["catalog", JSON.stringify(catalog)],
+    ["conversation", JSON.stringify(conversation)],
   ]) {
     hash.update(name);
     hash.update("\0");
@@ -214,19 +333,30 @@ function contextDigest(base: string, issue: IssueMetadata, catalog: IssueCatalog
 export function buildImmutableContext(
   issueRaw: unknown,
   catalogRaw: unknown,
+  commentsRaw: unknown,
   base: string,
   outputDir: string,
 ): IssueContext {
   assertSha(base, "base");
   const issue = canonicalIssue(issueRaw);
   const catalog = canonicalCatalog(catalogRaw, issue.number);
-  const contextId = contextDigest(base, issue, catalog);
+  const conversation = canonicalConversation(commentsRaw, issue.number);
+  const currentAidaReview = canonicalCurrentAidaReview(commentsRaw, issue.number);
+  const contextId = contextDigest(base, issue, catalog, conversation);
   mkdirSync(outputDir, { recursive: true });
   writeFileSync(resolve(outputDir, "issue.json"), `${JSON.stringify(issue, null, 2)}\n`);
   writeFileSync(resolve(outputDir, "issue-catalog.json"), `${JSON.stringify(catalog, null, 2)}\n`);
+  writeFileSync(
+    resolve(outputDir, "conversation.json"),
+    `${JSON.stringify(conversation, null, 2)}\n`,
+  );
+  writeFileSync(
+    resolve(outputDir, "current-aida-review.json"),
+    `${JSON.stringify(currentAidaReview, null, 2)}\n`,
+  );
   writeFileSync(resolve(outputDir, "base-sha.txt"), `${base}\n`);
   writeFileSync(resolve(outputDir, "context-id.txt"), `${contextId}\n`);
-  return { base, issue, catalog, contextId };
+  return { base, issue, catalog, conversation, currentAidaReview, contextId };
 }
 
 function requiredText(value: unknown, field: string, maxLength: number): string {
@@ -284,6 +414,7 @@ export function validateStructuredIssueReview(
   expectedContextId: string,
   metadata: IssueMetadata,
   catalog: IssueCatalogEntry[],
+  conversation: IssueConversation,
   repositoryRoot = process.cwd(),
 ): StructuredIssueReview {
   assertContextId(expectedContextId);
@@ -383,6 +514,30 @@ export function validateStructuredIssueReview(
         }
         return { source: "EXISTING_ISSUE", issue, quote };
       }
+      if (item.source === "ISSUE_COMMENT") {
+        const comment = positiveInteger(
+          item.comment,
+          `findings[${index}].evidence[${evidenceIndex}].comment`,
+        );
+        const quote = requiredText(
+          item.quote,
+          `findings[${index}].evidence[${evidenceIndex}].quote`,
+          500,
+        );
+        const entry = conversation.comments.find(candidate => candidate.id === comment);
+        if (!entry?.body.includes(quote)) {
+          throw new Error(`ISSUE_COMMENT evidence quote is not present in comment ${comment}`);
+        }
+        if (item.author !== entry.actor.login) {
+          throw new Error(`ISSUE_COMMENT evidence author does not match comment ${comment}`);
+        }
+        return {
+          source: "ISSUE_COMMENT",
+          comment,
+          author: entry.actor.login,
+          quote,
+        };
+      }
       throw new Error(`findings[${index}].evidence[${evidenceIndex}].source is invalid`);
     });
     const title = requiredText(finding.title, `findings[${index}].title`, 160);
@@ -430,6 +585,9 @@ function evidenceText(evidence: FindingEvidence): string {
   if (evidence.source === "EXISTING_ISSUE") {
     return `issue #${evidence.issue}: “${markdownText(evidence.quote)}”`;
   }
+  if (evidence.source === "ISSUE_COMMENT") {
+    return `comment by @${markdownText(evidence.author)}: “${markdownText(evidence.quote)}”`;
+  }
   if (evidence.source === "REPOSITORY") {
     return `<code>${markdownText(evidence.path)}</code>: “${markdownText(evidence.quote)}”`;
   }
@@ -442,7 +600,7 @@ export function renderIssueReview(review: StructuredIssueReview): IssueCommentPa
   const lines = [
     `<!-- ai-issue-review issue=${review.issue} -->`,
     `<!-- ai-issue-review context=${review.contextId} -->`,
-    `I reviewed issue #${review.issue} as a proposed product and workflow change.`,
+    `I reviewed issue #${review.issue} and its current conversation as a proposed product and workflow change.`,
     "",
     "## Final Assessment",
     "",
@@ -524,10 +682,29 @@ function main(): void {
     );
     return;
   }
+  if (command === "canonicalize-conversation") {
+    const input = JSON.parse(readFileSync(argValue(args, "--input"), "utf8"));
+    writeFileSync(
+      argValue(args, "--output"),
+      `${JSON.stringify(
+        canonicalConversation(input, Number(argValue(args, "--issue"))),
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
   if (command === "build-context") {
     const issue = JSON.parse(readFileSync(argValue(args, "--issue"), "utf8"));
     const catalog = JSON.parse(readFileSync(argValue(args, "--catalog"), "utf8"));
-    buildImmutableContext(issue, catalog, argValue(args, "--base"), argValue(args, "--output"));
+    const comments = JSON.parse(readFileSync(argValue(args, "--comments"), "utf8"));
+    buildImmutableContext(
+      issue,
+      catalog,
+      comments,
+      argValue(args, "--base"),
+      argValue(args, "--output"),
+    );
     return;
   }
   if (command === "validate") {
@@ -538,6 +715,9 @@ function main(): void {
     const catalog = JSON.parse(
       readFileSync(argValue(args, "--catalog"), "utf8"),
     ) as IssueCatalogEntry[];
+    const conversation = JSON.parse(
+      readFileSync(argValue(args, "--conversation"), "utf8"),
+    ) as IssueConversation;
     lastValidateInput = readFileSync(input, "utf8");
     const review = validateStructuredIssueReview(
       lastValidateInput,
@@ -545,6 +725,7 @@ function main(): void {
       argValue(args, "--context-id"),
       metadata,
       catalog,
+      conversation,
       args.includes("--repository-root") ? argValue(args, "--repository-root") : process.cwd(),
     );
     writeFileSync(
@@ -553,7 +734,9 @@ function main(): void {
     );
     return;
   }
-  throw new Error("usage: ai-issue-review.ts canonicalize|build-context|validate");
+  throw new Error(
+    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|build-context|validate",
+  );
 }
 
 if (import.meta.main) {

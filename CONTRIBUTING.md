@@ -78,12 +78,14 @@ Include:
 - Expected vs actual behavior
 - The platform, harness, and model you tested with
 
-Maintainers can request AIDA's pre-implementation review by applying the
-`ai-review` label or dispatching the **AI Issue Intent Review** workflow with an
-issue number. The review evaluates intent, project direction, user experience,
-scope, feasibility, dependencies, and open decisions. It updates one advisory
-comment when a maintainer changes the issue title or body; it does not
-prioritize, approve, reject, label, assign, close, or implement the issue.
+AIDA's pre-implementation review starts when a maintainer opens or updates an
+issue, or when a human adds to its conversation. External issue conversations
+require a maintainer to apply the `ai-review` opt-in label first. Maintainers can
+also dispatch the **AI Issue Intent Review** workflow with an issue number. The
+review evaluates the current issue and conversation for intent, project
+direction, user experience, scope, feasibility, dependencies, and open
+decisions. It updates one advisory comment; it does not prioritize, approve,
+reject, label, assign, close, or implement the issue.
 
 ## Contributing via Pull Requests
 

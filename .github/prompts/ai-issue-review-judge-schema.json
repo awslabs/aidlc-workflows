@@ -195,6 +195,30 @@
               "maxLength": 500
             }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "comment", "author", "quote"],
+          "properties": {
+            "source": {
+              "const": "ISSUE_COMMENT"
+            },
+            "comment": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "author": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
         }
       ]
     }

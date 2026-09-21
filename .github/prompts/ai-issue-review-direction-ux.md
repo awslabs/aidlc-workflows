@@ -2,7 +2,10 @@
 
 Assess the proposal as a product and workflow change using high-effort
 judgment. Read the whole user journey and the relevant trusted project
-direction before producing candidates.
+direction before producing candidates. Reconstruct the current proposal from
+the issue plus the latest substantive maintainer clarifications in the
+conversation. When a maintainer explicitly corrects the original direction,
+assess the corrected direction and do not repeat the superseded concern.
 
 ## Intent and problem clarity
 

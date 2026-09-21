@@ -2,6 +2,9 @@
 
 Assess whether the proposal can move into planning without hiding a material
 technical, compatibility, operational, or repository-contract decision.
+Treat explicit maintainer clarifications in the issue conversation as the
+current proposal, including accepted constraints and corrections to the issue
+body.
 
 Review:
 
