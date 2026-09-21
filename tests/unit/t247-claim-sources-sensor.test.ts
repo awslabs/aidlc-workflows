@@ -883,6 +883,48 @@ describe("t247 claim-sources sensor", () => {
     });
   }
 
+  test("a new block quote permits a non-one ordered list to interrupt prose", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n\nSome prose\n> 2. [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "## Problem Statement: claim block has no source tag",
+    );
+  });
+
+  test("consecutive non-one ordered markers remain paragraph continuation", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n\nSome prose\n2. continuation\n3. [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
   // GFM §6.9: a table continues until a blank line or another block structure.
   test("a definition-shaped line directly under a table row is a table row, not a definition", () => {
     const dir = makeStageDir();
