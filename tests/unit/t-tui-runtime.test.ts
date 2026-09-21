@@ -81,11 +81,11 @@ if (count > 2) { console.error("fixture stopped repeated runtime handoff"); proc
 });
 
 describe("TUI backend selection", () => {
-  test("auto uses native Bun on Linux/Windows and tmux on macOS", () => {
+  test("auto uses native Bun on Linux/Windows/macOS and tmux elsewhere", () => {
     for (const env of [{}, { AIDLC_TUI_BACKEND: "auto" }]) {
       expect(selectedTuiBackend(env, "linux")).toBe("bun");
       expect(selectedTuiBackend(env, "win32")).toBe("bun");
-      expect(selectedTuiBackend(env, "darwin")).toBe("tmux");
+      expect(selectedTuiBackend(env, "darwin")).toBe("bun");
       expect(selectedTuiBackend(env, "freebsd")).toBe("tmux");
     }
   });
@@ -191,8 +191,8 @@ describe("TUI driver runtime resolution", () => {
 });
 
 describe("TUI substrate prerequisites", () => {
-  test("native Bun needs neither tmux nor Node on either supported platform", () => {
-    for (const platform of ["linux", "win32"] as const) {
+  test("native Bun needs neither tmux nor Node on every supported platform", () => {
+    for (const platform of ["linux", "win32", "darwin"] as const) {
       const calls: string[] = [];
       const reason = tuiUnavailableReason({
         env: { AIDLC_BUN_BIN: "/native/bun", AIDLC_NODE_BIN: "/missing/node" },
@@ -213,7 +213,7 @@ describe("TUI substrate prerequisites", () => {
   });
 
   test("native lifecycle on unsupported platforms reports a reason without probing", () => {
-    for (const platform of ["darwin", "freebsd"] as const) {
+    for (const platform of ["freebsd", "openbsd"] as const) {
       expect(tuiUnavailableReason({
         env: { AIDLC_TUI_BACKEND: "bun" },
         platform,

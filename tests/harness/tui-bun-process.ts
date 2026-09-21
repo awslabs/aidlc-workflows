@@ -13,12 +13,14 @@ import {
   fstatSync,
   mkdirSync,
   openSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { constants as osConstants } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { publishTuiRecord } from "./tui-record-file.ts";
 
@@ -42,7 +44,7 @@ export interface SupervisorStatus {
   signal?: string | null;
   error?: string;
   cleanupComplete?: boolean;
-  /** Issued only after a failed Linux cleanup attempt; consumed by one later stop. */
+  /** Issued only after a failed POSIX cleanup attempt; consumed by one later stop. */
   cleanupRetryToken?: string;
 }
 
@@ -111,6 +113,74 @@ export function isLinuxDescendant(
   return false;
 }
 
+export interface DarwinProcessIdentity {
+  pid: number;
+  ppid: number;
+  uid: number;
+  status: number;
+  startSec: bigint;
+  startUsec: bigint;
+  env?: readonly string[];
+}
+
+export function sameDarwinProcess(a: DarwinProcessIdentity, b: DarwinProcessIdentity): boolean {
+  return a.pid === b.pid && a.startSec === b.startSec && a.startUsec === b.startUsec;
+}
+
+function darwinStartedAfter(a: DarwinProcessIdentity, b: DarwinProcessIdentity): boolean {
+  return a.startSec > b.startSec || (a.startSec === b.startSec && a.startUsec > b.startUsec);
+}
+
+/** KERN_PROCARGS2: argc, executable path, alignment NULs, argv, then environ. */
+export function parseDarwinProcArgs(buffer: Uint8Array): { env: string[] } {
+  const bytes = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const invalid = () => new Error("invalid or truncated Darwin process arguments");
+  if (bytes.length < 5) throw invalid();
+  const argc = bytes.readUInt32LE(0);
+  if (argc > bytes.length - 5) throw invalid();
+  let offset = 4;
+  const next = (): string => {
+    const end = bytes.indexOf(0, offset);
+    if (end < 0) throw invalid();
+    const value = bytes.toString("utf8", offset, end);
+    offset = end + 1;
+    return value;
+  };
+  if (!next()) throw invalid();
+  while (offset < bytes.length && bytes[offset] === 0) offset++;
+  for (let i = 0; i < argc; i++) next();
+  const env: string[] = [];
+  while (offset < bytes.length) {
+    const value = next();
+    if (!value) break; // End of environ; trailing Apple strings are not environment.
+    env.push(value);
+  }
+  return { env };
+}
+
+/** Token ownership survives setsid/double-fork; ancestry checks reject reused PIDs. */
+export function isDarwinDescendant(
+  candidate: DarwinProcessIdentity,
+  owner: DarwinProcessIdentity,
+  snapshot: ReadonlyMap<number, DarwinProcessIdentity>,
+  token: string,
+): boolean {
+  if (candidate.pid === owner.pid || candidate.uid !== owner.uid) return false;
+  const observed = snapshot.get(candidate.pid);
+  if (!observed || !sameDarwinProcess(candidate, observed)) return false;
+  if (candidate.env?.includes(`AIDLC_TUI_CONTAINMENT=${token}`)) return true;
+  const seen = new Set<number>();
+  let current = candidate;
+  while (!seen.has(current.pid)) {
+    seen.add(current.pid);
+    const parent = snapshot.get(current.ppid);
+    if (!parent || parent.uid !== owner.uid || darwinStartedAfter(parent, current)) return false;
+    if (parent.pid === owner.pid) return sameDarwinProcess(parent, owner);
+    current = parent;
+  }
+  return false;
+}
+
 const POLL_MS = 25;
 const CLEANUP_MS = 7_000; // Leaves a second for status I/O within the 8s stop budget.
 const GRACE_MS = 300;
@@ -169,8 +239,10 @@ function publish(path: string, status: SupervisorStatus): void {
 }
 
 export interface Containment {
-  /** Retain the dlopen allocation, not just its generated function pointers. */
+  /** Retain the native library allocation, not just its generated function pointers. */
   library: unknown;
+  /** Private ownership marker inherited by the target and its descendants. */
+  env?: Record<string, string>;
   parentAlive(): boolean;
   /** True only when there are no remaining descendants (including unreaped children). */
   sweep(force: boolean, targetPid: number | undefined, deadline: number): boolean;
@@ -394,6 +466,205 @@ int tui_close(int fd) { return checked(close(fd)); }
   } finally { loader.close(); }
 }
 
+/** Header-free wrappers bind each failure to errno before returning to Bun/JS. */
+export async function loadDarwinProcessCalls() {
+  if (process.platform !== "darwin" || !["x64", "arm64"].includes(process.arch)) {
+    throw new Error("native Darwin process calls require macOS x64 or arm64");
+  }
+  // This module also loads under Node for driver handoff; bun:ffi cannot load there.
+  const { cc } = await import("bun:ffi");
+  // Darwin has no memfd. Keep the compiler input private and remove it even on
+  // compilation failure; the returned library owns the compiled allocation.
+  const directory = mkdtempSync(join(tmpdir(), "aidlc-darwin-process-"));
+  const source = join(directory, "calls.c");
+  try {
+    writeFileSync(source, `
+extern int *__error(void);
+extern int proc_listpids(unsigned int, unsigned int, void *, int);
+extern int proc_pidinfo(int, int, unsigned long long, void *, int);
+extern int sysctl(int *, unsigned int, void *, unsigned long *, void *, unsigned long);
+extern int kill(int, int);
+extern int waitid(int, unsigned int, void *, int);
+struct tui_bsdinfo {
+  unsigned int flags, status, xstatus, pid, ppid;
+  unsigned int uid, gid, ruid, rgid, svuid, svgid, reserved;
+  char comm[16], name[32];
+  unsigned int nfiles, pgid, jobc, tdev, tpgid;
+  int nice;
+  unsigned long long start_sec, start_usec;
+};
+typedef char tui_bsdinfo_size_check[sizeof(struct tui_bsdinfo) == 136 ? 1 : -1];
+static int checked(int result) { return result < 0 ? -*__error() : result; }
+int tui_listpids(void *buffer, int size) {
+  *__error() = 0;
+  int result = proc_listpids(1, 0, buffer, size);
+  return result > 0 ? result : -(*__error() ? *__error() : 5);
+}
+int tui_pidinfo(int pid, void *buffer) {
+  *__error() = 0;
+  int result = proc_pidinfo(pid, 3, 0ULL, buffer, sizeof(struct tui_bsdinfo));
+  return result > 0 ? result : -(*__error() ? *__error() : 5);
+}
+int tui_argmax(void) {
+  int mib[2] = {1, 8}, value = 0;
+  unsigned long size = sizeof(value);
+  int result = checked(sysctl(mib, 2, &value, &size, 0, 0));
+  return result < 0 ? result : (size == sizeof(value) ? value : -5);
+}
+int tui_procargs(int pid, void *buffer, unsigned long size) {
+  int mib[3] = {1, 49, pid};
+  int result = checked(sysctl(mib, 3, buffer, &size, 0, 0));
+  return result < 0 ? result : (int)size;
+}
+int tui_kill(int pid, int signal) { return checked(kill(pid, signal)); }
+int tui_waitid(int type, unsigned int id, void *info, int options) {
+  return checked(waitid(type, id, info, options));
+}
+`, { mode: 0o600 });
+    return cc({
+      source,
+      symbols: {
+        tui_listpids: { args: ["ptr", "i32"], returns: "i32" },
+        tui_pidinfo: { args: ["i32", "ptr"], returns: "i32" },
+        tui_argmax: { args: [], returns: "i32" },
+        tui_procargs: { args: ["i32", "ptr", "u64"], returns: "i32" },
+        tui_kill: { args: ["i32", "i32"], returns: "i32" },
+        tui_waitid: { args: ["i32", "u32", "ptr", "i32"], returns: "i32" },
+      },
+    });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}
+
+export interface DarwinIdentityApi {
+  tui_pidinfo(pid: number, buffer: Uint8Array): number;
+}
+
+/** proc_bsdinfo's fixed 136-byte ABI is shared by Darwin arm64 and x64. */
+export function readDarwinProcessIdentity(
+  pid: number,
+  api: DarwinIdentityApi,
+  buffer = new Uint8Array(136),
+): DarwinProcessIdentity | null {
+  if (buffer.byteLength !== 136) throw new Error("Darwin process identity requires a 136-byte buffer");
+  const count = api.tui_pidinfo(pid, buffer);
+  if (count === -3) return null; // ESRCH
+  if (count < 0) throw new Error(`proc_pidinfo(${pid}) failed: errno ${-count}`);
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  if (count !== 136 || view.getUint32(12, true) !== pid) {
+    throw new Error(`proc_pidinfo(${pid}) returned an invalid proc_bsdinfo identity`);
+  }
+  return {
+    pid, ppid: view.getUint32(16, true), uid: view.getUint32(20, true),
+    status: view.getUint32(4, true),
+    startSec: view.getBigUint64(120, true), startUsec: view.getBigUint64(128, true),
+  };
+}
+
+async function containDarwin(parentPid: number): Promise<Containment> {
+  const library = await loadDarwinProcessCalls();
+  const api = library.symbols;
+  const failure = (call: string, result: number): Error => new Error(`${call} failed: errno ${-result}`);
+  const identityBuffer = new Uint8Array(136);
+  const readIdentity = (pid: number) => readDarwinProcessIdentity(pid, api, identityBuffer);
+  const owner = readIdentity(process.pid);
+  const parent = readIdentity(parentPid);
+  if (!owner || !parent || owner.ppid !== parentPid || darwinStartedAfter(parent, owner)) {
+    throw new Error("supervisor parent identity lost before containment");
+  }
+  const parentAlive = (): boolean => {
+    const current = readIdentity(parentPid);
+    return process.ppid === parentPid && current !== null &&
+      sameDarwinProcess(current, parent) && current.status !== 5; // SZOMB
+  };
+  if (!parentAlive()) throw new Error("supervisor parent exited during containment setup");
+  const argmax = api.tui_argmax();
+  if (argmax < 0) throw failure("sysctl(KERN_ARGMAX)", argmax);
+  if (argmax < 5) throw new Error("invalid Darwin KERN_ARGMAX");
+  // KERN_PROCARGS2 adds argc to the argument area bounded by KERN_ARGMAX.
+  const argumentsBuffer = new Uint8Array(argmax + 4);
+  const waitInfo = new BigUint64Array(16); // At least Darwin's 104-byte siginfo_t, 8-byte aligned.
+  let pids = new Int32Array(256);
+  const token = randomUUID();
+  const retained = new Map<number, DarwinProcessIdentity>();
+  const snapshot = (deadline: number): Map<number, DarwinProcessIdentity> => {
+    let bytes: number;
+    while (true) {
+      withinDeadline(deadline);
+      bytes = api.tui_listpids(pids, pids.byteLength);
+      if (bytes < 0) throw failure("proc_listpids", bytes);
+      if (bytes % 4 !== 0 || bytes > pids.byteLength) throw new Error("invalid Darwin process list");
+      if (bytes < pids.byteLength) break;
+      pids = new Int32Array(pids.length * 2);
+    }
+    const result = new Map<number, DarwinProcessIdentity>();
+    for (let i = 0; i < bytes / 4; i++) {
+      withinDeadline(deadline);
+      if (pids[i] <= 0) continue;
+      const identity = readIdentity(pids[i]);
+      if (identity) result.set(identity.pid, identity);
+    }
+    for (const identity of result.values()) {
+      withinDeadline(deadline);
+      if (identity.pid === owner.pid || identity.uid !== owner.uid || identity.status === 5) continue;
+      const size = api.tui_procargs(identity.pid, argumentsBuffer, argumentsBuffer.byteLength);
+      // The kernel cannot expose arguments for exited, exec-transitioning or
+      // protected processes. Such a process can still be owned through ancestry
+      // or an identity retained by a prior sweep, never by its executable name.
+      if ([-3, -22, -1, -13, -5].includes(size)) continue;
+      if (size < 0) throw failure(`sysctl(KERN_PROCARGS2, ${identity.pid})`, size);
+      if (size > argumentsBuffer.byteLength) throw new Error("oversized Darwin process arguments");
+      const current = readIdentity(identity.pid);
+      if (current && sameDarwinProcess(identity, current)) {
+        identity.env = parseDarwinProcArgs(argumentsBuffer.subarray(0, size)).env;
+      }
+    }
+    return result;
+  };
+  // There is no subreaper/pidfd on Darwin, and NOTE_TRACK is unsupported. The
+  // inherited exec-time token finds double-fork orphans under launchd, including
+  // those in other sessions. A process that BOTH escapes ancestry and execs with
+  // a scrubbed environment is undetectable (unlike Linux/Windows containment).
+  // Identity checks narrow but cannot eliminate Darwin's check-to-kill PID race.
+  return {
+    library, parentAlive, env: { AIDLC_TUI_CONTAINMENT: token },
+    sweep(force, targetPid, deadline) {
+      const processes = snapshot(deadline);
+      const owned: DarwinProcessIdentity[] = [];
+      for (const identity of processes.values()) {
+        const previous = retained.get(identity.pid);
+        if (identity.uid === owner.uid && ((previous && sameDarwinProcess(previous, identity)) ||
+          isDarwinDescendant(identity, owner, processes, token))) {
+          owned.push(identity);
+        }
+      }
+      // Retain observed ownership through zombie state, when procargs disappears.
+      retained.clear();
+      for (const previous of owned) {
+        withinDeadline(deadline);
+        retained.set(previous.pid, previous);
+        const current = readIdentity(previous.pid);
+        if (!current || !sameDarwinProcess(current, previous) || current.uid !== owner.uid) continue;
+        const signaled = api.tui_kill(current.pid, force ? 9 : 15);
+        if (signaled < 0 && signaled !== -3) throw failure("kill(Darwin descendant)", signaled);
+        if (current.status === 5 && current.ppid === owner.pid && current.pid !== targetPid) {
+          const result = api.tui_waitid(1, current.pid, waitInfo, 5); // P_PID, WEXITED | WNOHANG
+          if (result < 0 && result !== -10 && result !== -4) {
+            throw failure("waitid(P_PID) Darwin child", result); // ECHILD/EINTR need a fresh sweep.
+          }
+        }
+      }
+      withinDeadline(deadline);
+      if (owned.length !== 0) return false;
+      // Observe without stealing Bun's target status. Unlike Linux's subreaper,
+      // ECHILD alone is insufficient; the token-owned set must also be empty.
+      const result = api.tui_waitid(0, 0, waitInfo, 0x25); // P_ALL, WEXITED | WNOHANG | WNOWAIT
+      if (result === -10) return true;
+      if (result === 0 || result === -4) return false;
+      throw failure("waitid(P_ALL, WNOWAIT)", result);
+    },
+  };
+}
+
 /** Win64 ABI: BASIC_LIMIT=64, IO_COUNTERS=48, four SIZE_Ts=32; flags at byte 16. */
 export function windowsJobLimits(): Uint8Array {
   const limits = new Uint8Array(144);
@@ -600,7 +871,8 @@ async function containWindows(parentPid: number): Promise<Containment> {
 export async function createNativeContainment(parentPid: number): Promise<Containment> {
   if (process.platform === "linux") return containLinux(parentPid);
   if (process.platform === "win32") return containWindows(parentPid);
-  throw new Error(`native session containment is unsupported on ${process.platform}; use tmux on macOS`);
+  if (process.platform === "darwin") return containDarwin(parentPid);
+  throw new Error(`native session containment is unsupported on ${process.platform}`);
 }
 
 /** Process entry point: call only inside the dedicated supervisor, never in the daemon. */
@@ -645,7 +917,7 @@ export async function runSupervisor(
     if (!stopRequested()) {
       const child = Bun.spawn(config.command, {
         cwd: config.cwd,
-        env: { ...process.env, TERM: "xterm-256color" },
+        env: { ...process.env, ...containment!.env, TERM: "xterm-256color" },
         stdin: "inherit", stdout: "inherit", stderr: "inherit",
         windowsVerbatimArguments: config.windowsVerbatimArguments,
         onExit(child, exitCode, signalCode, error) {
@@ -691,13 +963,13 @@ export async function runSupervisor(
       recordError(error);
     }
     status.phase = failed ? "error" : requestedAt !== undefined ? "stopped" : "exited";
-    status.cleanupRetryToken = !status.cleanupComplete && process.platform === "linux" ? randomUUID() : undefined;
+    status.cleanupRetryToken = !status.cleanupComplete && process.platform !== "win32" ? randomUUID() : undefined;
     try { publish(config.statusPath, status); } catch (error) {
       recordError(error);
       console.error(`native supervisor status write failed: ${message(error)}`);
     }
     if (!status.cleanupRetryToken) break;
-    // Preserve the same subreaper and containment object. Existence of the old
+    // Preserve the same supervisor and containment object. Existence of the old
     // stop marker, old requests and signals cannot silently restart this budget.
     while (!cleanupRetryRequested(config, status.cleanupRetryToken)) await delay(POLL_MS);
     requestedAt = performance.now();

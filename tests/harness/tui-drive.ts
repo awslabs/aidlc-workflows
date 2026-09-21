@@ -14,7 +14,7 @@
 // pattern-matches the rendered pane.
 //
 // ---------------------------------------------------------------------------
-// Native Bun.Terminal on Linux / Windows, tmux on macOS. Select explicitly with
+// Native Bun.Terminal on Linux / Windows / macOS. Select explicitly with
 // AIDLC_TUI_BACKEND=bun|tmux|node-pty (auto is the platform default).
 // Native sessions use an inline PTY, an owned supervisor and @xterm/headless.
 // Each CLI invocation talks to the persistent daemon over framed local IPC.
@@ -2067,7 +2067,7 @@ function fileURLToPathSafe(url: string): string {
 // win32 DAEMON — owns the pty + @xterm/headless Terminal for one session.
 //
 // Runs UNDER NODE only. node-pty + @xterm/headless are imported HERE (inside the
-// daemon path) via dynamic import so the macOS/Linux tmux path — and any bun
+// daemon path) via dynamic import so the native Bun and tmux paths — and any bun
 // process that merely loads this module — never touches node-pty (the #748
 // in-process wedge can only happen if node-pty is loaded; we keep it out of
 // every path except the node daemon).

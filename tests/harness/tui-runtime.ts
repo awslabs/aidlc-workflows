@@ -28,7 +28,7 @@ export function selectedTuiBackend(
 ): TuiBackendName {
   const selected = env.AIDLC_TUI_BACKEND;
   if (selected === undefined || selected === "auto") {
-    return platform === "linux" || platform === "win32" ? "bun" : "tmux";
+    return platform === "linux" || platform === "win32" || platform === "darwin" ? "bun" : "tmux";
   }
   if (selected === "bun" || selected === "tmux" || selected === "node-pty") {
     return selected;
@@ -143,8 +143,8 @@ export function tuiUnavailableReason(context: TuiRuntimeContext = {}): string | 
   const platform = context.platform ?? process.platform;
   const backend = selectedTuiBackend(env, platform);
   executableOverride(env, backend === "node-pty" ? "AIDLC_NODE_BIN" : "AIDLC_BUN_BIN");
-  if (backend === "bun" && platform !== "linux" && platform !== "win32") {
-    return `Bun TUI backend is unsupported on ${platform}; native lifecycle supports Linux and Windows only (select AIDLC_TUI_BACKEND=tmux)`;
+  if (backend === "bun" && platform !== "linux" && platform !== "win32" && platform !== "darwin") {
+    return `Bun TUI backend is unsupported on ${platform}; native lifecycle supports Linux, Windows and macOS only (select AIDLC_TUI_BACKEND=tmux)`;
   }
   if (backend === "node-pty" && platform !== "win32") {
     return `node-pty TUI backend is unsupported on ${platform}; the legacy backend supports Windows only`;

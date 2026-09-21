@@ -152,6 +152,13 @@ bun tests/run-tests.ts [--ci | --all --debug -P 8]
 
 `bash tests/run-tests.sh ...` remains as a POSIX compatibility wrapper and delegates to the same TypeScript runner. Repository tests and copy-channel hooks/tools require `bun`; native release projections invoke hooks/tools through the installed `aidlc` binary. Bash is not the primary runner substrate.
 
+Terminal sessions default to native `bun` on all three platforms; `tmux` is an
+explicit alternative on Linux/macOS. On macOS, containment uses start-time-checked
+process identities and an inherited `AIDLC_TUI_CONTAINMENT` token to find detached
+double-fork descendants after they reparent to launchd. A descendant that both
+escapes ancestry and execs with a scrubbed environment is undetectable on macOS;
+Linux subreaper containment and Windows Job Objects do not have this limitation.
+
 **Portability constraints baked into the suite:**
 
 - **Paths**: `createTestProject` in `tests/harness/fixtures.ts` normalizes temporary project paths so they round-trip cleanly through JSON and native `bun`.
@@ -239,9 +246,9 @@ The shared selector in `tests/harness/tui-runtime.ts` chooses its backend from
 
 | Selection | Platform and prerequisites |
 |-----------|----------------------------|
-| Unset or `auto` | Native `bun` on Linux and Windows; `tmux` on macOS. |
-| `bun` | Linux and Windows. Requires **Bun >=1.3.14**, `Bun.Terminal`, `bun:ffi`, and `@xterm/headless`. Native containment supports x64/arm64: Linux requires glibc, procfs, and kernel >=5.4 for pidfd signaling and waiting; Windows requires ConPTY. |
-| `tmux` | Explicit alternative on Linux and the macOS default. Requires Bun to run the driver and `tmux` on `PATH`. |
+| Unset or `auto` | Native `bun` on Linux, Windows and macOS. |
+| `bun` | Linux, Windows and macOS. Requires **Bun >=1.3.14**, `Bun.Terminal`, `bun:ffi`, and `@xterm/headless`. Native containment supports x64/arm64: Linux requires glibc, procfs, and kernel >=5.4 for pidfd signaling and waiting; Windows requires ConPTY; macOS uses libSystem process identities and inherited ownership tokens (see [Cross-Platform Coverage](#cross-platform-coverage) for its environment-scrubbing limitation). |
+| `tmux` | Explicit alternative on Linux/macOS. Requires Bun to run the driver and `tmux` on `PATH`. |
 | `node-pty` | Explicit legacy Windows backend. Requires Node with `--experimental-strip-types`, `node-pty`, and `@xterm/headless`; the driver runs under Node. |
 
 `auto` chooses by platform; it does not fall back to another backend when
@@ -509,9 +516,9 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AIDLC_TEST_TIMEOUT` | `1800` | Per-`claude -p` call timeout in seconds. Set to `0` to disable. |
-| `AIDLC_TUI_BACKEND` | `auto` | Terminal driver: `bun` on Linux/Windows, `tmux` on macOS. Explicit values: `bun`, `tmux`, `node-pty`; see [Terminal Driver](#terminal-driver). |
+| `AIDLC_TUI_BACKEND` | `auto` | Terminal driver: native `bun` on Linux/Windows/macOS. Explicit values: `bun`, `tmux`, `node-pty`; see [Terminal Driver](#terminal-driver). |
 | `AIDLC_TUI_BUN_ROOT` | `<os.tmpdir()>/aidlc-bun-tui` | Native session records and final snapshots. Use the same root across a session's driver commands. |
-| `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use requires Bun >=1.3.14. |
+| `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use on Linux/Windows/macOS requires Bun >=1.3.14. |
 | `AIDLC_NODE_BIN` | Node on `PATH`, then the standard Windows install path | Executable override for the explicitly selected legacy Windows `node-pty` backend. |
 | `AIDLC_TUI_SETTING_SOURCES` | `project` | Setting sources injected into live `claude` TUI launches. Use `default` or an empty value only for focused calibration that intentionally includes user/local Claude settings. |
 | `AIDLC_TUI_TRACE_POLL_MS` | `10000` | Minimum interval between `answer_gate_poll` snapshots in TUI NDJSON traces while a long journey is waiting for the next menu or disk terminator. |

@@ -39,8 +39,8 @@ harness-specific CLIs or apps plus their credentials.
 | Dependency | Needed for | Notes |
 |------------|-----------|-------|
 | **`bun`** | every level | The runner, all hooks, and all CLI tools are TypeScript run via bun. No jq/sed/awk/Git-Bash dependency. |
-| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun`, `tmux`, or the legacy Windows `node-pty` implementation. |
-| **`tmux`** | default macOS TUI backend; optional on Linux | Requires Bun to run the driver. Native Linux/Windows TUI sessions do not require tmux or node-pty. |
+| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun`, `tmux`, or the legacy Windows `node-pty` implementation. |
+| **`tmux`** | explicit alternative on Linux/macOS | Requires Bun to run the driver. Native Linux/Windows/macOS TUI sessions do not require tmux or node-pty. |
 | **`claude` CLI + AWS/Bedrock creds** | live `integration` + `e2e` files | The SDK/tui drivers spend real Bedrock tokens. The runner's preflight (`tests/integration/t19.test.ts`) gates the live tiers; without the substrate, live files SKIP per-file rather than fail. |
 | **`AIDLC_TUI_LIVE=1`** | the token-spending live TUI journeys | A bare `--e2e` SKIPs them; `--all --debug` sets it by default. Set `AIDLC_TUI_LIVE=0` to force the SKIP path. |
 | **Kiro IDE + `AIDLC_KIRO_IDE_LIVE=1`** | `t-ide-kiro-*` live desktop journeys (macOS/Windows) | Requires a signed-in Kiro IDE. The default binary is `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |

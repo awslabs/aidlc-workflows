@@ -1,7 +1,8 @@
-// Portable identity and Windows API-model controls. Real Linux process tests
-// are independently selectable in t-tui-bun-process-linux.test.ts.
+// Portable identity and Windows API-model controls. Real process fixtures are
+// independently selectable in t-tui-bun-process-{linux,darwin}.test.ts.
 import { describe, expect, test } from "bun:test";
 import {
+  type DarwinProcessIdentity, isDarwinDescendant, parseDarwinProcArgs, sameDarwinProcess,
   isLinuxDescendant, type LinuxProcessIdentity, parseLinuxProcStat, sameLinuxProcess,
   terminateWindowsJobMember, type WindowsJobTerminationApi,
   type WindowsJobTerminationObservation, windowsJobLimits,
@@ -66,6 +67,72 @@ describe("native supervisor identity checks", () => {
     expect(view.getUint32(40, true)).toBe(0); // ActiveProcessLimit
     expect(view.getBigUint64(112, true)).toBe(0n); // ProcessMemoryLimit
     expect([...bytes].filter((byte) => byte !== 0)).toEqual([0x20]);
+  });
+});
+
+describe("Darwin supervisor ownership checks", () => {
+  function darwin(pid: number, ppid: number, startUsec: bigint, env: string[] = []): DarwinProcessIdentity {
+    return { pid, ppid, uid: 501, status: 2, startSec: 1_700_000_000n, startUsec, env };
+  }
+
+  function procargs(argv: string[], env: string[]): Buffer {
+    const argc = Buffer.alloc(4);
+    argc.writeUInt32LE(argv.length);
+    return Buffer.concat([argc, Buffer.from(`/opt/bun\0\0\0${[...argv, ...env].join("\0")}\0`)]);
+  }
+
+  test("process arguments distinguish argv from environment and reject truncated strings", () => {
+    const marker = "AIDLC_TUI_CONTAINMENT=private-token";
+    const bytes = procargs(["bun", "", "fixture.ts"], ["PATH=/bin", marker, "EMPTY="]);
+    expect(parseDarwinProcArgs(bytes).env).toEqual(["PATH=/bin", marker, "EMPTY="]);
+    expect(parseDarwinProcArgs(procargs(["bun", marker], ["PATH=/bin"])).env).toEqual(["PATH=/bin"]);
+    expect(parseDarwinProcArgs(procargs(["bun"], [])).env).toEqual([]);
+    for (const truncated of [bytes.subarray(0, 3), bytes.subarray(0, 8), bytes.subarray(0, -1)]) {
+      expect(() => parseDarwinProcArgs(truncated)).toThrow("truncated Darwin process arguments");
+    }
+    const badArgc = Buffer.from(bytes);
+    badArgc.writeUInt32LE(bytes.length);
+    expect(() => parseDarwinProcArgs(badArgc)).toThrow("Darwin process arguments");
+  });
+
+  test("an inherited token owns a detached orphan but never a different uid or the supervisor", () => {
+    const owner = darwin(10, 1, 10n);
+    const orphan = darwin(30, 1, 30n, ["AIDLC_TUI_CONTAINMENT=ours"]);
+    const other = darwin(40, 1, 40n, ["AIDLC_TUI_CONTAINMENT=other"]);
+    const snapshot = new Map([owner, orphan, other].map((identity) => [identity.pid, identity]));
+    expect(isDarwinDescendant(orphan, owner, snapshot, "ours")).toBe(true);
+    expect(isDarwinDescendant(other, owner, snapshot, "ours")).toBe(false);
+    expect(isDarwinDescendant({ ...orphan, uid: 502 }, owner, snapshot, "ours")).toBe(false);
+    expect(isDarwinDescendant({ ...owner, env: orphan.env }, owner, snapshot, "ours")).toBe(false);
+  });
+
+  test("verified ancestry owns descendants without tokens but rejects incomplete and reused ancestors", () => {
+    const owner = darwin(10, 1, 10n);
+    const child = darwin(20, 10, 20n);
+    const leaf = darwin(30, 20, 30n);
+    const snapshot = new Map([owner, child, leaf].map((identity) => [identity.pid, identity]));
+    expect(isDarwinDescendant(leaf, owner, snapshot, "ours")).toBe(true);
+    snapshot.delete(child.pid);
+    expect(isDarwinDescendant(leaf, owner, snapshot, "ours")).toBe(false);
+    snapshot.set(child.pid, { ...child, startUsec: 31n });
+    expect(isDarwinDescendant(leaf, owner, snapshot, "ours")).toBe(false);
+    snapshot.set(child.pid, child);
+    snapshot.set(owner.pid, { ...owner, startUsec: 11n });
+    expect(isDarwinDescendant(leaf, owner, snapshot, "ours")).toBe(false);
+    snapshot.set(owner.pid, owner);
+    snapshot.set(child.pid, { ...child, ppid: leaf.pid, startUsec: leaf.startUsec });
+    expect(isDarwinDescendant(leaf, owner, snapshot, "ours")).toBe(false);
+  });
+
+  test("start seconds and microseconds reject PID reuse even with a stale ownership token", () => {
+    const owner = darwin(10, 1, 10n);
+    const stale = darwin(20, 1, 20n, ["AIDLC_TUI_CONTAINMENT=ours"]);
+    const reused = { ...stale, startUsec: 21n, env: [] };
+    expect(sameDarwinProcess(stale, { ...stale, ppid: 100 })).toBe(true);
+    expect(sameDarwinProcess(stale, reused)).toBe(false);
+    expect(sameDarwinProcess(stale, { ...stale, startSec: stale.startSec + 1n })).toBe(false);
+    expect(isDarwinDescendant(stale, owner, new Map([[owner.pid, owner], [reused.pid, reused]]), "ours"))
+      .toBe(false);
   });
 });
 
