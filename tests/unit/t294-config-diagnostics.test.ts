@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1035,6 +1036,32 @@ describe("t294 instruction-file doctor row", () => {
     descriptor.onboarding = "../../x\n";
     writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(absent);
+  }, 60_000);
+
+  test("onboarding behind a symlinked parent is a conflict even when its hash matches", () => {
+    const project = install("codex");
+    const outside = temp("aidlc-t294-onboarding-outside-");
+    cpSync(join(project, ".codex", "onboarding.md"), join(outside, "onboarding.md"));
+    symlinkSync(outside, join(project, ".codex", "etc"), process.platform === "win32" ? "junction" : "dir");
+    const onboarding = ".codex/etc/onboarding.md";
+    const descriptorPath = join(project, ".codex", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.onboarding = onboarding;
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    const baselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    baseline.files[onboarding] = baseline.files[".codex/onboarding.md"];
+    writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n");
+
+    const conflict = instructionFileDoctorCheck(project, ".codex");
+    expect(conflict.pass).toBe(false);
+    expect(conflict.label).toContain(`conflict (${onboarding})`);
+
+    delete baseline.files[onboarding];
+    writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n");
+    expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
+    rmSync(baselinePath);
+    expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
   }, 60_000);
 
   test("declared onboarding absent from the baseline remains a missing instruction", () => {

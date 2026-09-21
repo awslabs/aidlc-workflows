@@ -11,7 +11,11 @@ import {
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
 import { delimiter, extname, join, relative, resolve } from "node:path";
-import { sha256Bytes } from "./aidlc-distribution.ts";
+import {
+  assertProjectionPathHasNoSymlinks,
+  isSafeOnboardingPath,
+  sha256Bytes,
+} from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
@@ -2121,15 +2125,20 @@ function instructionStates(
     ));
     if (
       isRecord(descriptor) &&
-      typeof descriptor.onboarding === "string" &&
-      /^[A-Za-z0-9._\/-]+$/.test(descriptor.onboarding) &&
-      !descriptor.onboarding.split("/").includes("..") &&
-      descriptor.onboarding.startsWith(`${harnessDir}/`)
+      isSafeOnboardingPath(descriptor.onboarding, harnessDir)
     ) {
       onboardingPath = descriptor.onboarding;
     }
   } catch {
     // Legacy installations may not have a readable onboarding descriptor.
+  }
+  let onboardingConflict = false;
+  if (onboardingPath) {
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, onboardingPath);
+    } catch {
+      onboardingConflict = true;
+    }
   }
   const baselinePath = join(
     projectDir,
@@ -2144,6 +2153,9 @@ function instructionStates(
       instructionPaths.push(onboardingPath);
     }
     return instructionPaths.map((path) => {
+      if (path === onboardingPath && onboardingConflict) {
+        return { path, kind: "whole-file", state: "conflict" };
+      }
       const target = join(projectDir, path);
       return {
         path,
@@ -2186,6 +2198,9 @@ function instructionStates(
     }];
   }
   const states: InstructionState[] = tracked.map(({ path, contribution }) => {
+    if (path === onboardingPath && onboardingConflict) {
+      return { path, kind: "whole-file", state: "conflict" };
+    }
     const target = join(projectDir, path);
     if (!existsSync(target) || !lstatSync(target).isFile()) {
       return {
@@ -2228,7 +2243,7 @@ function instructionStates(
     states.push({
       path: onboardingPath,
       kind: "whole-file",
-      state: "missing",
+      state: onboardingConflict ? "conflict" : "missing",
     });
   }
   return states;

@@ -6543,7 +6543,18 @@ export async function main(
       if (sibling.harnessDir === descriptor.harnessDir) continue;
       const siblingProjection = siblingDescriptor(sibling);
       if (!siblingProjection) {
-        if (existing.distribution) continue;
+        if (existing.distribution) {
+          const baseline = siblingBaseline(sibling);
+          for (const integration of descriptor.rootIntegrations) {
+            if (integration.policy !== "managed-block" || integration.shared === "union") continue;
+            if (baseline?.rootContributions?.[integration.path]?.policy === "managed-block") {
+              throw new Error(
+                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
+              );
+            }
+          }
+          continue;
+        }
         throw new Error(
           `harness ${stamp.distribution} cannot be added while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
         );
@@ -6565,7 +6576,7 @@ export async function main(
             predatesFrameworkVersion(sibling.frameworkVersion, stamp.frameworkVersion)
           ) {
             throw new Error(
-              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${sibling.distribution} first`,
+              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${sibling.distribution} first — if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
             );
           }
           throw new Error(

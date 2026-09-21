@@ -735,9 +735,12 @@ may coexist. Claude Code may coexist with any other harness. Copilot's `AGENTS.m
 stays exclusive: pairing it with another harness that ships that block is refused
 with `cannot coexist in one project`, regardless of which is installed first.
 Kiro CLI and Kiro IDE still share `.kiro/`, and OpenCode and Copilot share `.aidlc/`,
-so those pairs cannot coexist. An older installed harness whose root block is not
-shared must be refreshed first; the `predates shared onboarding` error names the
-required `aidlc config --harness <name>` command. A refresh source that no longer
+so those pairs cannot coexist. For an older installed harness whose root block
+is not shared, the `predates shared onboarding` error suggests refreshing it with
+`aidlc config --harness <name>` first. This is a hint for an older sibling, not a
+promise that refreshing enables coexistence: if it still refuses afterwards,
+the sibling's block is exclusive. Copilot's block stays exclusive after refresh.
+A refresh source that no longer
 declares `AGENTS.md` shared is also refused while another installed harness shares
 it: `refusing to refresh <harness> from a release whose AGENTS.md is not shared`.
 Use a release that declares the block shared; `--force` cannot bypass this guard.

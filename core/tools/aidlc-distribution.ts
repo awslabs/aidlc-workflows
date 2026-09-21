@@ -96,6 +96,12 @@ export function assertProjectionPathHasNoSymlinks(
   }
 }
 
+export function isSafeOnboardingPath(value: unknown, harnessDir: string): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9._\/-]+$/.test(value) &&
+    !value.split("/").includes("..") && !value.split("/").includes(".") &&
+    value.startsWith(`${harnessDir}/`);
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -116,14 +122,17 @@ export function validateProjectionDescriptor(
   }
   safeRelativePath(stamp.harnessDir, "harnessDir", true);
   if (descriptor.onboarding !== undefined) {
+    const safe = descriptor.onboarding;
+    if (!isSafeOnboardingPath(safe, stamp.harnessDir)) {
+      throw new Error(`${root}: onboarding path is invalid`);
+    }
     try {
-      const safe = safeRelativePath(descriptor.onboarding, "onboarding path");
       assertProjectionPathHasNoSymlinks(root, safe);
-      if (!safe.startsWith(`${stamp.harnessDir}/`) || !lstatSync(join(root, safe)).isFile()) {
-        throw new Error("invalid onboarding file");
-      }
     } catch {
       throw new Error(`${root}: onboarding path is invalid`);
+    }
+    if (!lstatSync(join(root, safe), { throwIfNoEntry: false })?.isFile()) {
+      throw new Error(`${root}: onboarding file is missing: ${safe}`);
     }
   }
   if (!Array.isArray(descriptor.managedDirectories) || !Array.isArray(descriptor.rootIntegrations)) {
