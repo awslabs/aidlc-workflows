@@ -15,8 +15,24 @@ const CURRENT_AI_REVIEWS_FILE = "current-ai-reviews.json";
 const AI_REVIEW_MARKER = "<!-- ai-pr-review context=";
 
 export type Priority = "P0" | "P1" | "P2" | "P3";
+export type FindingCategory =
+  | "direction"
+  | "user-experience"
+  | "security"
+  | "contracts"
+  | "workflow-state"
+  | "correctness";
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
 export type DiffSide = "LEFT" | "RIGHT";
+
+const FINDING_CATEGORIES: Array<{ value: FindingCategory; heading: string }> = [
+  { value: "direction", heading: "Direction" },
+  { value: "user-experience", heading: "User Experience" },
+  { value: "security", heading: "Security & Trust" },
+  { value: "contracts", heading: "Contracts & Compatibility" },
+  { value: "workflow-state", heading: "Workflow, State & Recovery" },
+  { value: "correctness", heading: "Correctness & Reliability" },
+];
 
 export interface LineRange {
   start: number;
@@ -104,6 +120,7 @@ export interface ReviewDiscussion {
 
 export interface Finding {
   priority: Priority;
+  category: FindingCategory;
   title: string;
   evidence: FindingEvidence[];
   problem: string;
@@ -591,6 +608,13 @@ export function validateStructuredReview(
     const rank = Number(priority.slice(1));
     if (rank < previousRank) throw new Error("findings must be ordered from P0 through P3");
     previousRank = rank;
+    const category = finding.category;
+    if (
+      typeof category !== "string" ||
+      !FINDING_CATEGORIES.some(candidateCategory => candidateCategory.value === category)
+    ) {
+      throw new Error(`findings[${index}].category is invalid`);
+    }
 
     if (!Array.isArray(finding.evidence) || finding.evidence.length === 0) {
       throw new Error(`findings[${index}].evidence must be non-empty`);
@@ -641,6 +665,7 @@ export function validateStructuredReview(
     if (/[\r\n]/.test(title)) throw new Error(`findings[${index}].title must be one line`);
     return {
       priority,
+      category: category as FindingCategory,
       title,
       evidence,
       problem: requiredText(finding.problem, `findings[${index}].problem`, 3000),
@@ -743,33 +768,56 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "Validation performed:",
     ...review.validation.map(item => `- ${markdownText(item)}`),
   ];
+  const blocking = review.findings.filter(
+    finding => finding.priority === "P0" || finding.priority === "P1",
+  ).length;
+  const advisory = review.findings.length - blocking;
+  lines.push(
+    "",
+    `Findings: ${blocking} blocking, ${advisory} advisory.`,
+  );
   if (review.findings.length === 0) lines.push("", "No findings.");
-  for (const finding of review.findings) {
-    lines.push(
-      "",
-      `**${finding.priority}: ${markdownText(finding.title)}**`,
-      "",
-      `Evidence: ${finding.evidence
-        .map(item => {
-          if (item.source === "DIFF") {
-            return `<code>${codeText(item.path)}:${item.line}</code>${
-              item.side === "LEFT" ? " (deleted line)" : ""
-            }`;
-          }
-          if (item.source === "DIFF_FILE") {
-            return `<code>${codeText(item.path)}</code> (file-level change)`;
-          }
-          const label = item.source === "PR_TITLE" ? "PR title" : "PR body";
-          return `${label}: “${markdownText(item.quote)}”`;
-        })
-        .join(", ")}.`,
-      "",
-      `Problem: ${markdownText(finding.problem)}`,
-      "",
-      `Impact: ${markdownText(finding.impact)}`,
-      "",
-      `Required correction: ${markdownText(finding.requiredCorrection)}`,
-    );
+  const populatedCategories = FINDING_CATEGORIES
+    .map((category, categoryOrder) => ({
+      ...category,
+      categoryOrder,
+      findings: review.findings.filter(finding => finding.category === category.value),
+    }))
+    .filter(category => category.findings.length > 0)
+    .sort((left, right) => {
+      const leftRank = Number(left.findings[0].priority.slice(1));
+      const rightRank = Number(right.findings[0].priority.slice(1));
+      return leftRank - rightRank || left.categoryOrder - right.categoryOrder;
+    });
+  for (const category of populatedCategories) {
+    lines.push("", `## ${category.heading}`);
+    for (const finding of category.findings) {
+      lines.push(
+        "",
+        `**${finding.priority}: ${markdownText(finding.title)}**`,
+        "",
+        `Evidence: ${finding.evidence
+          .map(item => {
+            if (item.source === "DIFF") {
+              return `<code>${codeText(item.path)}:${item.line}</code>${
+                item.side === "LEFT" ? " (deleted line)" : ""
+              }`;
+            }
+            if (item.source === "DIFF_FILE") {
+              return `<code>${codeText(item.path)}</code> (file-level change)`;
+            }
+            const label = item.source === "PR_TITLE" ? "PR title" : "PR body";
+            return `${label}: “${markdownText(item.quote)}”`;
+          })
+          .join(", ")}.`,
+        "",
+        `Problem: ${markdownText(finding.problem)}`,
+        "",
+        `Impact: ${markdownText(finding.impact)}`,
+        "",
+        `Required correction: ${markdownText(finding.requiredCorrection)}`,
+      );
+    }
   }
   lines.push(
     "",
