@@ -1115,6 +1115,9 @@ you in one line, and continue. On the fences, `strict` leaves all five up,
 plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
 by the policy word.
 
+Setting `guard-policy relaxed` or `guard-policy off` from chat needs a fresh human turn newer than the engine's last directive, so the conductor cannot lower fences on its own and `AIDLC_UNATTENDED=1` refuses that lowering; scope defaults are not gated.
+Memory-held strict overrides both the policy word and any fence lowered earlier, which `/aidlc --status` shows as `on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch takes precedence.
+
 No value removes a gate: the conductor must still ask every approval question;
 a lowered fence does not enforce that prose obligation. A reviewer's verdict
 is never changed, no evidence is deleted, and an agent can never answer for a
@@ -1184,9 +1187,12 @@ setting `on` for a policy-lowered fence is not a no-op. Neither state line accep
 human presence, and a persisted human-presence entry is ignored.
 `/aidlc --status` prints a `Fences:` line with all five and where each setting
 came from, so nothing is lowered invisibly. Precedence is the environment kill
-switch, then per-work off, then per-work on, then the Guard Policy word, then on
+switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on
 by default. Four of the five have a kill switch; `state-transition` has none,
 so the policy word and this switch are its only controls.
+
+Setting `guard.<fence> off` from chat needs a fresh human turn newer than the engine's last directive, so the conductor cannot lower a fence on its own and `AIDLC_UNATTENDED=1` refuses that lowering as the person's decision.
+Memory-held strict overrides a fence lowered earlier, which `/aidlc --status` shows as `on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch takes precedence.
 
 A switch is the only thing that lowers a fence. Saying so in chat does not: the
 framework can tell that you spoke, not what you asked for, so a fence that opened

@@ -4,10 +4,16 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  engineTouchMarkerPath,
+  humanTurnMarkerPath,
+  markEngineTouch,
+  markHumanTurn,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -164,6 +170,11 @@ describe("t231 config get/list/set handlers", () => {
 
   test("one config-change exposes all eleven settings through get and both list formats", () => {
     const project = stateProject();
+    markEngineTouch(project);
+    markHumanTurn(project);
+    const base = Math.floor(Date.now() / 1000) - 120;
+    utimesSync(engineTouchMarkerPath(project), base, base);
+    utimesSync(humanTurnMarkerPath(project), base + 60, base + 60);
     const changed = utility([
       "config-change", "--depth", "minimal", "--test-strategy", "comprehensive",
       "--review", "advisory", "--guard-policy", "relaxed", "--sensors", "off",
@@ -272,6 +283,11 @@ describe("t231 config get/list/set handlers", () => {
     (fence) => {
       const project = stateProject();
       const key = `guard.${fence}`;
+      markEngineTouch(project);
+      markHumanTurn(project);
+      const base = Math.floor(Date.now() / 1000) - 120;
+      utimesSync(engineTouchMarkerPath(project), base, base);
+      utimesSync(humanTurnMarkerPath(project), base + 60, base + 60);
       const lowered = dispatcher(["engine", "config", "set", key, "off"], project, FENCE_ENV_CLEAR);
       expect(lowered.status, lowered.stderr).toBe(0);
       expect(stateField(project, "Guards Off")).toBe(`${fence} (set by you)`);

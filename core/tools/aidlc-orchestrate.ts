@@ -817,9 +817,12 @@ function readSteeringCursor(
     //     parts must restart at part one, so a surviving receipt must NOT be
     //     allowed to skip them.
     if (raw.marker_revision !== currentMarkerRevision(projectDir)) return null;
-    return markerSteeringPayload(
+    const payload = markerSteeringPayload(
       { steering_payload: raw.payload } as ActiveDirectiveMarker,
     );
+    return payload && steeringPayloadAuthentic(projectDir, payload, receipt)
+      ? payload
+      : null;
   } catch {
     return null;
   }
@@ -4006,6 +4009,26 @@ function receiptMatches(presented: string, expected: string): boolean {
   const a = Buffer.from(presented, "utf-8");
   const b = Buffer.from(expected, "utf-8");
   return a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
+}
+
+// The receipt proves the conductor holds THIS part; re-deriving it from the
+// stored payload proves that payload is still the part it was minted for.
+// A marker or cursor whose `i` was edited therefore cannot select a later chunk.
+// Markers and cursors are written only by real runs, so their tokens carry the
+// local key: a probe walking a retained part must verify with that same key,
+// never with its own probe key.
+function steeringPayloadAuthentic(
+  projectDir: string,
+  payload: SteeringTokenPayload,
+  receipt: string,
+): boolean {
+  try {
+    const loaded = steeringTokenKey(projectDir, false);
+    return loaded.key !== null &&
+      receiptMatches(receipt, steeringReceipt(payload, loaded.key));
+  } catch {
+    return false;
+  }
 }
 
 // Inside a read-only probe there is no marker to match a receipt against, so the
@@ -9878,7 +9901,8 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     args.length === 1 &&
     hint !== null &&
     typeof marker?.continue_token === "string" &&
-    receiptMatches(receipt, marker.continue_token)
+    receiptMatches(receipt, marker.continue_token) &&
+    steeringPayloadAuthentic(pd, hint, receipt)
       ? hint
       // The marker holds no matching part. It may never have been allowed to
       // take one (legacy Kiro IDE Plan Approval preserves the marker), so the

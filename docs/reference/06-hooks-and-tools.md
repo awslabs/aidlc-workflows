@@ -739,6 +739,10 @@ gate and completion outcomes, `aidlc-orchestrate.ts park` for parking, and
 recovery/configuration verbs remain available. The state CLI independently
 checks the same ownership marker, covering harnesses whose pre-tool payload
 cannot expose the shell command.
+The state CLI honours the same switch: a lowered `state-transition` fence lets
+the direct command run, reports the stand-aside on stderr so stdout stays JSON,
+and records `GUARD_STOOD_ASIDE`, so the advertised switch unblocks the command it
+names.
 
 When a harness supplies a correlated delegated-agent identity, the same guard
 also refuses conductor-only entrypoints from reviewers, leads, and support

@@ -30191,8 +30191,8 @@ export interface FenceResolution {
 
 /**
  * The effective setting of every fence for a state: the environment kill
- * switch first, then `Guards Off`, then `Guards On`, then the policy word,
- * then on. Human presence uses only its environment switch, never state.
+ * switch first, then `Guards Off` unless memory holds strict, then `Guards On`,
+ * then the policy word, then on. Human presence uses only its environment switch.
  */
 export function resolveFences(
   policy: GuardPolicyResolution,
@@ -30206,10 +30206,16 @@ export function resolveFences(
     const env = GUARD_FENCE_ENV[fence];
     if (env !== undefined && resolveProjectFlag(env) === "1") {
       out[fence] = { fence, value: "off", source: `env ${env}` };
-    } else if (isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
+    } else if (policy.memoryStrict === null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
       out[fence] = { fence, value: "off", source: "you" };
     } else if (isSwitchableGuardFence(fence) && perRunOn.includes(fence)) {
       out[fence] = { fence, value: "on", source: "you" };
+    } else if (policy.memoryStrict !== null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
+      out[fence] = {
+        fence,
+        value: "on",
+        source: `guard policy strict (${changeControlSourceLabel(policy.source)})`,
+      };
     } else if (byPolicy.includes(fence)) {
       out[fence] = {
         fence,
@@ -30413,6 +30419,10 @@ export function authorityFor(
     }
     return settle(instruction ? "instruction" : "none");
   }
+
+  // An unattended driver's prompt is not a person's message, even when a
+  // previously attended turn left fresh markers behind.
+  if (unattended) return settle(instruction ? "instruction" : "none");
 
   const humanSequence = marker?.human_sequence ?? 0;
   const engineSequence = marker?.engine_sequence ?? 0;

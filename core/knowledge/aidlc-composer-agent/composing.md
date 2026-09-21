@@ -63,10 +63,12 @@ caution nor default economy is acceptable.
 
 ## Guard Policy
 
-Every proposal names ONE Guard Policy value with a one-line rationale. The
-value decides two things: what happens when an input changes after the human
-approved or confirmed something, and how far the automatic checks stand aside
-for the agents. `strict` reopens that approval and holds every check; `relaxed`
+Every proposal names ONE Guard Policy value with a 1-2 sentence rationale
+naming the fences it lowers and why an input change after approval should
+reopen it, or be recorded and continue. The value decides two things: what
+happens when an input changes after the human approved or confirmed something,
+and how far the automatic checks stand aside for the agents. `strict` lowers
+no fences and reopens that approval; `relaxed`
 records the change once, tells the human in one line, continues, and stands the
 plan-approval and review-freeze checks aside; `off` does that and stands the
 state-transition and reviewer-scope checks aside as well. No value removes a

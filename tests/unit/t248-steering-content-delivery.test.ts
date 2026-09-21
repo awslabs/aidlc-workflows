@@ -844,6 +844,76 @@ describe("t248 deterministic steering delivery", () => {
     }
   }, 30_000);
 
+  test("editing the marker payload index cannot skip chunks with a genuine receipt", () => {
+    const proj = statefulProject();
+    inflateOrg(proj);
+    const first = invoke(proj, "next", []);
+    expect(first.directive.kind).toBe("load-steering");
+    expect(first.directive.part).toBe(1);
+    expect(first.directive.parts ?? 0).toBeGreaterThan(1);
+    expect(first.directive.receipt).toMatch(RECEIPT_PATTERN);
+
+    const path = statefulMarkerPath(proj);
+    const marker = readMarker(path);
+    expect(marker.continue_token).toBe(first.directive.receipt);
+    expectSteeringPayload(marker.steering_payload);
+    marker.steering_payload = {
+      ...marker.steering_payload,
+      i: first.directive.parts,
+    };
+    writeFileSync(path, `${JSON.stringify(marker)}\n`, "utf-8");
+
+    const answer = invoke(proj, "continue", [first.directive.receipt ?? ""]);
+    expect(answer.directive.kind).not.toBe("run-stage");
+    expect(answer.directive).toMatchObject({
+      kind: "load-steering",
+      part: 1,
+      receipt: first.directive.receipt,
+    });
+    expect(answer.line).toBe(first.line);
+    expect(answer.line).toBe(invoke(proj, "next", []).line);
+  });
+
+  test("editing the fallback cursor payload index cannot skip chunks with a genuine receipt", () => {
+    const proj = statefulProject();
+    inflateOrg(proj);
+    const first = invoke(proj, "next", []);
+    expect(first.directive.kind).toBe("load-steering");
+    expect(first.directive.part).toBe(1);
+    expect(first.directive.parts ?? 0).toBeGreaterThan(1);
+    expect(first.directive.receipt).toMatch(RECEIPT_PATTERN);
+
+    const markerPath = statefulMarkerPath(proj);
+    const marker = readMarker(markerPath);
+    expect(marker.continue_token).toBe(first.directive.receipt);
+    expectSteeringPayload(marker.steering_payload);
+    const cursorPath = join(seededRecordDir(proj), ".aidlc-engine", "steering-cursor.json");
+    const cursor = {
+      version: 1,
+      receipt: first.directive.receipt,
+      payload: marker.steering_payload,
+      marker_revision: marker.revision ?? null,
+    };
+    writeFileSync(cursorPath, `${JSON.stringify(cursor)}\n`, "utf-8");
+    const stored = JSON.parse(readFileSync(cursorPath, "utf-8")) as typeof cursor;
+    stored.payload = { ...stored.payload, i: first.directive.parts };
+    writeFileSync(cursorPath, `${JSON.stringify(stored)}\n`, "utf-8");
+    // Leave the marker's receipt and revision intact, but force continuation
+    // through the fallback cursor by removing the marker's payload.
+    delete marker.steering_payload;
+    writeFileSync(markerPath, `${JSON.stringify(marker)}\n`, "utf-8");
+
+    const answer = invoke(proj, "continue", [first.directive.receipt ?? ""]);
+    expect(answer.directive.kind).not.toBe("run-stage");
+    expect(answer.directive).toMatchObject({
+      kind: "load-steering",
+      part: 1,
+      receipt: first.directive.receipt,
+    });
+    expect(answer.line).toBe(first.line);
+    expect(answer.line).toBe(invoke(proj, "next", []).line);
+  });
+
   // Old property: a rule edited mid-delivery errored "rules changed ... Run a
   // fresh `next`". New property: the receipt names a bundle that no longer
   // exists, so the answer is part 1 of the CURRENT bundle under a new receipt,

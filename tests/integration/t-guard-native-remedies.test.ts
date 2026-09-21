@@ -34,6 +34,7 @@ import {
   GUARD_POLICY_FIELD,
   type GuardRefusal,
   type GuardRefusalInput,
+  markEngineTouch,
   setGuardPolicyLine,
   splitKiroCommandArgs,
   stateDigest,
@@ -887,6 +888,12 @@ describe("source and native guard remedies execute their owning operations", () 
       // lower-fence: the switch lands in state and the ledger, then the same
       // dispatch stands aside instead of being refused.
       expect(p.state()).not.toContain("- **Guards Off**:");
+      markEngineTouch(p.project);
+      const unchosen = p.exact(lowerFence.command!);
+      expect(unchosen.status).not.toBe(0);
+      expect(unchosen.stderr).toContain("is the person's decision");
+      expect(p.state()).not.toContain("- **Guards Off**:");
+      succeeded(p.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "lower-fence" }));
       const lowered = p.exact(lowerFence.command!);
       expect(lowered.status, lowered.stderr).toBe(0);
       expect(lowered.stdout).toContain("Fence plan-approval is off for this piece of work");

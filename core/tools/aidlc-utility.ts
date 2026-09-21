@@ -77,6 +77,7 @@ import {
   activeIntent,
   activeSpace,
   authoritativeProjectDescription,
+  authorityFor,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
@@ -147,6 +148,7 @@ import {
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   hooksHealthDir,
+  humanPresenceGuardDisabled,
   isAutonomousMode,
   isPlainObject,
   isTeamUnitOwnership,
@@ -8995,6 +8997,18 @@ function applyIntentSettings(
           `so ${loweredFence.fence} cannot be turned off from chat. Edit that line to change it for everyone on this repo.`,
       );
     }
+  }
+
+  const loweredFence = fenceRequests.find((request) => request.value === "off");
+  const loweredPolicy = ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off");
+  // The fence switch is the person's key, so it needs the same evidence an
+  // approval needs. The suite's fixture profile sets the presence skip; only
+  // production-profile tests exercise this key.
+  if ((loweredFence !== undefined || loweredPolicy) && !humanPresenceGuardDisabled() &&
+      authorityFor(projectDir, { stateContent: content }).covered !== "grant") {
+    die(loweredFence !== undefined
+      ? `Turning the ${loweredFence.fence} check off is the person's decision, and no human turn is newer than the engine's last directive. Ask them, and run this again after they reply.`
+      : `Setting Guard Policy ${changeControl} lowers fences and is the person's decision, and no human turn is newer than the engine's last directive. Ask them, and run this again after they reply.`);
   }
 
   const audit: AuditEntryInput[] = [];

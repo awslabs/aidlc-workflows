@@ -5,7 +5,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import {
   BLOCKED_STATE_TRANSITIONS,
@@ -19,6 +19,8 @@ import {
   createTestProject,
   FIXTURES_DIR,
   seededStateFile,
+  seededAuditShard,
+  seedAuditFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -605,6 +607,66 @@ describe("t242 state-transition ownership guard", () => {
         `Stage status cannot be changed with aidlc-state.ts ${verb}`,
       );
     }
+  });
+
+  test("the state CLI honors a lowered state-transition fence without corrupting JSON stdout", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    const state = readFileSync(statePath, "utf-8");
+    writeFileSync(
+      statePath,
+      state.replace(
+        "## Scope Configuration\n",
+        "## Scope Configuration\n- **Guards Off**: state-transition (set by you)\n",
+      ),
+    );
+    const r = spawnSync(
+      process.execPath,
+      [STATE, "checkbox", "scope-definition=in-progress", "--project-dir", project],
+      {
+        encoding: "utf-8",
+        env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "0" },
+      },
+    );
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).updated).toBe(true);
+    expect(r.stderr).toContain(
+      "Continuing past the state-transition check because it is off for this piece of work (set by you)",
+    );
+    expect(readFileSync(statePath, "utf-8")).toContain("- [-] scope-definition");
+    const rows = readFileSync(seededAuditShard(project), "utf-8")
+      .split("\n## ")
+      .filter((row) => row.includes("**Event**: GUARD_STOOD_ASIDE"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("**Guard**: state-transition");
+    expect(rows[0]).toContain("**Tool**: aidlc-state.ts");
+    expect(rows[0]).toContain("**Details**: aidlc-state.ts checkbox");
+  });
+
+  test("the state CLI refuses direct transitions when the state-transition fence is not lowered", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    const before = readFileSync(statePath, "utf-8");
+    const r = spawnSync(
+      process.execPath,
+      [STATE, "checkbox", "scope-definition=in-progress", "--project-dir", project],
+      {
+        encoding: "utf-8",
+        env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "0" },
+      },
+    );
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(1);
+    expect(r.stderr).toContain("Stage status cannot be changed");
+    expect(readFileSync(statePath, "utf-8")).toBe(before);
+    expect(readFileSync(seededAuditShard(project), "utf-8")).not.toContain(
+      "**Event**: GUARD_STOOD_ASIDE",
+    );
   });
 
   test("a copied static owner token does not authorize a direct state transition", () => {
