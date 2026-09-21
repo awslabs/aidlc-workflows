@@ -291,24 +291,6 @@ function highestPriority(findings: Finding[]): FindingPriority | "none" {
   return "none";
 }
 
-function orderedFindingCategories(findings: Finding[]): typeof FINDING_CATEGORIES {
-  return [...FINDING_CATEGORIES].sort((left, right) => {
-    const leftPriority = highestPriority(
-      findings.filter(finding => finding.category === left.value),
-    );
-    const rightPriority = highestPriority(
-      findings.filter(finding => finding.category === right.value),
-    );
-    const leftIndex = leftPriority === "none"
-      ? PRIORITY_ORDER.length
-      : PRIORITY_ORDER.indexOf(leftPriority);
-    const rightIndex = rightPriority === "none"
-      ? PRIORITY_ORDER.length
-      : PRIORITY_ORDER.indexOf(rightPriority);
-    return leftIndex - rightIndex;
-  });
-}
-
 export function labelStateForIssueReview(
   review: StructuredIssueReview,
 ): IssueReviewLabelState {
@@ -1251,28 +1233,39 @@ export function renderIssueReview(
     }
   }
 
-  for (const category of orderedFindingCategories(review.findings)) {
-    lines.push("", `## ${category.heading}`);
-    const categoryFindings = review.findings.filter(finding => finding.category === category.value);
-    if (categoryFindings.length === 0) {
-      lines.push("", "No material gap identified.");
-      continue;
-    }
-    for (const finding of categoryFindings) {
-      const label = finding.level === "blocking-question" ? "Blocking question" : "Recommendation";
-      lines.push(
-        "",
-        `**${finding.priority} · ${label}: ${markdownText(finding.title)}**`,
-        "",
-        `Evidence: ${finding.evidence.map(evidenceText).join(", ")}.`,
-        "",
-        `Concern: ${markdownText(finding.concern)}`,
-        "",
-        `Why it matters: ${markdownText(finding.impact)}`,
-        "",
-        `Suggested issue change: ${markdownText(finding.suggestedIssueChange)}`,
+  const orderedFindings = [...review.findings].sort(
+    (left, right) =>
+      PRIORITY_ORDER.indexOf(left.priority) - PRIORITY_ORDER.indexOf(right.priority),
+  );
+  const renderedCategories = new Set<FindingCategory>();
+  let activeCategory: FindingCategory | undefined;
+  for (const finding of orderedFindings) {
+    if (finding.category !== activeCategory) {
+      const category = FINDING_CATEGORIES.find(
+        candidate => candidate.value === finding.category,
       );
+      if (!category) throw new Error(`unsupported finding category: ${finding.category}`);
+      lines.push("", `## ${category.heading}`);
+      activeCategory = finding.category;
+      renderedCategories.add(finding.category);
     }
+    const label = finding.level === "blocking-question" ? "Blocking question" : "Recommendation";
+    lines.push(
+      "",
+      `**${finding.priority} · ${label}: ${markdownText(finding.title)}**`,
+      "",
+      `Evidence: ${finding.evidence.map(evidenceText).join(", ")}.`,
+      "",
+      `Concern: ${markdownText(finding.concern)}`,
+      "",
+      `Why it matters: ${markdownText(finding.impact)}`,
+      "",
+      `Suggested issue change: ${markdownText(finding.suggestedIssueChange)}`,
+    );
+  }
+  for (const category of FINDING_CATEGORIES) {
+    if (renderedCategories.has(category.value)) continue;
+    lines.push("", `## ${category.heading}`, "", "No material gap identified.");
   }
   const priority = highestPriority(review.findings);
   const decisionText = review.decision.action === "clarify"
