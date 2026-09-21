@@ -467,24 +467,31 @@ describe("t301 AI issue intent review", () => {
     expect(payload.body).toContain(
       "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.**",
     );
-    expect(payload.body).toContain("## Intent and Problem Clarity");
-    expect(payload.body).toContain("## Direction");
-    expect(payload.body).toContain("## User Experience");
-    expect(payload.body).toContain("## Scope and Outcomes");
-    expect(payload.body).toContain("## Feasibility and Dependencies");
-    expect(payload.body).toContain("## Risks and Open Decisions");
+    expect(payload.body).toContain("## Category Assessment");
+    expect(payload.body).toContain("### Intent and Problem Clarity");
+    expect(payload.body).toContain("### Direction");
+    expect(payload.body).toContain("### User Experience");
+    expect(payload.body).toContain("### Scope and Outcomes");
+    expect(payload.body).toContain("### Feasibility and Dependencies");
+    expect(payload.body).toContain("### Risks and Open Decisions");
+    expect(payload.body).toContain("## Findings by Priority");
+    expect(payload.body).toContain("### P1");
+    expect(payload.body).toContain("### P2");
+    expect(payload.body).toContain("### P3");
     expect(payload.body).toContain("## Bug Verification");
     expect(payload.body).toContain(
       "selected tests failed; the failure must be compared with the report",
     );
     expect(payload.body).toContain("<code>tests/unit/relevant.test.ts</code>");
-    expect(payload.body).toContain("**P1 · Blocking question: Define the completion boundary**");
     expect(payload.body).toContain(
-      "**P2 · Recommendation: Preserve the clarified conversational direction**",
+      "**Scope and Outcomes · Blocking question: Define the completion boundary**",
+    );
+    expect(payload.body).toContain(
+      "**Direction · Recommendation: Preserve the clarified conversational direction**",
     );
     expect(payload.body).toContain("comment by @maintainer: “latest conversation”");
     expect(payload.body).toContain(
-      "**P3 · Recommendation: Clarify the relationship with PR review**",
+      "**Feasibility and Dependencies · Recommendation: Clarify the relationship with PR review**",
     );
     expect(payload.body).toContain("## Decision");
     expect(payload.body).toContain(
@@ -495,15 +502,15 @@ describe("t301 AI issue intent review", () => {
       "Next decision: **Author — clarify the issue before planning.**",
     );
     expect(payload.body.indexOf("## Decision")).toBeGreaterThan(
-      payload.body.indexOf("## Risks and Open Decisions"),
+      payload.body.indexOf("## Findings by Priority"),
     );
     expect(payload.body).toEndWith("Reviewed by AIDA (AI-DLC Developer Agent).");
   });
 
   test("renderer preserves global priority order across category sections", () => {
     const payload = renderIssueReview(review());
-    expect(payload.body.indexOf("## Scope and Outcomes")).toBeLessThan(
-      payload.body.indexOf("## Direction"),
+    expect(payload.body.indexOf("Define the completion boundary")).toBeLessThan(
+      payload.body.indexOf("Preserve the clarified conversational direction"),
     );
 
     const tied = review();
@@ -528,6 +535,8 @@ describe("t301 AI issue intent review", () => {
     expect(tiedBody.indexOf("First P1")).toBeLessThan(tiedBody.indexOf("Second P1"));
     expect(tiedBody.indexOf("Second P1")).toBeLessThan(tiedBody.indexOf("First P2"));
     expect(tiedBody.indexOf("First P2")).toBeLessThan(tiedBody.indexOf("First P3"));
+    expect(tiedBody.match(/^### Intent and Problem Clarity$/gm)).toHaveLength(1);
+    expect(tiedBody.match(/^### Direction$/gm)).toHaveLength(1);
   });
 
   test("validator binds the Issue decision to blocking questions and readiness", () => {

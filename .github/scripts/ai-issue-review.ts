@@ -1237,22 +1237,39 @@ export function renderIssueReview(
     (left, right) =>
       PRIORITY_ORDER.indexOf(left.priority) - PRIORITY_ORDER.indexOf(right.priority),
   );
-  const renderedCategories = new Set<FindingCategory>();
-  let activeCategory: FindingCategory | undefined;
-  for (const finding of orderedFindings) {
-    if (finding.category !== activeCategory) {
-      const category = FINDING_CATEGORIES.find(
-        candidate => candidate.value === finding.category,
-      );
-      if (!category) throw new Error(`unsupported finding category: ${finding.category}`);
-      lines.push("", `## ${category.heading}`);
-      activeCategory = finding.category;
-      renderedCategories.add(finding.category);
+  lines.push("", "## Category Assessment");
+  for (const category of FINDING_CATEGORIES) {
+    const categoryFindings = orderedFindings.filter(
+      finding => finding.category === category.value,
+    );
+    lines.push("", `### ${category.heading}`, "");
+    if (categoryFindings.length === 0) {
+      lines.push("No material gap identified.");
+      continue;
     }
+    const categoryPriority = highestPriority(categoryFindings);
+    lines.push(
+      `${categoryFindings.length} ${
+        categoryFindings.length === 1 ? "finding" : "findings"
+      }; highest priority: **${categoryPriority}**.`,
+    );
+  }
+
+  lines.push("", "## Findings by Priority");
+  let activePriority: FindingPriority | undefined;
+  for (const finding of orderedFindings) {
+    if (finding.priority !== activePriority) {
+      lines.push("", `### ${finding.priority}`);
+      activePriority = finding.priority;
+    }
+    const category = FINDING_CATEGORIES.find(
+      candidate => candidate.value === finding.category,
+    );
+    if (!category) throw new Error(`unsupported finding category: ${finding.category}`);
     const label = finding.level === "blocking-question" ? "Blocking question" : "Recommendation";
     lines.push(
       "",
-      `**${finding.priority} · ${label}: ${markdownText(finding.title)}**`,
+      `**${category.heading} · ${label}: ${markdownText(finding.title)}**`,
       "",
       `Evidence: ${finding.evidence.map(evidenceText).join(", ")}.`,
       "",
@@ -1263,9 +1280,8 @@ export function renderIssueReview(
       `Suggested issue change: ${markdownText(finding.suggestedIssueChange)}`,
     );
   }
-  for (const category of FINDING_CATEGORIES) {
-    if (renderedCategories.has(category.value)) continue;
-    lines.push("", `## ${category.heading}`, "", "No material gap identified.");
+  if (orderedFindings.length === 0) {
+    lines.push("", "No findings.");
   }
   const priority = highestPriority(review.findings);
   const decisionText = review.decision.action === "clarify"
