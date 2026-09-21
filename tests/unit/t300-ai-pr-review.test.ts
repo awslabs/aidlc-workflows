@@ -62,6 +62,16 @@ function review(priority?: "P0" | "P1" | "P2" | "P3"): StructuredReview {
       changedFiles: ["core/example.ts"],
     },
     validation: ["Read every changed file and traced related callers."],
+    assessment: {
+      readiness: {
+        score: priority === "P0" || priority === "P1" ? 2 : 4,
+        rationale: "The implementation is complete except for the reported review findings.",
+      },
+      risk: {
+        score: priority === "P0" || priority === "P1" ? 4 : 2,
+        rationale: "The affected contract has a bounded but user-visible blast radius.",
+      },
+    },
     findings: priority
       ? [
           {
@@ -225,6 +235,10 @@ process.stdout.write(JSON.stringify(value));
     expect(payload.commit_id).toBe(HEAD);
     expect(payload.body).toStartWith(`<!-- ai-pr-review context=${CONTEXT_ID} -->`);
     expect(payload.body).toContain("Inspection: 1 changed file.");
+    expect(payload.body).toContain("## Final Assessment");
+    expect(payload.body).toContain("Scale: readiness 5 is strongest; risk 5 is highest.");
+    expect(payload.body).toContain("Readiness: **2/5**");
+    expect(payload.body).toContain("Risk: **4/5**");
     expect(payload.body).toContain("Findings: 1 blocking, 0 advisory.");
     expect(payload.body).toContain("## Contracts & Compatibility");
     expect(payload.body).toContain("**P1: Generated contract is incomplete**");
@@ -263,6 +277,44 @@ process.stdout.write(JSON.stringify(value));
     inverted.findings.push({ ...review("P1").findings[0] });
     expect(() => validate(JSON.stringify(inverted))).toThrow(
       "ordered from P0 through P3",
+    );
+  });
+
+  test("validator requires readiness and risk assessments from 1 through 5", () => {
+    const missing = review() as unknown as Record<string, unknown>;
+    delete missing.assessment;
+    expect(() => validate(JSON.stringify(missing))).toThrow("assessment must be an object");
+
+    for (const dimension of ["readiness", "risk"] as const) {
+      for (const score of [0, 1.5, 6, "5"]) {
+        const invalid = review() as unknown as {
+          assessment: Record<typeof dimension, { score: unknown; rationale: string }>;
+        };
+        invalid.assessment[dimension].score = score;
+        expect(() => validate(JSON.stringify(invalid))).toThrow(
+          `assessment.${dimension}.score must be an integer from 1 through 5`,
+        );
+      }
+    }
+
+    const validated = validate(JSON.stringify(review("P2")));
+    expect(validated.assessment).toEqual({
+      readiness: {
+        score: 4,
+        rationale: "The implementation is complete except for the reported review findings.",
+      },
+      risk: {
+        score: 2,
+        rationale: "The affected contract has a bounded but user-visible blast radius.",
+      },
+    });
+
+    const missingRationale = review() as unknown as {
+      assessment: { readiness: { score: number; rationale: string } };
+    };
+    missingRationale.assessment.readiness.rationale = "";
+    expect(() => validate(JSON.stringify(missingRationale))).toThrow(
+      "assessment.readiness.rationale",
     );
   });
 
@@ -1017,9 +1069,13 @@ process.stdout.write(JSON.stringify(value));
     expect(aidlc).toContain("Every PR must preserve existing changelog entries");
     expect(direction).toContain("workflow, a framework, and a software factory");
     expect(direction).toContain("starts with one intent");
-    expect(direction).toContain("defined scope");
+    expect(direction).toContain("selected scope");
     expect(direction).toContain("one hand-authored methodology");
     expect(direction).toContain("intent-to-software chain");
+    expect(direction).not.toContain("multiple unrelated intents mutating");
+    expect(direction).not.toContain("scope that is silently broadened");
+    expect(direction).not.toContain("can no longer be traced");
+    expect(direction).not.toContain("free-form chatbot");
     expect(judge).toContain(".ai-review-lenses/prompt-injection.md");
     expect(judge).toContain(".ai-review-lenses/security.md");
     expect(judge).toContain(".ai-review-lenses/aidlc.md");
@@ -1032,6 +1088,11 @@ process.stdout.write(JSON.stringify(value));
     expect(judge).toContain('Return `inspection.status` as `"complete"` only');
     expect(judge).toContain('return `"failed"`');
     expect(judge).toContain('"inspection": {"status": "complete"}');
+    expect(judge).toContain('"assessment"');
+    expect(judge).toContain('"readiness"');
+    expect(judge).toContain('"risk"');
+    expect(judge).toMatch(/integer score\s+from 1 through 5/);
+    expect(judge).toContain("human merge decision");
     expect(judge).not.toContain('"changedFiles"');
     expect(judge).toContain('"category": "contracts"');
     expect(judge).toContain("`direction`");

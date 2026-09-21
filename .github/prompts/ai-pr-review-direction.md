@@ -27,14 +27,6 @@ The direction to preserve is:
 
 Trace changes that weaken the intent-to-software chain. Look for:
 
-- multiple unrelated intents mutating one active workflow without explicit
-  boundaries;
-- scope that is silently broadened, narrowed, or replaced after the workflow
-  establishes it;
-- stages, gates, artifacts, or implementation work that can no longer be traced
-  to the active intent and its defined scope;
-- changes that turn the orchestrator into a free-form chatbot, isolated command
-  runner, or document generator instead of the coordinator of the lifecycle;
 - harness-specific behavior that forks the core methodology or produces a
   materially different lifecycle;
 - shortcuts that bypass required lifecycle guarantees, or mandatory machinery

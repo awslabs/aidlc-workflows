@@ -136,6 +136,16 @@ export interface StructuredReview {
     changedFiles: string[];
   };
   validation: string[];
+  assessment: {
+    readiness: {
+      score: number;
+      rationale: string;
+    };
+    risk: {
+      score: number;
+      rationale: string;
+    };
+  };
   findings: Finding[];
   residualRisk: string;
 }
@@ -593,6 +603,43 @@ export function validateStructuredReview(
   const validation = candidate.validation.map((value, index) =>
     requiredText(value, `validation[${index}]`, 500),
   );
+  if (
+    !candidate.assessment ||
+    typeof candidate.assessment !== "object" ||
+    Array.isArray(candidate.assessment)
+  ) {
+    throw new Error("assessment must be an object");
+  }
+  const assessmentCandidate = candidate.assessment as Record<string, unknown>;
+  const assessmentDimension = (
+    name: "readiness" | "risk",
+  ): StructuredReview["assessment"]["readiness"] => {
+    const value = assessmentCandidate[name];
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`assessment.${name} must be an object`);
+    }
+    const dimension = value as Record<string, unknown>;
+    if (
+      typeof dimension.score !== "number" ||
+      !Number.isInteger(dimension.score) ||
+      dimension.score < 1 ||
+      dimension.score > 5
+    ) {
+      throw new Error(`assessment.${name}.score must be an integer from 1 through 5`);
+    }
+    return {
+      score: dimension.score,
+      rationale: requiredText(
+        dimension.rationale,
+        `assessment.${name}.rationale`,
+        1000,
+      ),
+    };
+  };
+  const assessment = {
+    readiness: assessmentDimension("readiness"),
+    risk: assessmentDimension("risk"),
+  };
   if (!Array.isArray(candidate.findings)) throw new Error("findings must be an array");
 
   let previousRank = -1;
@@ -684,6 +731,7 @@ export function validateStructuredReview(
     head: expectedHead,
     inspection,
     validation,
+    assessment,
     findings,
     residualRisk,
   };
@@ -764,6 +812,18 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     `Inspection: ${review.inspection.changedFiles.length} changed ${
       review.inspection.changedFiles.length === 1 ? "file" : "files"
     }.`,
+    "",
+    "## Final Assessment",
+    "",
+    "Scale: readiness 5 is strongest; risk 5 is highest.",
+    "",
+    `Readiness: **${review.assessment.readiness.score}/5** — ${
+      markdownText(review.assessment.readiness.rationale)
+    }`,
+    "",
+    `Risk: **${review.assessment.risk.score}/5** — ${
+      markdownText(review.assessment.risk.rationale)
+    }`,
     "",
     "Validation performed:",
     ...review.validation.map(item => `- ${markdownText(item)}`),
