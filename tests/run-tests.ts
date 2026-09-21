@@ -29,6 +29,7 @@ import {
   type ParsedArgs,
 } from "./harness/runner-profile.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
+import { ensurePrivateRoot } from "./harness/tui-record-file.ts";
 import {
   selectShard,
   type ShardConfig,
@@ -741,7 +742,7 @@ async function runSpawnCapture(
           AIDLC_TUI_TMUX_SOCKET: socket,
           TEMP: temp, TMP: temp, TMPDIR: temp,
         };
-        mkdirSync(env.AIDLC_TUI_BUN_ROOT!, { recursive: true, mode: 0o700 });
+        ensurePrivateRoot(env.AIDLC_TUI_BUN_ROOT!);
         transport = { worker: { id: 0, root: cwd, socket }, env };
       }
       const supervisorPath = join(cwd, "tests", "lib", "e2e-process.ts");

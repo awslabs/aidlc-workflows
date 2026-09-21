@@ -7,6 +7,7 @@ import { cp, mkdir, mkdtemp, realpath, rename, rm, symlink } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { resolveTuiRuntime, selectedTuiBackend } from "../harness/tui-runtime.ts";
+import { ensurePrivateRoot } from "../harness/tui-record-file.ts";
 
 export interface E2eWorker {
   id: number;
@@ -264,7 +265,7 @@ export async function e2eWorkerEnvironment(
     AIDLC_TEST_WORKER_ROOT: artifactDir,
     AIDLC_TUI_BUN_ROOT: join(artifactDir, "tui-bun"),
   };
-  await mkdir(nativeEnv.AIDLC_TUI_BUN_ROOT, { recursive: true, mode: 0o700 });
+  ensurePrivateRoot(nativeEnv.AIDLC_TUI_BUN_ROOT);
   // Re-running a file may reuse its artifact directory. Confirm any previous
   // daemon's retirement before the test can start another generation there.
   await cleanupNativeTransports(worker, nativeEnv);

@@ -1,17 +1,22 @@
 // Token-free calibration of the public driver commands, using real native PTYs.
 import { afterAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bunSessionPaths, createBunBackend } from "../harness/tui-bun-backend.ts";
 import { publishSupervisorStop } from "../harness/tui-bun-process.ts";
 import { acquireNativeLock, getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
+import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord } from "../harness/tui-record-file.ts";
 import { physicalTuiText, type TuiSnapshot } from "../harness/tui-screen.ts";
 
 const supported = process.platform === "linux" || process.platform === "win32" || process.platform === "darwin";
-const root = mkdtempSync(join(tmpdir(), "aidlc-tui-native-calibration-"));
+const scratch = mkdtempSync(join(tmpdir(), "aidlc-tui-native-calibration-"));
+const root = join(scratch, "private");
+ensurePrivateRoot(root);
 const driver = join(import.meta.dir, "../harness/tui-drive.ts");
 const target = join(root, "terminal target.ts");
 const env = { ...process.env, AIDLC_TUI_BACKEND: "bun", AIDLC_TUI_BUN_ROOT: root };
@@ -105,8 +110,113 @@ afterAll(async () => {
   const cleanup = await Promise.allSettled([...sessions].map(stop));
   const failed = cleanup.filter((result) => result.status === "rejected");
   if (failed.length) throw new Error(`native calibration cleanup failed; inspect ${root}: ${JSON.stringify(failed)}`);
-  rmSync(root, { recursive: true, force: true });
+  rmSync(scratch, { recursive: true, force: true });
 }, 30_000);
+
+describe.skipIf(!supported)("native launch namespace security", () => {
+  test.skipIf(process.platform === "win32").each(["default", "explicit"])(
+    "%s world-writable root is refused before any lock/session publication", async (selection) => {
+      const temp = mkdtempSync(join(root, "unsafe-root-"));
+      const unsafeRoot = join(temp, "aidlc-bun-tui");
+      mkdirSync(unsafeRoot, { mode: 0o777 });
+      chmodSync(unsafeRoot, 0o777);
+      const result = await drive(["start", "--session", "refuse-public-root", "--cwd", root,
+        "--", process.execPath, "-e", "process.exit(0)"], {
+        TMPDIR: temp, TMP: temp, TEMP: temp,
+        AIDLC_TUI_BUN_ROOT: selection === "default" ? "" : unsafeRoot,
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("group/other permission bits");
+      expect(result.stderr).toContain(unsafeRoot);
+      expect(readdirSync(unsafeRoot)).toEqual([]);
+    },
+  );
+
+  test("an explicit root symlink/junction is refused without touching its target", async () => {
+    const temp = mkdtempSync(join(root, "linked-root-"));
+    const destination = join(temp, "destination");
+    ensurePrivateRoot(destination);
+    const alias = join(temp, "alias");
+    symlinkSync(destination, alias, process.platform === "win32" ? "junction" : "dir");
+    const result = await drive(["start", "--session", "refuse-linked-root", "--cwd", root,
+      "--", process.execPath, "-e", "process.exit(0)"], { AIDLC_TUI_BUN_ROOT: alias });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("symlink/reparse");
+    expect(readdirSync(destination)).toEqual([]);
+  });
+
+  test.each(["session", "parent"])("daemon refuses a replaced %s before PTY/supervisor creation", async (replaced) => {
+    const privateRoot = join(root, `replacement-${randomUUID()}`);
+    ensurePrivateRoot(privateRoot);
+    const childEnv = { ...env, AIDLC_TUI_BUN_ROOT: privateRoot };
+    const session = `replaced-${randomUUID()}`;
+    const paths = bunSessionPaths(session, childEnv);
+    ensurePrivateRoot(paths.directory);
+    const directoryIdentity = privateDirectoryIdentity(paths.directory);
+    const marker = join(root, `${session}-executed`);
+    const record = {
+      schema: 1, backend: "bun", session, token: randomUUID(), endpoint: paths.endpoint,
+      directoryIdentity, phase: "starting", cwd: root, fixtureCwd: null, width: 80, height: 16,
+      command: [process.execPath, "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)},'executed')`],
+    };
+    publishTuiRecord(paths.record, record, directoryIdentity);
+    renameSync(replaced === "parent" ? privateRoot : paths.directory,
+      `${replaced === "parent" ? privateRoot : paths.directory}-old`);
+    if (replaced === "parent") ensurePrivateRoot(privateRoot);
+    ensurePrivateRoot(paths.directory);
+    publishTuiRecord(paths.record, record, privateDirectoryIdentity(paths.directory));
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory], {
+      env: childEnv, stdout: "pipe", stderr: "pipe", timeout: 5000,
+    });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("directory identity mismatch");
+    expect(existsSync(paths.status)).toBe(false);
+    expect(existsSync(join(paths.directory, "supervisor-config.json"))).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+    expect(JSON.parse(readFileSync(paths.record, "utf8"))).toMatchObject({ phase: "error", cleanupComplete: true });
+  });
+
+  test.skipIf(process.platform === "win32")("untrusted daemon directories receive no error record or supervisor", async () => {
+    const privateRoot = join(root, `untrusted-${randomUUID()}`);
+    ensurePrivateRoot(privateRoot);
+    const childEnv = { ...env, AIDLC_TUI_BUN_ROOT: privateRoot };
+    const paths = bunSessionPaths("untrusted-directory", childEnv);
+    mkdirSync(paths.directory, { mode: 0o700 });
+    writeFileSync(paths.record, "untrusted bytes", { mode: 0o600 });
+    chmodSync(paths.directory, 0o777);
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory], {
+      env: childEnv, stdout: "pipe", stderr: "pipe", timeout: 5000,
+    });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("group/other permission bits");
+    expect(readFileSync(paths.record, "utf8")).toBe("untrusted bytes");
+    expect(readdirSync(paths.directory)).toEqual(["session.json"]);
+  });
+
+  test.skipIf(process.platform === "win32")("client commands refuse unsafe records instead of using their RPC credentials", async () => {
+    const privateRoot = join(root, `unsafe-record-${randomUUID()}`);
+    ensurePrivateRoot(privateRoot);
+    const childEnv = { AIDLC_TUI_BUN_ROOT: privateRoot };
+    const session = "unsafe-record";
+    const paths = bunSessionPaths(session, { ...env, ...childEnv });
+    mkdirSync(paths.directory, { mode: 0o700 });
+    publishTuiRecord(paths.record, {
+      schema: 1, backend: "bun", session, token: randomUUID(), endpoint: paths.endpoint,
+      directoryIdentity: privateDirectoryIdentity(paths.directory), phase: "running",
+    });
+    chmodSync(paths.record, 0o666);
+    for (const args of [
+      ["kill"], ["capture"], ["send", "--keys", "hello"], ["paste", "--text", "hello"],
+      ["wait", "--pattern", "hello"], ["wait-dead", "--timeout-ms", "100"],
+    ]) {
+      const result = await drive([...args, "--session", session], childEnv);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("group/other permission bits");
+    }
+  });
+});
 
 describe.skipIf(!supported)("native Bun terminal driver commands", () => {
   test("wrap-spanning wait patterns keep logical compatibility and both views share one snapshot", async () => {

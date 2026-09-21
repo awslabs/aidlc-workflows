@@ -1,5 +1,132 @@
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { dirname, resolve } from "node:path";
+
+export interface DirectoryIdentity { dev: string; ino: string }
+
+function unsafe(path: string, reason: string): Error {
+  return new Error(`unsafe native terminal private path ${path}: ${reason}; remove it or point AIDLC_TUI_BUN_ROOT at a private, user-owned 0700 directory (Windows: current-user owner, no public allow ACEs or reparse points)`);
+}
+
+/** Pure POSIX checks also apply to descriptors, not just pathname metadata. */
+export function validatePrivateStat(
+  path: string,
+  stat: Pick<fs.BigIntStats, "uid" | "mode" | "isSymbolicLink" | "isDirectory" | "isFile">,
+  kind: "directory" | "file",
+  uid: number | undefined = process.getuid?.(),
+): void {
+  if (stat.isSymbolicLink()) throw unsafe(path, "symlink/reparse point is not allowed");
+  if (kind === "directory" ? !stat.isDirectory() : !stat.isFile()) {
+    throw unsafe(path, kind === "directory" ? "not a directory" : "not a regular file");
+  }
+  if (uid !== undefined) {
+    if (stat.uid !== BigInt(uid)) throw unsafe(path, `owner uid ${stat.uid} differs from current uid ${uid}`);
+    if ((stat.mode & 0o077n) !== 0n) throw unsafe(path, "group/other permission bits are set");
+  }
+}
+
+export function assertDirectoryIdentity(path: string, actual: DirectoryIdentity, expected: unknown): void {
+  const value = expected as DirectoryIdentity | undefined;
+  if (!value || value.dev !== actual.dev || value.ino !== actual.ino) {
+    throw unsafe(path, "directory identity mismatch (directory was replaced or record is not pinned)");
+  }
+}
+
+function powershell(path: string, script: string): string {
+  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
+    env: { ...process.env, AIDLC_PRIVATE_PATH: resolve(path) }, encoding: "utf8", timeout: 10_000,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) throw unsafe(path, `Windows security check failed: ${result.error ?? result.stderr}`);
+  return result.stdout.trim();
+}
+
+// Node's legacy client must never resolve bun:ffi. Only Windows Bun loads this
+// adapter; all public filesystem operations remain synchronous after import.
+const windowsSecurity = process.platform === "win32" && process.versions.bun
+  ? await import("./tui-windows-private-file.ts") : undefined;
+
+function validateWindowsSecurity(path: string): void {
+  if (process.platform !== "win32") return;
+  if (windowsSecurity) {
+    try { windowsSecurity.validateWindowsPrivatePath(path); }
+    catch (error) { throw unsafe(path, String(error)); }
+    return;
+  }
+  powershell(path, `
+$ErrorActionPreference = 'Stop'
+$item = Get-Item -LiteralPath $env:AIDLC_PRIVATE_PATH -Force
+if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'reparse point is not allowed' }
+$acl = Get-Acl -LiteralPath $env:AIDLC_PRIVATE_PATH
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'owner SID differs from current user' }
+if ($null -eq ([Security.AccessControl.RawSecurityDescriptor]::new($acl.Sddl)).DiscretionaryAcl) { throw 'null DACL allows public access' }
+foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+  if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -in @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11')) {
+    throw 'public allow ACE (Everyone, BUILTIN\\Users or Authenticated Users)'
+  }
+}
+`);
+}
+
+export function privateDirectoryIdentity(path: string, expected?: DirectoryIdentity): DirectoryIdentity {
+  const stat = fs.lstatSync(path, { bigint: true });
+  validatePrivateStat(path, stat, "directory");
+  validateWindowsSecurity(path);
+  const identity = { dev: String(stat.dev), ino: String(stat.ino) };
+  if (expected) assertDirectoryIdentity(path, identity, expected);
+  return identity;
+}
+
+/** Existing directories are verified, never chmod/ACL repaired. */
+export function ensurePrivateRoot(root: string): void {
+  fs.mkdirSync(dirname(resolve(root)), { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") {
+    try { fs.lstatSync(root); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // Framework's Directory.CreateDirectory(path, security) passes a DACL to
+      // CreateDirectoryW atomically. An existing/racing directory is NOT repaired.
+      powershell(root, `
+$ErrorActionPreference = 'Stop'
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = New-Object Security.AccessControl.DirectorySecurity
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+[void][IO.Directory]::CreateDirectory($env:AIDLC_PRIVATE_PATH, $acl)
+`);
+    }
+  } else {
+    try { fs.mkdirSync(root, { mode: 0o700 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  }
+  privateDirectoryIdentity(root);
+}
+
+/** Validate the namespace before and after reading from one no-follow fd. */
+export function readPrivateRecord<T extends { directoryIdentity: DirectoryIdentity }>(directory: string, file: string): T {
+  if (resolve(dirname(file)) !== resolve(directory)) throw unsafe(file, "record is outside its session directory");
+  const root = dirname(resolve(directory));
+  const rootIdentity = privateDirectoryIdentity(root);
+  const identity = privateDirectoryIdentity(directory);
+  const before = fs.lstatSync(file, { bigint: true });
+  validatePrivateStat(file, before, "file");
+  validateWindowsSecurity(file);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY |
+    (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK));
+  try {
+    const stat = fs.fstatSync(fd, { bigint: true });
+    validatePrivateStat(file, stat, "file");
+    if (before.dev !== stat.dev || before.ino !== stat.ino) throw unsafe(file, "record identity changed while opening");
+    const value = JSON.parse(fs.readFileSync(fd, "utf8")) as T;
+    privateDirectoryIdentity(root, rootIdentity);
+    privateDirectoryIdentity(directory, identity);
+    assertDirectoryIdentity(directory, identity, value?.directoryIdentity);
+    return value;
+  } finally { fs.closeSync(fd); }
+}
 
 const RENAME_RETRY_MS = 250;
 const RETRY_DELAY_MS = 5;
@@ -11,21 +138,43 @@ const waitWord = new Int32Array(new SharedArrayBuffer(4));
  * rename, for at most 250ms total; never unlink/truncate the visible record.
  * Keep this module usable by both Node clients and Bun daemon/supervisor children.
  */
-export function publishTuiRecord(path: string, value: unknown): void {
+export function publishTuiRecord(path: string, value: unknown, directoryIdentity?: DirectoryIdentity): void {
   const body = `${JSON.stringify(value)}\n`;
+  const directory = dirname(path);
+  const root = dirname(resolve(directory));
+  const rootIdentity = directoryIdentity ? privateDirectoryIdentity(root) : undefined;
+  const verify = () => {
+    if (!directoryIdentity) return;
+    privateDirectoryIdentity(root, rootIdentity);
+    privateDirectoryIdentity(directory, directoryIdentity);
+  };
+  verify();
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   // Establish ownership before entering cleanup: an unsuccessful exclusive open
   // must not remove a file created by somebody else.
   let fd: number | undefined = fs.openSync(temporary, "wx", 0o600);
   try {
+    verify();
+    if (directoryIdentity && process.platform === "win32") {
+      if (windowsSecurity) windowsSecurity.ownWindowsPrivateFile(temporary);
+      else powershell(temporary, `
+$ErrorActionPreference = 'Stop'
+$acl = Get-Acl -LiteralPath $env:AIDLC_PRIVATE_PATH
+$acl.SetOwner([Security.Principal.WindowsIdentity]::GetCurrent().User)
+Set-Acl -LiteralPath $env:AIDLC_PRIVATE_PATH -AclObject $acl
+`);
+      validateWindowsSecurity(temporary);
+    }
     fs.writeFileSync(fd, body);
     const written = fd;
     fd = undefined;
     fs.closeSync(written); // Close the complete file before making it visible.
     const deadline = performance.now() + RENAME_RETRY_MS;
     while (true) {
+      verify();
       try {
         fs.renameSync(temporary, path);
+        verify();
         return;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException)?.code;
@@ -45,7 +194,7 @@ export function publishTuiRecord(path: string, value: unknown): void {
     if (fd !== undefined) {
       try { fs.closeSync(fd); } catch (closeError) { failures.push(closeError); }
     }
-    try { fs.unlinkSync(temporary); } catch (cleanupError) {
+    try { verify(); fs.unlinkSync(temporary); } catch (cleanupError) {
       if ((cleanupError as NodeJS.ErrnoException)?.code !== "ENOENT") failures.push(cleanupError);
     }
     if (failures.length > 1) {

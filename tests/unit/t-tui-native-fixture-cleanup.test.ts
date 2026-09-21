@@ -24,7 +24,7 @@ beforeEach(() => {
   project = join(root, "Project");
   legacyRoot = join(root, "legacy");
   nativeRoot = join(root, "native");
-  for (const path of [project, legacyRoot, nativeRoot]) mkdirSync(path);
+  for (const path of [project, legacyRoot, nativeRoot]) mkdirSync(path, { mode: 0o700 });
   writeFileSync(join(project, "artifact.txt"), "retain until cleanup is confirmed");
   priorNativeRoot = process.env.AIDLC_TUI_BUN_ROOT;
   priorKeepTemp = process.env.AIDLC_KEEP_TEMP;

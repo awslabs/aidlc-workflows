@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensurePrivateRoot } from "../harness/tui-record-file.ts";
 import {
   resolveTuiRuntime,
   selectedTuiBackend,
@@ -31,7 +32,9 @@ describe("native driver Node handoff", () => {
   test("a Node override fails after one handoff; a real Bun override executes the command", () => {
     const parent = scratchRoot();
     mkdirSync(parent, { recursive: true });
-    const directory = mkdtempSync(join(parent, "handoff-"));
+    const scratch = mkdtempSync(join(parent, "handoff-"));
+    const directory = join(scratch, "private");
+    ensurePrivateRoot(directory);
     const driver = resolve(import.meta.dir, "../harness/tui-drive.ts");
     const node = resolveTuiRuntime(driver, {
       env: { ...process.env, AIDLC_TUI_BACKEND: "node-pty" },
@@ -74,7 +77,7 @@ if (count > 2) { console.error("fixture stopped repeated runtime handoff"); proc
       expect(correct.stdout).toContain("process tree exited");
       passed = true;
     } finally {
-      if (passed) rmSync(directory, { recursive: true, force: true });
+      if (passed) rmSync(scratch, { recursive: true, force: true });
       else console.error(`native handoff evidence retained: ${directory}`);
     }
   }, 20_000);

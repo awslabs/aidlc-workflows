@@ -278,11 +278,26 @@ interrupted starter exits. Fixture cleanup also refuses to remove a project
 while its native session has unconfirmed cleanup.
 
 Session records and final snapshots remain under `AIDLC_TUI_BUN_ROOT`
-(default: `aidlc-bun-tui` under the OS temporary directory). Keep this setting
-consistent across commands. Target exit status and PTY exit status are
-separate: Bun reports ordinary Linux slave-close EIO as PTY status `1`.
-The driver accepts that status after confirmed supervisor exit and cleanup;
-Bun's callback does not expose an errno to distinguish other POSIX read errors.
+(default: `$TMPDIR/aidlc-bun-tui`, using the OS temporary directory). Both
+the default and an explicit root must be private: a real directory owned by
+the current user with mode **0700** on POSIX, or on Windows a current-user
+owner SID and no allow ACEs for Everyone, BUILTIN\Users or Authenticated Users.
+Symlinks, junctions and other Windows reparse points are refused. The driver
+creates a missing root with private permissions; it refuses an unsafe existing
+root rather than changing its permissions. Remove an unsafe pre-created root
+or point `AIDLC_TUI_BUN_ROOT` at a private directory, and keep that setting
+consistent across commands.
+
+Launch records are private regular files pinned to the session directory's
+filesystem identity. Both clients and the daemon validate ownership, permissions
+and identity before trusting them; a replaced directory cannot authorize a
+command or redirect RPC credentials. The daemon refuses it before creating a
+PTY or supervisor, and never writes diagnostics into an untrusted directory.
+
+Target exit status and PTY exit status are separate: Bun reports ordinary
+Linux slave-close EIO as PTY status `1`. The driver accepts that status after
+confirmed supervisor exit and cleanup; Bun's callback does not expose an errno
+to distinguish other POSIX read errors.
 Unreachable sessions and unconfirmed cleanup remain errors.
 
 Captures read the current active viewport after queued output has been
@@ -517,7 +532,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 |----------|---------|-------------|
 | `AIDLC_TEST_TIMEOUT` | `1800` | Per-`claude -p` call timeout in seconds. Set to `0` to disable. |
 | `AIDLC_TUI_BACKEND` | `auto` | Terminal driver: native `bun` on Linux/Windows/macOS. Explicit values: `bun`, `tmux`, `node-pty`; see [Terminal Driver](#terminal-driver). |
-| `AIDLC_TUI_BUN_ROOT` | `<os.tmpdir()>/aidlc-bun-tui` | Native session records and final snapshots. Use the same root across a session's driver commands. |
+| `AIDLC_TUI_BUN_ROOT` | `<os.tmpdir()>/aidlc-bun-tui` | Native records/snapshots; use the same root across commands. Must be user-owned and private (0700 on POSIX; current-user owner, no Everyone/Users/Authenticated Users allow ACEs on Windows), never a symlink/reparse point. A missing root is created privately; an unsafe existing root or identity-replaced session directory is refused. |
 | `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use on Linux/Windows/macOS requires Bun >=1.3.14. |
 | `AIDLC_NODE_BIN` | Node on `PATH`, then the standard Windows install path | Executable override for the explicitly selected legacy Windows `node-pty` backend. |
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
