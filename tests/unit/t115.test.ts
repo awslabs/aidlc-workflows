@@ -1246,6 +1246,43 @@ function appendAudit(event: string, fields: Record<string, string>, p: string): 
 }
 
 describe("t115 reviewer precondition (report refuses approve without a recorded review)", () => {
+  // Requesting a review and recording its verdict are the same command with
+  // --verdict added. Nothing the conductor sees between the two used to say so,
+  // and an unclosed request only surfaces much later, as a refused stage
+  // completion that reads as unrelated. So the request returns the exact
+  // command that closes it.
+  test("R0a: the review request returns the command that records its verdict", () => {
+    const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
+    const req = log(
+      [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+      ],
+      p,
+    );
+    expect(req.status).toBe(0);
+    const emitted = JSON.parse(req.stdout.trim().split("\n").pop()!);
+    expect(emitted.emitted).toBe("REVIEW_REQUESTED");
+    expect(emitted.recordVerdict).toBe(
+      'aidlc-log.ts review --stage "requirements-analysis" ' +
+        '--reviewer "aidlc-product-lead-agent" --iteration 1 ' +
+        "--verdict <READY|NOT-READY>",
+    );
+  }, 30000);
+
   test("R0: report preflights missing review into one ask without opening the gate", () => {
     const p = projWithState("state-mid-inception.md");
     const artifact = join(

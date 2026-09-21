@@ -23254,9 +23254,17 @@ export function evaluateGuardRefusal(
       ) {
         remedies.push({
           op: "record-verdict",
+          // Spell the closing call out. Requesting a review and recording its
+          // verdict are the same command with --verdict added, which is not
+          // guessable from the request's own output, so "record the verdict"
+          // alone left operators looking for a command that does not exist.
           action:
             `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration} if the reviewer returned.`,
+            `${input.attempt.pendingReview.iteration} if the reviewer returned: ` +
+            `aidlc-log.ts review --stage ${input.stage} ` +
+            `${input.unit ? `--unit ${input.unit} ` : ""}--reviewer <reviewer> ` +
+            `--iteration ${input.attempt.pendingReview.iteration} ` +
+            `--verdict <READY|NOT-READY>.`,
           requiresHuman: false,
           executableNow: true,
         });

@@ -2439,6 +2439,16 @@ function handleReview(args: string[]): void {
       if (e instanceof ReviewRefusal) error(e.message);
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    // A request is half of the exchange: the slot stays open until the same
+    // command runs again with --verdict. Nothing else the conductor sees before
+    // the gate names that second call, and a request that is never closed
+    // refuses the stage completion much later, for a reason that reads as
+    // unrelated. So the request hands back the exact command that closes it.
+    const recordVerdict =
+      `aidlc-log.ts review --stage "${flags.stage}" --reviewer "${flags.reviewer}"` +
+      `${flags.unit ? ` --unit "${flags.unit}"` : ""}` +
+      `${flags.single === "true" ? " --single" : ""}` +
+      ` --iteration ${iteration} --verdict <READY|NOT-READY>`;
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -2447,6 +2457,7 @@ function handleReview(args: string[]): void {
       ...(recovery ? { recovery } : {}),
       requestId,
       reviewFile,
+      recordVerdict,
       ...(requestChangeNotices.length > 0 ? { change_notices: requestChangeNotices } : {}),
     }));
     return;

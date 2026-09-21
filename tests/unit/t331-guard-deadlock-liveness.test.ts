@@ -570,6 +570,37 @@ describe("bounded guard-remedy liveness", () => {
     ).toBe(false);
   });
 
+  // "Record the verdict" is not a command. Closing a review is the request
+  // command with --verdict added, which is why operators went looking for a
+  // recorder that does not exist.
+  test("the record-verdict remedy spells out the closing command", () => {
+    const refusal = evaluateGuardRefusal({
+      code: "PENDING_TEST",
+      blockedAction: "present-approval-gate",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: state("-"),
+      invariant: "A review request receives its verdict.",
+      userMessage: "blocked",
+      attempt: {
+        recovery: "available",
+        pendingReview: { iteration: 2, retryable: false },
+        summaryCoverage: "current",
+        reviewCoverage: "missing",
+        sourceCoverage: "current",
+      },
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    const record = refusal.remedies.find((remedy) => remedy.op === "record-verdict");
+    expect(record?.action).toContain(
+      "Record the verdict for pending review iteration 2",
+    );
+    expect(record?.action).toContain(
+      "aidlc-log.ts review --stage functional-design --unit alpha " +
+        "--reviewer <reviewer> --iteration 2 --verdict <READY|NOT-READY>",
+    );
+  });
+
   test("repair-required progress exposes only the admission-gated next iteration remedy", () => {
     const cases = [
       { marker: "-" as const, summary: "current" as const, executable: true },
