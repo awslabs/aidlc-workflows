@@ -11,6 +11,9 @@
 // with the legacy detectors and intentionally fails closed.
 
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, sep } from "node:path";
 import {
   classifyRuntimeCompileCommand,
   isEngineToolCall,
@@ -1166,12 +1169,12 @@ describe("detector corpus", () => {
       kind: "print",
       message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
     });
-    for (const prefix of [
-      "cd /workspace/app && ",
-      "cd -- '/workspace/app with spaces' && ",
-      String.raw`cd "C:\Windows\Temp\project" && `,
-      String.raw`cd 'C:\Windows\Temp\project'&&`,
-      "cd '/workspace/a && b' && ",
+    for (const [prefix, projectDir] of [
+      ["cd /workspace/app && ", "/workspace/app"],
+      ["cd -- '/workspace/app with spaces' && ", "/workspace/app with spaces"],
+      [String.raw`cd "C:\Windows\Temp\project" && `, String.raw`C:\Windows\Temp\project`],
+      [String.raw`cd 'C:\Windows\Temp\project'&&`, String.raw`C:\Windows\Temp\project`],
+      ["cd '/workspace/a && b' && ", "/workspace/a && b"],
     ]) {
       for (const command of [
         "aidlc engine orchestrate next --depth extreme",
@@ -1179,7 +1182,7 @@ describe("detector corpus", () => {
         "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme 2>&1",
       ]) {
         expect(isEngineToolCall("Bash", { command: prefix + command }), prefix + command).toBe(true);
-        expect(isEngineToolCall("Bash", { command: prefix + command }, output), prefix + command).toBe(false);
+        expect(isEngineToolCall("Bash", { command: prefix + command }, output, projectDir), prefix + command).toBe(false);
       }
     }
     const terminal = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
@@ -1203,7 +1206,7 @@ describe("detector corpus", () => {
       `cd /workspace/app && ai\\\ndlc next --depth extreme`,
       `cd /workspace/app && ${terminal}\n`,
     ]) {
-      expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+      expect(isEngineToolCall("Bash", { command }, output, "/workspace/app"), command).toBe(true);
     }
     for (const invalid of [
       "",
@@ -1217,7 +1220,31 @@ describe("detector corpus", () => {
       JSON.stringify({ kind: "print", message: "done", continue: true }),
       [{ type: "text", text: output }, { type: "image", data: "other" }],
     ]) {
-      expect(isEngineToolCall("Bash", { command: `cd /workspace/app && ${terminal}` }, invalid)).toBe(true);
+      expect(isEngineToolCall("Bash", { command: `cd /workspace/app && ${terminal}` }, invalid, "/workspace/app")).toBe(true);
+    }
+  });
+
+  test("terminal configuration proof is bound to the active project directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-detector-"));
+    try {
+      const projectDir = join(root, "active project");
+      const otherProjectDir = join(root, "other project");
+      const projectAlias = join(root, "active alias");
+      mkdirSync(projectDir);
+      mkdirSync(otherProjectDir);
+      symlinkSync(projectDir, projectAlias, "junction");
+      const output = JSON.stringify({
+        kind: "print",
+        message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      });
+      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme";
+      const command = `cd '${projectDir}' && ${terminal}`;
+      expect(isEngineToolCall("Bash", { command }, output, projectDir)).toBe(false);
+      expect(isEngineToolCall("Bash", { command: `cd '${otherProjectDir}' && ${terminal}` }, output, projectDir)).toBe(true);
+      expect(isEngineToolCall("Bash", { command }, output)).toBe(true);
+      expect(isEngineToolCall("Bash", { command: `cd '${projectAlias}${sep}' && ${terminal}` }, output, `${projectDir}${sep}.${sep}`)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

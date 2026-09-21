@@ -2554,15 +2554,16 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   }, 30000);
 
   test("(h) a native Windows Bash diagnostic does not turn a completed config refusal into workflow continuation", () => {
-    // Native T27 carried this command and result structure: a literal quoted
-    // Windows cd, successful next -> terminal print, then a real config refusal.
-    // The Windows command is transcript data only; actual tools execute in our
-    // owned fixture. No shell/environment repair is needed to reproduce it.
-    const nativePrefix = String.raw`cd "C:\owned test fixtures\project" && `;
+    // Native T27 carried a literal quoted Windows cd, successful next -> terminal
+    // print, then a real config refusal. Bind its prelude to the owned fixture;
+    // preserve native Windows spelling only on the platform that executes it.
     for (const diagnostic of ["", `${bashStartupDiagnostic}\n`, `${bashStartupDiagnostic}\r\n`]) {
       for (const format of ["claude", "codex"] as const) {
         for (const textArray of [false, true]) {
           const proj = makeProject();
+          const nativePrefix = process.platform === "win32"
+            ? `cd '${proj}' && `
+            : directoryPrefix(proj);
           seedActive(proj, "feasibility");
           const output = terminalDepthDispatch(proj).trim();
           const before = readFileSync(seededStateFile(proj), "utf8");

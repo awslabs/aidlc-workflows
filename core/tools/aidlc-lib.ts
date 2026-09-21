@@ -1692,13 +1692,32 @@ function unescapeUnquotedShellTextForEngagement(text: string): string {
   return result;
 }
 
+function sameDirectory(left: string, right: string): boolean {
+  const canonical = (directory: string): string => {
+    let path = resolvePath(directory);
+    try {
+      path = realpathSync.native(path);
+    } catch {
+      // Unavailable directories retain their resolved lexical identity.
+    }
+    path = path.replace(process.platform === "win32" ? /[\\/]+$/ : /\/+$/, "");
+    return process.platform === "win32" ? path.toLowerCase() : path;
+  };
+  return canonical(left) === canonical(right);
+}
+
 // A workflow-engine tool call: a Bash invocation of legacy
 // aidlc-orchestrate/aidlc-state, a new-grammar `aidlc ...` engine command, or a
 // tool whose name itself references aidlc. These are the calls that mean "the
 // conductor engaged the workflow this turn"; their presence in the turn that
 // answered the human disqualifies the turn from the conversational carve-out (a
 // conductor that ran the engine and then quit mid-loop must still be nudged).
-export function isEngineToolCall(name: string, input: unknown, observedOutput?: unknown): boolean {
+export function isEngineToolCall(
+  name: string,
+  input: unknown,
+  observedOutput?: unknown,
+  projectDir?: string,
+): boolean {
   const cmd =
     input !== null && typeof input === "object"
       ? String((input as Record<string, unknown>).command ?? "")
@@ -1707,14 +1726,17 @@ export function isEngineToolCall(name: string, input: unknown, observedOutput?: 
   // surface the tool by name) the tool name itself.
   const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
   // Correlated output can prove only one literal engine invocation terminal.
-  // A directory-only prelude does not consume or replace that invocation's
-  // output. Every other chain stays on the conservative per-segment path.
+  // A directory-only prelude is exempt only when it resolves to the known
+  // active project directory. Unknown/other directories and every other chain
+  // stay on the conservative per-segment path.
   const literal = parseLiteralShellInvocation(rawText);
   if (literal) {
     const invocation = engineInvocationFromWords(literal.argv, literal.rawWords);
     if (
       invocation !== null && typeof invocation !== "string" &&
-      isTerminalConfigurationDispatch(invocation, observedOutput)
+      isTerminalConfigurationDispatch(invocation, observedOutput) &&
+      (literal.directory === null ||
+        (projectDir !== undefined && sameDirectory(literal.directory, projectDir)))
     ) return false;
   }
   const unescaped = unescapeUnquotedShellTextForEngagement(rawText);

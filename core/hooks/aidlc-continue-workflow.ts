@@ -788,7 +788,7 @@ function isInjectedHookFeedback(text: string): boolean {
 // both delivered formats; returns true ONLY with positive evidence. `format`
 // distinguishes Claude's message-shaped JSONL from Codex's {type,payload}
 // rollout. Fail-closed on every miss.
-function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex"): boolean {
+function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex", projectDir: string): boolean {
   let raw: string;
   try {
     raw = readFileSync(transcriptPath, "utf-8");
@@ -1019,7 +1019,7 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         const result = turns[results[0]].result;
         if (
           result && !result.failed &&
-          !isEngineToolCall(call.name, call.input, result.output)
+          !isEngineToolCall(call.name, call.input, result.output, projectDir)
         ) {
           continue;
         }
@@ -1075,7 +1075,7 @@ function isConversationalStop(
       // No transcript delivered — fall back to the marker mtimes.
       return turnMarkersShowConversational(projectDir);
     }
-    return transcriptIsConversational(transcriptPath, format);
+    return transcriptIsConversational(transcriptPath, format, projectDir);
   } catch {
     // Unparseable / odd content: fall through to decideBlock (never trap).
     return false;
