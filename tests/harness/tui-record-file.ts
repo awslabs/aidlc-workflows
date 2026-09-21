@@ -14,7 +14,7 @@ export function validatePrivateStat(
   path: string,
   stat: Pick<fs.BigIntStats, "uid" | "mode" | "isSymbolicLink" | "isDirectory" | "isFile">,
   kind: "directory" | "file",
-  uid: number | undefined = process.getuid?.(),
+  uid: number | undefined = process.platform === "win32" ? undefined : process.getuid?.(),
 ): void {
   if (stat.isSymbolicLink()) throw unsafe(path, "symlink/reparse point is not allowed");
   if (kind === "directory" ? !stat.isDirectory() : !stat.isFile()) {
