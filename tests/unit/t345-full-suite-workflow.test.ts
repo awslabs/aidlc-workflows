@@ -120,7 +120,9 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.live_kiro_linux).toBeUndefined();
     expect(job.environment).toBe("nightly-live");
     expect(job.if).toBe("vars.AIDLC_NIGHTLY_KIRO_API == '1'");
-    expect(job.env?.KIRO_API_KEY).toBe(`\${{ secrets.KIRO_API_KEY }}`);
+    for (const step of job.steps.filter((step) => step.name === "Require Kiro API authentication" || step.name?.startsWith("Run kiro-"))) {
+      expect(step.env?.KIRO_API_KEY).toBe(`\${{ secrets.KIRO_API_KEY }}`);
+    }
     expect(workflow.on.workflow_call.secrets.KIRO_API_KEY.required).toBe(false);
     expect(job.permissions?.["id-token"]).not.toBe("write");
     expect(job.steps.some((step) => step.uses?.startsWith("aws-actions/"))).toBe(false);
@@ -128,6 +130,42 @@ describe("t345 complete nightly coverage", () => {
     expect(preflight.run).toContain('test -n "$KIRO_API_KEY"');
     expect(preflight.run).toContain("kiro-cli whoami");
     expect(workflow.jobs.live_kiro_windows.strategy?.matrix.family).toEqual(["kiro-ide"]);
+  });
+
+  test("third-party API secrets are restricted to authenticated preflights and test execution", () => {
+    const exposed: string[] = [];
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      for (const value of Object.values(job.env ?? {})) expect(value, `${name} job env`).not.toContain("secrets.");
+      for (const step of job.steps) {
+        const referenced = /\b(?:KIRO_API_KEY|CURSOR_API_KEY)\b/.test(JSON.stringify(step));
+        if (referenced) {
+          expect(step.name, `${name} secret-bearing step`).toMatch(/^(?:Require |Run )/);
+          exposed.push(`${name}/${step.name}`);
+        }
+        if (/install/i.test(step.name ?? "") || /\b(?:bun|npm) install\b|\bcurl\b|\birm\b/.test(step.run ?? "")) {
+          expect(step.env?.KIRO_API_KEY).toBeUndefined();
+          expect(step.env?.CURSOR_API_KEY).toBeUndefined();
+          expect(JSON.stringify(step.env ?? {})).not.toMatch(/secrets\.(?:KIRO_API_KEY|CURSOR_API_KEY)/);
+        }
+      }
+    }
+    expect(exposed.sort()).toEqual([
+      "live_hosted/Require multi-provider Cursor credentials and executable",
+      "live_hosted/Run multi-provider",
+      "live_kiro_api/Require Kiro API authentication",
+      "live_kiro_api/Run kiro-acp",
+      "live_kiro_api/Run kiro-tui",
+      "live_cursor/Require Cursor credentials and executable",
+      "live_cursor/Run cursor",
+    ].sort());
+    const preflight = workflow.jobs.live_hosted.steps.find((step) => step.name === "Require multi-provider Cursor credentials and executable")!;
+    expect(preflight.if).toBe("matrix.family == 'multi-provider' && vars.AIDLC_NIGHTLY_CURSOR == '1'");
+    expect(preflight.env?.CURSOR_API_KEY).toBe(`\${{ secrets.CURSOR_API_KEY }}`);
+    const run = workflow.jobs.live_hosted.steps.find((step) => step.name === "Run multi-provider")!;
+    expect(run.env?.CURSOR_API_KEY).toBe(`\${{ vars.AIDLC_NIGHTLY_CURSOR == '1' && secrets.CURSOR_API_KEY || '' }}`);
+    for (const step of workflow.jobs.live_cursor.steps.filter((step) => step.name?.startsWith("Require ") || step.name === "Run cursor")) {
+      expect(step.env?.CURSOR_API_KEY).toBe(`\${{ secrets.CURSOR_API_KEY }}`);
+    }
   });
 
   test("self-hosted Windows inventories its desktop and uses Windows PowerShell 5.1 for every command", () => {

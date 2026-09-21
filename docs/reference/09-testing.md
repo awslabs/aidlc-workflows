@@ -1077,6 +1077,8 @@ Provision these repository/environment settings before expecting a green run:
   API, Kiro IDE or Cursor legs remain excluded/incomplete but do not block releases.
 - Environment `nightly-live` holds secret `AWS_NIGHTLY_TEST_ROLE_ARN` (required)
   and optional `KIRO_API_KEY` and `CURSOR_API_KEY` for their enabled families.
+  Kiro/Cursor API keys enter only authenticated preflight and test-run steps,
+  never job-level environments or dependency/CLI installer steps.
   The AWS role's OIDC trust must be scoped to
   this repository's `environment:nightly-live` subject. Set `MaxSessionDuration`
   to at least six hours; each assumption requests 21,600 seconds.
