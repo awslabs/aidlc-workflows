@@ -19,8 +19,8 @@ candidate merely because another model assigned it a high priority.
 Then close coverage gaps across all categories. Review the code that exists,
 not the PR description:
 
-- Establish accepted project direction from repository instructions, linked
-  issue context, PR discussion, base-branch contracts, and substantive
+- Establish accepted project direction from repository instructions, PR
+  discussion, base-branch contracts, and substantive
   maintainer decisions. Do not relitigate accepted direction or a specifically
   accepted finding, including an accepted P0 or P1. Report only when the current
   head expands beyond the accepted trigger or impact, or contradicts a later

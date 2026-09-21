@@ -34,8 +34,8 @@ Trace changes that weaken the intent-to-software chain. Look for:
 - output that stops before producing or validating the software outcome the
   intent requested.
 
-Repository instructions, accepted design documents, linked issues, and
-substantive maintainer decisions define the exact direction for a change. Do
+Repository instructions, accepted design documents, and substantive
+maintainer decisions define the exact direction for a change. Do
 not report a philosophical preference or relitigate an accepted tradeoff.
 A candidate requires a changed execution path and a specific consequence for
 intent identity, scope, lifecycle continuity, harness consistency, user

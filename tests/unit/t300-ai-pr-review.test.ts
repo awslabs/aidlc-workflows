@@ -94,7 +94,7 @@ function validate(raw: string): StructuredReview {
 }
 
 describe("t300 adversarial AI PR review", () => {
-  test("discussion builder collects PR threads, prior reviews, and linked issue comments", () => {
+  test("discussion builder collects PR threads and prior reviews", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-gh-"));
     const bin = join(root, "bin");
     const output = join(root, "discussion.json");
@@ -109,11 +109,7 @@ const comment = (id, login, association, body) => ({
   created_at: "2026-09-20T00:00:00Z", updated_at: "2026-09-20T00:00:00Z"
 });
 let value;
-if (args.includes("graphql")) {
-  value = [{ data: { repository: { pullRequest: { closingIssuesReferences: {
-    nodes: [{ number: 7 }], pageInfo: { hasNextPage: false, endCursor: null }
-  } } } } }];
-} else if (args.includes("issues/42/comments")) {
+if (args.includes("issues/42/comments")) {
   value = [[comment(1, "maintainer", "MEMBER", "The P1 is accepted.")]];
 } else if (args.includes("pulls/42/reviews")) {
   value = [[
@@ -134,13 +130,6 @@ if (args.includes("graphql")) {
     path: "core/example.ts", line: 42, side: "RIGHT", commit_id: "${HEAD}",
     in_reply_to_id: null
   }]];
-} else if (args.includes("issues/7/comments")) {
-  value = [[comment(6, null, "NONE", "Historical context from a deleted account.")]];
-} else if (args.includes("issues/7")) {
-  value = {
-    number: 7, title: "Selected design", state: "closed", body: "Use option A.",
-    user: user("maintainer"), author_association: "MEMBER"
-  };
 } else {
   throw new Error("unexpected gh invocation: " + args);
 }
@@ -153,8 +142,13 @@ process.stdout.write(JSON.stringify(value));
     expect(discussion.issueComments[0].actor.maintainer).toBe(true);
     expect(discussion.reviews.map((entry: { id: number }) => entry.id)).toEqual([2]);
     expect(discussion.reviewComments[0].actor.maintainer).toBe(true);
-    expect(discussion.linkedIssues[0].number).toBe(7);
-    expect(discussion.linkedIssues[0].comments[0].actor.login).toBe("[deleted]");
+    expect(Object.keys(discussion)).toEqual([
+      "version",
+      "pullRequest",
+      "issueComments",
+      "reviews",
+      "reviewComments",
+    ]);
     expect(currentReviews.map((entry: { id: number }) => entry.id)).toEqual([3]);
   });
 
@@ -207,17 +201,6 @@ process.stdout.write(JSON.stringify(value));
         commit_id: HEAD,
         in_reply_to_id: null,
       }],
-      [{
-        issue: {
-          number: 1252,
-          title: "Accepted design",
-          state: "closed",
-          body: "The maintainers selected the intent-scoped option.",
-          user: user("maintainer"),
-          author_association: "MEMBER",
-        },
-        comments: [comment(7, "maintainer", "MEMBER", "Keep this compatibility behavior.")],
-      }],
     );
 
     expect(normalized.discussion.issueComments[0].actor.maintainer).toBe(true);
@@ -225,7 +208,6 @@ process.stdout.write(JSON.stringify(value));
     expect(normalized.discussion.reviews.map(entry => entry.id)).toEqual([3, 5]);
     expect(normalized.currentAiReviews.map(entry => entry.id)).toEqual([4]);
     expect(normalized.discussion.reviewComments[0].actor.maintainer).toBe(true);
-    expect(normalized.discussion.linkedIssues[0].comments[0].actor.maintainer).toBe(true);
   });
 
   test("strict JSON is rendered as a context-bound REQUEST_CHANGES review", () => {
@@ -1002,6 +984,15 @@ process.stdout.write(JSON.stringify(value));
     expect(modelStep).toContain('"fable" \\\n            "User-experience review"');
     expect(modelStep).toContain('"fable" \\\n            "Direction review"');
     expect(modelStep).toContain('"fable" \\\n            "Final review judge"');
+    expect(modelStep).toContain(
+      '"fable" \\\n            "User-experience review" \\\n            "high"',
+    );
+    expect(modelStep).toContain(
+      '"fable" \\\n            "Direction review" \\\n            "high"',
+    );
+    expect(modelStep).toContain(
+      '"fable" \\\n            "Final review judge" \\\n            "high"',
+    );
     expect(modelStep).toContain("sudo -u ai-pr-review -- perl -i -pe");
     expect(modelStep).toContain('sudo -u ai-pr-review test -r "$destination"');
     expect(modelStep.indexOf("sudo -u ai-pr-review -- perl -i -pe")).toBeLessThan(

@@ -100,22 +100,12 @@ export interface DiscussionEntry {
   replyToId?: number | null;
 }
 
-export interface LinkedIssueDiscussion {
-  number: number;
-  title: string;
-  state: string;
-  body: string;
-  actor: DiscussionActor;
-  comments: DiscussionEntry[];
-}
-
 export interface ReviewDiscussion {
   version: 1;
   pullRequest: number;
   issueComments: DiscussionEntry[];
   reviews: DiscussionEntry[];
   reviewComments: DiscussionEntry[];
-  linkedIssues: LinkedIssueDiscussion[];
 }
 
 export interface Finding {
@@ -281,10 +271,6 @@ export function normalizeDiscussion(
   issueCommentsRaw: Record<string, unknown>[],
   reviewsRaw: Record<string, unknown>[],
   reviewCommentsRaw: Record<string, unknown>[],
-  linkedIssuesRaw: Array<{
-    issue: Record<string, unknown>;
-    comments: Record<string, unknown>[];
-  }>,
 ): { discussion: ReviewDiscussion; currentAiReviews: DiscussionEntry[] } {
   if (!Number.isInteger(pullRequest) || pullRequest < 1) {
     throw new Error("pull request number must be a positive integer");
@@ -304,59 +290,8 @@ export function normalizeDiscussion(
     reviewComments: reviewCommentsRaw
       .map(value => commentEntry(value, "review-comment"))
       .sort(byTimeAndId),
-    linkedIssues: linkedIssuesRaw
-      .map(({ issue, comments }) => ({
-        number: integer(issue.number, "linked issue number"),
-        title: text(issue.title),
-        state: text(issue.state),
-        body: text(issue.body),
-        actor: actor(issue.user, issue.author_association),
-        comments: comments
-          .map(value => commentEntry(value, "issue-comment"))
-          .sort(byTimeAndId),
-      }))
-      .sort((left, right) => left.number - right.number),
   };
   return { discussion, currentAiReviews };
-}
-
-function linkedIssueNumbers(
-  repository: string,
-  pullRequest: number,
-  ghExecutable = "gh",
-): number[] {
-  const [owner, name, extra] = repository.split("/");
-  if (!owner || !name || extra) throw new Error("repository must be owner/name");
-  const query = `query($owner:String!,$name:String!,$number:Int!,$endCursor:String) {
-    repository(owner:$owner,name:$name) {
-      pullRequest(number:$number) {
-        closingIssuesReferences(first:100,after:$endCursor) {
-          nodes { number }
-          pageInfo { hasNextPage endCursor }
-        }
-      }
-    }
-  }`;
-  const pages = gh([
-    "api", "graphql", "--paginate", "--slurp",
-    "-f", `query=${query}`,
-    "-F", `owner=${owner}`,
-    "-F", `name=${name}`,
-    "-F", `number=${pullRequest}`,
-  ], ghExecutable);
-  if (!Array.isArray(pages)) throw new Error("linked issue query did not return pages");
-  const numbers = new Set<number>();
-  for (const [index, pageValue] of pages.entries()) {
-    const page = record(pageValue, `linked issue page ${index}`);
-    const data = record(page.data, `linked issue page ${index} data`);
-    const repositoryValue = record(data.repository, `linked issue page ${index} repository`);
-    const pr = record(repositoryValue.pullRequest, `linked issue page ${index} pull request`);
-    const references = record(pr.closingIssuesReferences, `linked issue page ${index} references`);
-    for (const node of records(references.nodes, `linked issue page ${index} nodes`)) {
-      numbers.add(integer(node.number, "linked issue number"));
-    }
-  }
-  return [...numbers].sort((left, right) => left - right);
 }
 
 export function buildDiscussion(
@@ -379,20 +314,12 @@ export function buildDiscussion(
     `repos/${repository}/pulls/${pullRequest}/comments`,
     ghExecutable,
   );
-  const linkedIssues = linkedIssueNumbers(repository, pullRequest, ghExecutable).map(number => ({
-    issue: record(
-      gh(["api", `repos/${repository}/issues/${number}`], ghExecutable),
-      `linked issue ${number}`,
-    ),
-    comments: paginatedRecords(`repos/${repository}/issues/${number}/comments`, ghExecutable),
-  }));
   const normalized = normalizeDiscussion(
     pullRequest,
     head,
     issueComments,
     reviews,
     reviewComments,
-    linkedIssues,
   );
   writeFileSync(output, `${JSON.stringify(normalized.discussion, null, 2)}\n`);
   writeFileSync(currentAiOutput, `${JSON.stringify(normalized.currentAiReviews, null, 2)}\n`);
