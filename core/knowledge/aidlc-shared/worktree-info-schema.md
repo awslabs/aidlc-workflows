@@ -148,11 +148,12 @@ The slug is the kebab-case Bolt identifier threaded through every worktree comma
 | Exit | Meaning | stdout | stderr |
 |------|---------|--------|--------|
 | 0 | Hit — JSON emitted | JSON object (see below) | (empty) |
-| 1 | No `WORKTREE_CREATED` for slug (or audit absent), or malformed block, or the block's `Branch name`/`Worktree path` do not describe the canonical Bolt for the selected intent | (empty) | one-line error message |
+| 1 | No `WORKTREE_CREATED` for slug (or audit absent), or malformed block, or the block's `Branch name`/`Worktree path` do not describe the canonical Bolt for the selected intent, or its `Timestamp` is not an ISO 8601 UTC instant | (empty) | one-line error message |
 
-Identity validation uses these stable refusals in check order (branch name, registry identity, worktree path). `<owner>` renders as `intent <record>` or `the selected workspace`. Each refusal emits one line on stderr and leaves stdout empty; the rejected audit bytes never appear on either stream.
+Identity validation uses these stable refusals in check order (timestamp, branch name, registry identity, worktree path). `<owner>` renders as `intent <record>` or `the selected workspace`. Each refusal emits one line on stderr and leaves stdout empty; the rejected audit bytes never appear on either stream; `<ts>` in the later refusals is only ever a validated timestamp.
 
 ```text
+error: malformed WORKTREE_CREATED block for Bolt <slug>: Timestamp is not an ISO 8601 UTC instant
 error: malformed WORKTREE_CREATED block at <ts>: Branch name does not name Bolt <slug> for <owner>
 error: WORKTREE_CREATED block at <ts> names an intent-scoped Bolt, but <owner> has no registry identity (uuid); adopt or re-create the intent before Construction
 error: malformed WORKTREE_CREATED block at <ts>: Worktree path is not the canonical directory <dir> of Bolt <name>
@@ -179,7 +180,7 @@ Field semantics:
 - **`path`** — canonical absolute location for the validated identity: `<projectDir>/.aidlc/worktrees/bolt-<id8>_<slug>` for an intent-scoped Bolt or `<projectDir>/.aidlc/worktrees/bolt-<slug>` for a legacy Bolt. `info` reconstructs this value, never echoes it. The audited `**Worktree path**:` (project-relative in new rows, absolute in legacy rows) must resolve to that location under canonical path comparison (realpath, separator-normalised), or `info` refuses with the worktree-path refusal above. The user `cd`s here to inspect a paused Bolt.
 - **`branch_name`** — canonical Bolt name for the validated identity, not free text. The audited `**Branch name**:` must parse with `parseBoltName`, its slug must equal `--slug`, and an intent-scoped name's id8 must equal the selected intent's registry id8; malformed names or identity mismatches refuse with the branch-name refusal above, and an intent-scoped name under an intent with no registry UUID fails closed. New branches use `bolt-<id8>_<slug>`; pre-upgrade legacy branches retain `bolt-<slug>`. Never construct it from `slug`: the tool reconstructs it, not the orchestrator.
 - **`intent_id8`** — the validated id8 of an intent-scoped name, else the canonical legacy directory's metadata `intentId8`, else `null`.
-- **`audit_timestamp`** — ISO 8601 timestamp of the matching `WORKTREE_CREATED` block. Useful for the orchestrator to reason about freshness; not currently surfaced in the AUQ prompt.
+- **`audit_timestamp`** — ISO 8601 UTC timestamp of the matching `WORKTREE_CREATED` block, validated before output (a row whose `**Timestamp**:` is not `YYYY-MM-DDTHH:MM:SS[.fff]Z` is refused). Useful for the orchestrator to reason about freshness; not currently surfaced in the AUQ prompt.
 - **`merge_held`** — boolean reflecting the `Merge-Held` field in the per-Bolt forked state at `<path>/<record>/aidlc-state.md` (`true` only if the file exists AND the field reads `true`; absence resolves to `false`). The orchestrator reads this on resume to decide whether dispatching `aidlc-bolt complete --merge --slug <slug>` is safe. The held state is set by `aidlc-bolt hold-merge --slug <slug>` before a multi-failure halt-and-ask sequence opens and cleared by `aidlc-bolt release-merge --slug <slug>` once all sibling AUQs resolve.
 
 ## Most-recent semantics

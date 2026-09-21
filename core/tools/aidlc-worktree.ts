@@ -86,6 +86,8 @@ import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts
 // this regex across conceptual domains; a one-line constant beats a cross-
 // module import for a tool-local check.
 const SLUG_RE = /^[a-z][a-z0-9-]*$/;
+// The emitter uses isoTimestamp() (YYYY-MM-DDTHH:MM:SSZ); fixtures may carry fractional seconds.
+const AUDIT_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
 
 const VALID_STRATEGIES = new Set(["squash", "merge", "rebase"]);
 const WORKTREE_META_FILENAME = "worktree-meta.json";
@@ -3882,6 +3884,12 @@ function handleInfo(args: string[]): void {
   if (!match) {
     process.stderr.write(
       `error: no WORKTREE_CREATED audit entry for slug ${slug}\n`
+    );
+    process.exit(1);
+  }
+  if (!AUDIT_TIMESTAMP_RE.test(match.timestamp)) {
+    process.stderr.write(
+      `error: malformed WORKTREE_CREATED block for Bolt ${slug}: Timestamp is not an ISO 8601 UTC instant\n`
     );
     process.exit(1);
   }
