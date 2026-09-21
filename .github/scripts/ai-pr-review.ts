@@ -13,10 +13,8 @@ const MAX_CHANGED_FILES = 500;
 const MAX_REVIEW_BYTES = 100_000;
 const CURRENT_AI_REVIEWS_FILE = "current-ai-reviews.json";
 const DISCUSSION_FILE = "discussion.json";
-const FOLLOW_UP_FILE = "follow-up.json";
 const AI_REVIEW_MARKER = "<!-- ai-pr-review context=";
 const AI_REVIEW_DECISION_MARKER = "<!-- ai-pr-review decision=";
-const AI_FINDING_TITLE_MARKER = "<!-- ai-pr-finding title=";
 
 export type Priority = "P0" | "P1" | "P2" | "P3";
 export type FindingCategory =
@@ -158,22 +156,9 @@ export interface ReviewDiscussion {
   reviewComments: DiscussionEntry[];
 }
 
-export interface FollowUpContext {
-  version: 1;
-  mode: "initial" | "follow-up";
-  previousReview: {
-    id: number;
-    head: string;
-    createdAt: string;
-    findingTitles: string[];
-  } | null;
-  changedFilesSincePrevious: string[];
-}
-
 export interface Finding {
   priority: Priority;
   category: FindingCategory;
-  origin: "current-change" | "retained" | "late-discovery";
   title: string;
   evidence: FindingEvidence[];
   problem: string;
@@ -680,9 +665,7 @@ function contextDigest(root: string): string {
       if (
         contextPath === "context-id.txt" ||
         contextPath === CURRENT_AI_REVIEWS_FILE ||
-        contextPath === DISCUSSION_FILE ||
-        contextPath === FOLLOW_UP_FILE ||
-        contextPath === "follow-up.diff"
+        contextPath === DISCUSSION_FILE
       ) continue;
       const stats = statSync(path);
       if (stats.isDirectory()) visit(path);
@@ -698,127 +681,11 @@ function contextDigest(root: string): string {
   return hash.digest("hex");
 }
 
-function previousReviewedHead(
-  discussion: ReviewDiscussion | undefined,
-  currentAiReviews: DiscussionEntry[] | undefined,
-  head: string,
-  repoDir: string,
-): DiscussionEntry | undefined {
-  const priorReviews = discussion && Array.isArray(discussion.reviews)
-    ? discussion.reviews
-    : [];
-  const currentReviews = Array.isArray(currentAiReviews) ? currentAiReviews : [];
-  return [...priorReviews, ...currentReviews]
-    .filter(entry => entry.kind === "ai-review")
-    .sort(byTimeAndId)
-    .reverse()
-    .find(entry => {
-      if (!entry.commitId || !/^[0-9a-f]{40}$/.test(entry.commitId)) return false;
-      try {
-        git(["merge-base", "--is-ancestor", entry.commitId, head], "utf8", repoDir);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-}
-
-function findingTitles(body: string): string[] {
-  const titles: string[] = [];
-  const pattern = /^<!-- ai-pr-finding title=([A-Za-z0-9_-]+) -->$/gm;
-  for (const match of body.matchAll(pattern)) {
-    try {
-      const title = Buffer.from(match[1], "base64url").toString("utf8");
-      if (
-        title.length > 0 &&
-        title.length <= 160 &&
-        Buffer.from(title, "utf8").toString("base64url") === match[1]
-      ) {
-        titles.push(title);
-      }
-    } catch {
-      // Ignore malformed markers from untrusted historical review content.
-    }
-  }
-  return titles;
-}
-
-function authorResponse(
-  previousHead: string,
-  head: string,
-  repoDir: string,
-): { diff: Buffer; changed: ReturnType<typeof parseNameStatus> } {
-  const commits = (git(
-    ["rev-list", "--reverse", "--first-parent", "--no-merges", `${previousHead}..${head}`],
-    "utf8",
-    repoDir,
-  ) as string).split("\n").filter(Boolean);
-  const diffs: Buffer[] = [];
-  const changed: ReturnType<typeof parseNameStatus> = [];
-  for (const commit of commits) {
-    const parent = (git(["rev-parse", `${commit}^`], "utf8", repoDir) as string).trim();
-    diffs.push(git(
-      ["diff", "--binary", "--find-renames", "--unified=0", parent, commit],
-      undefined,
-      repoDir,
-    ) as Buffer);
-    changed.push(...parseNameStatus(
-      git(
-        ["diff", "--name-status", "-z", "--find-renames", parent, commit],
-        undefined,
-        repoDir,
-      ) as Buffer,
-    ));
-  }
-  return { diff: Buffer.concat(diffs), changed };
-}
-
-function followUpContext(
-  outputDir: string,
-  head: string,
-  repoDir: string,
-  discussion?: ReviewDiscussion,
-  currentAiReviews?: DiscussionEntry[],
-): FollowUpContext {
-  const previous = previousReviewedHead(discussion, currentAiReviews, head, repoDir);
-  if (!previous?.commitId) {
-    writeFileSync(join(outputDir, "follow-up.diff"), "");
-    return {
-      version: 1,
-      mode: "initial",
-      previousReview: null,
-      changedFilesSincePrevious: [],
-    };
-  }
-  const response = authorResponse(previous.commitId, head, repoDir);
-  const diff = response.diff;
-  writeFileSync(join(outputDir, "follow-up.diff"), diff);
-  return {
-    version: 1,
-    mode: "follow-up",
-    previousReview: {
-      id: previous.id,
-      head: previous.commitId,
-      createdAt: previous.createdAt,
-      findingTitles: findingTitles(previous.body),
-    },
-    changedFilesSincePrevious: [
-      ...new Set(
-        response.changed.flatMap(
-          file => [file.previousPath, file.path].filter(Boolean) as string[],
-        ),
-      ),
-    ].sort(),
-  };
-}
-
 export function buildContext(
   base: string,
   head: string,
   outputDir: string,
   repoDir = process.cwd(),
-  discussion?: ReviewDiscussion,
-  currentAiReviews?: DiscussionEntry[],
 ): ChangedFileManifest {
   assertSha(base, "base");
   assertSha(head, "head");
@@ -850,34 +717,6 @@ export function buildContext(
   });
   const manifest = { base, head, files };
   writeFileSync(join(outputDir, "changed-files.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-  let reviewDiscussion = discussion;
-  if (!reviewDiscussion) {
-    try {
-      reviewDiscussion = JSON.parse(
-        readFileSync(join(outputDir, DISCUSSION_FILE), "utf8"),
-      ) as ReviewDiscussion;
-    } catch {
-      reviewDiscussion = undefined;
-    }
-  }
-  let priorCurrentReviews = currentAiReviews;
-  if (!priorCurrentReviews) {
-    try {
-      priorCurrentReviews = JSON.parse(
-        readFileSync(join(outputDir, CURRENT_AI_REVIEWS_FILE), "utf8"),
-      ) as DiscussionEntry[];
-    } catch {
-      priorCurrentReviews = undefined;
-    }
-  }
-  const followUp = followUpContext(
-    outputDir,
-    head,
-    repoDir,
-    reviewDiscussion,
-    priorCurrentReviews,
-  );
-  writeFileSync(join(outputDir, FOLLOW_UP_FILE), `${JSON.stringify(followUp, null, 2)}\n`);
   const digest = contextDigest(outputDir);
   writeFileSync(join(outputDir, "context-id.txt"), `${digest}\n`);
   return manifest;
@@ -911,7 +750,6 @@ export function validateStructuredReview(
   expectedHead: string,
   manifest: ChangedFileManifest,
   metadata: ReviewMetadata,
-  followUp?: FollowUpContext,
 ): StructuredReview {
   assertSha(expectedBase, "base");
   assertSha(expectedHead, "head");
@@ -1053,13 +891,6 @@ export function validateStructuredReview(
     ) {
       throw new Error(`findings[${index}].category is invalid`);
     }
-    if (
-      finding.origin !== "current-change" &&
-      finding.origin !== "retained" &&
-      finding.origin !== "late-discovery"
-    ) {
-      throw new Error(`findings[${index}].origin is invalid`);
-    }
 
     if (!Array.isArray(finding.evidence) || finding.evidence.length === 0) {
       throw new Error(`findings[${index}].evidence must be non-empty`);
@@ -1105,31 +936,12 @@ export function validateStructuredReview(
       }
       return { source: "DIFF", path, line, side };
     });
-    const latestPaths = new Set(followUp?.changedFilesSincePrevious ?? []);
-    const outsideLatestChange = followUp?.mode === "follow-up" &&
-      evidence.some(item => item.source === "DIFF" || item.source === "DIFF_FILE") &&
-      evidence.every(item =>
-        item.source !== "DIFF" && item.source !== "DIFF_FILE"
-          ? true
-          : !latestPaths.has(item.path)
-      );
-    const title = requiredText(finding.title, `findings[${index}].title`, 160);
-    const retained = outsideLatestChange &&
-      (followUp?.previousReview?.findingTitles ?? []).includes(title);
-    const expectedOrigin = outsideLatestChange
-      ? retained ? "retained" : "late-discovery"
-      : "current-change";
-    if (finding.origin !== expectedOrigin) {
-      throw new Error(
-        `findings[${index}].origin must be ${expectedOrigin} for the reviewed commit range`,
-      );
-    }
 
+    const title = requiredText(finding.title, `findings[${index}].title`, 160);
     if (/[\r\n]/.test(title)) throw new Error(`findings[${index}].title must be one line`);
     return {
       priority,
       category: category as FindingCategory,
-      origin: finding.origin,
       title,
       evidence,
       problem: requiredText(finding.problem, `findings[${index}].problem`, 3000),
@@ -1280,16 +1092,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
   const appendFinding = (finding: Finding): void => {
     lines.push(
       "",
-      `${AI_FINDING_TITLE_MARKER}${
-        Buffer.from(finding.title, "utf8").toString("base64url")
-      } -->`,
-      `**${finding.priority}: ${markdownText(finding.title)}${
-        finding.origin === "retained"
-          ? " · Retained"
-          : finding.origin === "late-discovery"
-          ? " · Late discovery"
-          : ""
-      }**`,
+      `**${finding.priority}: ${markdownText(finding.title)}**`,
       "",
       `Evidence: ${finding.evidence
         .map(item => {
@@ -1409,14 +1212,6 @@ function main(): void {
     const output = argValue(args, "--output");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ChangedFileManifest;
     const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as ReviewMetadata;
-    let followUp: FollowUpContext | undefined;
-    try {
-      followUp = JSON.parse(
-        readFileSync(join(dirname(manifestPath), FOLLOW_UP_FILE), "utf8"),
-      ) as FollowUpContext;
-    } catch {
-      followUp = undefined;
-    }
     lastValidateInput = readFileSync(input, "utf8");
     const review = validateStructuredReview(
       lastValidateInput,
@@ -1424,7 +1219,6 @@ function main(): void {
       head,
       manifest,
       metadata,
-      followUp,
     );
     const payload = renderReview(review, contextId);
     writeFileSync(output, `${JSON.stringify(payload, null, 2)}\n`);
