@@ -74,11 +74,15 @@ export function readDarwinProcessIdentity(
   pid: number,
   api: DarwinIdentityApi,
   buffer = new Uint8Array(DARWIN_BSDINFO_SIZE),
+  mode: "required" | "enumeration" = "required",
 ): DarwinProcessIdentity | null {
   validatePid(pid);
   if (buffer.byteLength !== DARWIN_BSDINFO_SIZE) throw new Error("Darwin process identity requires a 136-byte buffer");
   const count = api.tui_pidinfo(pid, buffer);
   if (count === -3) return null; // ESRCH
+  // System-wide scans encounter other users' and protected processes. Only the
+  // enumeration caller may exclude these; required ownership reads fail closed.
+  if (count === -1 && mode === "enumeration") return null; // EPERM
   if (count < 0) throw new Error(`proc_pidinfo(${pid}) failed: errno ${-count}`);
   if (count !== DARWIN_BSDINFO_SIZE) throw new Error(`proc_pidinfo(${pid}) returned ${count} bytes, expected 136`);
   return parseDarwinProcBsdInfo(pid, buffer);

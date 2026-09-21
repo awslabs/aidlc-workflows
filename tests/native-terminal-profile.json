@@ -299,6 +299,10 @@
               "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
             },
             {
+              "classname": "Darwin native process identity",
+              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+            },
+            {
               "classname": "Linux native process identity",
               "name": "comm delimiters and 64-bit ticks cannot alias a different process"
             },
@@ -1030,6 +1034,10 @@
             {
               "classname": "Darwin native process identity",
               "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
+            },
+            {
+              "classname": "Darwin native process identity",
+              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
             },
             {
               "classname": "Linux native process identity",
@@ -1779,6 +1787,10 @@
             {
               "classname": "Darwin native process identity",
               "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
+            },
+            {
+              "classname": "Darwin native process identity",
+              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
             },
             {
               "classname": "Linux native process identity",

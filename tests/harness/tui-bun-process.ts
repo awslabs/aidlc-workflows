@@ -559,7 +559,7 @@ async function containDarwin(parentPid: number): Promise<Containment> {
     for (let i = 0; i < bytes / 4; i++) {
       withinDeadline(deadline);
       if (pids[i] <= 0) continue;
-      const identity = readIdentity(pids[i]);
+      const identity = readDarwinProcessIdentity(pids[i], api, identityBuffer, "enumeration");
       if (identity) result.set(identity.pid, identity);
     }
     for (const identity of result.values()) {

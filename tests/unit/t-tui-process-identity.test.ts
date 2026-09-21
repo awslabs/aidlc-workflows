@@ -9,10 +9,12 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   acquireNativeLock,
+  type DarwinIdentityApi,
   getNativeProcessIdentity,
   getNativeProcessIdentityWithBun,
   parseDarwinProcBsdInfo,
   parseLinuxNativeProcessIdentity,
+  readDarwinProcessIdentity,
   readLinuxNativeProcessIdentity,
   readWindowsNativeProcessIdentity,
   type WindowsIdentityApi,
@@ -105,6 +107,24 @@ describe("Darwin native process identity", () => {
     for (const size of [0, 128, 135, 137]) {
       expect(() => parseDarwinProcBsdInfo(42, new Uint8Array(size))).toThrow("136-byte buffer");
     }
+  });
+
+  test("system enumeration excludes EPERM while required identities and other errors fail closed", () => {
+    const api: DarwinIdentityApi = {
+      tui_pidinfo(pid, buffer) {
+        if (pid === 43) return -1; // Foreign/protected process: EPERM.
+        if (pid === 44) return -3; // Exited during enumeration: ESRCH.
+        if (pid === 45) return -5; // EIO must never count as absence.
+        new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(12, pid, true);
+        return 136;
+      },
+    };
+    const snapshot = [42, 43, 44]
+      .map((pid) => readDarwinProcessIdentity(pid, api, undefined, "enumeration"))
+      .filter((identity) => identity !== null);
+    expect(snapshot.map((identity) => identity.pid)).toEqual([42]);
+    expect(() => readDarwinProcessIdentity(43, api)).toThrow("errno 1");
+    expect(() => readDarwinProcessIdentity(45, api, undefined, "enumeration")).toThrow("errno 5");
   });
 });
 
