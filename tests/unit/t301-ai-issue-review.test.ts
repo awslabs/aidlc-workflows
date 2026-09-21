@@ -769,6 +769,8 @@ describe("t301 AI issue intent review", () => {
     expect(WORKFLOW).toContain("--disable shell_tool");
     expect(WORKFLOW).toContain("--disable unified_exec");
     expect(WORKFLOW).toContain("--disable multi_agent");
+    expect(WORKFLOW).toContain(`printf '%s' "$prompt"`);
+    expect(WORKFLOW).toContain("status=$" + "{PIPESTATUS[1]}");
     expect(WORKFLOW).toContain("The final judge has no tools");
     expect(WORKFLOW).toContain('cat ".ai-issue-review-context/$context_file"');
     expect(WORKFLOW).toContain('cat ".ai-issue-review-lenses/$lens.md"');

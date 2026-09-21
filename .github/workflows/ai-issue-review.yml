@@ -344,7 +344,8 @@ jobs:
               else
                 sol_tool_args=()
               fi
-              sudo -u ai-issue-review -- timeout \
+              printf '%s' "$prompt" \
+                | sudo -u ai-issue-review -- timeout \
                 --signal=TERM \
                 --kill-after=30s \
                 15m \
@@ -365,9 +366,9 @@ jobs:
                 "${sol_tool_args[@]}" \
                 "${sol_output_args[@]}" \
                 --output-last-message "$output_file" \
-                "$prompt" \
+                - \
                 > /dev/null 2>&1
-              status=$?
+              status=${PIPESTATUS[1]}
             elif [ "$runtime" = "fable" ]; then
               if [ -n "$schema" ]; then
                 fable_output_args=(--output-format json --json-schema "$schema")
