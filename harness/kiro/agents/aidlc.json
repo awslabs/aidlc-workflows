@@ -56,6 +56,7 @@
   },
   "resources": [
     "skill://.kiro/skills/*/SKILL.md",
+    "file://.kiro/steering/aidlc-onboarding.md",
     "file://aidlc/spaces/default/memory/**/*.md",
     "file://AGENTS.md"
   ],

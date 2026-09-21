@@ -3,7 +3,7 @@
 // The unified packager copies core/ → dist/codex/.codex/ (rules → aidlc-rules)
 // and runs graph compile, then calls this emit() for everything that is CODE,
 // not declarative data: the Codex config, hook wiring, trust pre-seed, the
-// AGENTS.md merge, the per-agent TOML transpositions, and the .agents/skills/
+// onboarding skills-path rewrite, per-agent TOML transpositions, and .agents/skills/
 // tree (orchestrator + generated runners + session skills + openai.yaml guards).
 //
 // Ported faithfully from the proven scripts/package-codex.ts emission half
@@ -24,8 +24,6 @@ import {
   absorbReviewerKnowledge,
   injectDelegatedKnowledgePreflight,
 } from "../../scripts/agent-knowledge.ts";
-import { renderOnboarding } from "../../scripts/onboarding.ts";
-import onboardingFills from "./onboarding.fills.ts";
 import type { Tier } from "../../core/tools/aidlc-tiers.ts";
 import {
   modelAgentName,
@@ -91,10 +89,18 @@ function emitHooksJson(
   return JSON.stringify({ hooks }, null, 2) + "\n";
 }
 
-function emitConfigToml(): string {
-  return `# dist/codex shipped config — copy into the project's .codex/config.toml
-# (trusted projects) or merge into ~/.codex/config.toml.
-#
+function emitConfigToml(onboarding: string): string {
+  if (onboarding.includes("'''")) {
+    throw new Error("Codex onboarding contains the TOML multiline literal delimiter (''').");
+  }
+  return `# dist/codex shipped config — project-scoped; copy into .codex/config.toml
+# of a trusted project. Do not merge this file into ~/.codex/config.toml:
+# developer_instructions carries this project's AI-DLC onboarding.
+
+# AI-DLC Codex onboarding, injected into every session (same content as .codex/onboarding.md).
+developer_instructions = '''
+${onboarding}'''
+
 # Model/provider: intentionally omitted. The project inherits the provider,
 # authentication, model, context window, and reasoning effort selected in the
 # user's Codex configuration. Agent roles also inherit that model; balanced
@@ -333,34 +339,10 @@ export default function emit(ctx: EmitContext): void {
 
   // The codex anchored transform: token/prefix substitution (.codex) THEN the
   // aidlc-rules rename — mirrors the packager's transform for prose the emit
-  // layer generates from core sources (AGENTS.md, agent bodies, runner prose).
+  // layer generates from core sources (agent bodies and runner prose).
   const rewriteProse = (s: string): string =>
     substituteToken(s).replaceAll(`${harnessDir}/rules/`, `${harnessDir}/aidlc-rules/`);
 
-  // --- AGENTS.md, at the dist ROOT (beside .codex/) -------------------------
-  // Rendered from the SHARED onboarding skeleton (core/templates/onboarding.md)
-  // with Codex's fills — NOT a regex-rewrite of Claude's CLAUDE.md. This retires
-  // the read-CLAUDE.md path and the Claude-prose-leak class with it: Codex
-  // authors its own header + Prerequisites in harness/codex/onboarding.fills.ts.
-  // The skeleton carries {{HARNESS_DIR}}; rewriteProse() substitutes → .codex and
-  // renames rules/ → aidlc-rules/, exactly the codex transform class. Skills ship
-  // at .agents/skills/ (never .codex/skills/), so redirect that one segment.
-  function emitAgentsMd(): string {
-    const skeleton = readFileSync(join(coreRoot, "templates", "onboarding.md"), "utf-8");
-    let s = renderOnboarding(skeleton, onboardingFills);
-    s = substituteToken(s); // {{HARNESS_DIR}} → .codex
-    // Rename the markdown rule layers dir → aidlc-rules/, but NOT the native
-    // Starlark `.codex/rules/default.rules` (the codex fills reference both, and
-    // only the aidlc-* markdown layers move). Negative lookahead on default.rules.
-    const escapedHarnessDir = harnessDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    s = s.replace(
-      new RegExp(`${escapedHarnessDir}/rules/(?!default\\.rules)`, "g"),
-      `${harnessDir}/aidlc-rules/`,
-    );
-    // Skills ship at .agents/skills/, never .codex/skills/.
-    s = s.replaceAll(`${harnessDir}/skills/`, ".agents/skills/");
-    return s;
-  }
 
   function emitAgentToml(mdPath: string): string {
     const raw = readFileSync(mdPath, "utf-8");
@@ -443,15 +425,20 @@ export default function emit(ctx: EmitContext): void {
     return out;
   }
 
+  const onboarding = readFileSync(join(CODEX_ROOT, "onboarding.md"), "utf-8")
+    .replaceAll(`${harnessDir}/skills/`, ".agents/skills/");
   const emissions: Array<{ path: string; content: () => string }> = [];
 
-  // codex-only config + wiring + trust + AGENTS.md
+  // codex-only config + wiring + trust + native onboarding skills paths
   emissions.push({
     path: join(CODEX_ROOT, "hooks.json"),
     content: () =>
       emitHooksJson(substituteToken, harnessName, trustedRouteNamespace),
   });
-  emissions.push({ path: join(CODEX_ROOT, "config.toml"), content: emitConfigToml });
+  emissions.push({
+    path: join(CODEX_ROOT, "config.toml"),
+    content: () => emitConfigToml(onboarding),
+  });
   emissions.push({
     path: join(CODEX_ROOT, "rules", "default.rules"),
     content: () =>
@@ -462,7 +449,10 @@ export default function emit(ctx: EmitContext): void {
     content: () =>
       emitTrustSeed(harnessDir, harnessName, invoke, trustedRouteNamespace),
   });
-  emissions.push({ path: join(distRoot, "AGENTS.md"), content: emitAgentsMd });
+  emissions.push({
+    path: join(CODEX_ROOT, "onboarding.md"),
+    content: () => onboarding,
+  });
 
   // agent TOMLs from core/agents/*.md (one per shipped persona)
   const agentsDir = join(coreRoot, "agents");

@@ -1,15 +1,14 @@
 // harness/opencode/onboarding.fills.ts — opencode's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/opencode/AGENTS.md (project root — opencode auto-reads it as its
-// primary rules file). {{HARNESS_DIR}} → .opencode is applied by the packager
-// transform afterwards.
+// The packager fills core/templates/onboarding-harness.md into
+// dist/opencode/.aidlc/onboarding.md, loaded by opencode.json instructions.
+// The root AGENTS.md stays neutral, identical to the other sharing harnesses.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
 const fills: OnboardingFills = {
   invoke: "/aidlc",
   slots: {
-    title_block: `# Project Name <!-- Replace with your project name -->
+    title_block: `# AI-DLC on opencode
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **opencode harness**. The workspace shell ships in \`.aidlc/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 
@@ -24,8 +23,6 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     structure_extra: "",
 
-    guide_pointer: `The opencode-specific guide (install, what differs, verification) is \`docs/guide/harnesses/opencode.md\`.`,
-
     sections_before_resumption: `## What's different on this harness
 
 This is the same AI-DLC core that ships to every harness: the same ordered steps, the same approval gates, and the same written record of what was decided, rendered onto opencode. On opencode:
@@ -39,11 +36,11 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - Session-end audit events (\`SESSION_ENDED\`) are not emitted — opencode has no session-end hook moment; pre-compaction validation DOES fire (\`experimental.session.compacting\`).
 - **MCP servers**: none ship (configure your own under \`mcp:\` in \`opencode.json\` if needed).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between harness installs (supported but untested — keep the trees in sync via the framework's packaging if you do this).
+
+The opencode-specific guide (install, what differs, verification) is \`docs/guide/harnesses/opencode.md\`.
 `,
 
     sections_after_resumption: "",
-
-    gitignore_extra: "",
   },
 };
 

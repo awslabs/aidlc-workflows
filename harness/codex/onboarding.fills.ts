@@ -1,12 +1,7 @@
 // harness/codex/onboarding.fills.ts — Codex CLI's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts inside
-// emit.ts into dist/codex/AGENTS.md (project root). emit() applies the
-// {{HARNESS_DIR}} → .codex substitution + rules/ → aidlc-rules/ rename itself.
-//
-// This RETIRES the old read-CLAUDE.md + regex-rewrite path: Codex no longer
-// derives its onboarding doc from Claude's, so Claude prose can no longer leak
-// through (the F-ONBOARDING-LEAK class). The Codex-specific header + Prerequisites
-// are authored here directly.
+// The packager fills core/templates/onboarding-harness.md into
+// dist/codex/.codex/onboarding.md; emit.ts then projects its skills paths.
+// The root AGENTS.md stays neutral, identical to the other sharing harnesses.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
@@ -35,13 +30,11 @@ gate).`,
 - **MCP servers (optional)**: Codex reads MCP server definitions from \`[mcp_servers.<name>]\` tables in \`config.toml\` (project \`.codex/config.toml\` or \`~/.codex/config.toml\`). The shipped config declares none — add the servers you need there. Credentials flow through your environment; a server you have no credentials for is simply unavailable and never blocks a workflow.`,
 
     prereq_bullets_tail: `- **Permissions**: \`.codex/rules/default.rules\` (Starlark prefix rules) pre-allows the deterministic core's exact command prefixes — \`bun .codex/tools/\`, \`bun .codex/hooks/\`, and \`git worktree\`/\`commit\`/\`add\` — so workflows run without per-call prompts. The sandbox is \`workspace-write\`; commands outside the allowlist prompt.
-- **Personal overrides**: Configure the model provider in \`~/.codex/config.toml\`; Codex ignores project-level \`model_provider\` and \`model_providers\`. In a trusted project, other settings in \`.codex/config.toml\`, such as \`model\`, take precedence over user configuration, so add project-level model keys only when the shared override is intentional.`,
+- **Personal overrides**: Put machine-specific defaults (model, AWS profile/region, environment variables) in \`~/.codex/config.toml\` to avoid changing the shared project config. For keys supported at both levels, project-scoped settings take precedence over user-level settings, as documented in the [Codex configuration reference](https://developers.openai.com/codex/config-reference/). \`developer_instructions\` is single-valued: the trusted project's \`.codex/config.toml\` value overrides a user-level one, so do not define it in \`~/.codex/config.toml\` for AI-DLC projects.`,
 
     agents_note: `On Codex all 14 expert roles are transposed into \`.codex/agents/\` TOMLs (the \`/aidlc\` session reads the role \`.md\` bodies as prose); the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through Codex subagent roles.`,
 
     structure_extra: "",
-
-    guide_pointer: `The Codex-specific guide (prerequisites, trust pre-seed, provider config, the git-repo requirement) is \`docs/guide/harnesses/codex-cli.md\`.`,
 
     sections_before_resumption: `## What's different on this harness
 
@@ -53,11 +46,11 @@ This is the same AI-DLC core that ships to every harness, rendered onto Codex CL
 - **Swarm floor** is \`codex exec\`-per-unit workers; \`AIDLC_USE_SWARM=1\` has no Workflow tool here and loud-degrades (\`SWARM_DEGRADED\`).
 - **Session lifecycle**: Codex has no SessionEnd event (an unclosed session is reconciled as an inferred \`SESSION_ENDED\` at the next start); after compaction, Codex emits SessionStart with \`source=compact\`, which re-injects the workflow mission before the first post-compaction continuation (the reason Codex >= 0.145.0 is required).
 - **The AIDLC method** (the layered practice files \`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) lives once at the workspace root under \`aidlc/spaces/<active-space>/memory/\` — the single hand-editable source of truth, identical on every harness, NOT a per-harness copy. Codex auto-merges the root \`AGENTS.md\` and the orchestrator injects the active-space memory paths into context on demand; AI-DLC's own stage resolver reads the same tree directly (via the \`AIDLC_RULES_DIR\` seam in the shipped \`config.toml\`). Edit the method there, never under \`.codex/\`. (\`.codex/rules/default.rules\` remains Codex's native Starlark permission-rules file — distinct from the AIDLC method, and the two must not collide.)
+
+The Codex-specific guide (prerequisites, trust pre-seed, provider config, the git-repo requirement) is \`docs/guide/harnesses/codex-cli.md\`.
 `,
 
     sections_after_resumption: "",
-
-    gitignore_extra: "",
   },
 };
 

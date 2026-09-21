@@ -1,6 +1,6 @@
 // harness/claude/onboarding.fills.ts — Claude Code's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/claude/.claude/CLAUDE.md. {{HARNESS_DIR}} stays for the packager transform.
+// The packager concatenates onboarding-harness.md, filled here, then neutral
+// onboarding in dist/claude/.claude/CLAUDE.md before transforming tokens.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
@@ -35,16 +35,14 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     structure_extra: "",
 
-    guide_pointer: "",
-
     sections_before_resumption: `## AI-DLC Method (imported)
 
-The AI-DLC method — the layered practice files (\`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) — is authored once at the workspace root under \`aidlc/spaces/<active-space>/memory/\` and imported into Claude's ambient context by reference (the \`@{{HARNESS_DIR}}/rules/aidlc.md\` import at the top of this file), never copied. The shipped shell starts on \`default\`; switching spaces repoints that stub to the selected space. Edit the active space's memory files — they are the single hand-editable source of truth, identical on every harness. (AI-DLC's own stage resolver reads the same tree directly, so each stage is method-correct without this ambient import.)
+The AI-DLC method — the layered practice files (\`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) — is authored once at the workspace root under \`aidlc/spaces/<active-space>/memory/\` and imported into Claude's ambient context by reference (the \`@{{HARNESS_DIR}}/rules/aidlc.md\` import in this file), never copied. The shipped shell starts on \`default\`; switching spaces repoints that stub to the selected space. Edit the active space's memory files — they are the single hand-editable source of truth, identical on every harness. (AI-DLC's own stage resolver reads the same tree directly, so each stage is method-correct without this ambient import.)
 `,
 
-    sections_after_resumption: "",
+    sections_after_resumption: `## Local settings
 
-    gitignore_extra: `- \`.claude/settings.local.json\``,
+The shipped .gitignore block also ignores \`.claude/settings.local.json\` (per-machine Claude Code settings).`,
   },
 };
 

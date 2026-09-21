@@ -1,9 +1,8 @@
 // harness/codex/manifest.ts — the Codex CLI distribution row.
 //
 // Projects core/ into dist/codex/.codex/ (rules → aidlc-rules, D-10) and defers
-// every codex-specific surface to emit.ts (config.toml, hooks.json, trust-seed,
-// AGENTS.md, 14 agent TOMLs, the .agents/skills/ tree). Mirrors the proven
-// package-codex.ts spike, generalized onto the unified packager.
+// native shell surfaces to emit.ts (config.toml, hooks.json, trust-seed,
+// 14 agent TOMLs, the .agents/skills/ tree). Onboarding uses the shared renderer.
 //
 // Codex specifics vs Claude/Kiro:
 //   - token → .codex
@@ -17,6 +16,7 @@
 
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import emit from "./emit.ts";
+import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "codex",
@@ -43,6 +43,7 @@ const manifest: HarnessManifest = {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
+      shared: "identical",
       legacySignatures: {
         wholeFileHashes: [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
@@ -66,6 +67,8 @@ const manifest: HarnessManifest = {
           "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
           // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
           "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
         ],
       },
     },
@@ -98,6 +101,8 @@ const manifest: HarnessManifest = {
     // --check determinism guard.
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
+
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "onboarding.md", fills: onboardingFills },
 
   rulesRename: "aidlc-rules",
 

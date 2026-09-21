@@ -11,7 +11,11 @@ import {
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
 import { delimiter, extname, join, relative, resolve } from "node:path";
-import { sha256Bytes } from "./aidlc-distribution.ts";
+import {
+  assertProjectionPathHasNoSymlinks,
+  isSafeOnboardingPath,
+  sha256Bytes,
+} from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
@@ -2474,6 +2478,29 @@ function instructionStates(
   harnessDir: string,
   harness: ModelHarness,
 ): InstructionState[] {
+  let onboardingPath = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
+  try {
+    const descriptor: unknown = JSON.parse(readFileSync(
+      join(projectDir, harnessDir, "tools", "data", "aidlc-projection.json"),
+      "utf-8",
+    ));
+    if (
+      isRecord(descriptor) &&
+      isSafeOnboardingPath(descriptor.onboarding, harnessDir)
+    ) {
+      onboardingPath = descriptor.onboarding;
+    }
+  } catch {
+    // Legacy installations may not have a readable onboarding descriptor.
+  }
+  let onboardingConflict = false;
+  if (onboardingPath) {
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, onboardingPath);
+    } catch {
+      onboardingConflict = true;
+    }
+  }
   const baselinePath = join(
     projectDir,
     harnessDir,
@@ -2482,16 +2509,23 @@ function instructionStates(
     "aidlc-manifest.json",
   );
   if (!existsSync(baselinePath)) {
-    const instructionPath = harness === "claude"
-      ? `${harnessDir}/CLAUDE.md`
-      : "AGENTS.md";
-    return [{
-      path: instructionPath,
-      kind: "whole-file",
-      state: existsSync(join(projectDir, instructionPath))
-        ? "intact"
-        : "missing",
-    }];
+    const instructionPaths = harness === "claude" ? [] : ["AGENTS.md"];
+    if (onboardingPath && !instructionPaths.includes(onboardingPath)) {
+      instructionPaths.push(onboardingPath);
+    }
+    return instructionPaths.map((path) => {
+      if (path === onboardingPath && onboardingConflict) {
+        return { path, kind: "whole-file", state: "conflict" };
+      }
+      const target = join(projectDir, path);
+      return {
+        path,
+        kind: "whole-file",
+        state: existsSync(target) && lstatSync(target).isFile()
+          ? "intact"
+          : "missing",
+      };
+    });
   }
   const baseline = JSON.parse(
     readFileSync(baselinePath, "utf-8"),
@@ -2510,24 +2544,24 @@ function instructionStates(
       tracked.push({ path, contribution });
     }
   }
-  if (harness === "claude") {
-    const path = `${harnessDir}/CLAUDE.md`;
-    const hash = baseline.files?.[path];
-    if (hash) {
-      tracked.push({
-        path,
-        contribution: { policy: "whole-file", hash },
-      });
-    }
+  const onboardingHash = onboardingPath ? baseline.files?.[onboardingPath] : undefined;
+  if (onboardingPath && onboardingHash) {
+    tracked.push({
+      path: onboardingPath,
+      contribution: { policy: "whole-file", hash: onboardingHash },
+    });
   }
-  if (tracked.length === 0) {
+  if (tracked.length === 0 && !onboardingPath) {
     return [{
       path: baselinePath,
       kind: "whole-file",
       state: "missing",
     }];
   }
-  return tracked.map(({ path, contribution }) => {
+  const states: InstructionState[] = tracked.map(({ path, contribution }) => {
+    if (path === onboardingPath && onboardingConflict) {
+      return { path, kind: "whole-file", state: "conflict" };
+    }
     const target = join(projectDir, path);
     if (!existsSync(target) || !lstatSync(target).isFile()) {
       return {
@@ -2566,6 +2600,14 @@ function instructionStates(
       state: sha256Bytes(block) === contribution.hash ? "intact" : "conflict",
     };
   });
+  if (onboardingPath && !onboardingHash) {
+    states.push({
+      path: onboardingPath,
+      kind: "whole-file",
+      state: onboardingConflict ? "conflict" : "missing",
+    });
+  }
+  return states;
 }
 
 export function instructionFileDoctorCheck(
