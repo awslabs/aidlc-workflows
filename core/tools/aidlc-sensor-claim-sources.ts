@@ -1007,6 +1007,8 @@ const HTML_FINITE_BLOCKS: ReadonlyArray<readonly [RegExp, RegExp]> = [
 	[/^<!\[CDATA\[/, /\]\]>/],
 	[/^<![A-Za-z]/, />/],
 ];
+const HTML_INLINE_TAG_LINE_RE =
+	/^(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$/;
 
 function isThematicBreak(line: string): boolean {
 	const content = firstContent(line);
@@ -1213,29 +1215,34 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 	const lines = documentContainerLines(visibleLines);
 	const labels = new Set<string>();
 	const definitionLines = new Set<number>();
-	let open = false;
-	let previousContext = "";
+	let block: "none" | "paragraph" | "html" = "none";
+	let blockContext = "";
 	let htmlEnd: RegExp | null = null;
 
 	// CommonMark §4.7: a link reference definition cannot interrupt a paragraph.
 	// A definition-shaped line directly under prose is visible lazy continuation.
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
-		if (htmlEnd) {
-			if (htmlEnd.test(line.text)) {
+		const content = firstContent(line.text);
+		// CommonMark §4.6: HTML blocks never continue lazily outside their container.
+		if (block === "html" && line.context !== blockContext) {
+			block = "none";
+			htmlEnd = null;
+		}
+		if (block === "html") {
+			if (htmlEnd ? htmlEnd.test(line.text) : content === null) {
+				block = "none";
 				htmlEnd = null;
-				open = false;
 			}
 			continue;
 		}
-		const content = firstContent(line.text);
 		if (content === null) {
-			open = false;
+			block = "none";
 			continue;
 		}
 		let continuation = false;
-		if (open) {
-			if (!continuesContext(line.context, previousContext)) {
+		if (block === "paragraph") {
+			if (!continuesContext(line.context, blockContext)) {
 				const raw = visibleLines[index].replace(/^(?: {0,3}> ?)+/, "");
 				const ordered = /^ {0,3}(\d{1,9})[.)](?:\t| {1,4}(?! ))/.exec(raw);
 				// CommonMark §5.3: a list interrupts a paragraph only when it is a bullet
@@ -1244,15 +1251,15 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 				continuation =
 					ordered !== null &&
 					Number(ordered[1]) !== 1 &&
-					leadingQuoteDepth(line.context) === leadingQuoteDepth(previousContext) &&
-					!contextParts(previousContext).some((part) => part.startsWith("list#"));
+					leadingQuoteDepth(line.context) === leadingQuoteDepth(blockContext) &&
+					!contextParts(blockContext).some((part) => part.startsWith("list#"));
 				if (!continuation) {
-					open = false;
-					previousContext = line.context;
+					block = "none";
+					blockContext = line.context;
 				}
 			}
 		} else {
-			previousContext = line.context;
+			blockContext = line.context;
 		}
 
 		const rest = line.text.slice(content.index);
@@ -1261,31 +1268,31 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			const finite = HTML_FINITE_BLOCKS.find(([start]) => start.test(rest));
 			if (finite) {
 				if (finite[1].test(rest.slice(1))) {
-					open = false;
+					block = "none";
 				} else {
+					block = "html";
+					blockContext = line.context;
 					htmlEnd = finite[1];
 				}
 				continue;
 			}
-			if (HTML_BLOCK_RE.test(rest)) {
-				open = true;
-				continue;
-			}
 			if (
-				!open &&
-				/^(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$/.test(rest)
+				HTML_BLOCK_RE.test(rest) ||
+				(block === "none" && HTML_INLINE_TAG_LINE_RE.test(rest))
 			) {
-				open = true;
+				block = "html";
+				blockContext = line.context;
+				htmlEnd = null;
 				continue;
 			}
 			const codeItem = /^(?:([-*+])|(\d{1,9})[.)]) {5,}\S/.exec(rest);
-			if (codeItem && (!open || codeItem[1] !== undefined || Number(codeItem[2]) === 1)) {
-				open = false;
+			if (codeItem && (block === "none" || codeItem[1] !== undefined || Number(codeItem[2]) === 1)) {
+				block = "none";
 				continue;
 			}
 		}
 
-		if (!open) {
+		if (block === "none") {
 			const definition = referenceDefinitionAt(lines, index);
 			if (definition) {
 				labels.add(normalizedReferenceLabel(definition.label));
@@ -1293,7 +1300,7 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 					definitionLines.add(line);
 				}
 				index = definition.endLine;
-				previousContext = lines[index].context;
+				blockContext = lines[index].context;
 				continue;
 			}
 		}
@@ -1302,21 +1309,21 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			content.column <= 3 &&
 			(/^#{1,6}(?:[ \t]+|$)/.test(rest) ||
 				isThematicBreak(line.text) ||
-				(open && /^(?:=+|-+)[ \t]*$/.test(rest)))
+				(block === "paragraph" && /^(?:=+|-+)[ \t]*$/.test(rest)))
 		) {
-			open = false;
+			block = "none";
 			continue;
 		}
 		// CommonMark §5.2: a marker-only line starts an empty list item whose
 		// content begins on the next line. It opens a container, not a paragraph,
 		// and cannot interrupt an open paragraph (then it is continuation text).
 		if (
-			!open &&
+			block === "none" &&
 			content.column <= 3 &&
 			/^(?:[-*+]|\d{1,9}[.)])[ \t]*$/.test(rest)
 		) continue;
-		if (!open && content.column > 3) continue;
-		open = true;
+		if (block === "none" && content.column > 3) continue;
+		block = "paragraph";
 	}
 
 	return { labels, definitionLines };

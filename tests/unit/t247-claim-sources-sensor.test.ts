@@ -973,6 +973,9 @@ describe("t247 claim-sources sensor", () => {
     ["a multiline processing instruction", "<?php\n?>\n[Q1]: /url"],
     ["an indented-code list item", "-     code\n[Q1]: /url"],
     ["an exited block quote", "> prose\n2. [Q1]: /url"],
+    ["an exited quoted processing instruction", "> <?php\n[Q1]: /url"],
+    ["an exited quoted div block", "> <div>\n[Q1]: /url"],
+    ["an exited list-item processing instruction", "- <?php\n[Q1]: /url"],
   ] as const) {
     test(`a reference definition after ${label} resolves document-wide`, () => {
       const dir = makeStageDir();
@@ -1000,6 +1003,7 @@ describe("t247 claim-sources sensor", () => {
   for (const [label, content] of [
     ["a blank-terminated HTML block", "<div>\n[Q1]: /url\n</div>"],
     ["a same-depth block quote", "> prose\n> 2. [Q1]: /url"],
+    ["an uninterrupted quoted div block", "> <div>\n> [Q1]: /url"],
   ] as const) {
     test(`a definition-shaped line in ${label} stays literal`, () => {
       const dir = makeStageDir();
