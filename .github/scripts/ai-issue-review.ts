@@ -1,13 +1,7 @@
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { resolve, sep } from "node:path";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const MAX_REVIEW_BYTES = 100_000;
 const MAX_COMMENT_BYTES = 65_536;
@@ -15,6 +9,7 @@ const MAX_CATALOG_ENTRIES = 200;
 const MAX_CONVERSATION_ENTRIES = 50;
 const MAX_CONVERSATION_BODY_CHARACTERS = 8_000;
 const MAX_AIDA_REVIEW_CHARACTERS = 40_000;
+const MAX_BUG_TEST_FILES = 5;
 const AI_ISSUE_REVIEW_MARKER = "<!-- ai-issue-review issue=";
 
 export type FindingLevel = "blocking-question" | "recommendation";
@@ -146,6 +141,22 @@ export interface StructuredIssueReview {
 
 export interface IssueCommentPayload {
   body: string;
+}
+
+export interface BugTriage {
+  issue: number;
+  contextId: string;
+  classification: "bug-report" | "not-bug" | "unclear";
+  confidence: "high" | "medium" | "low";
+  rationale: string;
+  testFiles: string[];
+}
+
+export interface BugVerification {
+  triage: BugTriage;
+  status: "tests-passed" | "tests-failed" | "timed-out" | "setup-failed" | "not-run";
+  exitCode: number | null;
+  outputTail: string;
 }
 
 function argValue(args: string[], name: string): string {
@@ -369,24 +380,184 @@ function requiredText(value: unknown, field: string, maxLength: number): string 
   return value.trim();
 }
 
-function repositoryFile(root: string, path: string): string {
+function assertBaseSha(base: string): void {
+  if (!/^[0-9a-f]{40}$/.test(base)) {
+    throw new Error("trusted repository base must be a 40-character lowercase SHA");
+  }
+}
+
+function repositoryFile(root: string, base: string, path: string): string {
+  assertBaseSha(base);
+  const parts = path.split("/");
+  const hasUnsafeCharacter = [...path].some(character => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127 || character === "\\" || character === ":";
+  });
   if (
     path.length === 0 ||
     path.startsWith("/") ||
-    path.split("/").some(part => part === "." || part === "..")
+    hasUnsafeCharacter ||
+    parts.some(part => part === "" || part === "." || part === "..") ||
+    parts[0].startsWith(".ai-issue-review-")
   ) {
     throw new Error(`unsafe repository evidence path: ${JSON.stringify(path)}`);
   }
-  const rootReal = realpathSync(root);
-  const candidate = resolve(rootReal, path);
-  if (!candidate.startsWith(`${rootReal}${sep}`) || !existsSync(candidate)) {
-    throw new Error(`repository evidence path does not exist: ${path}`);
+  let entry: string;
+  try {
+    entry = execFileSync("git", ["ls-tree", "-z", base, "--", path], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 1_000_000,
+    });
+  } catch {
+    throw new Error(`repository evidence base is unavailable: ${base}`);
   }
-  const resolved = realpathSync(candidate);
-  if (!resolved.startsWith(`${rootReal}${sep}`) || !statSync(resolved).isFile()) {
-    throw new Error(`repository evidence path is not a trusted file: ${path}`);
+  const separator = entry.indexOf("\t");
+  const header = separator >= 0 ? entry.slice(0, separator) : "";
+  const entryPath = separator >= 0 ? entry.slice(separator + 1, -1) : "";
+  const mode = header.split(" ")[0];
+  if ((mode !== "100644" && mode !== "100755") || entryPath !== path) {
+    throw new Error(`repository evidence path is not a trusted base file: ${path}`);
   }
-  return readFileSync(resolved, "utf8");
+  try {
+    return execFileSync("git", ["cat-file", "-p", `${base}:${path}`], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 10_000_000,
+    });
+  } catch {
+    throw new Error(`repository evidence path cannot be read from trusted base: ${path}`);
+  }
+}
+
+function trustedBugTestFile(root: string, base: string, path: string): string {
+  if (
+    !/^tests\/(smoke|unit|integration)\/[A-Za-z0-9._/-]+\.test\.ts$/.test(path) ||
+    path.split("/").some(part => part === "." || part === "..")
+  ) {
+    throw new Error(`bug triage selected an unsupported test path: ${path}`);
+  }
+  repositoryFile(root, base, path);
+  return path;
+}
+
+export function validateBugTriage(
+  raw: string,
+  expectedIssue: number,
+  expectedContextId: string,
+  expectedBase: string,
+  repositoryRoot = process.cwd(),
+): BugTriage {
+  assertContextId(expectedContextId);
+  assertBaseSha(expectedBase);
+  if (Buffer.byteLength(raw, "utf8") > 20_000) {
+    throw new Error("bug triage exceeds 20000 bytes");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("bug triage must be valid JSON");
+  }
+  const candidate = record(parsed, "bug triage");
+  if (candidate.issue !== expectedIssue || candidate.contextId !== expectedContextId) {
+    throw new Error("bug triage does not match the immutable context");
+  }
+  if (
+    candidate.classification !== "bug-report" &&
+    candidate.classification !== "not-bug" &&
+    candidate.classification !== "unclear"
+  ) {
+    throw new Error("bug triage classification is invalid");
+  }
+  if (
+    candidate.confidence !== "high" &&
+    candidate.confidence !== "medium" &&
+    candidate.confidence !== "low"
+  ) {
+    throw new Error("bug triage confidence is invalid");
+  }
+  if (!Array.isArray(candidate.testFiles) || candidate.testFiles.length > MAX_BUG_TEST_FILES) {
+    throw new Error(`bug triage may select at most ${MAX_BUG_TEST_FILES} test files`);
+  }
+  const testFiles = [...new Set(candidate.testFiles.map((value, index) => {
+    if (typeof value !== "string") {
+      throw new Error(`bug triage testFiles[${index}] must be a string`);
+    }
+    return trustedBugTestFile(repositoryRoot, expectedBase, value);
+  }))];
+  if (candidate.classification !== "bug-report" && testFiles.length > 0) {
+    throw new Error("non-bug triage cannot select test files");
+  }
+  return {
+    issue: expectedIssue,
+    contextId: expectedContextId,
+    classification: candidate.classification,
+    confidence: candidate.confidence,
+    rationale: requiredText(candidate.rationale, "bug triage rationale", 1000),
+    testFiles,
+  };
+}
+
+export function validateBugVerification(
+  value: unknown,
+  expectedIssue: number,
+  expectedContextId: string,
+  expectedBase: string,
+  repositoryRoot: string,
+): BugVerification {
+  const candidate = record(value, "bug verification");
+  const triage = validateBugTriage(
+    JSON.stringify(candidate.triage),
+    expectedIssue,
+    expectedContextId,
+    expectedBase,
+    repositoryRoot,
+  );
+  if (
+    candidate.status !== "tests-passed" &&
+    candidate.status !== "tests-failed" &&
+    candidate.status !== "timed-out" &&
+    candidate.status !== "setup-failed" &&
+    candidate.status !== "not-run"
+  ) {
+    throw new Error("bug verification status is invalid");
+  }
+  if (
+    candidate.exitCode !== null &&
+    (typeof candidate.exitCode !== "number" || !Number.isInteger(candidate.exitCode))
+  ) {
+    throw new Error("bug verification exitCode is invalid");
+  }
+  const outputTail = text(candidate.outputTail);
+  if (Buffer.byteLength(outputTail, "utf8") > 20_000) {
+    throw new Error("bug verification output tail exceeds 20000 bytes");
+  }
+  if (triage.classification !== "bug-report" && candidate.status !== "not-run") {
+    throw new Error("non-bug verification must not run tests");
+  }
+  if (triage.testFiles.length === 0 && candidate.status !== "not-run") {
+    throw new Error("bug verification without selected tests must not run");
+  }
+  if (
+    triage.classification === "bug-report" &&
+    triage.testFiles.length > 0 &&
+    candidate.status === "not-run"
+  ) {
+    throw new Error("bug verification with selected tests must record an execution result");
+  }
+  if (
+    (candidate.status === "not-run" && candidate.exitCode !== null) ||
+    (candidate.status !== "not-run" && candidate.exitCode === null)
+  ) {
+    throw new Error("bug verification exitCode does not match its status");
+  }
+  return {
+    triage,
+    status: candidate.status,
+    exitCode: candidate.exitCode,
+    outputTail,
+  };
 }
 
 function assessmentDimension(
@@ -412,12 +583,14 @@ export function validateStructuredIssueReview(
   raw: string,
   expectedIssue: number,
   expectedContextId: string,
+  expectedBase: string,
   metadata: IssueMetadata,
   catalog: IssueCatalogEntry[],
   conversation: IssueConversation,
   repositoryRoot = process.cwd(),
 ): StructuredIssueReview {
   assertContextId(expectedContextId);
+  assertBaseSha(expectedBase);
   if (Buffer.byteLength(raw, "utf8") > MAX_REVIEW_BYTES) {
     throw new Error(`review exceeds ${MAX_REVIEW_BYTES} bytes`);
   }
@@ -493,7 +666,7 @@ export function validateStructuredIssueReview(
           `findings[${index}].evidence[${evidenceIndex}].quote`,
           500,
         );
-        if (!repositoryFile(repositoryRoot, path).includes(quote)) {
+        if (!repositoryFile(repositoryRoot, expectedBase, path).includes(quote)) {
           throw new Error(`REPOSITORY evidence quote is not present in ${path}`);
         }
         return { source: "REPOSITORY", path, quote };
@@ -594,7 +767,10 @@ function evidenceText(evidence: FindingEvidence): string {
   throw new Error("unsupported issue-review evidence");
 }
 
-export function renderIssueReview(review: StructuredIssueReview): IssueCommentPayload {
+export function renderIssueReview(
+  review: StructuredIssueReview,
+  bugVerification?: BugVerification,
+): IssueCommentPayload {
   const blocking = review.findings.filter(finding => finding.level === "blocking-question").length;
   const recommendations = review.findings.length - blocking;
   const lines = [
@@ -619,6 +795,38 @@ export function renderIssueReview(review: StructuredIssueReview): IssueCommentPa
     "Validation performed:",
     ...review.validation.map(item => `- ${markdownText(item)}`),
   ];
+
+  if (bugVerification?.triage.classification === "bug-report") {
+    const statusLabel = {
+      "tests-passed": "selected tests passed; they did not reproduce a failure",
+      "tests-failed": "selected tests failed; the failure must be compared with the report",
+      "timed-out": "test execution timed out",
+      "setup-failed": "the isolated test environment could not be prepared",
+      "not-run": "not run",
+    }[bugVerification.status];
+    lines.push(
+      "",
+      "## Bug Verification",
+      "",
+      `Classification: **bug report** (${bugVerification.triage.confidence} confidence).`,
+      "",
+      `Execution: **${statusLabel}**.`,
+      "",
+      `Reason: ${markdownText(bugVerification.triage.rationale)}`,
+    );
+    if (bugVerification.triage.testFiles.length > 0) {
+      lines.push(
+        "",
+        "Trusted tests selected:",
+        ...bugVerification.triage.testFiles.map(path => `- <code>${markdownText(path)}</code>`),
+      );
+    } else {
+      lines.push(
+        "",
+        "No existing trusted test was specific enough to run automatically.",
+      );
+    }
+  }
 
   for (const category of FINDING_CATEGORIES) {
     lines.push("", `## ${category.heading}`);
@@ -694,6 +902,18 @@ function main(): void {
     );
     return;
   }
+  if (command === "validate-triage") {
+    const input = readFileSync(argValue(args, "--input"), "utf8");
+    const triage = validateBugTriage(
+      input,
+      Number(argValue(args, "--issue")),
+      argValue(args, "--context-id"),
+      argValue(args, "--base"),
+      args.includes("--repository-root") ? argValue(args, "--repository-root") : process.cwd(),
+    );
+    writeFileSync(argValue(args, "--output"), `${JSON.stringify(triage, null, 2)}\n`);
+    return;
+  }
   if (command === "build-context") {
     const issue = JSON.parse(readFileSync(argValue(args, "--issue"), "utf8"));
     const catalog = JSON.parse(readFileSync(argValue(args, "--catalog"), "utf8"));
@@ -718,11 +938,21 @@ function main(): void {
     const conversation = JSON.parse(
       readFileSync(argValue(args, "--conversation"), "utf8"),
     ) as IssueConversation;
+    const bugVerification = args.includes("--bug-verification")
+      ? validateBugVerification(
+        JSON.parse(readFileSync(argValue(args, "--bug-verification"), "utf8")),
+        Number(argValue(args, "--issue")),
+        argValue(args, "--context-id"),
+        argValue(args, "--base"),
+        args.includes("--repository-root") ? argValue(args, "--repository-root") : process.cwd(),
+      )
+      : undefined;
     lastValidateInput = readFileSync(input, "utf8");
     const review = validateStructuredIssueReview(
       lastValidateInput,
       Number(argValue(args, "--issue")),
       argValue(args, "--context-id"),
+      argValue(args, "--base"),
       metadata,
       catalog,
       conversation,
@@ -730,12 +960,12 @@ function main(): void {
     );
     writeFileSync(
       argValue(args, "--output"),
-      `${JSON.stringify(renderIssueReview(review), null, 2)}\n`,
+      `${JSON.stringify(renderIssueReview(review, bugVerification), null, 2)}\n`,
     );
     return;
   }
   throw new Error(
-    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|build-context|validate",
+    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|build-context|validate-triage|validate",
   );
 }
 

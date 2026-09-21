@@ -6,6 +6,12 @@ Treat explicit maintainer clarifications in the issue conversation as the
 current proposal, including accepted constraints and corrections to the issue
 body.
 
+When `.ai-issue-review-context/bug-verification.json` classifies the Issue as a
+bug report, inspect the selected trusted tests and bounded execution result.
+Determine whether a failure matches the report or whether passing tests simply
+leave the claimed path uncovered. Never treat a generic failure as proof of the
+bug and never hide a setup failure, timeout, or missing relevant test.
+
 Review:
 
 - compatibility with the single hand-authored core and supported harnesses;

@@ -32,22 +32,31 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       || (github.event_name == 'issues'
-          && ((github.event.action == 'opened')
+          && ((github.event.action == 'opened'
+               && (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                            github.event.issue.author_association)
+                   || contains(github.event.issue.labels.*.name, 'ai-review')))
               || (github.event.action == 'labeled'
                && github.event.label.name == 'ai-review')
               || (github.event.action == 'edited'
                   && (github.event.changes.title != null
-                      || github.event.changes.body != null))))
+                      || github.event.changes.body != null)
+                  && (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                               github.event.issue.author_association)
+                      || contains(github.event.issue.labels.*.name, 'ai-review')))))
       || (github.event_name == 'issue_comment'
           && github.event.issue.pull_request == null
           && github.event.comment.user.type != 'Bot'
-          && !startsWith(github.event.comment.body, '<!-- ai-issue-review issue='))
+          && !startsWith(github.event.comment.body, '<!-- ai-issue-review issue=')
+          && (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                       github.event.comment.author_association)
+              || contains(github.event.issue.labels.*.name, 'ai-review')))
     concurrency:
       group: ai-issue-review-${{ github.event.issue.number || inputs.issue_number }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     environment: ai-pr-review
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
       id-token: write
@@ -204,6 +213,7 @@ jobs:
           && steps.context.outputs.skip != 'true'
           && steps.context.outputs.already_reviewed != 'true'
         env:
+          BASE_SHA: ${{ steps.context.outputs.base }}
           CONTEXT_ID: ${{ steps.context.outputs.context_id }}
           ISSUE_NUMBER: ${{ steps.context.outputs.issue }}
         run: |
@@ -224,17 +234,30 @@ jobs:
             local output_dir
             local output_file
             local error_file
+            local schema_file
             local structured_file
+            local structured_filter
             local status
             local size
             local -a fable_output_args
+            local -a sol_output_args
 
             output_dir="$(sudo -u ai-issue-review mktemp -d -t aidlc-issue-review.XXXXXX)"
             output_file="$output_dir/output"
             error_file="$output_dir/error"
             echo "Running $name..."
+            if [ -n "$schema" ]; then
+              schema_file="$output_dir/schema.json"
+              printf '%s' "$schema" \
+                | sudo -u ai-issue-review tee "$schema_file" >/dev/null
+            fi
             set +e
             if [ "$runtime" = "sol" ]; then
+              if [ -n "$schema" ]; then
+                sol_output_args=(--output-schema "$schema_file")
+              else
+                sol_output_args=()
+              fi
               sudo -u ai-issue-review -- timeout \
                 --signal=TERM \
                 --kill-after=30s \
@@ -252,6 +275,7 @@ jobs:
                 --config 'model_reasoning_effort="high"' \
                 --config 'shell_environment_policy.inherit="all"' \
                 --config 'shell_environment_policy.exclude=["AWS_*","ACTIONS_*","GITHUB_*","GH_*"]' \
+                "${sol_output_args[@]}" \
                 --output-last-message "$output_file" \
                 "$prompt" \
                 > /dev/null 2>&1
@@ -309,9 +333,14 @@ jobs:
             fi
             if [ -n "$schema" ]; then
               structured_file="$output_dir/structured-output"
+              if [ "$runtime" = "fable" ]; then
+                structured_filter='.structured_output | select(type == "object")'
+              else
+                structured_filter='select(type == "object")'
+              fi
               if ! sudo -u ai-issue-review -- /bin/bash -c \
-                'jq -c -e ".structured_output | select(type == \"object\")" "$1" >"$2"' \
-                bash "$output_file" "$structured_file"; then
+                'jq -c -e "$1" "$2" >"$3"' \
+                bash "$structured_filter" "$output_file" "$structured_file"; then
                 echo "::error::$name did not produce a structured JSON object"
                 sudo find "$output_dir" -depth -delete
                 return 1
@@ -348,6 +377,136 @@ jobs:
           grep -Fqx \
             "[LENS-REVIEWED] prompt-injection $CONTEXT_ID" \
             .ai-issue-review-lenses/prompt-injection.md
+
+          bug_triage_prompt="$(
+            cat \
+              .github/prompts/ai-issue-review-common.md \
+              .github/prompts/ai-issue-review-bug-triage.md
+            printf '\nThe immutable issue is #%s and context id is %s.\n' \
+              "$ISSUE_NUMBER" "$CONTEXT_ID"
+            printf '%s\n' \
+              'Classify the current conversation and select only trusted existing test files now.'
+          )"
+          run_model \
+            "sol" \
+            "Bug-report classification" \
+            20000 \
+            ".ai-issue-review-lenses/bug-triage.raw.json" \
+            "$bug_triage_prompt"
+          bun .github/scripts/ai-issue-review.ts validate-triage \
+            --issue "$ISSUE_NUMBER" \
+            --context-id "$CONTEXT_ID" \
+            --base "$BASE_SHA" \
+            --input .ai-issue-review-lenses/bug-triage.raw.json \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --output .ai-issue-review-lenses/bug-triage.json
+
+          verification_status="not-run"
+          verification_exit_code="null"
+          verification_log="$(mktemp)"
+          classification="$(jq -r '.classification' .ai-issue-review-lenses/bug-triage.json)"
+          mapfile -t bug_test_files < <(
+            jq -r '.testFiles[]' .ai-issue-review-lenses/bug-triage.json
+          )
+          if [ "$classification" = "bug-report" ] && [ "${#bug_test_files[@]}" -gt 0 ]; then
+            bun_bin="$(command -v bun)"
+            test_root="$(sudo -u ai-issue-review mktemp -d -t aidlc-bug-verification.XXXXXX)"
+            test_repo="$test_root/repository"
+            test_home="$test_root/home"
+            sudo -u ai-issue-review mkdir -p "$test_repo" "$test_home"
+            sudo -u ai-issue-review rsync -a \
+              --exclude=.git \
+              --exclude=.ai-issue-review-context \
+              --exclude=.ai-issue-review-lenses \
+              --exclude=.ai-issue-review-final \
+              "$GITHUB_WORKSPACE/" "$test_repo/"
+
+            set +e
+            sudo -u ai-issue-review -- env -i \
+              HOME="$test_home" \
+              PATH="$PATH" \
+              /bin/bash -c \
+              'ulimit -f 20480; cd "$1" && exec timeout --signal=TERM --kill-after=30s 5m "$2" install --frozen-lockfile --ignore-scripts' \
+              bash "$test_repo" "$bun_bin" \
+              >"$verification_log" 2>&1
+            setup_status=$?
+            set -e
+
+            if [ "$setup_status" -ne 0 ]; then
+              if [ "$setup_status" -eq 124 ]; then
+                verification_status="timed-out"
+              else
+                verification_status="setup-failed"
+              fi
+              verification_exit_code="$setup_status"
+            else
+              set +e
+              sudo unshare --net -- \
+                sudo -u ai-issue-review -- env -i \
+                  AIDLC_NO_LLM=1 \
+                  CI=true \
+                  HOME="$test_home" \
+                  PATH="$PATH" \
+                  /bin/bash -c \
+                  'ulimit -f 20480; cd "$1"; shift; exec "$@"' \
+                  bash "$test_repo" \
+                  timeout --signal=TERM --kill-after=30s 5m \
+                  "$bun_bin" scripts/package.ts \
+                  >>"$verification_log" 2>&1
+              package_status=$?
+              set -e
+              if [ "$package_status" -ne 0 ]; then
+                if [ "$package_status" -eq 124 ]; then
+                  verification_status="timed-out"
+                else
+                  verification_status="setup-failed"
+                fi
+                verification_exit_code="$package_status"
+              else
+                set +e
+                sudo unshare --net -- \
+                  sudo -u ai-issue-review -- env -i \
+                    AIDLC_NO_LLM=1 \
+                    CI=true \
+                    HOME="$test_home" \
+                    PATH="$PATH" \
+                    /bin/bash -c \
+                    'ulimit -f 20480; cd "$1"; shift; exec "$@"' \
+                    bash "$test_repo" \
+                    timeout --signal=TERM --kill-after=30s 10m \
+                    "$bun_bin" test "${bug_test_files[@]}" \
+                    >>"$verification_log" 2>&1
+                test_status=$?
+                set -e
+                verification_exit_code="$test_status"
+                if [ "$test_status" -eq 0 ]; then
+                  verification_status="tests-passed"
+                elif [ "$test_status" -eq 124 ]; then
+                  verification_status="timed-out"
+                else
+                  verification_status="tests-failed"
+                fi
+              fi
+            fi
+            sudo find "$test_root" -depth -delete
+          fi
+
+          verification_tail="$(mktemp)"
+          tail -c 20000 "$verification_log" \
+            | perl -pe \
+              's/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/[REDACTED-AWS-KEY-ID]/g; s/(?i)(aws_access_key_id|aws_secret_access_key|aws_session_token|x-amz-security-token)\s*[:=]\s*\S+/$1=[REDACTED]/g' \
+            > "$verification_tail"
+          jq -n \
+            --slurpfile triage .ai-issue-review-lenses/bug-triage.json \
+            --arg status "$verification_status" \
+            --argjson exitCode "$verification_exit_code" \
+            --rawfile outputTail "$verification_tail" \
+            '{triage: $triage[0], status: $status, exitCode: $exitCode, outputTail: $outputTail}' \
+            > /tmp/bug-verification.json
+          sudo install -m 640 -o runner -g ai-issue-review \
+            /tmp/bug-verification.json \
+            .ai-issue-review-context/bug-verification.json
+          rm -f "$verification_log" "$verification_tail"
 
           feasibility_prompt="$(
             cat \
@@ -394,7 +553,7 @@ jobs:
           )"
           judge_schema="$(jq -c . .github/prompts/ai-issue-review-judge-schema.json)"
           run_model \
-            "fable" \
+            "sol" \
             "Final issue-review judge" \
             100000 \
             ".ai-issue-review-final/review.md" \
@@ -404,10 +563,12 @@ jobs:
           bun .github/scripts/ai-issue-review.ts validate \
             --issue "$ISSUE_NUMBER" \
             --context-id "$CONTEXT_ID" \
+            --base "$BASE_SHA" \
             --input .ai-issue-review-final/review.md \
             --metadata .ai-issue-review-context/issue.json \
             --catalog .ai-issue-review-context/issue-catalog.json \
             --conversation .ai-issue-review-context/conversation.json \
+            --bug-verification .ai-issue-review-context/bug-verification.json \
             --repository-root "$GITHUB_WORKSPACE" \
             --output .ai-issue-review-final/comment.json
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -7,17 +8,20 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   buildImmutableContext,
   canonicalConversation,
   canonicalCurrentAidaReview,
   canonicalIssue,
   renderIssueReview,
+  type BugVerification,
   type IssueCatalogEntry,
   type IssueConversation,
   type IssueMetadata,
   type StructuredIssueReview,
+  validateBugTriage,
+  validateBugVerification,
   validateStructuredIssueReview,
 } from "../../.github/scripts/ai-issue-review.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -69,6 +73,19 @@ const PROMPT_INJECTION_PROMPT = readFileSync(
   join(REPO_ROOT, ".github", "prompts", "ai-issue-review-prompt-injection.md"),
   "utf8",
 );
+const JUDGE_PROMPT = readFileSync(
+  join(REPO_ROOT, ".github", "prompts", "ai-issue-review-judge.md"),
+  "utf8",
+);
+
+function commitFixture(root: string): string {
+  execFileSync("git", ["init", "--quiet"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "tests@example.com"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "AIDLC tests"], { cwd: root });
+  execFileSync("git", ["add", "."], { cwd: root });
+  execFileSync("git", ["commit", "--quiet", "-m", "fixture"], { cwd: root });
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+}
 
 function review(): StructuredIssueReview {
   return {
@@ -239,6 +256,8 @@ describe("t301 AI issue intent review", () => {
     try {
       mkdirSync(join(root, "docs"));
       writeFileSync(join(root, "docs", "direction.md"), "One intent becomes verified software.\n");
+      const base = commitFixture(root);
+      writeFileSync(join(root, "docs", "direction.md"), "Forged mutable workspace content.\n");
       const candidate = review();
       candidate.findings.push({
         level: "recommendation",
@@ -257,12 +276,29 @@ describe("t301 AI issue intent review", () => {
         JSON.stringify(candidate),
         ISSUE.number,
         CONTEXT_ID,
+        base,
         ISSUE,
         CATALOG,
         CONVERSATION,
         root,
       );
       expect(validated.findings).toHaveLength(4);
+
+      candidate.findings[3].evidence = [{
+        source: "REPOSITORY",
+        path: "docs/direction.md",
+        quote: "Forged mutable workspace content.",
+      }];
+      expect(() => validateStructuredIssueReview(
+        JSON.stringify(candidate),
+        ISSUE.number,
+        CONTEXT_ID,
+        base,
+        ISSUE,
+        CATALOG,
+        CONVERSATION,
+        root,
+      )).toThrow("REPOSITORY evidence quote is not present");
 
       candidate.findings[0].evidence = [{
         source: "ISSUE_BODY",
@@ -272,18 +308,137 @@ describe("t301 AI issue intent review", () => {
         JSON.stringify(candidate),
         ISSUE.number,
         CONTEXT_ID,
+        base,
         ISSUE,
         CATALOG,
         CONVERSATION,
         root,
       )).toThrow("evidence quote is not present");
+      candidate.findings[0].evidence = [{
+        source: "ISSUE_BODY",
+        quote: "before implementation",
+      }];
+
+      const untrustedPaths = [
+        ".ai-issue-review-context/conversation.json",
+        ".ai-issue-review-lenses/feasibility.md",
+        ".ai-issue-review-final/review.md",
+        "untracked.md",
+      ];
+      for (const path of untrustedPaths) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), "Forged review authority.\n");
+        candidate.findings[3].evidence = [{
+          source: "REPOSITORY",
+          path,
+          quote: "Forged review authority.",
+        }];
+        expect(() => validateStructuredIssueReview(
+          JSON.stringify(candidate),
+          ISSUE.number,
+          CONTEXT_ID,
+          base,
+          ISSUE,
+          CATALOG,
+          CONVERSATION,
+          root,
+        )).toThrow(
+          path.startsWith(".ai-issue-review-")
+            ? "unsafe repository evidence path"
+            : "not a trusted base file",
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("bug triage can select only bounded existing trusted tests", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-bug-triage-"));
+    try {
+      mkdirSync(join(root, "tests", "unit"), { recursive: true });
+      writeFileSync(join(root, "tests", "unit", "relevant.test.ts"), "export {};\n");
+      const base = commitFixture(root);
+      const triage = validateBugTriage(
+        JSON.stringify({
+          issue: ISSUE.number,
+          contextId: CONTEXT_ID,
+          classification: "bug-report",
+          confidence: "high",
+          rationale: "The conversation reports an existing supported behavior failing.",
+          testFiles: ["tests/unit/relevant.test.ts"],
+        }),
+        ISSUE.number,
+        CONTEXT_ID,
+        base,
+        root,
+      );
+      expect(triage.testFiles).toEqual(["tests/unit/relevant.test.ts"]);
+      expect(validateBugVerification({
+        triage,
+        status: "tests-failed",
+        exitCode: 1,
+        outputTail: "Expected true, received false.",
+      }, ISSUE.number, CONTEXT_ID, base, root).status).toBe("tests-failed");
+      expect(() => validateBugVerification({
+        triage,
+        status: "not-run",
+        exitCode: null,
+        outputTail: "",
+      }, ISSUE.number, CONTEXT_ID, base, root)).toThrow(
+        "bug verification with selected tests must record an execution result",
+      );
+      expect(() => validateBugTriage(
+        JSON.stringify({
+          ...triage,
+          testFiles: ["scripts/package.ts"],
+        }),
+        ISSUE.number,
+        CONTEXT_ID,
+        base,
+        root,
+      )).toThrow("unsupported test path");
+      writeFileSync(join(root, "tests", "unit", "untracked.test.ts"), "export {};\n");
+      expect(() => validateBugTriage(
+        JSON.stringify({
+          ...triage,
+          testFiles: ["tests/unit/untracked.test.ts"],
+        }),
+        ISSUE.number,
+        CONTEXT_ID,
+        base,
+        root,
+      )).toThrow("not a trusted base file");
+      expect(() => validateBugTriage(
+        JSON.stringify({
+          ...triage,
+          classification: "not-bug",
+        }),
+        ISSUE.number,
+        CONTEXT_ID,
+        base,
+        root,
+      )).toThrow("non-bug triage cannot select test files");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
   test("renderer produces one sectioned advisory AIDA comment", () => {
-    const payload = renderIssueReview(review());
+    const bugVerification: BugVerification = {
+      triage: {
+        issue: ISSUE.number,
+        contextId: CONTEXT_ID,
+        classification: "bug-report",
+        confidence: "high",
+        rationale: "The Issue reports a regression in existing behavior.",
+        testFiles: ["tests/unit/relevant.test.ts"],
+      },
+      status: "tests-failed",
+      exitCode: 1,
+      outputTail: "Expected true, received false.",
+    };
+    const payload = renderIssueReview(review(), bugVerification);
     expect(payload.body).toStartWith(`<!-- ai-issue-review issue=${ISSUE.number} -->`);
     expect(payload.body).toContain(`<!-- ai-issue-review context=${CONTEXT_ID} -->`);
     expect(payload.body).toContain(
@@ -295,6 +450,11 @@ describe("t301 AI issue intent review", () => {
     expect(payload.body).toContain("## Scope and Outcomes");
     expect(payload.body).toContain("## Feasibility and Dependencies");
     expect(payload.body).toContain("## Risks and Open Decisions");
+    expect(payload.body).toContain("## Bug Verification");
+    expect(payload.body).toContain(
+      "selected tests failed; the failure must be compared with the report",
+    );
+    expect(payload.body).toContain("<code>tests/unit/relevant.test.ts</code>");
     expect(payload.body).toContain("**Blocking question: Define the completion boundary**");
     expect(payload.body).toContain(
       "**Recommendation: Preserve the clarified conversational direction**",
@@ -319,6 +479,10 @@ describe("t301 AI issue intent review", () => {
   });
 
   test("workflow supports iterative human conversation with debounced, bounded execution", () => {
+    const admissionGuard = WORKFLOW.slice(
+      WORKFLOW.indexOf("    if: >-"),
+      WORKFLOW.indexOf("    concurrency:"),
+    );
     expect(WORKFLOW).toContain("issue_comment:");
     expect(WORKFLOW).toContain("- opened");
     expect(WORKFLOW).toContain("- created");
@@ -327,6 +491,9 @@ describe("t301 AI issue intent review", () => {
       "!startsWith(github.event.comment.body, '<!-- ai-issue-review issue=')",
     );
     expect(WORKFLOW).toContain("github.event.label.name == 'ai-review'");
+    expect(admissionGuard).toContain("github.event.comment.author_association");
+    expect(admissionGuard).toContain("github.event.issue.author_association");
+    expect(admissionGuard).toContain("github.event.issue.labels.*.name, 'ai-review'");
     expect(WORKFLOW).toContain("github.event.changes.title != null");
     expect(WORKFLOW).toContain("github.event.changes.body != null");
     expect(WORKFLOW).toContain('repos/$REPO/collaborators/$GITHUB_ACTOR/permission');
@@ -335,8 +502,18 @@ describe("t301 AI issue intent review", () => {
     expect(WORKFLOW).toContain("Coalesce rapid conversation updates");
     expect(WORKFLOW).toContain("run: sleep 45");
     expect(WORKFLOW).toContain("cancel-in-progress: true");
+    const jobTimeout = Number(WORKFLOW.match(/timeout-minutes: (\d+)/)?.[1]);
+    expect(jobTimeout).toBeGreaterThanOrEqual(100);
     expect(WORKFLOW).toContain("--conversation .ai-issue-review-context/conversation.json");
     expect(WORKFLOW).toContain("Issue conversation changed during publication");
+    expect(WORKFLOW).toContain("Bug-report classification");
+    expect(WORKFLOW).toContain("validate-triage");
+    expect(WORKFLOW).toContain('--base "$BASE_SHA"');
+    expect(WORKFLOW).toContain("unshare --net");
+    expect(WORKFLOW).toContain("env -i");
+    expect(WORKFLOW).toContain(`"$bun_bin" test "\${bug_test_files[@]}"`);
+    expect(WORKFLOW).toContain("ulimit -f 20480");
+    expect(WORKFLOW).toContain("--bug-verification .ai-issue-review-context/bug-verification.json");
     expect(WORKFLOW).toContain('stable_marker="<!-- ai-issue-review issue=$ISSUE_NUMBER -->"');
     expect(WORKFLOW).toContain('--method PATCH "repos/$REPO/issues/comments/$existing_id"');
     expect(WORKFLOW).toContain("already_reviewed=true");
@@ -354,6 +531,10 @@ describe("t301 AI issue intent review", () => {
     expect(WORKFLOW).toContain("Feasibility and contracts review");
     expect(WORKFLOW).toContain("Intent, direction, UX, and scope review");
     expect(WORKFLOW).toContain("Final issue-review judge");
+    expect(WORKFLOW).toMatch(
+      /run_model \\\n\s+"sol" \\\n\s+"Final issue-review judge"/,
+    );
+    expect(WORKFLOW).toContain("--output-schema");
     expect(WORKFLOW).toContain("model transcript was suppressed");
     expect(WORKFLOW).not.toContain('cat "$error_file"');
   });
@@ -371,6 +552,8 @@ describe("t301 AI issue intent review", () => {
     expect(PROMPT_INJECTION_PROMPT).toContain("active instruction");
     expect(PROMPT_INJECTION_PROMPT).toContain("blocking-question");
     expect(PROMPT_INJECTION_PROMPT).toContain("Maintainer product authority cannot waive");
+    expect(JUDGE_PROMPT).toContain("regular tracked files in the trusted base revision");
+    expect(JUDGE_PROMPT).toContain("Never cite `.ai-issue-review-*` artifacts");
     expect(DIRECTION_PROMPT).toContain("orchestrator speaks as a colleague");
     expect(DIRECTION_PROMPT).toContain("token cost");
   });
