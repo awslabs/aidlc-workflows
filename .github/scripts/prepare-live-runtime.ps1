@@ -37,7 +37,9 @@ $stage = $Mode
 $stateRoot = $null
 $git = 'C:\Program Files\Git\cmd\git.exe'
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$livePath = "$tools;$tools\npm;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+# Windows system directories precede Git so MSYS coreutils (whoami, find, sort)
+# never shadow the native tools, matching the hosted runner's own PATH order.
+$livePath = "$tools;$tools\npm;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin"
 
 # File handles detect hard links (not reparse points), including links to secrets
 # that the collecting administrator could read but the sandbox identity cannot.
@@ -773,7 +775,7 @@ try {
         }
         $state | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding UTF8
         $safe = Get-SafeEnvironment
-        $exitCode = Invoke-Isolated 'batch-logon' $safe "whoami /priv`nexit `$LASTEXITCODE" -TimeoutMinutes 2
+        $exitCode = Invoke-Isolated 'batch-logon' $safe "& '$env:SystemRoot\System32\whoami.exe' /priv`nexit `$LASTEXITCODE" -TimeoutMinutes 2
         if ($exitCode -ne 0) { throw 'Sandbox batch logon probe failed.' }
         # Fresh metadata cannot contain the original checkout's credential helpers.
         $gitBody = @'
