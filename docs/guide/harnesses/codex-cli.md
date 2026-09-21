@@ -7,11 +7,15 @@ byte-identical across every distribution — only the shell differs. The
 source/development tree is **generated** into ignored local `dist/codex/` from
 `core/` + `harness/codex/` by `bun scripts/package.ts codex`; never hand-edit it.
 
-Harness-specific onboarding lives in `.codex/onboarding.md`. The harness-neutral
-root `AGENTS.md` block tells Codex to read it when working in Codex and is shared
-with other installed harnesses whose engine directories differ.
-`.codex/config.toml` carries a human-readable comment pointing at that file, not
-a load path.
+Harness-specific onboarding is injected into every Codex session through
+`developer_instructions` in the project's `.codex/config.toml`, which Codex loads
+when the project is trusted. `.codex/onboarding.md` keeps the same content as a
+human-readable copy. The harness-neutral root `AGENTS.md` block lists that copy
+and is shared with other installed harnesses whose engine directories differ.
+The [Codex configuration reference](https://developers.openai.com/codex/config-reference/)
+documents `developer_instructions` as additional developer instructions injected
+into the session. Live injection was not verified on the review host; a live
+Codex session check remains the reviewer ask.
 
 ## Prerequisites
 

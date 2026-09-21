@@ -26,7 +26,7 @@ Each configured harness keeps its own onboarding file; only the files for harnes
 
 - **Claude Code**: `.claude/CLAUDE.md`
 - **Kiro CLI and Kiro IDE**: `.kiro/steering/aidlc-onboarding.md`
-- **Codex CLI**: `.codex/onboarding.md` (read it when working in Codex)
+- **Codex CLI**: `.codex/onboarding.md` (also injected into every Codex session through `developer_instructions` in `.codex/config.toml`)
 - **Cursor**: `.cursor/rules/aidlc-onboarding.mdc`
 - **opencode**: `.aidlc/onboarding.md`
 - **GitHub Copilot**: `AGENTS.md` itself

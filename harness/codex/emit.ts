@@ -89,11 +89,17 @@ function emitHooksJson(
   return JSON.stringify({ hooks }, null, 2) + "\n";
 }
 
-function emitConfigToml(): string {
+function emitConfigToml(onboarding: string): string {
+  if (onboarding.includes("'''")) {
+    throw new Error("Codex onboarding contains the TOML multiline literal delimiter (''').");
+  }
   return `# dist/codex shipped config — copy into the project's .codex/config.toml
 # (trusted projects) or merge into ~/.codex/config.toml.
-# Read .codex/onboarding.md for AI-DLC setup and Codex-specific commands.
-#
+
+# AI-DLC Codex onboarding, injected into every session (same content as .codex/onboarding.md).
+developer_instructions = '''
+${onboarding}'''
+
 # Model: these session defaults are what judgment-tier agent roles inherit
 # (their TOMLs omit model/model_reasoning_effort by design - see the tier
 # projection); balanced roles pin gpt-5.6-terra/medium, while templated roles inherit.
@@ -430,6 +436,8 @@ export default function emit(ctx: EmitContext): void {
     return out;
   }
 
+  const onboarding = readFileSync(join(CODEX_ROOT, "onboarding.md"), "utf-8")
+    .replaceAll(`${harnessDir}/skills/`, ".agents/skills/");
   const emissions: Array<{ path: string; content: () => string }> = [];
 
   // codex-only config + wiring + trust + native onboarding skills paths
@@ -438,7 +446,10 @@ export default function emit(ctx: EmitContext): void {
     content: () =>
       emitHooksJson(substituteToken, harnessName, trustedRouteNamespace),
   });
-  emissions.push({ path: join(CODEX_ROOT, "config.toml"), content: emitConfigToml });
+  emissions.push({
+    path: join(CODEX_ROOT, "config.toml"),
+    content: () => emitConfigToml(onboarding),
+  });
   emissions.push({
     path: join(CODEX_ROOT, "rules", "default.rules"),
     content: () =>
@@ -451,8 +462,7 @@ export default function emit(ctx: EmitContext): void {
   });
   emissions.push({
     path: join(CODEX_ROOT, "onboarding.md"),
-    content: () => readFileSync(join(CODEX_ROOT, "onboarding.md"), "utf-8")
-      .replaceAll(`${harnessDir}/skills/`, ".agents/skills/"),
+    content: () => onboarding,
   });
 
   // agent TOMLs from core/agents/*.md (one per shipped persona)

@@ -267,11 +267,26 @@ describe("t-active-space-includes: Codex config.toml AIDLC_RULES_DIR", () => {
 
   test("re-points AIDLC_RULES_DIR to the requested space; preserves model/sandbox/statusline", () => {
     const root = setup();
+    const before = readFileSync(join(root, ".codex", "config.toml"), "utf-8");
     const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".codex/config.toml"]);
     const cfg = readFileSync(join(root, ".codex", "config.toml"), "utf-8");
     expect(cfg).toContain('AIDLC_RULES_DIR = "aidlc/spaces/teamB/memory"');
     expect(cfg).not.toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+    expect(cfg).toBe(before.replace(
+      'AIDLC_RULES_DIR = "aidlc/spaces/default/memory"',
+      'AIDLC_RULES_DIR = "aidlc/spaces/teamB/memory"',
+    ));
+    // The parser's object return type omits these shipped Codex config fields.
+    const parsed = Bun.TOML.parse(cfg) as {
+      developer_instructions?: string;
+      shell_environment_policy?: { set?: Record<string, string> };
+    };
+    expect(parsed.shell_environment_policy).toMatchObject({
+      set: { AIDLC_RULES_DIR: "aidlc/spaces/teamB/memory" },
+    });
+    const parsedBefore = Bun.TOML.parse(before) as typeof parsed;
+    expect(parsed.developer_instructions).toBe(parsedBefore.developer_instructions);
     // Engine config preserved (the load-bearing reason config.toml stays committed).
     expect(cfg).toContain("model_provider");
     expect(cfg).toContain("sandbox_mode");

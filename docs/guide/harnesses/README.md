@@ -15,7 +15,7 @@ Onboarding is installed in each harness's native instruction surface:
 |---------|-----------------|
 | Claude Code | `.claude/CLAUDE.md` (full onboarding) |
 | Kiro CLI and Kiro IDE | `.kiro/steering/aidlc-onboarding.md` |
-| Codex CLI | `.codex/onboarding.md` (read it when working in Codex) |
+| Codex CLI | `.codex/onboarding.md` (also injected through `developer_instructions` in `.codex/config.toml` when the project is trusted) |
 | Cursor | `.cursor/rules/aidlc-onboarding.mdc` |
 | opencode | `.aidlc/onboarding.md` |
 | GitHub Copilot | Root `AGENTS.md` (full onboarding, including method imports) |

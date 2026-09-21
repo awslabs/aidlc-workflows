@@ -731,7 +731,10 @@ project content.
 directories differ and they do not share an exclusive managed block. `AGENTS.md`
 is neutral and byte-identical (`shared: "identical"`) across Kiro CLI, Kiro IDE,
 Codex, Cursor, and OpenCode, so any of those with distinct engine directories
-may coexist. Claude Code may coexist with any other harness. Copilot's `AGENTS.md`
+may coexist. Codex's harness-specific onboarding is injected through
+`developer_instructions` in the project `.codex/config.toml` when the project is
+trusted, with `.codex/onboarding.md` as its readable copy.
+Claude Code may coexist with any other harness. Copilot's `AGENTS.md`
 stays exclusive: pairing it with another harness that ships that block is refused
 with `cannot coexist in one project`, regardless of which is installed first.
 Kiro CLI and Kiro IDE still share `.kiro/`, and OpenCode and Copilot share `.aidlc/`,
