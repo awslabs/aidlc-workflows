@@ -2048,6 +2048,18 @@ export function providerSurfaceIssues(
           if (/^\[model_providers\.amazon-bedrock[^\]]*\]\s*$/m.test(text)) {
             entries.push("[model_providers.amazon-bedrock] table");
           }
+          if (/^model\s*=\s*"openai\.gpt-5\.5"\s*$/m.test(text)) {
+            entries.push("legacy shipped model pin");
+          }
+          if (/^model_context_window\s*=\s*1000000\s*$/m.test(text)) {
+            entries.push("legacy shipped context-window pin");
+          }
+          if (/^#[ \t]*model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(text)) {
+            entries.push("commented model_provider");
+          }
+          if (/^#[ \t]*\[model_providers\.amazon-bedrock[^\]]*\]\s*$/m.test(text)) {
+            entries.push("commented [model_providers.amazon-bedrock] table");
+          }
           if (entries.length > 0) {
             warning(
               "provider-codex-project-override",

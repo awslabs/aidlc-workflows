@@ -725,20 +725,18 @@ Locally modified framework-owned files conflict against the prior baseline.
 edits to hand-authored orchestrator prose. It does not claim unrelated
 project content.
 
-`.claude/settings.json`, `.codex/config.toml`, and `opencode.json` are the
-project's files. Provider, scope, and model answers apply their own keys in
-place; unrelated edits never cause ownership conflicts for those answers.
-An explicit `--from` still selects that source instead of the project's copy.
+Provider, scope, and model answers preserve project-owned fields in
+`.claude/settings.json` and `.codex/config.toml`. The Claude
+`companyAnnouncements`, `permissions`, `statusLine`, and `hooks` keys remain
+framework-owned. The Codex `[shell_environment_policy]`,
+`[sandbox_workspace_write]`, `[agents]`, `[features]`, `[tools]`, and `[tui]`
+tables also remain framework-owned. Local edits to those entries conflict
+against the baseline, and `--force` restores the shipped entries while
+retaining unrelated project-owned fields. An explicit `--from` selects that
+source instead of the project's copy.
 
-For Claude and Codex, a release refresh updates only shipped entries you have
-not changed: Claude's `companyAnnouncements`, `permissions`, `statusLine`, and
-`hooks` keys, and Codex's `[agents]`, `[features]`, `[tools]`, and `[tui]` tables.
-Your changed entry is kept, even with `--force`; when the release also changes
-it, config prints a `Note`. Delete the key or table and rerun `aidlc config`
-to take the shipped version. Other settings are carried forward, including
-Claude's `disableAllHooks`; provider and scope records still control their own
-environment values. Older baselines without entry hashes conservatively keep
-differing values in edited files and print the same note.
+`opencode.json` provider answers edit their attributed keys in place. An
+ordinary release refresh still applies the whole-file ownership policy.
 
 ### Root Integrations and Ownership
 

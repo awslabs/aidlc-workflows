@@ -1486,13 +1486,18 @@ function showDiagnosticSection(
       output += `  Offline credentials: ${credentials.hasCredentials ? "found" : "not found"}\n`;
       for (const source of credentials.sources) output += `    source: ${source}\n`;
     }
-    const pending = data.pendingActions as ReturnType<typeof pendingProviderIssues>;
-    for (const issue of pending) output += `  Pending: ${issue.id} - ${issue.message}\n`;
-    const warnings = (data.issues as DiagnosticIssue[]).filter(
-      (issue) => issue.severity === "warn",
+    const pending = new Set(
+      (data.pendingActions as ReturnType<typeof pendingProviderIssues>)
+        .map((issue) => issue.id),
     );
-    for (const issue of warnings) {
-      output += `  Warning: ${issue.id} - ${issue.message}\n`;
+    for (const issue of data.issues as DiagnosticIssue[]) {
+      const label = pending.has(issue.id)
+        ? "Pending"
+        : issue.severity === "warn"
+        ? "Warning"
+        : "Unmet";
+      output += `  ${label}: ${issue.id} - ${issue.message}\n`;
+      output += `    fix: ${issue.remediation}\n`;
     }
     output += "  Files carrying provider settings:\n";
     for (const entry of data.files as ReturnType<typeof providerFiles>) {
@@ -1740,23 +1745,37 @@ function diagnosticWizard(
         } region ${detected.region}.\n`
         : "  No AWS credentials were detected.\n",
     );
+    const recordedBedrock = records.providers?.provider === "amazon-bedrock"
+      ? records.providers
+      : null;
     process.stdout.write(
-      "    1. keep current     inherit the provider already configured in the harness (default)\n",
+      `    1. keep current     inherit the provider already configured in the harness${
+        recordedBedrock ? "" : " (default)"
+      }\n`,
     );
     process.stdout.write(`    2. amazon-bedrock   ${copy.bedrock}${
-      credentials.hasCredentials ? " (AWS credentials detected)" : ""
+      recordedBedrock
+        ? ` (recorded: ${recordedBedrock.region}, ${
+          recordedBedrock.profile || "default credential chain"
+        }; default)`
+        : credentials.hasCredentials
+        ? " (AWS credentials detected)"
+        : ""
     }\n`);
-    const choice = promptChoice("  Provider", 2, 1);
+    const choice = promptChoice("  Provider", 2, recordedBedrock ? 2 : 1);
     const providerAnswer = choice === 1
       ? "current"
       : "amazon-bedrock";
     const args = ["--provider", providerAnswer];
     const skipMarkDone = new Set<string>();
     if (choice === 2) {
-      const region = promptTextDefault("  AWS region", detected.region);
+      const region = promptTextDefault(
+        "  AWS region",
+        recordedBedrock?.region ?? detected.region,
+      );
       const profileAnswer = promptTextDefault(
         "  AWS profile",
-        "default credential chain",
+        recordedBedrock?.profile ?? "default credential chain",
       );
       const profile = profileAnswer === "default credential chain"
         ? ""
@@ -1771,7 +1790,7 @@ function diagnosticWizard(
       if (selected.harness === "opencode") {
         const offer = promptYesDefault(
           "  Write amazon-bedrock provider options to opencode.json?",
-          false,
+          recordedBedrock?.opencodeDefault ?? false,
         );
         args.push("--opencode-default", offer ? "yes" : "no");
       }
@@ -3686,35 +3705,29 @@ function preserveClaudeProviderFields(
   previousProvider: ProvidersRecord | null,
   nextProvider: ProvidersRecord | null,
   prior: Baseline | null,
-  notes: string[],
-): void {
+): boolean {
   const relative = `${harnessDir}/settings.json`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
   const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
   const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
   const pristine = sha256File(currentPath) === prior?.files[relative];
+  const priorEntries = prior?.entries?.[relative];
+  const frameworkOwnedClean = priorEntries
+    ? CLAUDE_SHIPPED_KEYS.every((key) => {
+      const priorHash = priorEntries[key];
+      if (!priorHash) return !Object.hasOwn(current, key);
+      return Object.hasOwn(current, key) &&
+        sha256Bytes(canonical(current[key])) === priorHash;
+    })
+    : pristine;
   for (const [key, value] of Object.entries(current)) {
     if (key === "env") continue;
-    // This file is the project's. Refresh only shipped entries that the user
-    // has not changed; all other top-level keys remain theirs.
-    if (!CLAUDE_SHIPPED_KEYS.includes(key) || !Object.hasOwn(staged, key)) {
+    // Preserve project-owned additions. Shipped enforcement keys remain
+    // baseline-owned so drift conflicts and --force restores them.
+    if (!CLAUDE_SHIPPED_KEYS.includes(key)) {
       staged[key] = value;
-      continue;
-    }
-    const priorHash = prior?.entries?.[relative]?.[key];
-    const currentValue = canonical(value);
-    if (priorHash ? sha256Bytes(currentValue) === priorHash : pristine) continue;
-    const releaseValue = canonical(staged[key]);
-    staged[key] = value;
-    if (
-      releaseValue !== currentValue &&
-      (!priorHash || sha256Bytes(releaseValue) !== priorHash)
-    ) {
-      notes.push(
-        `kept your ${key} in ${relative}; this release ships a different ${key}. Delete the key and rerun 'aidlc config' to take the shipped one.`,
-      );
     }
   }
   const currentEnv = current.env && typeof current.env === "object" &&
@@ -3774,9 +3787,12 @@ function preserveClaudeProviderFields(
   delete currentEnv.AWS_AIDLC_DEFAULT_SCOPE;
   staged.env = { ...stagedEnv, ...currentEnv };
   writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
+  return frameworkOwnedClean;
 }
 
 const CODEX_FRAMEWORK_TABLES = new Set([
+  "shell_environment_policy",
+  "sandbox_workspace_write",
   "agents",
   "features",
   "tools",
@@ -3817,13 +3833,12 @@ function mergeCodexUserConfiguration(
   current: string,
   priorEntries: Record<string, string> | undefined,
   pristine: boolean,
-  relative: string,
-  notes: string[],
-): string {
-  // Keep the project's bytes as the base and refresh only shipped tables the
-  // user has not changed. Unchanged tables are byte-idempotent; model/provider
-  // assignments and custom tables remain the project's settings.
+): { content: string; frameworkOwnedClean: boolean } {
+  // Keep project model/provider assignments and custom tables, but always
+  // stage framework tables from the release. Local drift in those tables
+  // remains visible to the ownership planner.
   let merged = current;
+  let frameworkOwnedClean = true;
   const generatedFrameworkSections = codexSections(staged).filter((section) =>
     CODEX_FRAMEWORK_TABLES.has(section.name)
   );
@@ -3835,26 +3850,22 @@ function mergeCodexUserConfiguration(
     );
     const existing = pattern.exec(merged)?.[0];
     const currentText = existing?.replaceAll("\r\n", "\n").trimEnd();
-    if (currentText === section.text) continue;
     const priorHash = priorEntries?.[section.name];
-    if (
-      currentText !== undefined &&
-      (priorHash ? sha256Bytes(currentText) !== priorHash : !pristine)
-    ) {
-      if (!priorHash || sha256Bytes(section.text) !== priorHash) {
-        notes.push(
-          `kept your [${section.name}] table in ${relative}; this release ships a different one. Delete the table and rerun 'aidlc config' to take the shipped one.`,
-        );
-      }
-      continue;
-    }
+    const owned = priorHash
+      ? currentText !== undefined && sha256Bytes(currentText) === priorHash
+      : pristine;
+    if (!owned) frameworkOwnedClean = false;
+    if (currentText === section.text) continue;
     if (existing !== undefined) {
       merged = merged.replace(pattern, () => `${section.text}\n\n`);
     } else {
       merged = `${merged.trimEnd()}\n\n${section.text}\n`;
     }
   }
-  return merged.endsWith("\n") ? merged : `${merged}\n`;
+  return {
+    content: merged.endsWith("\n") ? merged : `${merged}\n`,
+    frameworkOwnedClean,
+  };
 }
 
 function preserveCodexProviderFields(
@@ -3862,24 +3873,20 @@ function preserveCodexProviderFields(
   stagedRoot: string,
   harnessDir: string,
   prior: Baseline | null,
-  notes: string[],
-): void {
+): boolean {
   const relative = `${harnessDir}/config.toml`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
   const current = readFileSync(currentPath, "utf-8");
-  writeFileSync(
-    stagedPath,
-    mergeCodexUserConfiguration(
-      readFileSync(stagedPath, "utf-8"),
-      current,
-      prior?.entries?.[relative],
-      sha256Bytes(current) === prior?.files[relative],
-      relative,
-      notes,
-    ),
+  const merged = mergeCodexUserConfiguration(
+    readFileSync(stagedPath, "utf-8"),
+    current,
+    prior?.entries?.[relative],
+    sha256Bytes(current) === prior?.files[relative],
   );
+  writeFileSync(stagedPath, merged.content);
+  return merged.frameworkOwnedClean;
 }
 
 function preserveOpenCodeProviderFields(
@@ -3914,23 +3921,22 @@ function preserveUserProviderFields(
   previousProvider: ProvidersRecord | null,
   nextProvider: ProvidersRecord | null,
   prior: Baseline | null,
-  notes: string[],
-): void {
+): boolean {
   if (harness === "claude") {
-    preserveClaudeProviderFields(
+    return preserveClaudeProviderFields(
       projectDir,
       stagedRoot,
       harnessDir,
       previousProvider,
       nextProvider,
       prior,
-      notes,
     );
   } else if (harness === "codex") {
-    preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior, notes);
+    return preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior);
   } else if (harness === "opencode") {
     preserveOpenCodeProviderFields(projectDir, stagedRoot);
   }
+  return true;
 }
 
 function prepareRefreshSource(
@@ -4096,9 +4102,9 @@ function prepareRefreshSource(
       regenerated.add(integration.path);
     }
   }
-  // The configuration files are the project's; preservation refreshes only
-  // shipped entries the user has not changed and carries their other settings.
-  preserveUserProviderFields(
+  // Preserve project-owned provider/model fields and unrelated additions.
+  // Framework-owned enforcement entries remain tied to the baseline.
+  const configurationOwnershipClean = preserveUserProviderFields(
     projectDir,
     root,
     descriptor.harnessDir,
@@ -4106,7 +4112,6 @@ function prepareRefreshSource(
     previousProvider,
     normalizeProvidersRecord(staged.providers),
     prior,
-    notes,
   );
   // User environment preservation intentionally excludes this managed value,
   // but reapply it here to keep the ordering explicit.
@@ -4131,12 +4136,16 @@ function prepareRefreshSource(
     },
     previousProvider,
   );
-  // Every staged entry is either the user's value or an unchanged AI-DLC entry
-  // refreshed from the release, so these files never have ownership conflicts.
+  // Provider/model fields can be updated in place only while framework-owned
+  // entries still match the recorded baseline.
   if (modelHarness(distribution) === "claude") {
-    regenerated.add(`${descriptor.harnessDir}/settings.json`);
+    const rel = `${descriptor.harnessDir}/settings.json`;
+    if (configurationOwnershipClean) regenerated.add(rel);
+    else regenerated.delete(rel);
   } else if (modelHarness(distribution) === "codex") {
-    regenerated.add(`${descriptor.harnessDir}/config.toml`);
+    const rel = `${descriptor.harnessDir}/config.toml`;
+    if (configurationOwnershipClean) regenerated.add(rel);
+    else regenerated.delete(rel);
   }
   // Kiro CLI: the aws-mcp region is the project's own MCP setting, not a provider
   // answer, so the staged file takes it from the project rather than the release.
@@ -4325,6 +4334,13 @@ function prepareRefreshSource(
         if (!regularFile(currentPath) || sha256File(currentPath) !== sha256File(join(root, rel))) {
           regenerated.add(rel);
         }
+      }
+    }
+    if (!configurationOwnershipClean) {
+      if (modelHarness(distribution) === "claude") {
+        regenerated.delete(`${descriptor.harnessDir}/settings.json`);
+      } else if (modelHarness(distribution) === "codex") {
+        regenerated.delete(`${descriptor.harnessDir}/config.toml`);
       }
     }
   }
@@ -5233,15 +5249,19 @@ function renderFirstRunEnding(
   process.stdout.write(
     `\n  Writing project files ... ${successText("done", process.stdout)}  (${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)\n`,
   );
-  process.stdout.write(
-    `  Recording model preset ... ${successText("done", process.stdout)}  (${
-      choices.target === "project"
-        ? "aidlc.settings.json in this project"
-        : choices.target === "local"
-        ? "aidlc.settings.local.json in this project"
-        : settingsPathForTarget(projectDir, choices.target)
-    })\n`,
-  );
+  if (choices.preset === "unchanged") {
+    process.stdout.write("  Model preset ... left unchanged\n");
+  } else {
+    process.stdout.write(
+      `  Recording model preset ... ${successText("done", process.stdout)}  (${
+        choices.target === "project"
+          ? "aidlc.settings.json in this project"
+          : choices.target === "local"
+          ? "aidlc.settings.local.json in this project"
+          : settingsPathForTarget(projectDir, choices.target)
+      })\n`,
+    );
+  }
   const remaining = postApplyOutstandingActions(
     projectDir,
     choices.candidate.descriptor.harnessDir,

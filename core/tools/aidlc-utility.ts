@@ -3238,10 +3238,9 @@ export async function collectDoctorReport(
           (settingsHooks === undefined || sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash)
         ) {
           results.push({
-            pass: true,
-            severity: "warn",
+            pass: false,
             label: "hooks in .claude/settings.json differ from the shipped wiring (you changed them)",
-            fix: `if unintended, delete the hooks key and rerun \`${aidlcInvocation()} config\` to restore the shipped registrations`,
+            fix: `rerun \`${aidlcInvocation()} config --force\` to restore the shipped registrations`,
           });
         }
       } catch {

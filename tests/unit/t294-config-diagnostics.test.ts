@@ -1041,14 +1041,34 @@ describe("t294 trust diagnostics", () => {
       writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
       const moved = doctor();
       expect(moved.checks).toContainEqual(expect.objectContaining({
-        pass: true,
-        severity: "warn",
+        pass: false,
         label: driftLabel,
       }));
       expect(moved.checks.some((check) => check.label.includes("shipped but not wired")))
         .toBe(false);
-      expect(moved.failed).toBe(pristine.failed);
-      expect(moved.status).toBe(pristine.status);
+      expect(moved.failed).toBeGreaterThan(pristine.failed);
+      expect(moved.status).toBe(1);
+
+      for (const variant of ["matcher", "command"]) {
+        settings.hooks = structuredClone(shippedHooks);
+        const registration = settings.hooks.PreToolUse.find(
+          (candidate: { hooks: Array<{ command: string }> }) =>
+            candidate.hooks.some((entry) => entry.command.includes("plan-approval-guard")),
+        );
+        expect(registration).toBeDefined();
+        if (variant === "matcher") {
+          registration.matcher = "Write";
+        } else {
+          registration.hooks[0].command += " --changed";
+        }
+        writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+        const altered = doctor();
+        expect(altered.checks).toContainEqual(expect.objectContaining({
+          pass: false,
+          label: driftLabel,
+        }));
+        expect(altered.status).toBe(1);
+      }
 
       settings.hooks = structuredClone(shippedHooks);
 
@@ -1067,17 +1087,16 @@ describe("t294 trust diagnostics", () => {
       expect(unwired.status).toBe(1);
 
       const refreshed = run(args, project, env);
-      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-      const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
-      expect(after.hooks).toEqual(settings.hooks);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+      expect(refreshed.stdout + refreshed.stderr).toContain(
+        ".claude/settings.json (locally modified or unowned)",
+      );
       const stillUnwired = doctor();
       expect(stillUnwired.checks).toContainEqual(expect.objectContaining({ pass: false, label }));
       expect(stillUnwired.failed).toBeGreaterThan(0);
       expect(stillUnwired.status).toBe(1);
 
-      delete after.hooks;
-      writeFileSync(settingsPath, `${JSON.stringify(after, null, 2)}\n`);
-      const restored = run(args, project, env);
+      const restored = run([...args, "--force"], project, env);
       expect(restored.status, restored.stdout + restored.stderr).toBe(0);
       expect(JSON.parse(readFileSync(settingsPath, "utf-8")).hooks).toEqual(shippedHooks);
       const repaired = doctor();
@@ -1762,7 +1781,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(secondText).toBe(firstText);
   }, 60_000);
 
-  test("provider mutation and later refresh preserve unrelated Claude and Codex settings", () => {
+  test("provider mutation preserves project fields but rejects Codex framework drift", () => {
     const env = runtimeEnv();
     const claude = install("claude");
     const claudePath = join(claude, ".claude", "settings.json");
@@ -1808,10 +1827,19 @@ describe("t294 config diagnostics CLI", () => {
     const codexPath = join(codex, ".codex", "config.toml");
     writeFileSync(
       codexPath,
-      readFileSync(codexPath, "utf-8").replace(
-        'sandbox_mode = "workspace-write"',
-        'sandbox_mode = "read-only"',
-      ),
+      (
+        `model = "team-model"\nmodel_provider = "team-provider"\n\n` +
+        `[model_providers.team-provider]\nname = "Team Provider"\n\n` +
+        readFileSync(codexPath, "utf-8")
+      )
+        .replace(
+          'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }',
+          'set = { AIDLC_RULES_DIR = "team/rules" }',
+        )
+        .replace(
+          'sandbox_mode = "workspace-write"',
+          'sandbox_mode = "read-only"',
+        ),
     );
     const codexRecorded = run([
       "config",
@@ -1828,6 +1856,8 @@ describe("t294 config diagnostics CLI", () => {
     ).toBe(0);
     expect(readFileSync(codexPath, "utf-8"))
       .toContain('sandbox_mode = "read-only"');
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('AIDLC_RULES_DIR = "team/rules"');
     const codexRefreshed = run([
       "config",
       "--project-dir",
@@ -1837,12 +1867,29 @@ describe("t294 config diagnostics CLI", () => {
     expect(
       codexRefreshed.status,
       codexRefreshed.stdout + codexRefreshed.stderr,
-    ).toBe(0);
+    ).toBe(4);
     expect(readFileSync(codexPath, "utf-8"))
       .toContain('sandbox_mode = "read-only"');
+    const codexRepaired = run([
+      "config",
+      "--project-dir",
+      codex,
+      "--force",
+      "--yes",
+    ], codex, env);
+    expect(codexRepaired.status, codexRepaired.stdout + codexRepaired.stderr)
+      .toBe(0);
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('sandbox_mode = "workspace-write"');
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain('model = "team-model"');
+    expect(readFileSync(codexPath, "utf-8"))
+      .toContain("[model_providers.team-provider]");
   }, 90_000);
 
-  test("refresh keeps user Claude permissions and never conflicts", () => {
+  test("refresh conflicts on Claude permissions drift and force restores the baseline", () => {
     const project = install("claude");
     const env = runtimeEnv();
     expect(run([
@@ -1873,15 +1920,28 @@ describe("t294 config diagnostics CLI", () => {
       "claude",
       "--yes",
     ], project, env);
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+    expect(readFileSync(settingsPath, "utf-8")).toBe(edited);
+    const forced = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--force",
+      "--yes",
+    ], project, env);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
     const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    expect(after.permissions).toEqual(settings.permissions);
-    expect(after.env).toEqual(settings.env);
+    expect(after.permissions).not.toEqual(settings.permissions);
+    expect(after.permissions.deny).toBeUndefined();
+    expect(after.env.MY_TEAM_SETTING).toBe("preserved");
     expect(after.hooks).toEqual(settings.hooks);
-    expect(refreshed.stdout).not.toContain("Note: kept your permissions");
   }, 60_000);
 
-  test("refresh with a Bedrock record keeps user Claude settings and never conflicts", () => {
+  test("Bedrock refresh preserves project fields but rejects Claude framework drift", () => {
     const env = runtimeEnv();
     for (const change of ["permissions", "env", "pristine"]) {
       const project = install("claude");
@@ -1899,6 +1959,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(configured.status, configured.stdout + configured.stderr).toBe(0);
       const settingsPath = join(project, ".claude", "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      const shippedPermissions = structuredClone(settings.permissions);
       if (change !== "pristine") settings.env.MY_TEAM_SETTING = "preserved";
       if (change === "permissions") {
         settings.permissions = {
@@ -1908,7 +1969,7 @@ describe("t294 config diagnostics CLI", () => {
       }
       const edited = `${JSON.stringify(settings, null, 2)}\n`;
       if (change !== "pristine") writeFileSync(settingsPath, edited);
-      const refreshed = run([
+      let refreshed = run([
         "config",
         "--project-dir",
         project,
@@ -1918,16 +1979,32 @@ describe("t294 config diagnostics CLI", () => {
         "claude",
         "--yes",
       ], project, env);
-      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr)
+        .toBe(change === "permissions" ? 4 : 0);
+      if (change === "permissions") {
+        refreshed = run([
+          "config",
+          "--project-dir",
+          project,
+          "--from",
+          join(DIST_RELEASE, "claude"),
+          "--harness",
+          "claude",
+          "--force",
+          "--yes",
+        ], project, env);
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      }
       const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
-      expect(after.permissions).toEqual(settings.permissions);
+      expect(after.permissions).toEqual(
+        change === "permissions" ? shippedPermissions : settings.permissions,
+      );
       expect(after.hooks).toEqual(settings.hooks);
       expect(after.env).toEqual(expect.objectContaining({
         CLAUDE_CODE_USE_BEDROCK: "1",
         AWS_REGION: "us-east-1",
       }));
       if (change !== "pristine") expect(after.env.MY_TEAM_SETTING).toBe("preserved");
-      expect(refreshed.stdout).not.toContain("Note: kept your permissions");
       if (change === "permissions") {
         const current = run([
           "config",
@@ -1940,7 +2017,7 @@ describe("t294 config diagnostics CLI", () => {
         ], project, env);
         expect(current.status, current.stdout + current.stderr).toBe(0);
         const optedOut = JSON.parse(readFileSync(settingsPath, "utf-8"));
-        expect(optedOut.permissions).toEqual(settings.permissions);
+        expect(optedOut.permissions).toEqual(shippedPermissions);
         expect(optedOut.env.MY_TEAM_SETTING).toBe("preserved");
         expect(optedOut.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
         expect(optedOut.hooks).toEqual(settings.hooks);
@@ -1984,7 +2061,7 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 120_000);
 
-  test("refresh updates only the shipped Claude entries the user has not changed", () => {
+  test("refresh rejects changed shipped Claude entries and force restores them", () => {
     const env = runtimeEnv();
     const source = temp("aidlc-t294-claude-entries-source-");
     cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
@@ -2031,22 +2108,23 @@ describe("t294 config diagnostics CLI", () => {
       "claude",
       "--yes",
     ];
-    const note = "kept your permissions in .claude/settings.json";
     const dryRun = run([...args, "--dry-run"], project, env);
-    expect(dryRun.status, dryRun.stdout + dryRun.stderr).toBe(0);
-    expect(dryRun.stdout).toContain(`Note: ${note}`);
+    expect(dryRun.status, dryRun.stdout + dryRun.stderr).toBe(4);
+    expect(dryRun.stdout + dryRun.stderr).toContain(
+      ".claude/settings.json (locally modified or unowned)",
+    );
     expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual(settings);
     const dryJson = run([...args, "--dry-run", "--json"], project, env);
-    expect(dryJson.status, dryJson.stdout + dryJson.stderr).toBe(0);
-    expect(JSON.parse(dryJson.stdout).data.notes)
-      .toContainEqual(expect.stringContaining(note));
+    expect(dryJson.status, dryJson.stdout + dryJson.stderr).toBe(4);
 
     const refreshed = run(args, project, env);
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).toContain(`Note: ${note}`);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual(settings);
+    const forced = run([...args, "--force"], project, env);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
     const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    expect(after.permissions).toEqual(settings.permissions);
-    expect(after.permissions.allow).not.toContain("Bash(team-tool:*)");
+    expect(after.permissions).toEqual(release.permissions);
+    expect(after.permissions.allow).toContain("Bash(team-tool:*)");
     expect(after.hooks.Stop).toEqual(release.hooks.Stop);
     const baseline = JSON.parse(readFileSync(
       join(project, ".claude", "tools", "data", "aidlc-manifest.json"),
@@ -2060,7 +2138,7 @@ describe("t294 config diagnostics CLI", () => {
     });
   }, 120_000);
 
-  test("refresh keeps a user-edited Codex framework table and reports it", () => {
+  test("refresh rejects a user-edited Codex framework table and force restores it", () => {
     const env = runtimeEnv();
     const project = install("codex");
     const configPath = join(project, ".codex", "config.toml");
@@ -2076,10 +2154,9 @@ describe("t294 config diagnostics CLI", () => {
       project,
       "--yes",
     ], project, env);
-    expect(ordinary.status, ordinary.stdout + ordinary.stderr).toBe(0);
+    expect(ordinary.status, ordinary.stdout + ordinary.stderr).toBe(4);
     expect(parseToml(readFileSync(configPath, "utf-8")).tui)
       .toEqual({ status_line: userStatus });
-    expect(ordinary.stdout).not.toContain("Note: kept your [tui]");
 
     const source = temp("aidlc-t294-codex-entries-source-");
     cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
@@ -2099,10 +2176,23 @@ describe("t294 config diagnostics CLI", () => {
       "codex",
       "--yes",
     ], project, env);
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).toContain("Note: kept your [tui] table in .codex/config.toml");
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
     expect(parseToml(readFileSync(configPath, "utf-8")).tui)
       .toEqual({ status_line: userStatus });
+    const forced = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      source,
+      "--harness",
+      "codex",
+      "--force",
+      "--yes",
+    ], project, env);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    expect(parseToml(readFileSync(configPath, "utf-8")).tui)
+      .toEqual({ status_line: releaseStatus });
 
     const pristine = install("codex");
     const pristineRefresh = run([
@@ -2125,6 +2215,8 @@ describe("t294 config diagnostics CLI", () => {
     expect(baseline.entries[".codex/config.toml"]).toEqual({
       agents: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       features: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      sandbox_workspace_write: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      shell_environment_policy: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tui: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     });
@@ -2199,7 +2291,7 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 120_000);
 
-  test("provider answers apply in place and never conflict with unrelated edits", () => {
+  test("provider answers preserve project fields and reject framework drift", () => {
     const env = runtimeEnv();
     const opencode = install("opencode");
     const opencodePath = join(opencode, "opencode.json");
@@ -2254,9 +2346,9 @@ describe("t294 config diagnostics CLI", () => {
       "current",
       "--yes",
     ], codex, env);
-    expect(codexAnswer.status, codexAnswer.stdout + codexAnswer.stderr).toBe(0);
+    expect(codexAnswer.status, codexAnswer.stdout + codexAnswer.stderr).toBe(4);
     const codexAfter = readFileSync(codexPath, "utf-8");
-    expect(codexAfter).toBe(edited);
+    expect(codexAfter).toBe(legacyBlock + edited);
     expect(parseToml(codexAfter).tui).toEqual({ status_line: userStatus });
   }, 120_000);
 
@@ -2537,8 +2629,13 @@ describe("t294 config diagnostics CLI", () => {
         "--check",
       ], project, env);
       expect(check.status, check.stdout + check.stderr).toBe(0);
-      expect(check.stdout).toContain("clean for codex");
-      expect(check.stdout).not.toContain("provider-codex-project-override");
+      if (effort === "high") {
+        expect(check.stdout).toContain("clean for codex");
+        expect(check.stdout).not.toContain("provider-codex-project-override");
+      } else {
+        expect(check.stdout).toContain("warning");
+        expect(check.stdout).toContain("provider-codex-project-override");
+      }
     }
   }, 120_000);
 
@@ -2999,6 +3096,47 @@ describe("t294 config diagnostics CLI", () => {
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("provider-claude-project-override");
     expect(check.stdout).toContain("warning");
+  }, 60_000);
+
+  test("providers show renders blocking issues and their remediation", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const recorded = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "current",
+      "--yes",
+    ], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "us-east-1",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "global.anthropic.claude-fable-5[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "global.anthropic.claude-opus-4-8[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "global.anthropic.claude-sonnet-4-6[1m]",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL:
+        "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const show = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--show",
+    ], project, env);
+    expect(show.status, show.stdout + show.stderr).toBe(0);
+    expect(show.stdout).toContain(
+      "Unmet: provider-claude-project-override - Claude settings still carry the legacy AI-DLC Bedrock defaults",
+    );
+    expect(show.stdout).toContain(
+      "fix: Run aidlc config providers again to reapply the recorded answer",
+    );
   }, 60_000);
 
   test("provider flags refuse builtin and harness-owned access without writing", () => {

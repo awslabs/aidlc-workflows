@@ -265,6 +265,8 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toContain("Keeping existing settings unchanged; no preset recorded.");
     expect(result.stdout).toContain("3. Preset       none (unchanged)");
     expect(result.stdout).not.toContain("Using the unchanged preset.");
+    expect(result.stdout).not.toContain("Recording model preset");
+    expect(result.stdout).toContain("Model preset ... left unchanged");
     expect(result.stdout).toContain("Setup complete.");
     expect(existsSync(join(result.project, ".claude", "settings.json"))).toBe(true);
     for (const path of [

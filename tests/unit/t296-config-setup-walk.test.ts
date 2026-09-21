@@ -527,6 +527,60 @@ describe("t296 first-run config setup walk", () => {
     );
   }, 60_000);
 
+  test("re-entering a recorded Bedrock answer preserves its defaults and pending state", () => {
+    const path = project("aidlc-t296-recorded-bedrock-");
+    const env = hookPathEnv("aidlc", true, {
+      AWS_ACCESS_KEY_ID: "test-access",
+      AWS_SECRET_ACCESS_KEY: "test-secret",
+      AWS_REGION: "us-east-2",
+    });
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    expect(run([
+      "config",
+      "models",
+      "--project-dir",
+      path,
+      "--project",
+      "--preset",
+      "balanced",
+      "--yes",
+    ], path, env).status).toBe(0);
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      path,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "eu-west-1",
+      "--profile",
+      "team",
+      "--yes",
+    ], path, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const beforeRecord = readConfigDiagnosticRecords(join(path, ".claude")).providers;
+    const settingsPath = join(path, ".claude", "settings.json");
+    const beforeSettings = readFileSync(settingsPath);
+
+    const walked = run(
+      ["config", "--project-dir", path],
+      path,
+      env,
+      "\n\n\n\n\n",
+    );
+    expect(walked.status, walked.stdout + walked.stderr).toBe(0);
+    expect(walked.stdout).toContain(
+      "2. amazon-bedrock   write the AWS region and profile to settings.json (recorded: eu-west-1, team; default)",
+    );
+    expect(walked.stdout).toContain("Provider [2]:");
+    expect(walked.stdout).toContain("AWS region [eu-west-1]:");
+    expect(walked.stdout).toContain("AWS profile [team]:");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
+      .toEqual(beforeRecord);
+    expect(readFileSync(settingsPath)).toEqual(beforeSettings);
+  }, 90_000);
+
   test("non-TTY human output is byte-identical to the pre-walk completion", () => {
     const path = project("aidlc-t296-nontty-snapshot-");
     const result = run(
