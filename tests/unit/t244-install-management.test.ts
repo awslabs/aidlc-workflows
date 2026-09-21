@@ -2432,4 +2432,20 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).not.toContain("\n  push:");
   });
 
+  test("CI test jobs build the projections before running their tiers", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      on: { pull_request: { branches: string[] } };
+      jobs: Record<string, { steps: Array<{ run?: string }> }>;
+    };
+    expect(ci.on.pull_request.branches).toContain("main");
+    expect(ci.on.pull_request.branches).not.toContain("v2");
+    for (const name of ["test_smoke", "test_unit", "test_native_terminal"]) {
+      const steps = ci.jobs[name].steps;
+      const build = steps.findIndex((step) => step.run?.trim().startsWith("bun scripts/package.ts"));
+      const run = steps.findIndex((step) => step.run?.includes("tests/run-tests.ts"));
+      expect(build, `${name} must regenerate its projections`).toBeGreaterThanOrEqual(0);
+      expect(run, `${name} must invoke the test runner`).toBeGreaterThanOrEqual(0);
+      expect(build, `${name} must build before running its tier`).toBeLessThan(run);
+    }
+  });
 });
