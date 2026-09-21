@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveRunnerArgs, PLATFORM_ONLY, type LiveFamily } from "../../scripts/ci-live-filter.ts";
+import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveRunnerArgs, liveRunnerCommand, PLATFORM_ONLY, type LiveFamily } from "../../scripts/ci-live-filter.ts";
 import { FULL_SUITE_JOBS, fullSuiteResult, type SuiteNeeds } from "../../scripts/ci-full-suite-result.ts";
 import { credentialProcessResponse } from "../../scripts/ci-aws-credential-process.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
@@ -46,7 +46,11 @@ function platformOf(runner: string | string[]): string {
 
 function rows(job: Job): Array<{ family: LiveFamily; platform: string }> {
   const matrix = job.strategy?.matrix;
-  if (matrix?.include) return matrix.include.map((row) => ({ family: row.family as LiveFamily, platform: platformOf(row.runner) }));
+  if (matrix?.include) return matrix.include.map((row) => {
+    const platform = platformOf(row.runner);
+    expect(row.platform).toBe(platform);
+    return { family: row.family as LiveFamily, platform };
+  });
   return (matrix?.family ?? []).map((family) => ({ family, platform: platformOf(job["runs-on"]) }));
 }
 
@@ -86,6 +90,8 @@ describe("t345 complete nightly coverage", () => {
       if (!jobName.startsWith("live_")) continue;
       for (const step of job.steps) {
         expect(step.run ?? "").not.toMatch(/--(?:no-llm|unit|integration|e2e|isolated-e2e|bedrock-parallel|kiro-parallel|ide-parallel|require-coverage)\b/);
+        expect(step.run ?? "").not.toContain("mapfile");
+        expect(step.run ?? "").not.toContain(`\${ARGS`);
       }
       for (const row of rows(job)) {
         const family = FAMILIES[row.family];
@@ -94,10 +100,8 @@ describe("t345 complete nightly coverage", () => {
         const run = job.steps.find((step) => step.run?.includes(`ci-live-filter.ts ${row.family} `));
         expect(run, `${jobName}/${row.family} command`).toBeDefined();
         expect({ ...job.env, ...run!.env }).toMatchObject(family.env);
-        expect(run!.run).toContain("--platform ");
-        expect(run!.run).toContain("mapfile -t ARGS < <(");
-        expect(run!.run).toContain("--args)");
-        expect(run!.run).toContain(`bun tests/run-tests.ts --debug -P 4 "\${ARGS[@]}"`);
+        const command = run!.run!.replaceAll(`\${{ matrix.platform }}`, row.platform).trim();
+        expect(command).toBe(`bun scripts/ci-live-filter.ts ${row.family} --platform ${row.platform} --run -- --debug -P 4`);
         expect(job["runs-on"].includes("self-hosted")).toBe(family.hosting === "self-hosted");
       }
     }
@@ -119,6 +123,12 @@ describe("t345 complete nightly coverage", () => {
         expect(args.at(-2)).toBe("--filter");
         const regex = new RegExp(args.at(-1)!);
         expect([...discoverLiveFiles(REPO_ROOT).keys()].filter((file) => aliases(file).some((alias) => regex.test(alias))).sort()).toEqual(selected);
+        expect(liveRunnerCommand(family as LiveFamily, platform, [])).toEqual([join(REPO_ROOT, "tests/run-tests.ts"), ...args]);
+        const passthrough = ["--debug", "-P", "4"];
+        expect(liveRunnerCommand(family as LiveFamily, platform, passthrough)).toEqual([join(REPO_ROOT, "tests/run-tests.ts"), ...passthrough, ...args]);
+        const result = spawnSync(process.execPath, [
+          join(REPO_ROOT, "scripts/ci-live-filter.ts"), family, "--platform", platform, "--run", "--", "--e2e-plan",
+        ], { cwd: tmpdir(), encoding: "utf8", timeout: 15_000 });
         if (args.includes("--e2e")) {
           expect(args).toContain("--isolated-e2e");
           if (spec.resources === "kiro") {
@@ -130,9 +140,6 @@ describe("t345 complete nightly coverage", () => {
             expect(args).not.toContain("--kiro-parallel");
             expect(args).not.toContain("--ide-parallel");
           }
-          const result = spawnSync(process.execPath, [join(REPO_ROOT, "tests/run-tests.ts"), ...args, "--e2e-plan"], {
-            cwd: REPO_ROOT, encoding: "utf8", timeout: 15_000,
-          });
           expect(result.status, result.stdout + result.stderr).toBe(0);
           const plan = JSON.parse(result.stdout) as { files: Array<{ file: string }> };
           expect(plan.files.map(({ file }) => file).sort()).toEqual(selected.filter((file) => file.startsWith("tests/e2e/")));
@@ -140,6 +147,9 @@ describe("t345 complete nightly coverage", () => {
           for (const flag of ["--isolated-e2e", "--bedrock-parallel", "--kiro-parallel", "--ide-parallel"]) {
             expect(args).not.toContain(flag);
           }
+          expect(result.status).toBe(2);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("isolated e2e options require --e2e --isolated-e2e (or --e2e-plan)");
         }
       }, 30_000);
     }
@@ -232,7 +242,7 @@ describe("t345 complete nightly coverage", () => {
     const emitted = spawnSync(process.execPath, [script, "multi-provider", "--platform", "linux", "--args"], { encoding: "utf8" });
     expect(emitted.status, emitted.stderr).toBe(0);
     expect(emitted.stdout.trim().split("\n")).toEqual(liveRunnerArgs("multi-provider", "linux"));
-    for (const args of [["missing"], ["claude-tui", "--platform", "other"]]) {
+    for (const args of [["missing"], ["claude-tui", "--platform", "other"], ["copilot", "--run", "--", "--e2e-plan"], ["codex", "--args", "--run"]]) {
       expect(spawnSync(process.execPath, [script, ...args]).status).toBe(2);
     }
   });

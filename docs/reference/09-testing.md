@@ -921,13 +921,12 @@ Add `--args` to print the complete runner arguments, one per line. The script
 owns tier selection: it emits only tiers with selected files, enables
 `--isolated-e2e` and resource limits only when e2e files exist, and applies each
 family's strict-coverage policy. In particular, an integration-only mixed-provider
-selection does not launch an empty isolated e2e queue. The workflow preserves
-the filter as one argument rather than word-splitting it:
+selection does not launch an empty isolated e2e queue. The workflow uses `--run`
+to spawn the runner directly from the repository root, preserving each argument
+without shell word splitting or Bash-version-specific builtins:
 
 ```bash
-mapfile -t ARGS < <(bun scripts/ci-live-filter.ts multi-provider --platform linux --args)
-test "${#ARGS[@]}" -gt 0
-bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+bun scripts/ci-live-filter.ts multi-provider --platform linux --run -- --debug -P 4
 ```
 
 For a selection containing e2e files, append `--e2e-plan` to inspect its plan

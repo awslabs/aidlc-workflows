@@ -321,41 +321,31 @@ jobs:
         env:
           AIDLC_CLAUDE_SDK_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts claude-sdk --platform ${{ matrix.platform }} --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts claude-sdk --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Run claude-tui"
         if: "matrix.family == 'claude-tui'"
         env:
           AIDLC_TUI_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts claude-tui --platform ${{ matrix.platform }} --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts claude-tui --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Run codex"
         if: "matrix.family == 'codex'"
         env:
           AIDLC_CODEX_EXEC_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts codex --platform ${{ matrix.platform }} --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts codex --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Run opencode"
         if: "matrix.family == 'opencode'"
         env:
           AIDLC_OPENCODE_RUN_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts opencode --platform ${{ matrix.platform }} --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts opencode --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Run release-contract"
         if: "matrix.family == 'release-contract'"
         env:
           AIDLC_RELEASE_CONTRACT_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts release-contract --platform ${{ matrix.platform }} --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts release-contract --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Run multi-provider"
         if: "matrix.family == 'multi-provider'"
         env:
@@ -366,9 +356,7 @@ jobs:
           AIDLC_CURSOR_RUN_LIVE: "1"
           AIDLC_RELEASE_CONTRACT_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts multi-provider --platform ${{ matrix.platform }} --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts multi-provider --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Upload diagnostic logs"
         if: "${{ always() }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -401,18 +389,14 @@ jobs:
         env:
           AIDLC_KIRO_ACP_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts kiro-acp --platform linux --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts kiro-acp --platform linux --run -- --debug -P 4
       - name: "Run kiro-tui"
         if: "matrix.family == 'kiro-tui'"
         env:
           AIDLC_KIRO_TUI_LIVE: "1"
           AIDLC_TUI_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts kiro-tui --platform linux --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts kiro-tui --platform linux --run -- --debug -P 4
       - name: "Upload diagnostic logs"
         if: "${{ always() }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -445,26 +429,20 @@ jobs:
         env:
           AIDLC_KIRO_ACP_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts kiro-acp --platform win32 --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts kiro-acp --platform win32 --run -- --debug -P 4
       - name: "Run kiro-tui"
         if: "matrix.family == 'kiro-tui'"
         env:
           AIDLC_KIRO_TUI_LIVE: "1"
           AIDLC_TUI_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts kiro-tui --platform win32 --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts kiro-tui --platform win32 --run -- --debug -P 4
       - name: "Run kiro-ide"
         if: "matrix.family == 'kiro-ide'"
         env:
           AIDLC_KIRO_IDE_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts kiro-ide --platform win32 --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts kiro-ide --platform win32 --run -- --debug -P 4
       - name: "Upload diagnostic logs"
         if: "${{ always() }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -522,9 +500,7 @@ jobs:
         env:
           AIDLC_CURSOR_RUN_LIVE: "1"
         run: |
-          mapfile -t ARGS < <(bun scripts/ci-live-filter.ts cursor --platform ${{ matrix.platform }} --args)
-          test "${#ARGS[@]}" -gt 0
-          bun tests/run-tests.ts --debug -P 4 "${ARGS[@]}"
+          bun scripts/ci-live-filter.ts cursor --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Upload diagnostic logs"
         if: "${{ always() }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
