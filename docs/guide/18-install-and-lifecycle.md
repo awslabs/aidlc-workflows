@@ -228,6 +228,11 @@ aidlc doctor
 tree, the `aidlc/` workspace shell, root integrations, a projection stamp, and
 an ownership baseline. It does not create a workflow intent.
 
+When more than one harness is present, every `aidlc config` invocation must
+include `--harness <name>`, including previews and refreshes. See
+[Root Integrations and Ownership](#root-integrations-and-ownership) for which
+harnesses can coexist and how their shipped `.gitignore` entries are combined.
+
 After a successful scaffold or refresh, config runs a cheap installed-result
 sweep. It checks only the non-interactive hook PATH, host trust files, and
 recorded provider actions; it does not spawn the harness CLI or contact a
@@ -413,11 +418,13 @@ it never advances or resumes workflow work.
 ### Runtime Diagnostics
 
 `aidlc config runtime` checks the environment that project hooks actually use.
-On macOS and Linux it derives a non-interactive baseline from `getconf PATH`
-and the macOS system path files. On Windows it reads the User and Machine PATH
-without loading a shell profile. It then resolves the command required by the
-installed hook bytes (`bun` for copy projections or `aidlc` for native
-projections) and checks the selected harness CLI.
+On Linux it derives a non-interactive baseline from `getconf PATH` plus the
+`PATH` lines of `/etc/environment`, `ENV_PATH` in `/etc/login.defs`, and
+`environment.d`. On macOS it uses `getconf PATH` plus `/etc/paths` and
+`/etc/paths.d`. On Windows it reads the User and Machine PATH without loading a
+shell profile. It then resolves the command required by the installed hook
+bytes (`bun` for copy projections or `aidlc` for native projections) and checks
+the selected harness CLI.
 
 ```bash
 aidlc config runtime --show
@@ -714,11 +721,23 @@ project content.
 
 | Surface | Harnesses | Policy |
 |---------|-----------|--------|
-| `.gitignore` | All | Own one marked AI-DLC block; preserve every byte outside it |
+| `.gitignore` | All | Own one marked AI-DLC block containing the union of installed harnesses' shipped entries; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, OpenCode | Own one marked onboarding block; preserve project instructions |
 | `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
 | `opencode.json` | OpenCode | Whole-file ownership; an unknown existing file is a conflict |
+
+**More than one harness in a project.** Harnesses may coexist when their engine
+directories differ and they do not share an exclusive managed block (`AGENTS.md`
+today)—effectively Claude Code plus one other harness. `.gitignore` declares
+`shared: "union"`, so `aidlc config` writes one block combining every installed
+harness's shipped entries; extra entries appear under `# <harness> harness`.
+Adding a harness combines an unchanged sibling-owned block when that sibling's
+shipped block copy is available (`merge (combined with <harness>)`); older
+installs without that copy keep ownership until refreshed. Each harness records
+the same combined block hash on its next config invocation.
+Once more than one harness is present, every `aidlc config` invocation needs
+`--harness <name>`.
 
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Modified

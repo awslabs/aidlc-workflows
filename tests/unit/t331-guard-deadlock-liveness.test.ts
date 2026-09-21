@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
+  worktreePath,
   type ActiveDirectiveGuardRemedy,
   type AttemptView,
   type AuditShardEvent,
@@ -69,6 +70,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { guardPreflight } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -254,7 +256,7 @@ describe("bounded guard-remedy liveness", () => {
                 ) {
                   expect(summaryCoverage).not.toBe("current");
                   expect(reviewCoverage).not.toBe("current");
-                  expect(["in-progress", "awaiting-approval"]).toContain(
+                  expect(["in-progress", "awaiting-approval", "revising"]).toContain(
                     lifecycle,
                   );
                 }
@@ -317,8 +319,10 @@ describe("bounded guard-remedy liveness", () => {
       stage: "functional-design",
       reason_codes: ["TEST"],
       remedies: [{
-        op: "change-scope",
-        action: "Change scope.",
+        op: "restart-stage",
+        action: "Restart the stage.",
+        operation: { kind: "restart-stage", stage: "functional-design" },
+        interaction: "command",
         command: "bun .claude/tools/aidlc-orchestrate.ts next --scope <scope>",
         requiresHuman: true,
         executableNow: true,
@@ -340,7 +344,7 @@ describe("bounded guard-remedy liveness", () => {
     expect(bare.valid).toBe(false);
     if (!bare.valid) {
       expect(bare.errors.join("\n")).toContain(
-        "bun-qualified packaged AIDLC tool invocation",
+        "structured recovery operation",
       );
     }
 
@@ -350,6 +354,13 @@ describe("bounded guard-remedy liveness", () => {
         ...base.remedies[0],
         command:
           "bun .ported.harness/tools/aidlc-orchestrate.ts next --stage functional-design",
+      }],
+    }).valid).toBe(true);
+    expect(validateDirective({
+      ...base,
+      remedies: [{
+        ...base.remedies[0],
+        command: "aidlc engine orchestrate next --stage functional-design",
       }],
     }).valid).toBe(true);
   });
@@ -492,7 +503,7 @@ describe("bounded guard-remedy liveness", () => {
     ).toBe(0);
     expect(aborted.stdout).toContain('"emitted":"BOLT_FAILED"');
     expect(
-      existsSync(join(project, ".aidlc", "worktrees", "bolt-alpha")),
+      existsSync(worktreePath(project, fixtureIntentId8(project), "alpha")),
     ).toBe(false);
     expect(readAllAuditShards(project)).toContain("**Reason**: aborted");
   }, 60000);

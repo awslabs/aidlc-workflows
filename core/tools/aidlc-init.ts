@@ -96,6 +96,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  type ProjectHarness,
 } from "./aidlc-runtime-paths.ts";
 import {
   activeModelGroups,
@@ -3165,6 +3166,26 @@ function readBaseline(path: string): Baseline | null {
   }
 }
 
+function siblingBaseline(sibling: ProjectHarness): Baseline | null {
+  try {
+    return readBaseline(join(sibling.root, "tools", "data", "aidlc-manifest.json"));
+  } catch {
+    return null;
+  }
+}
+
+function siblingDescriptor(sibling: ProjectHarness): Pick<ProjectionDescriptor, "rootIntegrations"> | null {
+  try {
+    const path = join(sibling.root, "tools", "data", "aidlc-projection.json");
+    if (!regularFile(path)) return null;
+    const value: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (!isRecord(value) || !Array.isArray(value.rootIntegrations)) return null;
+    return value as Pick<ProjectionDescriptor, "rootIntegrations">;
+  } catch {
+    return null;
+  }
+}
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {
@@ -3951,6 +3972,30 @@ function assertRefreshSafe(projectDir: string): void {
       activeWorkflows.join(", ")
     }. Complete the workflow before rerunning aidlc config; update and use do not modify project files.`,
   );
+}
+
+function unionBlocks(contributors: Array<{ distribution: string; text: string }>): string {
+  contributors.sort((left, right) => left.distribution.localeCompare(right.distribution));
+  let base = contributors[0].text.trim();
+  const seen = new Set<string>();
+  for (const line of base.split(/\r?\n/)) {
+    const entry = line.trim();
+    if (entry && !entry.startsWith("#")) seen.add(entry);
+  }
+  for (let index = 1; index < contributors.length; index++) {
+    const contributor = contributors[index];
+    const extras: string[] = [];
+    for (const line of contributor.text.split(/\r?\n/)) {
+      const entry = line.trim();
+      if (!entry || entry.startsWith("#") || seen.has(entry)) continue;
+      extras.push(entry);
+      seen.add(entry);
+    }
+    if (extras.length > 0) {
+      base += `\n\n# ${contributor.distribution} harness\n${extras.join("\n")}`;
+    }
+  }
+  return base;
 }
 
 function mergeBlock(
@@ -5206,14 +5251,13 @@ function existingProject(projectDir: string, requested?: string): {
   baseline?: Baseline;
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
+  if (!requested && harnesses.length > 1) {
+    throw new Error("multiple project harnesses are present; pass one --harness <name>");
+  }
   const harness = requested
     ? harnesses.find((candidate) => candidate.distribution === requested)
     : harnesses[0];
-  if (!harness && requested && harnesses.length > 0) {
-    throw new Error(
-      `project uses ${harnesses.map((candidate) => candidate.distribution).join(", ")}; refusing ${requested}`,
-    );
-  }
+
   if (!harness) return {};
   const baselinePath = join(harness.root, "tools", "data", "aidlc-manifest.json");
   const baseline = readBaseline(baselinePath);
@@ -5369,6 +5413,11 @@ function planRootIntegrations(
   actions: PlannedAction[],
   contributions: Record<string, RootContribution>,
 ): void {
+  let siblings: ProjectHarness[] | undefined;
+  let siblingProjections: Array<{
+    sibling: ProjectHarness;
+    descriptor: Pick<ProjectionDescriptor, "rootIntegrations"> | null;
+  }> | undefined;
   for (const integration of descriptor.rootIntegrations) {
     const sourcePath = join(sourceRoot, integration.path);
     const targetPath = join(projectDir, integration.path);
@@ -5385,33 +5434,94 @@ function planRootIntegrations(
     const current = targetRegular ? readFileSync(targetPath, "utf-8") : "";
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
+      const marker = integration.marker || basename(integration.path);
+      let shipped = readFileSync(sourcePath, "utf-8");
+      let legacyWholeFileHashes = integration.legacySignatures?.wholeFileHashes;
+      let contributingSiblings: Set<ProjectHarness> | undefined;
+      let missingCopy: ProjectHarness | undefined;
+      if (integration.shared === "union") {
+        siblings ??= discoverProjectHarnesses(projectDir);
+        siblingProjections ??= siblings
+          .filter((sibling) => sibling.harnessDir !== descriptor.harnessDir)
+          .map((sibling) => ({ sibling, descriptor: siblingDescriptor(sibling) }));
+        const contributors = [{ distribution: descriptor.distribution, text: shipped }];
+        const legacyHashes = new Set(legacyWholeFileHashes);
+        contributingSiblings = new Set();
+        for (const { sibling, descriptor: siblingProjection } of siblingProjections) {
+          const siblingIntegration = siblingProjection?.rootIntegrations.find(
+            (candidate) => candidate.path === integration.path,
+          );
+          for (const hash of siblingIntegration?.legacySignatures?.wholeFileHashes ?? []) {
+            legacyHashes.add(hash);
+          }
+          try {
+            const path = join(sibling.root, "tools", "data", "root-blocks", marker);
+            if (!regularFile(path)) {
+              if (siblingIntegration?.shared === "union") missingCopy ??= sibling;
+              continue;
+            }
+            contributors.push({ distribution: sibling.distribution, text: readFileSync(path, "utf-8") });
+            contributingSiblings.add(sibling);
+          } catch {
+            // Older or unreadable installations do not contribute shipped blocks.
+            if (siblingIntegration?.shared === "union") missingCopy ??= sibling;
+          }
+        }
+        shipped = unionBlocks(contributors);
+        legacyWholeFileHashes = [...legacyHashes];
+      }
       const merged = mergeBlock(
         integration.path,
         current,
-        readFileSync(sourcePath, "utf-8"),
-        integration.marker || basename(integration.path),
-        integration.legacySignatures?.wholeFileHashes,
+        shipped,
+        marker,
+        legacyWholeFileHashes,
       );
       if (merged.error) {
         actions.push({ path: integration.path, action: "conflict", detail: merged.error });
+        continue;
+      }
+      if (missingCopy && !force && merged.value !== current) {
+        actions.push({
+          path: integration.path,
+          action: "conflict",
+          detail: `${missingCopy.distribution} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run aidlc config --harness ${missingCopy.distribution} first`,
+        });
         continue;
       }
       const value = merged.value as string;
       const priorHash = priorContribution?.policy === "managed-block"
         ? priorContribution.hash
         : undefined;
+      let combinedWith: string | undefined;
+
       if (
         merged.currentHash &&
         merged.currentHash !== merged.nextHash &&
         merged.currentHash !== priorHash &&
         !force
       ) {
-        actions.push({
-          path: integration.path,
-          action: "conflict",
-          detail: priorHash ? "managed block was locally modified" : "managed block has no ownership baseline",
+        siblings ??= discoverProjectHarnesses(projectDir);
+        const owner = siblings.find((sibling) => {
+          if (sibling.harnessDir === descriptor.harnessDir) return false;
+          const contribution = siblingBaseline(sibling)?.rootContributions?.[integration.path];
+          return contribution?.policy === "managed-block" && contribution.hash === merged.currentHash;
         });
-        continue;
+        if (owner) {
+          if (integration.shared === "union" && contributingSiblings?.has(owner)) {
+            combinedWith = owner.distribution;
+          } else {
+            actions.push({ path: integration.path, action: "preserve", detail: `owned by ${owner.distribution}` });
+            continue;
+          }
+        } else {
+          actions.push({
+            path: integration.path,
+            action: "conflict",
+            detail: priorHash ? "managed block was locally modified" : "managed block has no ownership baseline",
+          });
+          continue;
+        }
       }
       contributions[integration.path] = {
         policy: "managed-block",
@@ -5425,7 +5535,9 @@ function planRootIntegrations(
         actions.push({
           path: integration.path,
           action: targetExists ? "merge" : "create",
-          detail: merged.adoptedLegacy ? "adopted exact legacy signature" : undefined,
+          detail: combinedWith
+            ? `combined with ${combinedWith}`
+            : merged.adoptedLegacy ? "adopted exact legacy signature" : undefined,
         });
       }
       continue;
@@ -6398,6 +6510,37 @@ export async function main(
     const { stamp, descriptor } = selected;
     if (existing.distribution && existing.distribution !== stamp.distribution) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
+    }
+    if (!existing.distribution) {
+      const installed = discoverProjectHarnesses(projectDir);
+      const collision = installed.find(
+        (candidate) => candidate.harnessDir === descriptor.harnessDir,
+      );
+      if (collision) {
+        throw new Error(
+          `harness ${stamp.distribution} shares directory ${descriptor.harnessDir} with installed ${collision.distribution}; they cannot coexist in one project`,
+        );
+      }
+      for (const sibling of installed) {
+        const siblingProjection = siblingDescriptor(sibling);
+        if (!siblingProjection) {
+          throw new Error(
+            `harness ${stamp.distribution} cannot be added while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
+          );
+        }
+        for (const integration of descriptor.rootIntegrations) {
+          if (integration.policy !== "managed-block") continue;
+          const collision = siblingProjection.rootIntegrations.find((candidate) =>
+            candidate.path === integration.path && candidate.policy === "managed-block" &&
+            integration.shared !== "union"
+          );
+          if (collision) {
+            throw new Error(
+              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}; they cannot coexist in one project`,
+            );
+          }
+        }
+      }
     }
     if (existing.distribution) assertRefreshSafe(projectDir);
     if (regularFile(pinPath) && readFileSync(pinPath, "utf-8").trim() !== stamp.frameworkVersion) {
