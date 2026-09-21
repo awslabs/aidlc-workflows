@@ -1290,6 +1290,39 @@ describe("t230 version-aware startup", () => {
   }, 10_000);
 });
 
+describe("t230 dispatcher adapter identity", () => {
+  // A project installed before the `kiro-ide` row was retired still carries hook
+  // manifests that invoke `engine adapter kiro-ide <target>`, and `aidlc update`
+  // deliberately leaves project files alone. So the retired id keeps arriving on
+  // the GUARDED hook path, where a non-zero exit makes Kiro refuse the tool call --
+  // and `aidlc config` refuses to refresh while a workflow is active, so the
+  // project cannot be repaired first. That combination traps the user: guarded
+  // operations are unusable and the manifests cannot be rewritten until the
+  // workflow ends. The dispatcher therefore normalizes the retired id instead of
+  // rejecting it. Silent, deliberately -- this runs on every PreToolUse.
+  test("routes the retired kiro-ide adapter id to the kiro adapter", () => {
+    const route = resolveAction(["engine", "adapter", "kiro-ide", "plan-approval-guard"]);
+    expect(route).toMatchObject({
+      type: "adapter",
+      harness: "kiro",
+      target: "plan-approval-guard",
+    });
+    expect(route.type === "adapter" && route.path.endsWith("aidlc-kiro-adapter.ts")).toBe(true);
+  });
+
+  // The normalization is a one-entry map, not a family of spellings: an id that
+  // was never a distribution must still be refused, and the message must echo
+  // what the caller actually typed.
+  test("still refuses an adapter id that was never a distribution", () => {
+    expect(resolveAction(["engine", "adapter", "kiro-desktop", "mint"])).toEqual({
+      type: "error",
+      code: 2,
+      message:
+        "aidlc: unknown verb 'kiro-desktop' for engine noun 'adapter'; try 'aidlc engine --help'\n",
+    });
+  });
+});
+
 describe("t230 dispatcher global flag translation", () => {
   test("extracts --project-dir before noun/verb parsing and restores it for delegation", () => {
     expect(resolveAction(["engine", "space", "--project-dir", "/tmp/example", "create", "teamB"])).toEqual({

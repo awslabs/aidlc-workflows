@@ -21,6 +21,7 @@ import {
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   aidlcInvocation,
+  currentDistribution,
   discoverProjectHarnesses,
   isCompiledExecutable,
   packagedDistributionRoot,
@@ -1644,10 +1645,21 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     return { type: "statusline", path: resolveHookPath("aidlc-statusline.ts") };
   }
   if (route.routeOnly === "adapter") {
-    const harness = argv[1];
+    // `aidlc update` deliberately leaves project files alone, so a project
+    // installed before the kiro-ide row was retired keeps invoking
+    // `engine adapter kiro-ide <target>` from its own hook manifests. Those
+    // invocations land on the guarded hook path, where Kiro refuses the tool call
+    // when the hook exits non-zero -- and `aidlc config` refuses to refresh while
+    // a workflow is active, so the manifests cannot be rewritten first. Rejecting
+    // the retired id here therefore traps the user rather than nudging them.
+    // Normalize instead, and silently: this runs on every PreToolUse.
+    const requested = argv[1];
+    const harness = requested === undefined ? undefined : currentDistribution(requested);
     const target = argv[2];
     if (!harness) return nounError("adapter", undefined);
-    if (!isAdapterHarness(harness)) return nounError("adapter", harness);
+    // The error echoes what the caller typed, not the normalized value -- the map
+    // has one entry, so anything reaching here was never a distribution id.
+    if (!isAdapterHarness(harness)) return nounError("adapter", requested);
     if (!target) return nounError("adapter", undefined);
     if (!isSafeName(target)) return nounError("adapter", target);
     const file = adapterFile(harness);
