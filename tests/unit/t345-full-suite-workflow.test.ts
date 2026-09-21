@@ -24,11 +24,14 @@ interface Job {
   uses?: string;
   "runs-on": string | string[];
   env?: Record<string, string>;
+  environment?: string;
+  permissions?: Record<string, string>;
   defaults?: { run?: { shell?: string } };
   strategy?: { matrix: { include?: Array<Record<string, string>>; family?: LiveFamily[] } };
   steps: Step[];
 }
 const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
+  on: { workflow_call: { secrets: Record<string, { required: boolean }> } };
   jobs: Record<string, Job>;
 };
 
@@ -110,6 +113,21 @@ describe("t345 complete nightly coverage", () => {
     }
     const expected = Object.entries(FAMILIES).flatMap(([family, spec]) => spec.platforms.map((platform) => `${family}:${platform}`));
     expect(actual.sort()).toEqual(expected.sort());
+  });
+
+  test("Kiro CLI uses hosted API-key authentication while only IDE remains self-hosted", () => {
+    const job = workflow.jobs.live_kiro_api;
+    expect(workflow.jobs.live_kiro_linux).toBeUndefined();
+    expect(job.environment).toBe("nightly-live");
+    expect(job.if).toBe("vars.AIDLC_NIGHTLY_KIRO_API == '1'");
+    expect(job.env?.KIRO_API_KEY).toBe(`\${{ secrets.KIRO_API_KEY }}`);
+    expect(workflow.on.workflow_call.secrets.KIRO_API_KEY.required).toBe(false);
+    expect(job.permissions?.["id-token"]).not.toBe("write");
+    expect(job.steps.some((step) => step.uses?.startsWith("aws-actions/"))).toBe(false);
+    const preflight = job.steps.find((step) => step.name === "Require Kiro API authentication")!;
+    expect(preflight.run).toContain('test -n "$KIRO_API_KEY"');
+    expect(preflight.run).toContain("kiro-cli whoami");
+    expect(workflow.jobs.live_kiro_windows.strategy?.matrix.family).toEqual(["kiro-ide"]);
   });
 
   test("self-hosted Windows inventories its desktop and uses Windows PowerShell 5.1 for every command", () => {
@@ -281,23 +299,55 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("complete means all declared legs succeeded for an immutable SHA", () => {
-    expect(fullSuiteResult(allSuccess(), identity)).toMatchObject({ complete: true, excluded: [] });
+  test("passed requires successful non-excluded legs and complete additionally requires no exclusions", () => {
+    expect(fullSuiteResult(allSuccess(), identity)).toMatchObject({ passed: true, complete: true, excluded: [] });
     for (const status of ["failure", "cancelled", "skipped"] as const) {
-      expect(fullSuiteResult({ ...allSuccess(), live_hosted: { result: status } }, identity).complete).toBe(false);
+      expect(fullSuiteResult({ ...allSuccess(), live_hosted: { result: status } }, identity))
+        .toMatchObject({ passed: false, complete: false });
     }
     const missing = allSuccess();
     delete missing.native_reconcile;
-    expect(fullSuiteResult(missing, identity)).toMatchObject({ complete: false, legs: { native_reconcile: "missing" } });
-    expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" }).complete).toBe(false);
+    expect(fullSuiteResult(missing, identity)).toMatchObject({ passed: false, complete: false, legs: { native_reconcile: "missing" } });
+    expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" })).toMatchObject({ passed: false, complete: false });
   });
 
-  test("disabled repository-variable legs are excluded but never complete", () => {
-    const needs: SuiteNeeds = { ...allSuccess(), live_cursor: { result: "skipped" } };
-    expect(fullSuiteResult(needs, identity)).toMatchObject({ complete: false, excluded: ["live_cursor"] });
-    expect(fullSuiteResult(needs, identity, { cursor: "1" })).toMatchObject({ complete: false, excluded: [] });
-    needs.live_kiro_linux = { result: "skipped" };
-    needs.live_kiro_windows = { result: "skipped" };
-    expect(fullSuiteResult(needs, identity).excluded.sort()).toEqual(["live_cursor", "live_kiro_linux", "live_kiro_windows"]);
+  for (const [job, variable] of [["live_cursor", "cursor"], ["live_kiro_api", "kiroApi"], ["live_kiro_windows", "kiro"]] as const) {
+    test(`${job} is non-blocking only when explicitly disabled and skipped`, () => {
+      const needs: SuiteNeeds = { ...allSuccess(), [job]: { result: "skipped" } };
+      expect(fullSuiteResult(needs, identity)).toMatchObject({ passed: true, complete: false, excluded: [job] });
+      expect(fullSuiteResult(needs, identity, { [variable]: "1" })).toMatchObject({ passed: false, complete: false, excluded: [] });
+      for (const result of ["failure", "cancelled"] as const) {
+        needs[job] = { result };
+        expect(fullSuiteResult(needs, identity)).toMatchObject({ passed: false, complete: false, excluded: [] });
+      }
+      delete needs[job];
+      expect(fullSuiteResult(needs, identity)).toMatchObject({ passed: false, complete: false, excluded: [] });
+    });
+  }
+
+  test("result CLI warns about disabled families without failing the publication gate", () => {
+    const root = mkdtempSync(join(tmpdir(), "full-suite-result-"));
+    try {
+      const needs: SuiteNeeds = {
+        ...allSuccess(), live_cursor: { result: "skipped" }, live_kiro_api: { result: "skipped" }, live_kiro_windows: { result: "skipped" },
+      };
+      const env = {
+        ...process.env, FULL_SUITE_NEEDS: JSON.stringify(needs), FULL_SUITE_SHA: identity.sha,
+        AIDLC_NIGHTLY_CURSOR: "0", AIDLC_NIGHTLY_KIRO_API: "0", AIDLC_NIGHTLY_KIRO_RUNNERS: "0",
+      };
+      const output = join(root, "result.json");
+      const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
+      const result = spawnSync(process.execPath, [script, output], { encoding: "utf8", env });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("::warning::");
+      const report = JSON.parse(readFileSync(output, "utf8"));
+      expect(report).toMatchObject({ passed: true, complete: false });
+      expect(report.excluded.sort()).toEqual(["live_cursor", "live_kiro_api", "live_kiro_windows"]);
+      const enabledSkip = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, AIDLC_NIGHTLY_KIRO_API: "1" } });
+      expect(enabledSkip.status).toBe(1);
+      expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ passed: false, complete: false });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

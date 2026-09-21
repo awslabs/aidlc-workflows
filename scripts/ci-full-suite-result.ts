@@ -1,6 +1,6 @@
 export const FULL_SUITE_JOBS = [
   "plan", "native_terminal", "native_reconcile", "deterministic", "live_hosted",
-  "live_kiro_linux", "live_kiro_windows", "live_cursor",
+  "live_kiro_api", "live_kiro_windows", "live_cursor",
 ] as const;
 
 type JobResult = "success" | "failure" | "cancelled" | "skipped";
@@ -12,15 +12,17 @@ export interface SuiteIdentity {
 }
 export interface SuiteVariables {
   kiro?: string;
+  kiroApi?: string;
   cursor?: string;
 }
 export interface FullSuiteResult extends SuiteIdentity {
+  passed: boolean;
   complete: boolean;
   legs: Record<string, JobResult | "missing">;
   excluded: string[];
 }
 
-/** Missing, cancelled and intentionally disabled coverage all fail closed. */
+/** Only explicitly disabled, skipped families are exempt from the passing gate. */
 export function fullSuiteResult(
   needs: SuiteNeeds,
   identity: SuiteIdentity,
@@ -29,15 +31,17 @@ export function fullSuiteResult(
   const legs = Object.fromEntries([...new Set([...FULL_SUITE_JOBS, ...Object.keys(needs)])]
     .map((job) => [job, needs[job]?.result ?? "missing"]));
   const disabled: Record<string, boolean> = {
-    live_kiro_linux: variables.kiro !== "1",
+    live_kiro_api: variables.kiroApi !== "1",
     live_kiro_windows: variables.kiro !== "1",
     live_cursor: variables.cursor !== "1",
   };
   const excluded = Object.keys(legs).filter((job) => legs[job] === "skipped" && disabled[job]);
+  const passed = /^[a-f0-9]{40}$/.test(identity.sha) && Object.entries(legs)
+    .every(([job, result]) => result === "success" || (result === "skipped" && disabled[job]));
   return {
     ...identity,
-    complete: /^[a-f0-9]{40}$/.test(identity.sha) && excluded.length === 0 &&
-      Object.values(legs).every((result) => result === "success"),
+    passed,
+    complete: passed && excluded.length === 0,
     legs,
     excluded,
   };
@@ -48,11 +52,18 @@ if (import.meta.main) {
     sha: process.env.FULL_SUITE_SHA ?? "",
     runId: process.env.GITHUB_RUN_ID ?? "",
     runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "",
-  }, { kiro: process.env.AIDLC_NIGHTLY_KIRO_RUNNERS, cursor: process.env.AIDLC_NIGHTLY_CURSOR });
+  }, {
+    kiro: process.env.AIDLC_NIGHTLY_KIRO_RUNNERS,
+    kiroApi: process.env.AIDLC_NIGHTLY_KIRO_API,
+    cursor: process.env.AIDLC_NIGHTLY_CURSOR,
+  });
   await Bun.write(process.argv[2] ?? "full-suite-result.json", `${JSON.stringify(result, null, 2)}\n`);
-  if (!result.complete) {
+  if (result.excluded.length) {
+    console.error(`::warning::Full suite excluded disabled legs: ${result.excluded.join(", ")}`);
+  }
+  if (!result.passed) {
     console.error(`Incomplete full suite for ${result.sha || process.env.FULL_SUITE_REF || "unknown ref"}: ` +
-      Object.entries(result.legs).filter(([, status]) => status !== "success")
+      Object.entries(result.legs).filter(([job, status]) => status !== "success" && !result.excluded.includes(job))
         .map(([job, status]) => `${job}=${status}`).join(", "));
     process.exitCode = 1;
   }

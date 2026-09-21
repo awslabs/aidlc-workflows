@@ -1081,9 +1081,11 @@ describe("t332 preview publication pipeline", () => {
     expect(stableText).not.toContain("AIDLC_BUILD_VERSION");
     expect(stableText).not.toContain("./.github/workflows/ci.yml");
     expect(stable.jobs.validate.permissions).toEqual({ contents: "read", actions: "read" });
-    const evidence = stable.jobs.validate.steps?.find((step) => step.name === "Require complete full-suite evidence");
+    const evidence = stable.jobs.validate.steps?.find((step) => step.name === "Require passing full-suite evidence");
     expect(evidence?.run).toContain("full-suite-result");
-    expect(evidence?.run).toContain(".sha == $sha and .complete == true");
+    expect(evidence?.run).toContain(".sha == $sha and .passed == true");
+    expect(evidence?.run).toContain("::warning::");
+    expect(evidence?.run).toContain(".excluded // []");
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
     expect(preview.on.schedule).toEqual([{

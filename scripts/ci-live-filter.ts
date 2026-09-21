@@ -16,8 +16,8 @@ const REPO_ROOT = resolve(import.meta.dir, "..");
 const hostedPlatforms = ["linux", "darwin", "win32"] as const;
 export const FAMILIES = {
   "kiro-ide": { env: { AIDLC_KIRO_IDE_LIVE: "1" }, platforms: ["win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
-  "kiro-tui": { env: { AIDLC_KIRO_TUI_LIVE: "1", AIDLC_TUI_LIVE: "1" }, platforms: ["linux", "win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
-  "kiro-acp": { env: { AIDLC_KIRO_ACP_LIVE: "1" }, platforms: ["linux", "win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
+  "kiro-tui": { env: { AIDLC_KIRO_TUI_LIVE: "1", AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "kiro" },
+  "kiro-acp": { env: { AIDLC_KIRO_ACP_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "kiro" },
   codex: { env: { AIDLC_CODEX_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
   opencode: { env: { AIDLC_OPENCODE_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
   cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },

@@ -10,6 +10,8 @@ on:
         required: true
       CURSOR_API_KEY:
         required: false
+      KIRO_API_KEY:
+        required: false
   workflow_dispatch:
     inputs:
       ref:
@@ -372,15 +374,36 @@ jobs:
           name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
           path: tests/logs/
           include-hidden-files: true
-  live_kiro_linux:
+  live_kiro_api:
     needs: plan
-    if: "vars.AIDLC_NIGHTLY_KIRO_RUNNERS == '1'"
-    runs-on: [self-hosted, Linux, kiro]
-    timeout-minutes: 720
+    if: "vars.AIDLC_NIGHTLY_KIRO_API == '1'"
+    environment: nightly-live
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 350
     strategy:
       fail-fast: false
       matrix:
-        family: [kiro-acp, kiro-tui]
+        include:
+          - family: kiro-acp
+            runner: ubuntu-latest
+            platform: linux
+          - family: kiro-acp
+            runner: macos-15
+            platform: darwin
+          - family: kiro-acp
+            runner: windows-latest
+            platform: win32
+          - family: kiro-tui
+            runner: ubuntu-latest
+            platform: linux
+          - family: kiro-tui
+            runner: macos-15
+            platform: darwin
+          - family: kiro-tui
+            runner: windows-latest
+            platform: win32
+    env:
+      KIRO_API_KEY: "${{ secrets.KIRO_API_KEY }}"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -390,21 +413,38 @@ jobs:
           bun-version: "${{ env.BUN_VERSION }}"
       - run: "bun install --frozen-lockfile"
       - run: "bun scripts/package.ts"
-      - name: "Require signed-in Kiro host"
-        run: "kiro-cli whoami"
+      # Upstream distributes only latest; log it and disable background updates for this run.
+      - name: "Install Kiro CLI on Unix"
+        if: "runner.os != 'Windows'"
+        run: |
+          curl -fsSL https://cli.kiro.dev/install | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: "Install Kiro CLI on Windows"
+        if: "runner.os == 'Windows'"
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          irm 'https://cli.kiro.dev/install.ps1' | iex
+          "$env:ProgramFiles\Kiro-Cli" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: "Require Kiro API authentication"
+        run: |
+          test -n "$KIRO_API_KEY"
+          kiro-cli --version
+          kiro-cli settings app.disableAutoupdates true
+          kiro-cli whoami
       - name: "Run kiro-acp"
         if: "matrix.family == 'kiro-acp'"
         env:
           AIDLC_KIRO_ACP_LIVE: "1"
         run: |
-          bun scripts/ci-live-filter.ts kiro-acp --platform linux --run -- --debug -P 4
+          bun scripts/ci-live-filter.ts kiro-acp --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Run kiro-tui"
         if: "matrix.family == 'kiro-tui'"
         env:
           AIDLC_KIRO_TUI_LIVE: "1"
           AIDLC_TUI_LIVE: "1"
         run: |
-          bun scripts/ci-live-filter.ts kiro-tui --platform linux --run -- --debug -P 4
+          bun scripts/ci-live-filter.ts kiro-tui --platform ${{ matrix.platform }} --run -- --debug -P 4
       - name: "Upload diagnostic logs"
         if: "${{ always() }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -423,12 +463,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        family: [kiro-acp, kiro-tui, kiro-ide]
+        family: [kiro-ide]
     steps:
       - name: "Inventory self-hosted Windows host"
         shell: powershell
-        env:
-          KIRO_FAMILY: "${{ matrix.family }}"
         run: |
           $ErrorActionPreference = 'Stop'
           Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List
@@ -459,7 +497,7 @@ jobs:
           $kiroIde = "$env:LOCALAPPDATA\Programs\Kiro\Kiro.exe"
           $idePresent = Test-Path $kiroIde
           Write-Host "Kiro IDE path: $kiroIde; present: $idePresent"
-          if ($env:KIRO_FAMILY -eq 'kiro-ide' -and -not $idePresent) {
+          if (-not $idePresent) {
             throw "Kiro IDE executable missing: $kiroIde"
           }
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -472,19 +510,6 @@ jobs:
       - run: "bun scripts/package.ts"
       - name: "Require signed-in Kiro host"
         run: "kiro-cli whoami"
-      - name: "Run kiro-acp"
-        if: "matrix.family == 'kiro-acp'"
-        env:
-          AIDLC_KIRO_ACP_LIVE: "1"
-        run: |
-          bun scripts/ci-live-filter.ts kiro-acp --platform win32 --run -- --debug -P 4
-      - name: "Run kiro-tui"
-        if: "matrix.family == 'kiro-tui'"
-        env:
-          AIDLC_KIRO_TUI_LIVE: "1"
-          AIDLC_TUI_LIVE: "1"
-        run: |
-          bun scripts/ci-live-filter.ts kiro-tui --platform win32 --run -- --debug -P 4
       - name: "Run kiro-ide"
         if: "matrix.family == 'kiro-ide'"
         env:
@@ -558,7 +583,7 @@ jobs:
           include-hidden-files: true
   result:
     if: "${{ always() }}"
-    needs: [plan, native_terminal, native_reconcile, deterministic, live_hosted, live_kiro_linux, live_kiro_windows, live_cursor]
+    needs: [plan, native_terminal, native_reconcile, deterministic, live_hosted, live_kiro_api, live_kiro_windows, live_cursor]
     runs-on: ubuntu-latest
     steps:
       - name: "Reject unauthorized source without executing repository code"
@@ -584,6 +609,7 @@ jobs:
           FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
           FULL_SUITE_REF: "${{ inputs.ref }}"
           AIDLC_NIGHTLY_KIRO_RUNNERS: "${{ vars.AIDLC_NIGHTLY_KIRO_RUNNERS }}"
+          AIDLC_NIGHTLY_KIRO_API: "${{ vars.AIDLC_NIGHTLY_KIRO_API }}"
           AIDLC_NIGHTLY_CURSOR: "${{ vars.AIDLC_NIGHTLY_CURSOR }}"
         run: |
           bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"

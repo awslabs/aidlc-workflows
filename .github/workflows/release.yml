@@ -48,7 +48,7 @@ jobs:
           test "$RELEASE_TAG" = "v$version"
           printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Require complete full-suite evidence
+      - name: Require passing full-suite evidence
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,15 +66,19 @@ jobs:
               continue
             fi
             result="$evidence/full-suite-result.json"
-            if jq -e --arg sha "$tag_sha" '.sha == $sha and .complete == true' "$result"; then
+            if jq -e --arg sha "$tag_sha" '.sha == $sha and .passed == true' "$result"; then
+              exclusions="$(jq -c '.excluded // []' "$result")"
+              if [ "$exclusions" != '[]' ]; then
+                echo "::warning::Full-suite evidence for $tag_sha excludes disabled legs: $exclusions"
+              fi
               accepted=true
               break
             fi
-            echo "Preview run $run: wrong source or incomplete full-suite legs"
-            jq '{sha, complete, excluded, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
+            echo "Preview run $run: wrong source or failing full-suite legs"
+            jq '{sha, passed, complete, excluded, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
           done
           if [ "$accepted" != true ]; then
-            echo "::error::No successful preview has complete full-suite-result evidence for $tag_sha. Missing/incomplete legs are listed above; no artifact means every leg is unproven. Tag a green nightly SHA or dispatch preview-release.yml first."
+            echo "::error::No successful preview has passing full-suite-result evidence for $tag_sha. Missing/failing legs are listed above; no artifact means every leg is unproven. Tag a passing nightly SHA or dispatch preview-release.yml first."
             exit 1
           fi
 

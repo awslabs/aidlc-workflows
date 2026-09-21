@@ -170,9 +170,10 @@ cases and do not use strict coverage; their declared jobs must still succeed.
 Nightly `preview-release.yml` calls the reusable `full-suite.yml`: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
 hosted Claude/Codex/opencode/release-contract and Linux mixed-provider suites,
-self-hosted Kiro ACP/TUI and Windows IDE, plus opt-in Cursor legs. Copilot is
-excluded by account policy; there is no macOS Kiro IDE runner.
-Only source already on `main` passes the plan's ancestry gate. Self-hosted Kiro
+hosted Kiro ACP/TUI on Linux/macOS/Windows using `KIRO_API_KEY`, a dedicated
+self-hosted Windows Kiro IDE, plus opt-in Cursor legs. Copilot is excluded by
+account policy; there is no macOS Kiro IDE runner.
+Only source already on `main` passes the plan's ancestry gate. Self-hosted Kiro IDE
 runners must be dedicated CI hosts with a CI-only Kiro/IdC identity, never personal
 or development machines. Register them in an organization runner group restricted
 to selected workflows, pinned to
@@ -184,11 +185,16 @@ The self-hosted Windows runner needs only Windows PowerShell 5.1 and Git for
 Windows for its shell environment, alongside the documented Bun/Node/Kiro tools.
 Its steps never rely on `bash`: `C:\Windows\System32\bash.exe` is the WSL launcher.
 
-Set repository variables `AIDLC_NIGHTLY_KIRO_RUNNERS=1` and
-`AIDLC_NIGHTLY_CURSOR=1` after provisioning the hosts and secrets. Disabled legs
-are recorded as excluded, never complete. `full-suite-result` retains the exact
-SHA, run identity and every leg's result for 90 days; preview publication and
-stable tags require complete evidence. Tag a green nightly SHA or dispatch
+Set `AIDLC_NIGHTLY_KIRO_API=1` with secret `KIRO_API_KEY` for hosted ACP/TUI;
+API keys require Pro, Pro+, Pro Max or Power subscriptions, and admin-managed
+subscriptions must enable API-key authentication. Set
+`AIDLC_NIGHTLY_KIRO_RUNNERS=1` for the dedicated Windows IDE host and
+`AIDLC_NIGHTLY_CURSOR=1` with `CURSOR_API_KEY` for Cursor. Variable-disabled legs
+are reported in `excluded` and never block publication. `passed` requires all
+non-excluded legs to succeed; `complete` also requires no exclusions. Missing,
+failed, cancelled or enabled-but-skipped legs fail. `full-suite-result` retains
+the exact SHA and run/leg outcomes for 90 days; preview and stable publication
+require `passed: true` and warn about exclusions. Tag a passing nightly SHA or dispatch
 `preview-release.yml` first. `bun scripts/ci-live-filter.ts --list` shows the
 discovered partition; append `--platform linux|darwin|win32` to a family query
 for its exact platform filter. Add `--args` for one runner argument per line;
