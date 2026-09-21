@@ -262,6 +262,7 @@ function New-LaunchScript($Environment, [string]$Body) {
     $lines = [Collections.Generic.List[string]]::new()
     $lines.Add("Set-StrictMode -Version Latest`n`$ErrorActionPreference = 'Stop'")
     $lines.Add(@'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 # Inspect the raw alternate-logon environment before clearing even machine defaults.
 foreach ($key in [Environment]::GetEnvironmentVariables('Process').Keys) {
     if ($key -match '^(ACTIONS_|AWS_|BROKER_|GH_TOKEN$|GITHUB_TOKEN$|ANTHROPIC_API_KEY$|OPENAI_API_KEY$|KIRO_API_KEY$|CURSOR_API_KEY$)') {
@@ -278,7 +279,7 @@ foreach ($key in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
     }
     $lines.Add('try {')
     $lines.Add($Body)
-    $lines.Add("} catch { [Console]::Error.WriteLine('Isolated runtime failed.'); exit 1 }")
+    $lines.Add("} catch { [Console]::Error.WriteLine(`$_.Exception.ToString()); exit 1 }")
     [IO.File]::WriteAllText($path, ($lines -join "`r`n"), [Text.UTF8Encoding]::new($true))
     Set-RuntimeAcl $path $sandboxSid 'ReadAndExecute'
     return $path
@@ -288,17 +289,41 @@ function Invoke-Isolated([string]$Label, $Environment, [string]$Body) {
     $script:stage = $Label
     $wrapper = New-LaunchScript $Environment $Body
     $id = $Label + '-' + [Guid]::NewGuid().ToString('N')
-    $stdout = Join-Path $stateRoot ($id + '.stdout.log')
-    $stderr = Join-Path $stateRoot ($id + '.stderr.log')
+    $logRoot = Join-Path $tools 'logs'
+    $stdout = Join-Path $logRoot ($id + '.stdout.log')
+    $stderr = Join-Path $logRoot ($id + '.stderr.log')
     # -ArgumentList is joined by Start-Process; quote the complete -File path once.
     $arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $wrapper + '"'
+    $childExit = -1
     try {
         $process = Start-Process -FilePath $powershell -ArgumentList $arguments -Credential $credential `
             -UseNewEnvironment -WorkingDirectory $work -Wait -NoNewWindow -PassThru `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         $process.Refresh()
         if ($null -eq $process.ExitCode) { throw 'Alternate-logon process did not report an exit code.' }
-        return [int]$process.ExitCode
+        $childExit = [int]$process.ExitCode
+        $script:exitCode = $childExit
+        if ($childExit -ne 0) { throw "Isolated $Label exited $childExit" }
+        return $childExit
+    } catch {
+        if ($childExit -eq -1) {
+            [IO.File]::AppendAllText($stderr, ($_.Exception.ToString() + "`r`n"))
+        }
+        [Console]::Error.WriteLine(('Isolated {0} exit code: {1}' -f $Label, $childExit))
+        # Tool output remains untrusted even on failures: sanitize before printing.
+        & (Join-Path $tools 'bun.exe') (Join-Path $env:GITHUB_WORKSPACE 'scripts\ci-sanitize-logs.ts') $logRoot
+        if ($LASTEXITCODE -eq 0) {
+            $marker = 'aidlc-diagnostics-' + [Guid]::NewGuid().ToString('N')
+            [Console]::WriteLine(('::stop-commands::{0}' -f $marker))
+            foreach ($log in @($stdout, $stderr)) {
+                [Console]::WriteLine(('--- last 40 lines: {0} ---' -f [IO.Path]::GetFileName($log)))
+                if ([IO.File]::Exists($log)) {
+                    Get-Content -LiteralPath $log -Encoding UTF8 -Tail 40 | ForEach-Object { [Console]::WriteLine([string]$_) }
+                } else { [Console]::WriteLine('No retained UTF-8 text output.') }
+            }
+            [Console]::WriteLine(('::{0}::' -f $marker))
+        } else { [Console]::Error.WriteLine('Child output sanitization failed; diagnostic text withheld.') }
+        throw
     } finally {
         # These are runner-created read-only files, not sandbox-authored paths.
         if ([IO.File]::Exists($wrapper)) { [IO.File]::Delete($wrapper) }
@@ -389,7 +414,7 @@ if ($errorCode -ne 5) { throw 'Process-memory probe did not prove access denial.
 if (-not [IO.File]::Exists('C:\aidlc-live\work\scripts\ci-live-sandbox.ts')) { throw 'Isolated source is missing.' }
 & 'C:\aidlc-live\tools\bun.exe' --version
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& 'C:\Program Files\Git\cmd\git.exe' -C 'C:\aidlc-live\work' rev-parse --is-inside-work-tree
+& 'C:\Program Files\Git\cmd\git.exe' -c safe.directory=C:/aidlc-live/work -C 'C:\aidlc-live\work' rev-parse --is-inside-work-tree
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $configProbe = [IO.File]::Open((Join-Path $env:HOME '.gitconfig'), 'Open', 'ReadWrite', 'Read')
 $configProbe.Dispose()
@@ -437,6 +462,7 @@ try {
         New-PrivateDirectory $root
         $createdRoot = $true
         foreach ($path in @($work, $sandboxHome, $tools)) { New-PrivateDirectory $path }
+        New-PrivateDirectory (Join-Path $tools 'logs')
         $stage = 'copying checkout'
         # No .git auth config, user config, reparse targets, or credential files cross.
         Copy-PlainTree $workspace $work -Checkout
@@ -503,6 +529,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Cannot transfer sandbox worktree ownership.' }
         # The sandbox owns its worktree; keep an explicit path-only Git trust record.
         [IO.File]::WriteAllText((Join-Path $sandboxHome '.gitconfig'), "[safe]`n`tdirectory = C:/aidlc-live/work`n")
+        [Console]::WriteLine(('Sandbox worktree owner: {0}' -f (Get-Acl -LiteralPath $work).Owner))
         $credential | Export-Clixml -LiteralPath $credentialFile
         Set-RuntimeAcl $credentialFile $null 'ReadAndExecute'
         $state = [pscustomobject]@{
@@ -513,13 +540,13 @@ try {
         $safe = Get-SafeEnvironment
         # Fresh metadata cannot contain the original checkout's credential helpers.
         $gitBody = @'
-& 'C:\Program Files\Git\cmd\git.exe' -c init.templateDir=C:/aidlc-live/tools/git-template init --quiet .
+& 'C:\Program Files\Git\cmd\git.exe' -c safe.directory=C:/aidlc-live/work -c init.templateDir=C:/aidlc-live/tools/git-template init --quiet .
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& 'C:\Program Files\Git\cmd\git.exe' -C 'C:\aidlc-live\work' rev-parse --is-inside-work-tree
+& 'C:\Program Files\Git\cmd\git.exe' -c safe.directory=C:/aidlc-live/work -C 'C:\aidlc-live\work' rev-parse --is-inside-work-tree
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& 'C:\Program Files\Git\cmd\git.exe' -c core.hooksPath=NUL add --all -- .
+& 'C:\Program Files\Git\cmd\git.exe' -c safe.directory=C:/aidlc-live/work -c core.hooksPath=C:/aidlc-live/tools/git-template add --all -- .
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& 'C:\Program Files\Git\cmd\git.exe' -c core.hooksPath=NUL -c commit.gpgsign=false -c user.name=aidlc-live -c user.email=aidlc-live@localhost commit --quiet --allow-empty -m 'Isolated source snapshot'
+& 'C:\Program Files\Git\cmd\git.exe' -c safe.directory=C:/aidlc-live/work -c core.hooksPath=C:/aidlc-live/tools/git-template -c commit.gpgsign=false -c user.name=aidlc-live -c user.email=aidlc-live@localhost commit --quiet --allow-empty -m 'Isolated source snapshot'
 exit $LASTEXITCODE
 '@
         $exitCode = Invoke-Isolated 'git-init' $safe $gitBody
@@ -571,7 +598,7 @@ exit $LASTEXITCODE
         } else { [void][IO.Directory]::CreateDirectory($destination) }
         $launchLogs = Join-Path $destination ('windows-launch-' + [Guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($launchLogs)
-        foreach ($log in [IO.Directory]::EnumerateFiles($stateRoot, '*.log')) {
+        foreach ($log in [IO.Directory]::EnumerateFiles((Join-Path $tools 'logs'), '*.log')) {
             Assert-PlainPath $log
             [IO.File]::Copy($log, (Join-Path $launchLogs ([IO.Path]::GetFileName($log))), $false)
         }
