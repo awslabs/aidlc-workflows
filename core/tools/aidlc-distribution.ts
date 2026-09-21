@@ -115,6 +115,17 @@ export function validateProjectionDescriptor(
     throw new Error(`${root}: projection identity is invalid`);
   }
   safeRelativePath(stamp.harnessDir, "harnessDir", true);
+  if (descriptor.onboarding !== undefined) {
+    try {
+      const safe = safeRelativePath(descriptor.onboarding, "onboarding path");
+      assertProjectionPathHasNoSymlinks(root, safe);
+      if (!safe.startsWith(`${stamp.harnessDir}/`) || !lstatSync(join(root, safe)).isFile()) {
+        throw new Error("invalid onboarding file");
+      }
+    } catch {
+      throw new Error(`${root}: onboarding path is invalid`);
+    }
+  }
   if (!Array.isArray(descriptor.managedDirectories) || !Array.isArray(descriptor.rootIntegrations)) {
     throw new Error(`${root}: projection descriptor lists are invalid`);
   }
@@ -170,6 +181,13 @@ export function validateProjectionDescriptor(
       throw new Error(`${root}: root integration is invalid`);
     }
     const safe = safeRelativePath(integration.path, "root integration path");
+    if (
+      integration.shared !== undefined &&
+      integration.shared !== "union" &&
+      integration.shared !== "identical"
+    ) {
+      throw new Error(`${root}: ${safe} has an invalid shared mode`);
+    }
     declare(safe);
     assertProjectionPathHasNoSymlinks(root, safe);
     const path = join(root, safe);

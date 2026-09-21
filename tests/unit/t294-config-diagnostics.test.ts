@@ -1023,6 +1023,20 @@ describe("t294 instruction-file doctor row", () => {
     expect(missingOnboarding.label).toContain("missing (.codex/onboarding.md)");
   });
 
+  test("an unsafe onboarding path is ignored like an absent descriptor field", () => {
+    const project = install("codex");
+    const descriptorPath = join(project, ".codex", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    delete descriptor.onboarding;
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    const absent = instructionFileDoctorCheck(project, ".codex");
+    expect(absent.pass).toBe(true);
+
+    descriptor.onboarding = "../../x\n";
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    expect(instructionFileDoctorCheck(project, ".codex")).toEqual(absent);
+  }, 60_000);
+
   test("declared onboarding absent from the baseline remains a missing instruction", () => {
     const project = install("codex");
     const baselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");

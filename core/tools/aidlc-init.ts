@@ -55,7 +55,7 @@ import {
 } from "./aidlc-install-paths.ts";
 import { defaultHarnessPath } from "./aidlc-machine-config.ts";
 import { configureChannel, configureProjectPin } from "./aidlc-lifecycle.ts";
-import { RELEASE_CHANNELS } from "./aidlc-channel.ts";
+import { compareVersions, RELEASE_CHANNELS } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
@@ -3187,16 +3187,12 @@ function siblingDescriptor(sibling: ProjectHarness): Pick<ProjectionDescriptor, 
 }
 
 function predatesFrameworkVersion(version: string | undefined, incoming: string): boolean {
-  const installed = version?.split(".");
-  if (installed?.length !== 3 || installed.some((part) => !/^\d+$/.test(part))) {
+  if (version === undefined) return true;
+  try {
+    return compareVersions(version, incoming) < 0;
+  } catch {
     return true;
   }
-  const selected = incoming.split(".").map(Number);
-  for (let index = 0; index < 3; index++) {
-    const part = Number(installed[index]);
-    if (part !== selected[index]) return part < selected[index];
-  }
-  return false;
 }
 
 function canonical(value: unknown): string {
@@ -5520,8 +5516,16 @@ function planRootIntegrations(
           const contribution = siblingBaseline(sibling)?.rootContributions?.[integration.path];
           return contribution?.policy === "managed-block" && contribution.hash === merged.currentHash;
         });
-        if (owner) {
-          if (integration.shared === "union" && contributingSiblings?.has(owner)) {
+        if (owner && integration.shared) {
+          if (integration.shared === "identical") {
+            actions.push({
+              path: integration.path,
+              action: "conflict",
+              detail: `shared block is owned by ${owner.distribution} from a different release; refresh ${descriptor.distribution} from the same release as ${owner.distribution}, or refresh ${owner.distribution} from this release first`,
+            });
+            continue;
+          }
+          if (contributingSiblings?.has(owner)) {
             combinedWith = owner.distribution;
           } else {
             actions.push({ path: integration.path, action: "preserve", detail: `owned by ${owner.distribution}` });
@@ -6539,8 +6543,9 @@ export async function main(
       if (sibling.harnessDir === descriptor.harnessDir) continue;
       const siblingProjection = siblingDescriptor(sibling);
       if (!siblingProjection) {
+        if (existing.distribution) continue;
         throw new Error(
-          `${existing.distribution ? `refusing to refresh ${stamp.distribution}` : `harness ${stamp.distribution} cannot be added`} while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
+          `harness ${stamp.distribution} cannot be added while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
         );
       }
       for (const integration of descriptor.rootIntegrations) {

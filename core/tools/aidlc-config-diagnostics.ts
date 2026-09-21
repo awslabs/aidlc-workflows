@@ -2119,7 +2119,13 @@ function instructionStates(
       join(projectDir, harnessDir, "tools", "data", "aidlc-projection.json"),
       "utf-8",
     ));
-    if (isRecord(descriptor) && typeof descriptor.onboarding === "string" && descriptor.onboarding) {
+    if (
+      isRecord(descriptor) &&
+      typeof descriptor.onboarding === "string" &&
+      /^[A-Za-z0-9._\/-]+$/.test(descriptor.onboarding) &&
+      !descriptor.onboarding.split("/").includes("..") &&
+      descriptor.onboarding.startsWith(`${harnessDir}/`)
+    ) {
       onboardingPath = descriptor.onboarding;
     }
   } catch {

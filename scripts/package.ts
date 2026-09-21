@@ -865,7 +865,7 @@ function buildTree(
     const harnessSkeleton = readFileSync(HARNESS_ONBOARDING_SKELETON, "utf-8");
     const rendered = harnessDst
       ? neutral
-      : renderOnboarding(harnessSkeleton + "\n" + neutral, fills);
+      : renderOnboarding(harnessSkeleton + "\n## Shared AI-DLC onboarding\n\n" + neutral, fills);
     const outPath = projectRoot ? join(outRoot, dst) : join(treeRoot, dst);
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(

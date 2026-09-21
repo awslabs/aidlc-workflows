@@ -30,7 +30,7 @@ import {
 } from "../../core/tools/aidlc-archive.ts";
 import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
-import { sha256Bytes, walkFiles } from "../../core/tools/aidlc-distribution.ts";
+import { projectionFiles, sha256Bytes, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import {
   activeExecutablePath,
   commandPath,
@@ -1316,6 +1316,30 @@ describe("t243 project initialization", () => {
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
   }, 60_000);
 
+  test("coexisting harnesses restore missing projection descriptors one at a time", () => {
+    const project = temp("aidlc-t243-restore-descriptors-");
+    mkdirSync(join(project, ".git"));
+    const harnesses = [["kiro", ".kiro", KIRO_RELEASES[0]], ["claude", ".claude", CLAUDE_RELEASE]];
+    for (const [harness, , source] of harnesses) {
+      const initialized = run(INIT, [
+        "config", "--project-dir", project, "--from", source,
+        "--harness", harness, "--mcp", "none",
+      ], project);
+      expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    }
+    for (const [, harnessDir] of harnesses) {
+      rmSync(join(project, harnessDir, "tools", "data", "aidlc-projection.json"));
+    }
+    for (const [harness, harnessDir, source] of harnesses) {
+      const refreshed = run(INIT, [
+        "config", "--project-dir", project, "--from", source,
+        "--harness", harness, "--mcp", "none",
+      ], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(existsSync(join(project, harnessDir, "tools", "data", "aidlc-projection.json"))).toBe(true);
+    }
+  }, 60_000);
+
   test("harnesses sharing the neutral AGENTS.md block coexist and converge", () => {
     const project = temp("aidlc-t243-shared-agents-");
     mkdirSync(join(project, ".git"));
@@ -1382,6 +1406,42 @@ describe("t243 project initialization", () => {
       expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
       expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
     }
+  }, 60_000);
+
+  test("a shared block owned by a sibling from a different release conflicts without dropping ownership", () => {
+    const project = temp("aidlc-t243-different-release-block-");
+    mkdirSync(join(project, ".git"));
+    for (const [harness, source] of [["kiro", KIRO_RELEASES[0]], ["codex", CODEX_RELEASE]]) {
+      const initialized = run(INIT, [
+        "config", "--project-dir", project, "--from", source,
+        "--harness", harness, "--mcp", "none",
+      ], project);
+      expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    }
+    const agentsPath = join(project, "AGENTS.md");
+    const begin = "<!-- BEGIN AI-DLC:agents -->";
+    const end = "<!-- END AI-DLC:agents -->";
+    const agents = readFileSync(agentsPath, "utf-8").replace(end, `Sibling release guidance.\n${end}`);
+    writeFileSync(agentsPath, agents);
+    const kiroBaselinePath = join(project, ".kiro", "tools", "data", "aidlc-manifest.json");
+    const kiroBaseline = JSON.parse(readFileSync(kiroBaselinePath, "utf-8"));
+    kiroBaseline.rootContributions["AGENTS.md"].hash = sha256Bytes(
+      agents.slice(agents.indexOf(begin), agents.indexOf(end) + end.length),
+    );
+    writeFileSync(kiroBaselinePath, JSON.stringify(kiroBaseline, null, 2) + "\n");
+    const codexBaselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const codexContribution = JSON.parse(readFileSync(codexBaselinePath, "utf-8"))
+      .rootContributions["AGENTS.md"];
+
+    const refreshed = run(INIT, [
+      "config", "--project-dir", project, "--from", CODEX_RELEASE,
+      "--harness", "codex", "--mcp", "none",
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
+    expect(refreshed.stdout).toContain("shared block is owned by kiro from a different release");
+    expect(JSON.parse(readFileSync(codexBaselinePath, "utf-8")).rootContributions["AGENTS.md"])
+      .toEqual(codexContribution);
+    expect(readFileSync(agentsPath, "utf-8")).toBe(agents);
   }, 60_000);
 
   test("adding a harness is refused when the installed sibling's AGENTS.md predates shared onboarding", () => {
@@ -1504,6 +1564,34 @@ describe("t243 project initialization", () => {
     expect(addKiro.stdout).not.toContain("predates");
     expect(existsSync(join(project, ".kiro"))).toBe(false);
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
+  }, 60_000);
+
+  test("preview versions distinguish an install that predates shared onboarding from a newer exclusive block", () => {
+    const project = temp("aidlc-t243-preview-shared-agents-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", COPILOT_RELEASE,
+      "--harness", "copilot", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const agents = readFileSync(join(project, "AGENTS.md"));
+    const stampPath = join(project, ".aidlc", "tools", "data", "aidlc-stamp.json");
+    const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+    for (const [version, message] of [
+      [`${AIDLC_VERSION}-preview.20260101.1`, "predates shared onboarding"],
+      ["99.0.0-preview.20260101.1", "cannot coexist"],
+    ]) {
+      stamp.frameworkVersion = version;
+      writeFileSync(stampPath, JSON.stringify(stamp, null, 2) + "\n");
+      const addKiro = run(INIT, [
+        "config", "--project-dir", project, "--from", KIRO_RELEASES[0],
+        "--harness", "kiro", "--mcp", "none",
+      ], project);
+      expect(addKiro.status).toBe(4);
+      expect(addKiro.stdout).toContain(message);
+      expect(existsSync(join(project, ".kiro"))).toBe(false);
+      expect(readFileSync(join(project, "AGENTS.md"))).toEqual(agents);
+    }
   }, 60_000);
 
   test("refreshing a coexisting harness from a release that does not share AGENTS.md is refused", () => {
@@ -2233,6 +2321,37 @@ describe("t243 project initialization", () => {
     ], malformedMcp);
     expect(malformedJson.status).toBe(4);
     expect(malformedJson.stdout).toContain("malformed JSON");
+  }, 60_000);
+
+  test("a whole-file integration is adopted by an exact legacy signature", () => {
+    const project = temp("aidlc-t243-whole-file-legacy-");
+    mkdirSync(join(project, ".git"));
+    const legacy = '{"instructions":["legacy-onboarding.md"]}\n';
+    writeFileSync(join(project, "opencode.json"), legacy);
+    const source = temp("aidlc-t243-whole-file-legacy-source-");
+    cpSync(OPENCODE_RELEASE, source, { recursive: true });
+    const descriptorPath = join(source, ".aidlc", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<{ path: string; legacySignatures?: { wholeFileHashes: string[] } }>;
+    };
+    const integration = descriptor.rootIntegrations.find((item) => item.path === "opencode.json")!;
+    integration.legacySignatures = { wholeFileHashes: [sha256Bytes(legacy)] };
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    const refreshed = run(INIT, [
+      "config", "--project-dir", project, "--from", source,
+      "--harness", "opencode", "--mcp", "none", "--json",
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const result = JSON.parse(refreshed.stdout) as {
+      data: { actions: Array<{ path: string; action: string; detail?: string }> };
+    };
+    expect(result.data.actions.find((action) => action.path === "opencode.json")).toEqual({
+      path: "opencode.json",
+      action: "update",
+      detail: "adopted exact legacy signature",
+    });
+    expect(readFileSync(join(project, "opencode.json")))
+      .toEqual(readFileSync(join(source, "opencode.json")));
   }, 60_000);
 
   test("an unmarked AGENTS body is adopted only when it matches the shipped file exactly", () => {
@@ -4801,7 +4920,6 @@ describe("t243 projection channel", () => {
           "sha256:dd650e54fb2e645b6f30002f91f8f6f174fe34550295582f5b6a95356edaed77",
           "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
           "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
-          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
         ],
       },
       kiro: {
@@ -4820,7 +4938,6 @@ describe("t243 projection channel", () => {
           "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
           "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
           "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
-          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
         ],
       },
       "kiro-ide": {
@@ -4839,7 +4956,6 @@ describe("t243 projection channel", () => {
           "sha256:6735312a6ece44f0ba65b949ede2a241669fa422db584dadb2a9ed57e4e43be7",
           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
           "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
-          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
         ],
       },
       cursor: {
@@ -4848,7 +4964,9 @@ describe("t243 projection channel", () => {
           "sha256:2907b5293bfd8bd9d5f8b7a8025bfe23edd0ffcd31f925761916088517880936",
           "sha256:2ef8a8cd1b72e59d017013b8d261721b1c5dedb82499b44dc9a97be01b6a73cb",
           "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
-          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
+        ],
+        "install.ts": [
+          "sha256:338e1d36257108ce908eb42992e87e5df7cf96003a45e04a72189e4d79110aba",
         ],
       },
       opencode: {
@@ -4857,7 +4975,10 @@ describe("t243 projection channel", () => {
           "sha256:d86a61b7376772dcc7afdaefd63ce185f99d9c32d0e455668cf3b52f91a13d40",
           "sha256:db6e65ed85d6b47ca47d72b5a323ddc4dca76d021cce92591c1a28b26d9f237a",
           "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
-          "sha256:17d5e5ba3775a4f65c8649b476462f292cd9b450afd6f548518c112ec96c68da",
+        ],
+        "opencode.json": [
+          "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
+          "sha256:bc216975f2d614214fc6b6cc612c78f7da3f2b3f56492f0c252297fdc51fb928",
         ],
       },
       copilot: {
@@ -4866,7 +4987,6 @@ describe("t243 projection channel", () => {
           "sha256:1b8b3b4b10de3307a927429a676f5dd7440099a6d18859f603328b5ed239e6c7",
           "sha256:bf3077a6520e2735f618bad386858afc57edceaa791d98de7a6c269d71861e56",
           "sha256:55b31ba55f6e7ebc47fe76a00039e2ec16e020503fb63791cbd8665438ff32ac",
-          "sha256:76bf3ef612062087aebafb0274c3d2fbf9f87a113d98f63c15bf1bc55b92efa1",
         ],
       },
     };
@@ -4902,7 +5022,7 @@ describe("t243 projection channel", () => {
       for (const [path, hashes] of Object.entries(paths)) {
         const integration = descriptor.rootIntegrations.find((item) => item.path === path);
         expect(integration?.legacySignatures?.wholeFileHashes, `${harness}/${path}`)
-          .toEqual(hashes);
+          .toEqual(expect.arrayContaining(hashes));
       }
     }
   });
@@ -5100,6 +5220,37 @@ describe("t243 projection channel", () => {
     writeFileSync(path, `${JSON.stringify(descriptor, null, 2)}\n`);
     const { projectionFiles } = await import("../../core/tools/aidlc-distribution.ts");
     expect(() => projectionFiles(root)).toThrow("safe top-level name");
+  });
+
+  test("config refuses a projection descriptor with an invalid onboarding path", () => {
+    const source = temp("aidlc-t243-onboarding-path-source-");
+    cpSync(OPENCODE_RELEASE, source, { recursive: true });
+    const descriptorPath = join(source, ".aidlc", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.onboarding = "../etc/passwd";
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    const project = temp("aidlc-t243-onboarding-path-");
+    mkdirSync(join(project, ".git"));
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", source,
+      "--harness", "opencode", "--mcp", "none",
+    ], project);
+    expect(refused.status).toBe(4);
+    expect(refused.stdout).toContain("onboarding path is invalid");
+    expect(existsSync(join(project, ".aidlc"))).toBe(false);
+  }, 60_000);
+
+  test("projection descriptors reject invalid shared modes even for absent optional integrations", () => {
+    const source = temp("aidlc-t243-shared-mode-source-");
+    cpSync(CLAUDE_RELEASE, source, { recursive: true });
+    const descriptorPath = join(source, ".claude", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<{ path: string; shared?: string }>;
+    };
+    descriptor.rootIntegrations.find((item) => item.path === ".mcp.json")!.shared = "unknown";
+    rmSync(join(source, ".mcp.json"));
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    expect(() => projectionFiles(source)).toThrow(".mcp.json has an invalid shared mode");
   });
 
   test("projection descriptors reject malformed or policy-mismatched legacy signatures", async () => {

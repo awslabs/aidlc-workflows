@@ -69,7 +69,7 @@ function isCarvedOut(relPath: string, line: string): boolean {
   if (relPath === "templates/onboarding.md") {
     return (
       new Set(line.match(/\.(?:claude|kiro|codex|cursor|aidlc)\//g)).size >= 2 ||
-      /^- \*\*[^*]+\*\*: `\.(?:claude|kiro|codex|cursor|aidlc)\/[^`]*`/.test(line)
+      /^- \*\*[^*]+\*\*: `\.(?:claude|kiro|codex|cursor|aidlc)\/(?:[^`/]+\/)*(?:CLAUDE\.md|aidlc-onboarding\.md|onboarding\.md|aidlc-onboarding\.mdc|AGENTS\.md)`/.test(line)
     );
   }
   return false;

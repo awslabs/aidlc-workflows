@@ -66,7 +66,17 @@ const manifest: HarnessManifest = {
         ],
       },
     },
-    { path: "opencode.json", policy: "whole-file" },
+    {
+      path: "opencode.json",
+      policy: "whole-file",
+      legacySignatures: {
+        wholeFileHashes: [
+          // The pre-neutral shipped variant (#1268 changed this file).
+          "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
+          "sha256:bc216975f2d614214fc6b6cc612c78f7da3f2b3f56492f0c252297fdc51fb928",
+        ],
+      },
+    },
   ],
 
   // Same core projection as claude, into .aidlc/. The persona .md files ARE

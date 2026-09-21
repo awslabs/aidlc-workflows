@@ -72,7 +72,16 @@ const manifest: HarnessManifest = {
         ],
       },
     },
-    { path: "install.ts", policy: "whole-file" },
+    {
+      path: "install.ts",
+      policy: "whole-file",
+      legacySignatures: {
+        wholeFileHashes: [
+          // The pre-neutral shipped variant (#1268 changed this file).
+          "sha256:338e1d36257108ce908eb42992e87e5df7cf96003a45e04a72189e4d79110aba",
+        ],
+      },
+    },
   ],
 
   // Same core projection as claude, into .cursor/.

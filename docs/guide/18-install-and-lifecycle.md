@@ -741,6 +741,10 @@ required `aidlc config --harness <name>` command. A refresh source that no longe
 declares `AGENTS.md` shared is also refused while another installed harness shares
 it: `refusing to refresh <harness> from a release whose AGENTS.md is not shared`.
 Use a release that declares the block shared; `--force` cannot bypass this guard.
+A shared `AGENTS.md` block owned by a sibling from a different release is a
+conflict, not a deferred update. The error names the refresh order: refresh the
+selected harness from the same release as its sibling, or refresh the sibling
+from the selected release first.
 
 `.gitignore` declares `shared: "union"`, so `aidlc config` writes one block combining every installed
 harness's shipped entries; extra entries appear under `# <harness> harness`.
