@@ -925,6 +925,48 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings).toEqual([]);
   });
 
+  test("a lazy continuation preserves the list context for a sibling definition", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n1. paragraph\nlazy continuation\n2. [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "## Problem Statement: claim block has no source tag",
+    );
+  });
+
+  test("a paragraph after a blank line does not inherit the prior list context", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n- item\n\nSome prose\n2. [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
   // GFM §6.9: a table continues until a blank line or another block structure.
   test("a definition-shaped line directly under a table row is a table row, not a definition", () => {
     const dir = makeStageDir();

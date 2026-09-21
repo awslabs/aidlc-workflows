@@ -1216,24 +1216,29 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 		const content = firstContent(line.text);
 		if (content === null) {
 			open = false;
-			previousContext = line.context;
 			continue;
 		}
 		let continuation = false;
-		if (open && !continuesContext(line.context, previousContext)) {
-			const raw = visibleLines[index].replace(/^(?: {0,3}> ?)+/, "");
-			const ordered = /^ {0,3}(\d{1,9})[.)](?:\t| {1,4}(?! ))/.exec(raw);
-			// CommonMark §5.3: a list interrupts a paragraph only when it is a bullet
-			// list or starts at 1; a new block quote always interrupts. Our flat
-			// containers treat a marker after in-list prose as a sibling item.
-			continuation =
-				ordered !== null &&
-				Number(ordered[1]) !== 1 &&
-				leadingQuoteDepth(line.context) <= leadingQuoteDepth(previousContext) &&
-				!contextParts(previousContext).some((part) => part.startsWith("list#"));
-			if (!continuation) open = false;
+		if (open) {
+			if (!continuesContext(line.context, previousContext)) {
+				const raw = visibleLines[index].replace(/^(?: {0,3}> ?)+/, "");
+				const ordered = /^ {0,3}(\d{1,9})[.)](?:\t| {1,4}(?! ))/.exec(raw);
+				// CommonMark §5.3: a list interrupts a paragraph only when it is a bullet
+				// list or starts at 1; a new block quote always interrupts. Our flat
+				// containers treat a marker after in-list prose as a sibling item.
+				continuation =
+					ordered !== null &&
+					Number(ordered[1]) !== 1 &&
+					leadingQuoteDepth(line.context) <= leadingQuoteDepth(previousContext) &&
+					!contextParts(previousContext).some((part) => part.startsWith("list#"));
+				if (!continuation) {
+					open = false;
+					previousContext = line.context;
+				}
+			}
+		} else {
+			previousContext = line.context;
 		}
-		if (!continuation) previousContext = line.context;
 
 		if (!open) {
 			const definition = referenceDefinitionAt(lines, index);
