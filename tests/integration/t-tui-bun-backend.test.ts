@@ -10,7 +10,7 @@ import { publishSupervisorStop } from "../harness/tui-bun-process.ts";
 import { acquireNativeLock, getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
 import { physicalTuiText, type TuiSnapshot } from "../harness/tui-screen.ts";
 
-const supported = process.platform === "linux" || process.platform === "win32";
+const supported = process.platform === "linux" || process.platform === "win32" || process.platform === "darwin";
 const root = mkdtempSync(join(tmpdir(), "aidlc-tui-native-calibration-"));
 const driver = join(import.meta.dir, "../harness/tui-drive.ts");
 const target = join(root, "terminal target.ts");

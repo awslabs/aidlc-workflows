@@ -22,6 +22,7 @@ import {
 } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { DARWIN_BSDINFO_SIZE, type DarwinProcessIdentity, readDarwinProcessIdentity } from "./tui-process-identity.ts";
 import { publishTuiRecord } from "./tui-record-file.ts";
 
 export interface SupervisorConfig {
@@ -113,15 +114,6 @@ export function isLinuxDescendant(
   return false;
 }
 
-export interface DarwinProcessIdentity {
-  pid: number;
-  ppid: number;
-  uid: number;
-  status: number;
-  startSec: bigint;
-  startUsec: bigint;
-  env?: readonly string[];
-}
 
 export function sameDarwinProcess(a: DarwinProcessIdentity, b: DarwinProcessIdentity): boolean {
   return a.pid === b.pid && a.startSec === b.startSec && a.startUsec === b.startUsec;
@@ -201,7 +193,7 @@ function markerExists(path: string): boolean {
 
 function readConfig(path: string): SupervisorConfig {
   const fd = openSync(path, fsConstants.O_RDONLY |
-    (process.platform === "linux" ? fsConstants.O_NOFOLLOW : 0));
+    (process.platform !== "win32" ? fsConstants.O_NOFOLLOW : 0));
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || (process.platform !== "win32" && (stat.mode & 0o077) !== 0)) {
@@ -485,15 +477,6 @@ extern int proc_pidinfo(int, int, unsigned long long, void *, int);
 extern int sysctl(int *, unsigned int, void *, unsigned long *, void *, unsigned long);
 extern int kill(int, int);
 extern int waitid(int, unsigned int, void *, int);
-struct tui_bsdinfo {
-  unsigned int flags, status, xstatus, pid, ppid;
-  unsigned int uid, gid, ruid, rgid, svuid, svgid, reserved;
-  char comm[16], name[32];
-  unsigned int nfiles, pgid, jobc, tdev, tpgid;
-  int nice;
-  unsigned long long start_sec, start_usec;
-};
-typedef char tui_bsdinfo_size_check[sizeof(struct tui_bsdinfo) == 136 ? 1 : -1];
 static int checked(int result) { return result < 0 ? -*__error() : result; }
 int tui_listpids(void *buffer, int size) {
   *__error() = 0;
@@ -502,7 +485,7 @@ int tui_listpids(void *buffer, int size) {
 }
 int tui_pidinfo(int pid, void *buffer) {
   *__error() = 0;
-  int result = proc_pidinfo(pid, 3, 0ULL, buffer, sizeof(struct tui_bsdinfo));
+  int result = proc_pidinfo(pid, 3, 0ULL, buffer, ${DARWIN_BSDINFO_SIZE});
   return result > 0 ? result : -(*__error() ? *__error() : 5);
 }
 int tui_argmax(void) {
@@ -535,36 +518,12 @@ int tui_waitid(int type, unsigned int id, void *info, int options) {
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 
-export interface DarwinIdentityApi {
-  tui_pidinfo(pid: number, buffer: Uint8Array): number;
-}
-
-/** proc_bsdinfo's fixed 136-byte ABI is shared by Darwin arm64 and x64. */
-export function readDarwinProcessIdentity(
-  pid: number,
-  api: DarwinIdentityApi,
-  buffer = new Uint8Array(136),
-): DarwinProcessIdentity | null {
-  if (buffer.byteLength !== 136) throw new Error("Darwin process identity requires a 136-byte buffer");
-  const count = api.tui_pidinfo(pid, buffer);
-  if (count === -3) return null; // ESRCH
-  if (count < 0) throw new Error(`proc_pidinfo(${pid}) failed: errno ${-count}`);
-  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-  if (count !== 136 || view.getUint32(12, true) !== pid) {
-    throw new Error(`proc_pidinfo(${pid}) returned an invalid proc_bsdinfo identity`);
-  }
-  return {
-    pid, ppid: view.getUint32(16, true), uid: view.getUint32(20, true),
-    status: view.getUint32(4, true),
-    startSec: view.getBigUint64(120, true), startUsec: view.getBigUint64(128, true),
-  };
-}
 
 async function containDarwin(parentPid: number): Promise<Containment> {
   const library = await loadDarwinProcessCalls();
   const api = library.symbols;
   const failure = (call: string, result: number): Error => new Error(`${call} failed: errno ${-result}`);
-  const identityBuffer = new Uint8Array(136);
+  const identityBuffer = new Uint8Array(DARWIN_BSDINFO_SIZE);
   const readIdentity = (pid: number) => readDarwinProcessIdentity(pid, api, identityBuffer);
   const owner = readIdentity(process.pid);
   const parent = readIdentity(parentPid);

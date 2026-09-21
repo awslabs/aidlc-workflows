@@ -2,11 +2,12 @@
 // independently selectable in t-tui-bun-process-{linux,darwin}.test.ts.
 import { describe, expect, test } from "bun:test";
 import {
-  type DarwinProcessIdentity, isDarwinDescendant, parseDarwinProcArgs, sameDarwinProcess,
+  isDarwinDescendant, parseDarwinProcArgs, sameDarwinProcess,
   isLinuxDescendant, type LinuxProcessIdentity, parseLinuxProcStat, sameLinuxProcess,
   terminateWindowsJobMember, type WindowsJobTerminationApi,
   type WindowsJobTerminationObservation, windowsJobLimits,
 } from "../harness/tui-bun-process.ts";
+import type { DarwinProcessIdentity } from "../harness/tui-process-identity.ts";
 
 function identity(pid: number, ppid: number, ticks: bigint): LinuxProcessIdentity {
   return { pid, ppid, startTicks: ticks, state: "S" };

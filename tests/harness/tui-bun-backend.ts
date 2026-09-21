@@ -430,9 +430,9 @@ export async function runBunDaemon(directory: string): Promise<void> {
         await screen.flush();
         if (parsedError) throw parsedError;
         if (!eof) throw new Error("PTY output did not reach EOF before the drain deadline");
-        // Bun maps ordinary POSIX slave-close EIO to status 1. The API exposes
+        // Bun maps ordinary Linux slave-close EIO to status 1. The API exposes
         // no errno to distinguish it from other read errors; accept it only
-        // after the supervisor confirms exit and cleanup. Windows closes at 0.
+        // after the supervisor confirms exit and cleanup. Windows/macOS close at 0.
         if (record.ptyExitCode !== 0 && !(process.platform === "linux" && record.ptyExitCode === 1)) {
           throw new Error(`PTY output ended with error status ${record.ptyExitCode}`);
         }

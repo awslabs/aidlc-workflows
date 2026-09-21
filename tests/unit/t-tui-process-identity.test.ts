@@ -11,6 +11,7 @@ import {
   acquireNativeLock,
   getNativeProcessIdentity,
   getNativeProcessIdentityWithBun,
+  parseDarwinProcBsdInfo,
   parseLinuxNativeProcessIdentity,
   readLinuxNativeProcessIdentity,
   readWindowsNativeProcessIdentity,
@@ -74,6 +75,35 @@ describe("Linux native process identity", () => {
       await expect(readLinuxNativeProcessIdentity(42, async () => {
         throw fsError(code);
       })).rejects.toThrow(code);
+    }
+  });
+});
+
+describe("Darwin native process identity", () => {
+  test("start-time identities retain both 64-bit fields and distinguish PID reuse", () => {
+    const buffer = new Uint8Array(136);
+    const view = new DataView(buffer.buffer);
+    view.setUint32(4, 2, true);
+    view.setUint32(12, 42, true);
+    view.setUint32(16, 10, true);
+    view.setUint32(20, 501, true);
+    view.setBigUint64(120, 9007199254740993n, true);
+    view.setBigUint64(128, 999999n, true);
+    const before = parseDarwinProcBsdInfo(42, buffer);
+    expect(before).toEqual({ pid: 42, ppid: 10, uid: 501, status: 2,
+      startSec: 9007199254740993n, startUsec: 999999n });
+    view.setBigUint64(128, 999998n, true);
+    expect(parseDarwinProcBsdInfo(42, buffer)).not.toEqual(before);
+    view.setUint32(4, 5, true);
+    expect(parseDarwinProcBsdInfo(42, buffer).status).toBe(5);
+  });
+
+  test("incomplete and mismatched native identities fail instead of claiming process absence", () => {
+    const buffer = new Uint8Array(136);
+    new DataView(buffer.buffer).setUint32(12, 42, true);
+    expect(() => parseDarwinProcBsdInfo(43, buffer)).toThrow("invalid proc_bsdinfo identity");
+    for (const size of [0, 128, 135, 137]) {
+      expect(() => parseDarwinProcBsdInfo(42, new Uint8Array(size))).toThrow("136-byte buffer");
     }
   });
 });
@@ -177,7 +207,7 @@ describe("native process identity input validation", () => {
   });
 });
 
-const supported = process.platform === "linux" || process.platform === "win32";
+const supported = process.platform === "linux" || process.platform === "win32" || process.platform === "darwin";
 
 describe.skipIf(!supported)("native process identity OS reads", () => {
   test("self has a repeatable creation identity", async () => {

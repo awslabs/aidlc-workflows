@@ -2912,7 +2912,7 @@ export function preseedClaudeOnboarding(
 function selectBackend(): Backend {
   const selected = selectedTuiBackend();
   if (selected === "bun") {
-    if (process.platform !== "linux" && process.platform !== "win32") {
+    if (process.platform !== "linux" && process.platform !== "win32" && process.platform !== "darwin") {
       fail(`native lifecycle is unsupported on ${process.platform}; select AIDLC_TUI_BACKEND=tmux`);
     }
     return createBunBackend({

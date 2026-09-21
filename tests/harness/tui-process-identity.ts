@@ -53,6 +53,77 @@ export async function readLinuxNativeProcessIdentity(
   return parseLinuxNativeProcessIdentity(pid, stat);
 }
 
+export const DARWIN_BSDINFO_SIZE = 136;
+
+export interface DarwinProcessIdentity {
+  pid: number;
+  ppid: number;
+  uid: number;
+  status: number;
+  startSec: bigint;
+  startUsec: bigint;
+  env?: readonly string[];
+}
+
+export interface DarwinIdentityApi {
+  tui_pidinfo(pid: number, buffer: Uint8Array): number;
+}
+
+/** The caller returns -errno, captured immediately in the native call or its adapter. */
+export function readDarwinProcessIdentity(
+  pid: number,
+  api: DarwinIdentityApi,
+  buffer = new Uint8Array(DARWIN_BSDINFO_SIZE),
+): DarwinProcessIdentity | null {
+  validatePid(pid);
+  if (buffer.byteLength !== DARWIN_BSDINFO_SIZE) throw new Error("Darwin process identity requires a 136-byte buffer");
+  const count = api.tui_pidinfo(pid, buffer);
+  if (count === -3) return null; // ESRCH
+  if (count < 0) throw new Error(`proc_pidinfo(${pid}) failed: errno ${-count}`);
+  if (count !== DARWIN_BSDINFO_SIZE) throw new Error(`proc_pidinfo(${pid}) returned ${count} bytes, expected 136`);
+  return parseDarwinProcBsdInfo(pid, buffer);
+}
+
+/** proc_bsdinfo's fixed ABI is shared by Darwin arm64 and x64; offsets live only here. */
+export function parseDarwinProcBsdInfo(pid: number, buffer: Uint8Array): DarwinProcessIdentity {
+  validatePid(pid);
+  if (buffer.byteLength !== DARWIN_BSDINFO_SIZE) throw new Error("Darwin process identity requires a 136-byte buffer");
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  if (view.getUint32(12, true) !== pid) {
+    throw new Error(`proc_pidinfo(${pid}) returned an invalid proc_bsdinfo identity`);
+  }
+  return {
+    pid, ppid: view.getUint32(16, true), uid: view.getUint32(20, true),
+    status: view.getUint32(4, true),
+    startSec: view.getBigUint64(120, true), startUsec: view.getBigUint64(128, true),
+  };
+}
+
+async function readDarwinWithFfi(pid: number): Promise<string | null> {
+  if (!process.versions.bun || !["x64", "arm64"].includes(process.arch)) {
+    throw new Error("Darwin native process identity requires Bun with bun:ffi on x64 or arm64");
+  }
+  // Node can import this module, but only Bun can enter the Darwin FFI path.
+  const { dlopen, read } = await import("bun:ffi");
+  const library = dlopen("libSystem.B.dylib", {
+    proc_pidinfo: { args: ["i32", "i32", "u64", "ptr", "i32"], returns: "i32" },
+    __error: { args: [], returns: "ptr" },
+  });
+  try {
+    const identity = readDarwinProcessIdentity(pid, {
+      tui_pidinfo(pid, buffer) {
+        const count = library.symbols.proc_pidinfo(pid, 3, 0, buffer, DARWIN_BSDINFO_SIZE);
+        // Read errno immediately: libproc returns zero on failure. Unlike the
+        // supervisor's cc wrapper, this crosses JS and errno can become stale.
+        const code = count <= 0 ? read.i32(library.symbols.__error()!) : 0;
+        return count > 0 ? count : -(code || 5);
+      },
+    });
+    if (!identity || identity.status === 5) return null; // SZOMB is observed exit.
+    return `darwin:${pid}:${identity.startSec * 1_000_000n + identity.startUsec}`;
+  } finally { library.close(); }
+}
+
 export interface WindowsIdentityApi<Handle> {
   OpenProcess(access: number, inherit: number, pid: number): Handle | null;
   GetProcessTimes(
@@ -163,7 +234,8 @@ export async function getNativeProcessIdentity(pid: number): Promise<string | nu
   if (process.platform === "win32") {
     return process.versions.bun ? readWindowsWithFfi(pid) : getNativeProcessIdentityWithBun(pid);
   }
-  throw new Error(`native process identity is unsupported on ${process.platform}; requires Linux or Windows`);
+  if (process.platform === "darwin") return readDarwinWithFfi(pid);
+  throw new Error(`native process identity is unsupported on ${process.platform}; requires Linux, Windows or macOS`);
 }
 
 /**
@@ -173,34 +245,43 @@ export async function getNativeProcessIdentity(pid: number): Promise<string | nu
  */
 export async function acquireNativeLock(path: string): Promise<() => void> {
   if (!path || path.includes("\0")) throw new Error("native lock requires a nonempty file path");
-  if (process.platform !== "linux" && process.platform !== "win32") {
-    throw new Error(`native lock is unsupported on ${process.platform}; requires Linux or Windows`);
+  if (process.platform !== "linux" && process.platform !== "win32" && process.platform !== "darwin") {
+    throw new Error(`native lock is unsupported on ${process.platform}; requires Linux, Windows or macOS`);
   }
   if (!process.versions.bun) throw new Error("acquireNativeLock requires Bun with bun:ffi");
   const { dlopen, read } = await import("bun:ffi");
   const busy = () => new Error(`native lock already in progress: ${path}`);
 
-  if (process.platform === "linux") {
+  if (process.platform === "linux" || process.platform === "darwin") {
     const definitions = {
       flock: { args: ["i32", "i32"], returns: "i32" },
       fcntl: { args: ["i32", "i32", "i32"], returns: "i32" },
-      __errno_location: { args: [], returns: "ptr" },
     } as const;
     const load = () => {
+      if (process.platform === "darwin") {
+        const library = dlopen("libSystem.B.dylib", {
+          ...definitions, __error: { args: [], returns: "ptr" },
+        });
+        return { library, errno: () => read.i32(library.symbols.__error()!) };
+      }
       const arch = process.arch === "arm64" ? "aarch64" : process.arch === "x64" ? "x86_64" : process.arch;
       let lastError: unknown;
       for (const candidate of ["libc.so.6", `/lib/ld-musl-${arch}.so.1`, `libc.musl-${arch}.so.1`]) {
-        try { return dlopen(candidate, definitions); }
+        try {
+          const library = dlopen(candidate, {
+            ...definitions, __errno_location: { args: [], returns: "ptr" },
+          });
+          return { library, errno: () => read.i32(library.symbols.__errno_location()!) };
+        }
         catch (error) { lastError = error; }
       }
       throw new Error(`native lock cannot load Linux flock: ${String(lastError)}`);
     };
-    const library = load();
+    const { library, errno } = load();
     let fd: number | undefined;
     try {
       fd = openSync(path, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
       if (!fstatSync(fd).isFile()) throw new Error(`native lock must be a regular file: ${path}`);
-      const errno = () => read.i32(library.symbols.__errno_location()!);
       // F_GETFD=1, F_SETFD=2, FD_CLOEXEC=1. Explicitly prevent an exec'd daemon
       // from inheriting the starter's lock and retaining it after starter death.
       const flags = library.symbols.fcntl(fd, 1, 0);
@@ -209,7 +290,7 @@ export async function acquireNativeLock(path: string): Promise<() => void> {
       }
       if (library.symbols.flock(fd, 2 | 4) !== 0) { // LOCK_EX | LOCK_NB
         const code = errno();
-        if (code === 11) throw busy(); // EWOULDBLOCK / EAGAIN on Linux
+        if (code === (process.platform === "darwin" ? 35 : 11)) throw busy(); // EWOULDBLOCK / EAGAIN
         throw new Error(`native flock failed: errno ${code} (${path})`);
       }
     } catch (error) {

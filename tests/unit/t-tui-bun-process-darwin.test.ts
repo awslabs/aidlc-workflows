@@ -5,11 +5,13 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
-  type DarwinProcessIdentity, loadDarwinProcessCalls, readDarwinProcessIdentity,
+  loadDarwinProcessCalls,
   sameDarwinProcess, type SupervisorConfig, type SupervisorStatus,
 } from "../harness/tui-bun-process.ts";
+import { type DarwinProcessIdentity, readDarwinProcessIdentity } from "../harness/tui-process-identity.ts";
 
 const supervisorPath = resolve(import.meta.dir, "../harness/tui-bun-process.ts");
+const identityPath = resolve(import.meta.dir, "../harness/tui-process-identity.ts");
 const pause = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
 // Keep fixture code and evidence in this worktree's ignored private tmp/.
@@ -62,7 +64,8 @@ async function exited(child: Bun.Subprocess, timeout = 8_000): Promise<number> {
 const fixtureSource = `
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadDarwinProcessCalls, readDarwinProcessIdentity } from ${JSON.stringify(supervisorPath)};
+import { loadDarwinProcessCalls } from ${JSON.stringify(supervisorPath)};
+import { readDarwinProcessIdentity } from ${JSON.stringify(identityPath)};
 const library = await loadDarwinProcessCalls();
 const [role, dir, mode] = process.argv.slice(2);
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
