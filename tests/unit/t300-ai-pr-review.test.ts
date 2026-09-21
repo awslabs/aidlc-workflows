@@ -912,6 +912,7 @@ process.stdout.write(JSON.stringify(value));
     const detach = WORKFLOW.indexOf('git checkout --detach "$base"');
     expect(detach).toBeGreaterThan(-1);
     const controlsSha = WORKFLOW.indexOf('controls_sha="$(git rev-parse HEAD)"');
+    const selfReviewCheckout = WORKFLOW.indexOf('git checkout --detach "$head"');
     const snapshot = WORKFLOW.indexOf("mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts");
     const promptSnapshot = WORKFLOW.indexOf(
       "cp .github/prompts/ai-pr-review-*.md .ai-review-controls/prompts/",
@@ -920,6 +921,8 @@ process.stdout.write(JSON.stringify(value));
       "cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh",
     );
     expect(controlsSha).toBeGreaterThan(-1);
+    expect(selfReviewCheckout).toBeGreaterThan(controlsSha);
+    expect(selfReviewCheckout).toBeLessThan(snapshot);
     expect(controlsSha).toBeLessThan(snapshot);
     expect(snapshot).toBeLessThan(promptSnapshot);
     expect(promptSnapshot).toBeLessThan(scriptSnapshot);
@@ -931,7 +934,9 @@ process.stdout.write(JSON.stringify(value));
     expect(afterDetach).not.toContain(".github/prompts/ai-pr-review-");
     expect(afterDetach).not.toMatch(/\.github\/(?:prompts|scripts)/);
     expect(WORKFLOW).not.toContain("REVIEW_CONTROL");
-    expect(WORKFLOW).toContain("This PR changes AI reviewer controls; self-review is skipped");
+    expect(WORKFLOW).not.toContain("self-review is skipped");
+    expect(WORKFLOW).toContain("AI reviewer controls changed; self-review uses head");
+    expect(WORKFLOW).toContain('echo "self_change=$control_change"');
     expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.md");
     expect(WORKFLOW).toContain('git diff --name-only "$base...$head"');
     expect(WORKFLOW).not.toContain('git diff --name-only "$base" "$head"');

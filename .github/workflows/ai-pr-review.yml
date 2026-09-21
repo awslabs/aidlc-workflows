@@ -154,21 +154,15 @@ jobs:
                 ;;
             esac
           done < <(git diff --name-only "$base...$head")
-          if [ "$control_change" = "true" ]; then
-            echo "::notice::This PR changes AI reviewer controls; self-review is skipped"
-            {
-              echo "base=$base"
-              echo "head=$head"
-              echo "pr=$REQUESTED_PR"
-              echo "self_change=true"
-              echo "skip=true"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           # pulls/<n>.base.sha can lag the default branch; controls must match
           # the workflow revision that runs them, not the immutable review base.
+          # A controls PR self-reviews the exact immutable head it proposes.
           controls_sha="$(git rev-parse HEAD)"
+          if [ "$control_change" = "true" ]; then
+            git checkout --detach "$head"
+            controls_sha="$(git rev-parse HEAD)"
+            echo "::notice::AI reviewer controls changed; self-review uses head $controls_sha"
+          fi
           mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts
           cp .github/prompts/ai-pr-review-*.md .ai-review-controls/prompts/
           cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh \
@@ -211,7 +205,7 @@ jobs:
             echo "existing_state=$existing_state"
             echo "head=$head"
             echo "pr=$REQUESTED_PR"
-            echo "self_change=false"
+            echo "self_change=$control_change"
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
 
