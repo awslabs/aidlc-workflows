@@ -747,7 +747,7 @@ function visibleHtmlText(text: string): string {
 // the marker only comes off for a run of one to four — and four spaces of
 // remaining indentation is an indented code block too, which the caller's
 // column test rejects.
-type ContainerStep = { kind: "quote" } | { kind: "indent"; columns: number };
+type ContainerStep = { kind: "quote" } | { kind: "indent"; columns: number; item: string };
 
 interface ContainerLine {
 	text: string;
@@ -755,7 +755,7 @@ interface ContainerLine {
 	steps: ContainerStep[];
 }
 
-function containerLine(line: string): ContainerLine {
+function containerLine(line: string, allocateItem: () => string): ContainerLine {
 	let stripped = line;
 	const context: string[] = [];
 	const steps: ContainerStep[] = [];
@@ -775,9 +775,10 @@ function containerLine(line: string): ContainerLine {
 			stripped,
 		);
 		if (list) {
+			const item = allocateItem();
 			stripped = stripped.slice(list[0].length);
-			context.push("list");
-			steps.push({ kind: "indent", columns: textColumns(list[0]) });
+			context.push(item);
+			steps.push({ kind: "indent", columns: textColumns(list[0]), item });
 			continue;
 		}
 		return { text: stripped, context: context.join("/"), steps };
@@ -830,7 +831,10 @@ interface ReferenceAnalysis {
 
 interface ActiveListContainer {
 	steps: ContainerStep[];
-	listContext: string;
+}
+
+function contextFor(steps: ContainerStep[]): string {
+	return steps.map((step) => step.kind === "quote" ? "quote" : step.item).join("/");
 }
 
 function contextParts(context: string): string[] {
@@ -925,7 +929,8 @@ function stripContainerSteps(
 
 function explicitListContainer(
 	line: string,
-	listItem: number,
+	listItem: string,
+	allocateItem: () => string,
 ): { line: ContainerLine; active: ActiveListContainer } | null {
 	let text = line;
 	const before: string[] = [];
@@ -940,24 +945,20 @@ function explicitListContainer(
 	const marker =
 		/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(text);
 	if (!marker) return null;
-	const after = containerLine(text.slice(marker[0].length));
-	const listContext = `list#${listItem}`;
+	const after = containerLine(text.slice(marker[0].length), allocateItem);
 	const steps: ContainerStep[] = [
 		...before.map((): ContainerStep => ({ kind: "quote" })),
-		{ kind: "indent", columns: textColumns(marker[0]) },
+		{ kind: "indent", columns: textColumns(marker[0]), item: listItem },
 		...after.steps,
 	];
 	return {
 		line: {
 			text: after.text,
-			context: [...before, listContext, ...contextParts(after.context)].join(
-				"/",
-			),
+			context: contextFor(steps),
 			steps,
 		},
 		active: {
 			steps,
-			listContext,
 		},
 	};
 }
@@ -970,12 +971,13 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 	const result: ContainerLine[] = [];
 	let activeList: ActiveListContainer | null = null;
 	let listItem = 0;
+	const allocateItem = (): string => `list#${++listItem}`;
 
 	for (const line of lines) {
 		if (line.trim().length === 0) {
 			result.push({
 				text: line,
-				context: activeList?.listContext ?? "",
+				context: activeList ? contextFor(activeList.steps) : "",
 				steps: activeList?.steps ?? [],
 			});
 			continue;
@@ -998,19 +1000,12 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 				}
 			}
 			if (matched !== null && inside !== null) {
-				const listContext = activeList.listContext;
-				let firstIndent = true;
-				const context = matched.map((step) => {
-					if (step.kind === "quote") return "quote";
-					if (!firstIndent) return "list";
-					firstIndent = false;
-					return listContext;
-				}).join("/");
+				const context = contextFor(matched);
 				if (inside.blank) {
 					result.push({ text: "", context, steps: matched });
 					continue;
 				}
-				const after = containerLine(inside.text);
+				const after = containerLine(inside.text, allocateItem);
 				const steps = [...matched, ...after.steps];
 				activeList.steps = steps;
 				result.push({
@@ -1022,16 +1017,15 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 			}
 		}
 
-		const explicitList = explicitListContainer(line, listItem + 1);
+		const explicitList = explicitListContainer(line, allocateItem(), allocateItem);
 		if (explicitList) {
-			listItem++;
 			activeList = explicitList.active;
 			result.push(explicitList.line);
 			continue;
 		}
 
 		activeList = null;
-		result.push(containerLine(line));
+		result.push(containerLine(line, allocateItem));
 	}
 
 	return result;
