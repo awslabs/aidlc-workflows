@@ -323,7 +323,7 @@ jobs:
                 "$claude_bin" \
                 --bare \
                 --restricted \
-                --print \
+                --print "$prompt" \
                 --model "$FABLE_MODEL" \
                 --effort "$effort" \
                 --output-format text \
@@ -332,8 +332,7 @@ jobs:
                 --strict-mcp-config \
                 --permission-mode dontAsk \
                 --permission-prompts none \
-                --tools "Read,Glob,Grep" \
-                "$prompt"
+                --tools "Read,Glob,Grep"
               status=$?
             else
               echo "::error::Unknown review runtime $runtime"

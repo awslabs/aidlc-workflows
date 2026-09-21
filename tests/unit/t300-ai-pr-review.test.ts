@@ -889,6 +889,10 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW).toContain("--permission-mode dontAsk");
     expect(WORKFLOW).toContain("--permission-prompts none");
     expect(WORKFLOW).toContain('--tools "Read,Glob,Grep"');
+    expect(WORKFLOW.indexOf('--print "$prompt"')).toBeLessThan(
+      WORKFLOW.indexOf('--tools "Read,Glob,Grep"'),
+    );
+    expect(WORKFLOW).not.toContain('--tools "Read,Glob,Grep" \\\n                "$prompt"');
     expect(WORKFLOW).toContain("--no-session-persistence");
     expect(WORKFLOW).toContain("--disable-slash-commands");
     expect(WORKFLOW).toContain("--strict-mcp-config");
