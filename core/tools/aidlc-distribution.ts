@@ -36,6 +36,37 @@ export type ProjectionDescriptor = {
   rootIntegrations: RootIntegration[];
 };
 
+const AIDLC_DISPATCHER =
+  '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
+const AIDLC_HOOK_COMMAND = new RegExp(
+  `${AIDLC_DISPATCHER}\\s+engine\\s+(?:hook\\s+[A-Za-z0-9_-]+\\b|statusline\\b)`,
+);
+
+export function isAidlcHookCommand(command: string): boolean {
+  return /aidlc-[A-Za-z0-9_-]+\.ts/.test(command) || AIDLC_HOOK_COMMAND.test(command);
+}
+
+/** Keep event, matcher, and item metadata while excluding project hook entries. */
+export function aidlcHookRegistrations(hooks: unknown): Record<string, unknown[]> {
+  const registrations: Record<string, unknown[]> = {};
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return registrations;
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const owned = groups.flatMap((group: unknown) => {
+      if (!group || typeof group !== "object" || Array.isArray(group)) return [];
+      const entry = group as Record<string, unknown>;
+      if (!Array.isArray(entry.hooks)) return [];
+      const items = entry.hooks.filter((item: unknown) =>
+        item !== null && typeof item === "object" && "command" in item &&
+        typeof item.command === "string" && isAidlcHookCommand(item.command)
+      );
+      return items.length > 0 ? [{ ...entry, hooks: items }] : [];
+    });
+    if (owned.length > 0) registrations[event] = owned;
+  }
+  return registrations;
+}
+
 function parseJson<T>(path: string): T {
   try {
     return JSON.parse(readFileSync(path, "utf-8")) as T;

@@ -39,7 +39,7 @@ import {
   type LegacyDoctorResult,
   redactSecretPatterns,
 } from "./aidlc-doctor-bundle.ts";
-import { sha256Bytes } from "./aidlc-distribution.ts";
+import { aidlcHookRegistrations, isAidlcHookCommand, sha256Bytes } from "./aidlc-distribution.ts";
 import {
   artifactsRegistryFor,
   consumedArtifactProducerCollisions,
@@ -2750,10 +2750,24 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function projectSettingsRepair(distribution: string): string {
+  const invoke = aidlcInvocation();
+  const source = invoke === "aidlc"
+    ? ""
+    : ` --from <the runtime/${distribution} root you copied from>`;
+  const explanation = distribution === "claude"
+    ? "the shipped registrations (your own hook entries are kept)"
+    : "the shipped entries (your other project settings are kept)";
+  return `run \`${invoke} config --harness ${distribution}${source}\` to restore ${explanation}`;
+}
+
 function projectedFileRepair(
   distribution: string,
   relativePath: string,
 ): string {
+  if (relativePath === ".claude/settings.json" || relativePath === ".codex/config.toml") {
+    return projectSettingsRepair(distribution);
+  }
   const invoke = aidlcInvocation();
   if (invoke === "aidlc") {
     return `run \`${invoke} config --force\` to restore ${relativePath} from the installed runtime`;
@@ -3166,6 +3180,7 @@ export async function collectDoctorReport(
       const dispatcher =
         '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
       for (const command of commands) {
+        if (!isAidlcHookCommand(command)) continue;
         for (const match of command.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
           refs.add(match[0]);
         }
@@ -3217,8 +3232,8 @@ export async function collectDoctorReport(
           files?: Record<string, string>;
           entries?: Record<string, Record<string, string>>;
         };
-        // Refresh preserves the project's registrations. Compare only with the
-        // install baseline: extra hook files belong to the project, not AI-DLC.
+        // Compare with the install baseline: extra hook files and registrations
+        // belong to the project, not AI-DLC.
         if (expectedHooks.length > 0) {
           const hooksPrefix = `${harness}/hooks/`;
           for (const file of Object.keys(manifest?.files ?? {})) {
@@ -3228,19 +3243,22 @@ export async function collectDoctorReport(
             results.push({
               pass: false,
               label: `${basename} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
-              fix: `re-add the hook entry, or rerun \`${aidlcInvocation()} config --force\` to restore the shipped wiring`,
+              fix: projectSettingsRepair("claude"),
             });
           }
         }
-        const shippedHooksHash = manifest?.entries?.[".claude/settings.json"]?.hooks;
+        // Only the AI-DLC-only projection is comparable; a baseline that
+        // predates it has nothing to say about drift.
+        const shippedHooksHash = manifest?.entries?.[".claude/settings.json"]?.hooksAidlc;
         if (
           typeof shippedHooksHash === "string" &&
-          (settingsHooks === undefined || sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash)
+          sha256Bytes(canonical(aidlcHookRegistrations(settingsHooks))) !== shippedHooksHash
         ) {
           results.push({
-            pass: false,
-            label: "hooks in .claude/settings.json differ from the shipped wiring (you changed them)",
-            fix: `rerun \`${aidlcInvocation()} config --force\` to restore the shipped registrations`,
+            pass: true,
+            severity: "warn",
+            label: "AI-DLC hook registrations in .claude/settings.json differ from the shipped wiring (you changed them)",
+            fix: projectSettingsRepair("claude"),
           });
         }
       } catch {

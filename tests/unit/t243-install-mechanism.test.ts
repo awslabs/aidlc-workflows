@@ -1983,6 +1983,7 @@ describe("t243 project initialization", () => {
       permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      hooksAidlc: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     });
 
     const gitignore = join(project, ".gitignore");

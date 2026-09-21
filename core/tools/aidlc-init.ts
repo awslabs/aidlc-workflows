@@ -38,7 +38,9 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  aidlcHookRegistrations,
   assertProjectionPathHasNoSymlinks,
+  isAidlcHookCommand,
   type ProjectionDescriptor,
   projectionFiles,
   sha256Bytes,
@@ -3742,27 +3744,86 @@ function preserveClaudeProviderFields(
   nextProvider: ProvidersRecord | null,
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
-): boolean {
+  notes: string[],
+): void {
   const relative = `${harnessDir}/settings.json`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
   const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
   const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
   const pristine = sha256File(currentPath) === prior?.files[relative];
   const priorEntries = prior?.entries?.[relative];
-  const frameworkOwnedClean = priorEntries
-    ? CLAUDE_SHIPPED_KEYS.every((key) => {
-      const priorHash = priorEntries[key];
-      if (!priorHash) return !Object.hasOwn(current, key);
-      return Object.hasOwn(current, key) &&
-        sha256Bytes(canonical(current[key])) === priorHash;
-    })
-    : pristine;
+  // Start with the shipped object's key order so a pristine refresh is byte-identical.
+  if (canonical(current.hooks) !== canonical(staged.hooks)) {
+    if (
+      canonical(aidlcHookRegistrations(current.hooks)) !==
+        canonical(aidlcHookRegistrations(staged.hooks))
+    ) {
+      notes.push(
+        "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed); your own hook entries were kept.",
+      );
+    }
+    const hooks = isRecord(staged.hooks) ? { ...staged.hooks } : {};
+    for (const [event, groups] of Object.entries(isRecord(current.hooks) ? current.hooks : {})) {
+      if (!Array.isArray(groups)) continue;
+      const userGroups = groups.flatMap((group: unknown) => {
+        if (!isRecord(group) || !Array.isArray(group.hooks)) return [group];
+        const items = group.hooks.filter((item: unknown) =>
+          !isRecord(item) || typeof item.command !== "string" || !isAidlcHookCommand(item.command)
+        );
+        return items.length > 0 ? [{ ...group, hooks: items }] : [];
+      });
+      if (userGroups.length > 0) {
+        hooks[event] = [...(Array.isArray(hooks[event]) ? hooks[event] : []), ...userGroups];
+      }
+    }
+    staged.hooks = hooks;
+  }
+  const permissions = isRecord(current.permissions) ? current.permissions : {};
+  const shippedPermissions = isRecord(staged.permissions) ? staged.permissions : {};
+  const shippedAllow = Array.isArray(shippedPermissions.allow) ? shippedPermissions.allow : [];
+  const userAllow = Array.isArray(permissions.allow) ? permissions.allow : [];
+  if (shippedAllow.some((entry: unknown) => !userAllow.includes(entry))) {
+    notes.push(
+      "added the AI-DLC command allow entries that were missing from .claude/settings.json; your other permissions were kept.",
+    );
+  }
+  staged.permissions = {
+    ...permissions,
+    allow: [...shippedAllow, ...userAllow.filter((entry: unknown) => !shippedAllow.includes(entry))],
+  };
+  // A kept personal value is reported only when this release ships a different
+  // value than the one recorded last time; otherwise the choice stands silently.
+  const shippedChanged = (key: string): boolean =>
+    priorEntries?.[key] === undefined ||
+    sha256Bytes(canonical(staged[key])) !== priorEntries[key];
+  if (
+    Object.hasOwn(current, "statusLine") &&
+    !(isRecord(current.statusLine) && typeof current.statusLine.command === "string" &&
+      isAidlcHookCommand(current.statusLine.command))
+  ) {
+    if (shippedChanged("statusLine")) {
+      notes.push(
+        "kept your statusLine in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
+      );
+    }
+    staged.statusLine = current.statusLine;
+  }
+  if (
+    Object.hasOwn(current, "companyAnnouncements") && !pristine &&
+    sha256Bytes(canonical(current.companyAnnouncements)) !== priorEntries?.companyAnnouncements
+  ) {
+    if (shippedChanged("companyAnnouncements")) {
+      notes.push(
+        "kept your companyAnnouncements in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
+      );
+    }
+    staged.companyAnnouncements = current.companyAnnouncements;
+  }
   for (const [key, value] of Object.entries(current)) {
     if (key === "env") continue;
-    // Preserve project-owned additions. Shipped enforcement keys remain
-    // baseline-owned so drift conflicts and --force restores them.
+    // Every other top-level setting belongs to the project.
     if (!CLAUDE_SHIPPED_KEYS.includes(key)) {
       staged[key] = value;
     }
@@ -3826,7 +3887,6 @@ function preserveClaudeProviderFields(
   }
   staged.env = { ...stagedEnv, ...currentEnv };
   writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
-  return frameworkOwnedClean;
 }
 
 const CODEX_FRAMEWORK_TABLES = new Set([
@@ -3929,14 +3989,10 @@ function codexSections(
 function mergeCodexUserConfiguration(
   staged: string,
   current: string,
-  priorEntries: Record<string, string> | undefined,
-  pristine: boolean,
-): { content: string; frameworkOwnedClean: boolean } {
-  // Keep project model/provider assignments and custom tables, but always
-  // stage framework tables from the release. Local drift in those tables
-  // remains visible to the ownership planner.
+  notes: string[],
+): string {
+  // Refresh AI-DLC's tables and assignments; retain every other project entry.
   let merged = current;
-  let frameworkOwnedClean = true;
   const generatedFrameworkAssignments = codexFrameworkAssignments(staged);
   const missingAssignments: string[] = [];
   for (const assignment of generatedFrameworkAssignments) {
@@ -3946,11 +4002,11 @@ function mergeCodexUserConfiguration(
     if (!definition) continue;
     const existing = codexFrameworkAssignmentMatch(merged, definition.pattern);
     const currentText = existing?.[0].replaceAll("\r\n", "\n").trimEnd();
-    const priorHash = priorEntries?.[assignment.name];
-    const owned = priorHash
-      ? currentText !== undefined && sha256Bytes(currentText) === priorHash
-      : currentText === undefined || pristine;
-    if (!owned) frameworkOwnedClean = false;
+    if (currentText !== assignment.text) {
+      notes.push(
+        `restored the shipped ${assignment.name} assignment in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`,
+      );
+    }
     if (currentText === assignment.text) continue;
     if (existing) {
       merged = merged.slice(0, existing.index) + `${assignment.text}\n` +
@@ -3973,11 +4029,11 @@ function mergeCodexUserConfiguration(
     );
     const existing = pattern.exec(merged)?.[0];
     const currentText = existing?.replaceAll("\r\n", "\n").trimEnd();
-    const priorHash = priorEntries?.[section.name];
-    const owned = priorHash
-      ? currentText !== undefined && sha256Bytes(currentText) === priorHash
-      : pristine;
-    if (!owned) frameworkOwnedClean = false;
+    if (currentText !== section.text) {
+      notes.push(
+        `restored the shipped [${section.name}] table in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`,
+      );
+    }
     if (currentText === section.text) continue;
     if (existing !== undefined) {
       merged = merged.replace(pattern, () => `${section.text}\n\n`);
@@ -3985,31 +4041,26 @@ function mergeCodexUserConfiguration(
       merged = `${merged.trimEnd()}\n\n${section.text}\n`;
     }
   }
-  return {
-    content: merged.endsWith("\n") ? merged : `${merged}\n`,
-    frameworkOwnedClean,
-  };
+  return merged.endsWith("\n") ? merged : `${merged}\n`;
 }
 
 function preserveCodexProviderFields(
   projectDir: string,
   stagedRoot: string,
   harnessDir: string,
-  prior: Baseline | null,
-): boolean {
+  notes: string[],
+): void {
   const relative = `${harnessDir}/config.toml`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
   const current = readFileSync(currentPath, "utf-8");
   const merged = mergeCodexUserConfiguration(
     readFileSync(stagedPath, "utf-8"),
     current,
-    prior?.entries?.[relative],
-    sha256Bytes(current) === prior?.files[relative],
+    notes,
   );
-  writeFileSync(stagedPath, merged.content);
-  return merged.frameworkOwnedClean;
+  writeFileSync(stagedPath, merged);
 }
 
 function preserveOpenCodeProviderFields(
@@ -4045,9 +4096,10 @@ function preserveUserProviderFields(
   nextProvider: ProvidersRecord | null,
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
-): boolean {
+  notes: string[],
+): void {
   if (harness === "claude") {
-    return preserveClaudeProviderFields(
+    preserveClaudeProviderFields(
       projectDir,
       stagedRoot,
       harnessDir,
@@ -4055,13 +4107,13 @@ function preserveUserProviderFields(
       nextProvider,
       projectFlags,
       prior,
+      notes,
     );
   } else if (harness === "codex") {
-    return preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior);
+    preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, notes);
   } else if (harness === "opencode") {
     preserveOpenCodeProviderFields(projectDir, stagedRoot);
   }
-  return true;
 }
 
 function unrecordedLegacyProviderMigration(
@@ -4117,6 +4169,7 @@ function prepareRefreshSource(
       CLAUDE_SHIPPED_KEYS.filter((key) => Object.hasOwn(settings, key))
         .map((key) => [key, sha256Bytes(canonical(settings[key]))]),
     );
+    entries[rel].hooksAidlc = sha256Bytes(canonical(aidlcHookRegistrations(settings.hooks)));
   } else if (!projectProjection && entries && descriptor.distribution === "codex") {
     const rel = `${descriptor.harnessDir}/config.toml`;
     const config = readFileSync(join(sourceRoot, rel), "utf-8");
@@ -4267,9 +4320,8 @@ function prepareRefreshSource(
       regenerated.add(integration.path);
     }
   }
-  // Preserve project-owned provider/model fields and unrelated additions.
-  // Framework-owned enforcement entries remain tied to the baseline.
-  const configurationOwnershipClean = preserveUserProviderFields(
+  // Refresh AI-DLC's entries while preserving the project's own settings.
+  preserveUserProviderFields(
     projectDir,
     root,
     descriptor.harnessDir,
@@ -4278,6 +4330,7 @@ function prepareRefreshSource(
     normalizeProvidersRecord(staged.providers),
     projectFlags,
     prior,
+    notes,
   );
   // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
@@ -4314,16 +4367,11 @@ function prepareRefreshSource(
         )}.`,
     );
   }
-  // Provider/model fields can be updated in place only while framework-owned
-  // entries still match the recorded baseline.
+  // These project-owned files have already been merged at entry granularity.
   if (modelHarness(distribution) === "claude") {
-    const rel = `${descriptor.harnessDir}/settings.json`;
-    if (configurationOwnershipClean) regenerated.add(rel);
-    else regenerated.delete(rel);
+    regenerated.add(`${descriptor.harnessDir}/settings.json`);
   } else if (modelHarness(distribution) === "codex") {
-    const rel = `${descriptor.harnessDir}/config.toml`;
-    if (configurationOwnershipClean) regenerated.add(rel);
-    else regenerated.delete(rel);
+    regenerated.add(`${descriptor.harnessDir}/config.toml`);
   }
   // Kiro CLI: the aws-mcp region is the project's own MCP setting, not a provider
   // answer, so the staged file takes it from the project rather than the release.
@@ -4512,13 +4560,6 @@ function prepareRefreshSource(
         if (!regularFile(currentPath) || sha256File(currentPath) !== sha256File(join(root, rel))) {
           regenerated.add(rel);
         }
-      }
-    }
-    if (!configurationOwnershipClean) {
-      if (modelHarness(distribution) === "claude") {
-        regenerated.delete(`${descriptor.harnessDir}/settings.json`);
-      } else if (modelHarness(distribution) === "codex") {
-        regenerated.delete(`${descriptor.harnessDir}/config.toml`);
       }
     }
   }

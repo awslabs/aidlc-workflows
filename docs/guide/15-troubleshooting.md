@@ -47,7 +47,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `aidlc doctor` asks for Bun on a project you did not install through the copy channel | Copy-channel projections run hooks through Bun; native installs run them through the `aidlc` command. The remediation names which channel the project is on. To stop needing Bun, reinstall through the native release installer and rerun `aidlc config --harness <name>`. |
 | `refusing to refresh while ... workflow(s) are active` | Complete every named workflow, including parked workflows, then rerun `aidlc config`. `--force`, `--yes`, and a plan token cannot bypass this guard. `update` or `use` may proceed because they do not modify projects. |
 | `config plan changed after approval` | Rerun `aidlc config --dry-run --json`, review `data.actions`, and apply the new `data.planToken` with exactly the same source and behavior options. |
-| `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. Claude enforcement keys and Codex framework tables remain baseline-owned, while provider/model fields and unrelated project settings are preserved. |
+| `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. `.claude/settings.json` and `.codex/config.toml` are project-owned files merged by entry, so they do not need `--force`: refresh restores AI-DLC hook registrations, allow entries, and Codex tables while keeping your hooks, deny rules, custom statusline, environment, and other settings. Notes explain what was restored. Retired shipped allow entries are not removed automatically. |
 | `cannot coexist in one project` | The second harness shares an engine directory (`kiro` / `kiro-ide` use `.kiro`; `opencode` / `copilot` use `.aidlc`) or an exclusive managed block (Copilot's `AGENTS.md`). Choose distinct engine directories and avoid exclusive blocks. The neutral `AGENTS.md` block is shared across Kiro CLI, Kiro IDE, Codex, Cursor, and OpenCode; `.gitignore` combines shipped entries. |
 | `predates shared onboarding` | The named installed harness is older than the selected release (or has no valid recorded version) and its block is not shared. A preview sorts before the stable release with the same base version. Try refreshing it with `aidlc config --harness <name>` before adding another harness that shares the neutral `AGENTS.md` block. This is a hint for an older sibling: if it still refuses afterwards, its block is exclusive and they cannot coexist in one project. Copilot's block stays exclusive after refresh. Current exclusive blocks instead report `cannot coexist in one project`. `--force` does not bypass this compatibility check. |
 | `refusing to refresh <harness> from a release whose AGENTS.md is not shared` | Another installed harness shares the neutral root block, but the selected refresh source does not declare it shared. Use a release that declares `AGENTS.md` shared; `--force` does not bypass this guard, and no project files are changed. |
@@ -147,13 +147,14 @@ On Claude Code, per-stage token usage and cost tracking is on by default: the fo
 Hooks are registered project-wide in the harness's native configuration. On
 Claude, verify that `.claude/settings.json` contains the expected `hooks`
 events and `statusLine`. For a native project, complete active workflows,
-then re-add the affected entry or run `aidlc config --force` to restore the
-shipped wiring. An ordinary refresh reports a conflict when a shipped key is
-missing or changed. For a manual copy,
-replace the complete harness root from the same versioned
-`runtime/<harness>/` archive while preserving project root integrations; do
-not patch one hook command in isolation. The manual archive is Bun-shaped and
-does not require the native `aidlc` executable.
+then run `aidlc config --harness claude` to restore the shipped registrations;
+your own hook entries are kept. A copy-channel project instead uses
+`bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude root you copied from>`.
+No `--force` is needed. Notes tell you when registrations were restored.
+Doctor warns about changed AI-DLC registrations and fails when a shipped hook
+is no longer wired; your own additional hooks do not trigger drift warnings.
+An absent `statusLine` is restored too, but a custom non-AI-DLC statusline is
+kept. Delete that key and refresh if you want the shipped one again.
 
 ### Hooks disabled globally (`disableAllHooks`)
 
