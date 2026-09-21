@@ -342,15 +342,22 @@ function New-LaunchScript($Environment, [string]$Body) {
     $lines.Add("Set-StrictMode -Version Latest`n`$ErrorActionPreference = 'Stop'")
     $lines.Add(@'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-# Inspect the batch-logon environment before clearing even machine defaults.
-foreach ($key in [Environment]::GetEnvironmentVariables('Process').Keys) {
-    if ($key -match '^(ACTIONS_|AWS_|BROKER_|GH_TOKEN$|GITHUB_TOKEN$|ANTHROPIC_API_KEY$|OPENAI_API_KEY$|KIRO_API_KEY$|CURSOR_API_KEY$)') {
-        [Console]::Error.WriteLine('Batch logon inherited a forbidden environment variable.')
-        exit 1
-    }
+# Machine-level image markers are not credentials. Name inherited credential
+# variables for diagnosis, remove them, then prove the scrub before adding the
+# explicit nonsecret runtime/model configuration below. Never print values.
+$credentialNames = '^(ACTIONS_ID_TOKEN_REQUEST_TOKEN|ACTIONS_ID_TOKEN_REQUEST_URL|ACTIONS_RUNTIME_TOKEN|ACTIONS_RESULTS_URL|GITHUB_TOKEN|GH_TOKEN|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AWS_WEB_IDENTITY_TOKEN_FILE|AWS_ROLE_ARN|AWS_PROFILE|AWS_CONFIG_FILE|AWS_SHARED_CREDENTIALS_FILE|ANTHROPIC_.*|KIRO_API_KEY|CURSOR_API_KEY|AIDLC_BROKER_TOKEN)$'
+$inheritedForbidden = @([Environment]::GetEnvironmentVariables('Process').Keys | Where-Object { $_ -match $credentialNames } | Sort-Object)
+if ($inheritedForbidden.Count -gt 0) {
+    [Console]::WriteLine(('Removed forbidden env: {0}' -f ($inheritedForbidden -join ', ')))
+    foreach ($key in $inheritedForbidden) { [Environment]::SetEnvironmentVariable($key, $null, 'Process') }
 }
 foreach ($key in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
     [Environment]::SetEnvironmentVariable($key, $null, 'Process')
+}
+$remainingForbidden = @([Environment]::GetEnvironmentVariables('Process').Keys | Where-Object { $_ -match $credentialNames } | Sort-Object)
+if ($remainingForbidden.Count -gt 0) {
+    [Console]::Error.WriteLine(('Forbidden env after scrub: {0}' -f ($remainingForbidden -join ', ')))
+    exit 1
 }
 '@)
     foreach ($name in $Environment.Keys) {

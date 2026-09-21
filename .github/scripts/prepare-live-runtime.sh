@@ -97,11 +97,7 @@ if [[ "$mode" == prepare || "$mode" == prove ]]; then
     echo 'Live identity can read the Actions environment file' >&2
     exit 1
   fi
-  sandbox_env="$(run_live env)"
-  if printf '%s\n' "$sandbox_env" | grep -Eq '^(ACTIONS_|AWS_|GITHUB_TOKEN=|GH_TOKEN=)'; then
-    echo 'Live identity inherited control-plane credentials' >&2
-    exit 1
-  fi
+  run_live bun -e 'const re=/^(ACTIONS_ID_TOKEN_REQUEST_TOKEN|ACTIONS_ID_TOKEN_REQUEST_URL|ACTIONS_RUNTIME_TOKEN|ACTIONS_RESULTS_URL|GITHUB_TOKEN|GH_TOKEN|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AWS_WEB_IDENTITY_TOKEN_FILE|AWS_ROLE_ARN|AWS_PROFILE|AWS_CONFIG_FILE|AWS_SHARED_CREDENTIALS_FILE|ANTHROPIC_.*|KIRO_API_KEY|CURSOR_API_KEY|AIDLC_BROKER_TOKEN)$/i; const names=Object.keys(process.env).filter(key=>re.test(key)).sort(); if(names.length){console.error("Forbidden env after scrub: "+names.join(", "));process.exit(1);}'
   if run_live sudo -n true >/dev/null 2>&1; then
     echo 'Live identity unexpectedly has sudo authority' >&2
     exit 1
