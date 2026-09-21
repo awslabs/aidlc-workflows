@@ -169,34 +169,23 @@ not use strict coverage; live provider families require executed coverage.
 
 Nightly `preview-release.yml` calls the reusable `full-suite.yml`: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
-hosted Claude/Codex/opencode/release-contract suites,
-Kiro ACP/TUI/IDE on the dedicated self-hosted Windows desktop. Linux/macOS Kiro
-jobs are not declared. Cursor is excluded because its CLI exposes vendor API
-keys to agent environments; Copilot is excluded by account policy.
-Only source already on `main` passes the plan's ancestry gate. Self-hosted Kiro
-runners must be dedicated CI hosts with a CI-only Kiro/IdC identity, never personal
-or development machines. Register them in an organization runner group restricted
-to selected workflows, pinned to
-`awslabs/aidlc-workflows/.github/workflows/full-suite.yml@refs/heads/main`:
-repository-wide runner visibility lets any workflow on any branch bypass an
-in-workflow check. Windows inventory also rejects session 0 and requires the
-runner process's own session to be listed for the current user.
-The self-hosted Windows runner needs only Windows PowerShell 5.1 and Git for
-Windows for its shell environment, alongside the documented Bun/Node/Kiro tools.
-Its steps never rely on `bash`: `C:\Windows\System32\bash.exe` is the WSL launcher.
+and hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
+because its CLI exposes vendor API keys to agent environments; Copilot is
+excluded by account policy. Only source already on `main` passes the plan's
+ancestry gate.
 
-This maintainer-owned lane is default-off. Agents run as the runner user with
-the host's own Kiro login, its primary credential rather than a repository
-secret; no repository secrets are passed. The job token has only `contents: read`
-and is never persisted. A post-checkout proof rejects local Git extraheaders or
-conditional includes, `RUNNER_TEMP` credential files, and a `GITHUB_TOKEN`
-environment variable before any `Run kiro-*` step.
+Kiro ACP/TUI/IDE live families are declared exclusions in the nightly full suite,
+printed as warnings and leaving `complete: false`. They need a dedicated isolated
+Windows desktop host running Kiro under a separate low-privilege identity.
+Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
+`AIDLC_KIRO_IDE_LIVE=1` remain the coverage path. A follow-up issue tracks the
+hosted lane.
 
-Set `AIDLC_NIGHTLY_KIRO_RUNNERS=1` for the dedicated Windows Kiro host.
-No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Disabled
-Kiro jobs are reported in `excluded` and never block publication. `passed` requires all
-non-excluded legs to succeed; `complete` also requires no exclusions. Missing,
-failed, cancelled or enabled-but-skipped legs fail. `full-suite-result` retains
+No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Declared
+live-family exclusions are reported in the sorted `excluded` list and never block
+publication. `passed` requires every declared job to succeed and a 40-hex commit
+SHA; `complete` also requires no exclusions. Missing, failed, cancelled or skipped
+jobs fail. `full-suite-result` retains
 the exact SHA and run/leg outcomes for 90 days; preview and stable publication
 require `passed: true` and warn about exclusions. Tag a passing nightly SHA, or
 dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired

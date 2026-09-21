@@ -30,8 +30,6 @@ interface Job {
   "runs-on": string | string[];
   env?: Record<string, string>;
   environment?: string;
-  permissions?: Record<string, string>;
-  defaults?: { run?: { shell?: string } };
   strategy?: { matrix: { include?: Array<Record<string, string>>; family?: LiveFamily[] } };
   steps: Step[];
 }
@@ -69,6 +67,8 @@ function allSuccess(): SuiteNeeds {
   return Object.fromEntries(FULL_SUITE_JOBS.map((job) => [job, { result: "success" as const }]));
 }
 const identity = { sha: "a".repeat(40), runId: "123", runAttempt: "2" };
+const excludedFamilies = Object.entries(FAMILIES).filter(([, family]) => family.hosting === "excluded")
+  .map(([name]) => name).sort();
 
 describe("t345 complete nightly coverage", () => {
   test("native terminal CI selects only executable platform units across every runner alias", () => {
@@ -196,6 +196,7 @@ describe("t345 complete nightly coverage", () => {
   test("live families have every supported platform, opt-ins and strictness, without no-LLM", () => {
     const actual: string[] = [];
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      expect(job["runs-on"]).not.toContain("self-hosted");
       if (!jobName.startsWith("live_") && jobName !== "release_contract_windows") continue;
       for (const step of job.steps) {
         expect(step.run ?? "").not.toMatch(/--(?:no-llm|unit|integration|e2e|isolated-e2e|bedrock-parallel|kiro-parallel|ide-parallel|require-coverage)\b/);
@@ -226,7 +227,6 @@ describe("t345 complete nightly coverage", () => {
         } else {
           expect(command).toBe(`bun scripts/ci-live-filter.ts ${row.family} --platform ${row.platform} --run -- --debug -P 4`);
         }
-        expect(job["runs-on"].includes("self-hosted")).toBe(family.hosting === "self-hosted");
       }
     }
     const expected = Object.entries(FAMILIES).flatMap(([family, spec]) => spec.platforms.map((platform) => `${family}:${platform}`));
@@ -250,27 +250,24 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("Kiro uses only the dedicated Windows host and Cursor cannot expose API keys", () => {
-    expect(workflow.jobs.live_kiro_api).toBeUndefined();
-    expect(workflow.jobs.live_kiro_linux).toBeUndefined();
+  test("Kiro and Cursor are excluded without exposing vendor API keys", () => {
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      expect(name).not.toContain("kiro");
+      const matrix = job.strategy?.matrix;
+      for (const family of [...(matrix?.family ?? []), ...(matrix?.include ?? []).map((row) => row.family ?? "")]) {
+        expect(family).not.toContain("kiro");
+      }
+    }
     expect(workflow.jobs.live_cursor).toBeUndefined();
     expect(workflow.on.workflow_call.secrets.KIRO_API_KEY).toBeUndefined();
     expect(workflow.on.workflow_call.secrets.CURSOR_API_KEY).toBeUndefined();
-    expect(workflow.jobs.live_kiro_windows.strategy?.matrix.family).toEqual(["kiro-acp", "kiro-tui", "kiro-ide"]);
-    expect(FAMILIES.cursor).toMatchObject({ hosting: "excluded", platforms: [], reason: "no credential separation: vendor CLI reads the API key from the agent environment" });
-  });
-
-  test("self-hosted Kiro cannot persist the read-only checkout token before agents run", () => {
-    const job = workflow.jobs.live_kiro_windows;
-    expect(job.permissions).toEqual({ contents: "read" });
-    const checkout = job.steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
-    expect(checkout).toBeGreaterThanOrEqual(0);
-    expect(job.steps[checkout].with?.["persist-credentials"]).toBe(false);
-    const proof = job.steps.findIndex((step) => step.name?.startsWith("Prove no persisted checkout credential"));
-    expect(proof).toBe(checkout + 1);
-    for (const [index, step] of job.steps.entries()) {
-      if (step.name?.startsWith("Run kiro-")) expect(proof).toBeLessThan(index);
+    for (const family of ["kiro-ide", "kiro-tui", "kiro-acp"] as const) {
+      expect(FAMILIES[family]).toMatchObject({
+        hosting: "excluded", platforms: [],
+        reason: "needs a dedicated isolated Windows desktop host with a separate low-privilege Kiro identity; tracked as a follow-up",
+      });
     }
+    expect(FAMILIES.cursor).toMatchObject({ hosting: "excluded", platforms: [], reason: "no credential separation: vendor CLI reads the API key from the agent environment" });
   });
 
   test("no workflow step or job exposes vendor API keys", () => {
@@ -281,18 +278,6 @@ describe("t345 complete nightly coverage", () => {
         expect(step.env?.CURSOR_API_KEY).toBeUndefined();
         expect(JSON.stringify(step)).not.toMatch(/secrets\.(?:KIRO_API_KEY|CURSOR_API_KEY)/);
       }
-    }
-  });
-
-  test("self-hosted Windows inventories its desktop and uses Windows PowerShell 5.1 for every command", () => {
-    const job = workflow.jobs.live_kiro_windows;
-    expect(job.steps[0]).toMatchObject({ name: "Inventory self-hosted Windows host", shell: "powershell" });
-    expect(job.steps[0].run).toContain("(Get-Process -Id $PID).SessionId");
-    expect(job.steps[0].run).toContain("if ($sessionId -eq 0) { throw");
-    expect(job.steps[0].run).toContain("[int]$Matches.id -eq $sessionId");
-    for (const step of job.steps) {
-      if (!step.run) continue;
-      expect(step.shell ?? job.defaults?.run?.shell).toBe("powershell");
     }
   });
 
@@ -337,15 +322,9 @@ describe("t345 complete nightly coverage", () => {
         ], { cwd: tmpdir(), encoding: "utf8", timeout: 15_000 });
         if (args.includes("--e2e")) {
           expect(args).toContain("--isolated-e2e");
-          if (spec.resources === "kiro") {
-            expect(args[args.indexOf("--kiro-parallel") + 1]).toBe("2");
-            expect(args[args.indexOf("--ide-parallel") + 1]).toBe("1");
-            expect(args).not.toContain("--bedrock-parallel");
-          } else {
-            expect(args[args.indexOf("--bedrock-parallel") + 1]).toBe("2");
-            expect(args).not.toContain("--kiro-parallel");
-            expect(args).not.toContain("--ide-parallel");
-          }
+          expect(args[args.indexOf("--bedrock-parallel") + 1]).toBe("2");
+          expect(args).not.toContain("--kiro-parallel");
+          expect(args).not.toContain("--ide-parallel");
           expect(result.status, result.stdout + result.stderr).toBe(0);
           const plan = JSON.parse(result.stdout) as { files: Array<{ file: string }> };
           expect(plan.files.map(({ file }) => file).sort()).toEqual(selected.filter((file) => file.startsWith("tests/e2e/")));
@@ -456,8 +435,8 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("passed requires successful non-excluded legs and complete additionally requires no exclusions", () => {
-    expect(fullSuiteResult(allSuccess(), identity)).toMatchObject({ passed: true, complete: true, excluded: [] });
+  test("passed requires every declared job to succeed and complete additionally requires no excluded families", () => {
+    expect(fullSuiteResult(allSuccess(), identity)).toMatchObject({ passed: true, complete: false, excluded: excludedFamilies });
     for (const status of ["failure", "cancelled", "skipped"] as const) {
       expect(fullSuiteResult({ ...allSuccess(), live_hosted: { result: status } }, identity))
         .toMatchObject({ passed: false, complete: false });
@@ -468,41 +447,25 @@ describe("t345 complete nightly coverage", () => {
     expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" })).toMatchObject({ passed: false, complete: false });
   });
 
-  for (const [job, variable] of [["live_kiro_windows", "kiro"]] as const) {
-    test(`${job} is non-blocking only when explicitly disabled and skipped`, () => {
-      const needs: SuiteNeeds = { ...allSuccess(), [job]: { result: "skipped" } };
-      expect(fullSuiteResult(needs, identity)).toMatchObject({ passed: true, complete: false, excluded: [job] });
-      expect(fullSuiteResult(needs, identity, { [variable]: "1" })).toMatchObject({ passed: false, complete: false, excluded: [] });
-      for (const result of ["failure", "cancelled"] as const) {
-        needs[job] = { result };
-        expect(fullSuiteResult(needs, identity)).toMatchObject({ passed: false, complete: false, excluded: [] });
-      }
-      delete needs[job];
-      expect(fullSuiteResult(needs, identity)).toMatchObject({ passed: false, complete: false, excluded: [] });
-    });
-  }
-
-  test("result CLI warns about disabled families without failing the publication gate", () => {
+  test("result CLI warns about excluded families without failing publication but rejects missing jobs", () => {
     const root = mkdtempSync(join(tmpdir(), "full-suite-result-"));
     try {
-      const needs: SuiteNeeds = {
-        ...allSuccess(), live_kiro_windows: { result: "skipped" },
-      };
+      const needs = allSuccess();
       const env = {
         ...process.env, FULL_SUITE_NEEDS: JSON.stringify(needs), FULL_SUITE_SHA: identity.sha,
-        AIDLC_NIGHTLY_KIRO_RUNNERS: "0",
       };
       const output = join(root, "result.json");
       const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
       const result = spawnSync(process.execPath, [script, output], { encoding: "utf8", env });
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain("::warning::");
+      expect(result.stderr).toContain(`::warning::Full suite excluded families: ${excludedFamilies.join(", ")}`);
       const report = JSON.parse(readFileSync(output, "utf8"));
-      expect(report).toMatchObject({ passed: true, complete: false });
-      expect(report.excluded).toEqual(["live_kiro_windows"]);
-      const enabledSkip = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, AIDLC_NIGHTLY_KIRO_RUNNERS: "1" } });
-      expect(enabledSkip.status).toBe(1);
-      expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ passed: false, complete: false });
+      expect(report).toMatchObject({ passed: true, complete: false, excluded: excludedFamilies });
+      delete needs.native_reconcile;
+      const missing = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(needs) } });
+      expect(missing.status).toBe(1);
+      expect(missing.stderr).toContain("native_reconcile=missing");
+      expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ passed: false, complete: false, excluded: excludedFamilies });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -434,7 +434,7 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request | Deterministic gate | `ci.yml`: contract checks + smoke + unit shards + native-terminal units + credential-free live OS-isolation proofs on Linux/macOS/Windows + production guards | GitHub Actions |
-| Nightly preview / manual preview dispatch | Enabled deep-tier matrix | `preview-release.yml` calls `full-suite.yml` for deterministic integration/e2e on Linux/macOS/Windows and enabled live families; disabled families are reported | GitHub Actions |
+| Nightly preview / manual preview dispatch | Declared deep-tier matrix | `preview-release.yml` calls `full-suite.yml` for deterministic integration/e2e on Linux/macOS/Windows and hosted live families; excluded families are reported | GitHub Actions |
 | Stable tag | Exact-source evidence | `release.yml` requires a successful preview or main-branch full-suite dispatch artifact with the tag SHA and `passed: true`; exclusions are warned | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
@@ -1000,8 +1000,8 @@ profile obligations appear as `NOT_REQUESTED`, never as fulfilled coverage.
 
 This profile verifies the terminal driver and retained compatibility controls.
 The scheduled preview now calls `full-suite.yml`, which reconciles native
-receipts and requires enabled live/GUI jobs before publishing; variable-disabled
-families remain explicitly excluded, not represented as tested coverage.
+receipts and requires every declared job before publishing; excluded live
+families are not represented as tested coverage.
 
 ### Nightly full-suite matrix and provisioning
 
@@ -1010,7 +1010,7 @@ families remain explicitly excluded, not represented as tested coverage.
 already be an ancestor of `origin/main` before installing dependencies or
 dispatching source-executing jobs. All matrix legs check out the authorized
 immutable SHA. `preview-release.yml` calls it after the normal CI gate and cannot
-publish unless every non-excluded leg passes. Stable releases download
+publish unless every declared job passes. Stable releases download
 `full-suite-result` from successful preview runs or main-branch `workflow_dispatch`
 runs of `full-suite.yml`, requiring the artifact's `sha` to equal the tag SHA and
 `passed: true`; declared exclusions warn but do not block publication. Missing,
@@ -1027,8 +1027,8 @@ The declared coverage is:
   supplies Node; Bun installs the pinned dependencies and native addon.
 - Claude SDK, Claude TUI, Codex, opencode and release-endpoint contracts on
   hosted Linux/macOS/Windows, including Claude plugin invocation in the strict SDK leg.
-- Kiro ACP, TUI and IDE on the dedicated, logged-in self-hosted Windows desktop.
-  Linux/macOS Kiro jobs are not declared; no hosted job receives a vendor API key.
+- Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
+  Windows desktop host; local live runs remain their coverage path.
 - Cursor is excluded: no credential separation is available because its vendor
   CLI reads the API key from the agent environment. Copilot remains excluded by
   account policy; neither exclusion is reported as successful coverage.
@@ -1065,40 +1065,22 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-deterministic-<tier>-<OS>`, `full-suite-live-<family>-<OS>`, and
 `full-suite-result` (90-day retention). The final JSON records `sha`, `runId`,
-`runAttempt`, `passed`, `complete`, every job's result in `legs`, and repository-
-variable-disabled jobs in `excluded`. `passed` means every non-excluded leg
-succeeded; `complete` additionally requires no exclusions. Disabled-and-skipped
-Kiro host jobs are reported as exclusions and never block
-preview/stable publication. A missing, failed or cancelled leg still fails, as
-does a skipped leg whose enabling variable is on. Exclusions are not coverage.
+`runAttempt`, `passed`, `complete`, every job's result in `legs`, and live families
+declared with `hosting: "excluded"` in the sorted `excluded` list. `passed` means
+every declared job succeeded and `sha` is a 40-hex commit ID; `complete` additionally
+requires no exclusions. Exclusions warn without blocking preview/stable
+publication. A missing, failed, cancelled or skipped job still fails.
+Exclusions are not coverage.
 
-The Kiro lane trusts a maintainer-owned self-hosted host and is default-off
-unless `vars.AIDLC_NIGHTLY_KIRO_RUNNERS` is `1`. Agents run as the runner user
-with the host's own Kiro login, the host's primary credential rather than a
-repository secret; no repository secrets are passed to this job. Its job token
-has only `contents: read`, and checkout never persists it. Immediately after
-checkout, a proof step fails on local Git extraheaders or conditional includes,
-`RUNNER_TEMP` credential files, or a `GITHUB_TOKEN` environment variable, before
-any Kiro agent runs.
+Kiro ACP/TUI/IDE live families are declared exclusions in the nightly full suite,
+printed as warnings and leaving `complete: false`. They need a dedicated isolated
+Windows desktop host running Kiro under a separate low-privilege identity.
+Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
+`AIDLC_KIRO_IDE_LIVE=1` remain the coverage path. A follow-up issue tracks the
+hosted lane.
 
 Provision these repository/environment settings before expecting a green run:
 
-- Repository variable `AIDLC_NIGHTLY_KIRO_RUNNERS=1` enables Kiro ACP/TUI/IDE
-  on `[self-hosted, Windows, kiro]`. The host supplies signed-in `kiro-cli`
-  and Kiro IDE. It must be a dedicated CI host using a CI-only Kiro/IdC identity,
-  **never a personal or development machine**. Register it in an organization runner
-  group restricted to selected workflows, pinned to
-  `awslabs/aidlc-workflows/.github/workflows/full-suite.yml@refs/heads/main`.
-  A runner visible to the whole repository is reachable by any workflow on any
-  branch regardless of in-workflow source checks; the runner-group restriction
-  is required in addition to the plan's main-ancestry check.
-  Register the Windows runner as a logged-on-session scheduled task, **not a
-  service**: GUI automation must share the interactive user's desktop. Inventory
-  rejects session 0 and requires `query user` to match both the current user and
-  the runner process's own session ID; another session for that user is not enough.
-  Its shell requirements are Windows PowerShell 5.1 and Git for Windows; PowerShell
-  7 (`pwsh`) is not required. These Windows steps never rely on `bash`, because
-  `C:\Windows\System32\bash.exe` is the WSL launcher, not Git Bash.
 - Environment `nightly-live` holds secret `AWS_NIGHTLY_TEST_ROLE_ARN` (required).
   No Kiro/Cursor API-key workflow secret or hosted vendor-key leg is supported.
   The AWS role's OIDC trust must be scoped to
@@ -1109,8 +1091,7 @@ Provision these repository/environment settings before expecting a green run:
   Haiku 4.5 inference profiles in `us-east-1`, opencode's Sonnet 4.6 default in
   that region, and Codex `openai.gpt-5.5` through Bedrock Mantle in `us-east-2`.
   The table pins the broker allowlist and Claude client aliases; shipped user
-  settings remain provider-neutral. Kiro uses its API key or IDE host login,
-  not AWS OIDC.
+  settings remain provider-neutral.
 
 Claude Code and opencode npm versions are pinned in the workflow; update those
 pins deliberately after verifying the registry and compatibility. CLI/authentication preflights fail

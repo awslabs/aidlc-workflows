@@ -7,25 +7,24 @@ import { TEST_MATRIX_LIVE_GATES, type AllowedLiveGate } from "../tests/lib/test-
 interface Family {
   env: Partial<Record<AllowedLiveGate, "1">>;
   platforms: readonly NodeJS.Platform[];
-  hosting: "hosted" | "self-hosted" | "excluded";
+  hosting: "hosted" | "excluded";
   requireCoverage: boolean;
-  resources: "bedrock" | "kiro";
   reason?: string;
 }
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const hostedPlatforms = ["linux", "darwin", "win32"] as const;
 export const FAMILIES = {
-  "kiro-ide": { env: { AIDLC_KIRO_IDE_LIVE: "1" }, platforms: ["win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
-  "kiro-tui": { env: { AIDLC_KIRO_TUI_LIVE: "1", AIDLC_TUI_LIVE: "1" }, platforms: ["win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
-  "kiro-acp": { env: { AIDLC_KIRO_ACP_LIVE: "1" }, platforms: ["win32"], hosting: "self-hosted", requireCoverage: true, resources: "kiro" },
-  codex: { env: { AIDLC_CODEX_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
-  opencode: { env: { AIDLC_OPENCODE_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
-  cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, resources: "bedrock", reason: "no credential separation: vendor CLI reads the API key from the agent environment" },
-  copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, resources: "bedrock" },
-  "claude-tui": { env: { AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
-  "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true, resources: "bedrock" },
-  "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false, resources: "bedrock" },
+  "kiro-ide": { env: { AIDLC_KIRO_IDE_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, reason: "needs a dedicated isolated Windows desktop host with a separate low-privilege Kiro identity; tracked as a follow-up" },
+  "kiro-tui": { env: { AIDLC_KIRO_TUI_LIVE: "1", AIDLC_TUI_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, reason: "needs a dedicated isolated Windows desktop host with a separate low-privilege Kiro identity; tracked as a follow-up" },
+  "kiro-acp": { env: { AIDLC_KIRO_ACP_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, reason: "needs a dedicated isolated Windows desktop host with a separate low-privilege Kiro identity; tracked as a follow-up" },
+  codex: { env: { AIDLC_CODEX_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
+  opencode: { env: { AIDLC_OPENCODE_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
+  cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, reason: "no credential separation: vendor CLI reads the API key from the agent environment" },
+  copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true },
+  "claude-tui": { env: { AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
+  "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
+  "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false },
 } as const satisfies Record<string, Family>;
 export type LiveFamily = keyof typeof FAMILIES;
 
@@ -102,10 +101,7 @@ export function liveRunnerArgs(family: LiveFamily, platform: NodeJS.Platform): s
   if (!files.length) throw new Error(`${family} has no selected files on ${platform}`);
   const tiers = new Set(files.map((file) => file.startsWith("plugins/") ? "integration" : file.split("/")[1]));
   const args = ["unit", "integration", "e2e"].filter((tier) => tiers.has(tier)).map((tier) => `--${tier}`);
-  if (tiers.has("e2e")) {
-    args.push("--isolated-e2e", ...(spec.resources === "kiro"
-      ? ["--kiro-parallel", "2", "--ide-parallel", "1"] : ["--bedrock-parallel", "2"]));
-  }
+  if (tiers.has("e2e")) args.push("--isolated-e2e", "--bedrock-parallel", "2");
   if (spec.requireCoverage) args.push("--require-coverage");
   args.push("--filter", liveFilter(files));
   return args;

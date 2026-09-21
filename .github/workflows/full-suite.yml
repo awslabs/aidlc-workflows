@@ -471,119 +471,9 @@ jobs:
           name: full-suite-live-release-contract-Windows
           path: tests/logs/
           include-hidden-files: true
-  # Maintainer-owned self-hosted host; default-off via vars.AIDLC_NIGHTLY_KIRO_RUNNERS.
-  # Agents run as the runner user with the host's own Kiro login: its primary
-  # credential, not a repository secret. No repository secrets are passed;
-  # the job token is read-only and never persisted.
-  live_kiro_windows:
-    needs: plan
-    if: "vars.AIDLC_NIGHTLY_KIRO_RUNNERS == '1'"
-    runs-on: [self-hosted, Windows, kiro]
-    permissions:
-      contents: read
-    timeout-minutes: 720
-    defaults:
-      run:
-        shell: powershell
-    strategy:
-      fail-fast: false
-      matrix:
-        family: [kiro-acp, kiro-tui, kiro-ide]
-    steps:
-      - name: "Inventory self-hosted Windows host"
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List
-          $sessions = & cmd /c "query user 2>&1"
-          Write-Host ($sessions -join "`n")
-          if ($LASTEXITCODE -ne 0) { throw 'query user failed; an interactive user session is required' }
-          $sessionId = (Get-Process -Id $PID).SessionId
-          Write-Host "Runner process session ID: $sessionId"
-          if ($sessionId -eq 0) { throw 'Runner is in session 0; run it as a logged-on-session scheduled task, not a service' }
-          $sessionPattern = '^\s*>?\s*' + [regex]::Escape($env:USERNAME) + '\s+(?:\S+\s+)?(?<id>\d+)\s+(?<state>\S+)(?:\s|$)'
-          $sessionState = $null
-          foreach ($row in $sessions) {
-            if ("$row" -match $sessionPattern -and [int]$Matches.id -eq $sessionId) {
-              $sessionState = $Matches.state
-              break
-            }
-          }
-          if ($null -eq $sessionState) {
-            throw "No session $sessionId listed for current user $env:USERNAME; the runner must share the interactive desktop"
-          }
-          Write-Host "Runner user: $env:USERNAME; session ID: $sessionId; state: $sessionState"
-          foreach ($tool in @('bun', 'node', 'git', 'kiro-cli')) {
-            $command = Get-Command $tool -ErrorAction Stop | Select-Object -First 1
-            Write-Host "$tool path: $($command.Source)"
-            & $command.Source --version
-            if ($LASTEXITCODE -ne 0) { throw "$tool --version failed" }
-          }
-          $kiroIde = "$env:LOCALAPPDATA\Programs\Kiro\Kiro.exe"
-          $idePresent = Test-Path $kiroIde
-          Write-Host "Kiro IDE path: $kiroIde; present: $idePresent"
-          if (-not $idePresent) {
-            throw "Kiro IDE executable missing: $kiroIde"
-          }
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: "${{ needs.plan.outputs.sha }}"
-          persist-credentials: false
-      - name: "Prove no persisted checkout credential"
-        run: |
-          $ErrorActionPreference = 'Stop'
-          foreach ($pattern in @('^http\..*\.extraheader$', '^includeIf\.')) {
-            $config = @(& git config --local --get-regexp $pattern)
-            $gitExit = $LASTEXITCODE
-            if ($config.Count -ne 0) { throw "Persisted checkout credential configuration detected ($pattern)" }
-            if ($gitExit -ne 1) { throw "git config credential check expected no matches (exit 1), got $gitExit" }
-          }
-          if (Test-Path -Path "$env:RUNNER_TEMP\git-credentials*") { throw 'Persisted checkout credential file detected in RUNNER_TEMP' }
-          if (Test-Path Env:GITHUB_TOKEN) { throw 'Unexpected GITHUB_TOKEN environment variable' }
-          $global:LASTEXITCODE = 0
-          Write-Host 'Checkout credential proof passed: no persisted credentials or GITHUB_TOKEN environment variable.'
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "${{ env.BUN_VERSION }}"
-      - run: "bun install --frozen-lockfile"
-      - run: "bun scripts/package.ts"
-      - name: "Require signed-in Kiro host"
-        run: "kiro-cli whoami"
-      - name: "Run kiro-acp"
-        if: "matrix.family == 'kiro-acp'"
-        env:
-          AIDLC_KIRO_ACP_LIVE: "1"
-        run: |
-          bun scripts/ci-live-filter.ts kiro-acp --platform win32 --run -- --debug -P 4
-      - name: "Run kiro-tui"
-        if: "matrix.family == 'kiro-tui'"
-        env:
-          AIDLC_KIRO_TUI_LIVE: "1"
-          AIDLC_TUI_LIVE: "1"
-        run: |
-          bun scripts/ci-live-filter.ts kiro-tui --platform win32 --run -- --debug -P 4
-      - name: "Run kiro-ide"
-        if: "matrix.family == 'kiro-ide'"
-        env:
-          AIDLC_KIRO_IDE_LIVE: "1"
-        run: |
-          bun scripts/ci-live-filter.ts kiro-ide --platform win32 --run -- --debug -P 4
-      - name: "Sanitize diagnostic logs"
-        id: sanitize
-        if: "${{ always() }}"
-        env:
-          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
-        run: bun scripts/ci-sanitize-logs.ts tests/logs
-      - name: "Upload diagnostic logs"
-        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
-          path: tests/logs/
-          include-hidden-files: true
   result:
     if: "${{ always() }}"
-    needs: [plan, native_terminal, native_reconcile, deterministic, live_hosted, live_windows, release_contract_windows, live_kiro_windows]
+    needs: [plan, native_terminal, native_reconcile, deterministic, live_hosted, live_windows, release_contract_windows]
     runs-on: ubuntu-latest
     steps:
       - name: "Reject unauthorized source without executing repository code"
@@ -608,7 +498,6 @@ jobs:
         env:
           FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
           FULL_SUITE_REF: "${{ inputs.ref }}"
-          AIDLC_NIGHTLY_KIRO_RUNNERS: "${{ vars.AIDLC_NIGHTLY_KIRO_RUNNERS }}"
         run: |
           bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
       - if: "${{ always() }}"

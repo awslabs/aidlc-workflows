@@ -72,7 +72,7 @@ jobs:
             if jq -e --arg sha "$tag_sha" '.sha == $sha and .passed == true' "$result"; then
               exclusions="$(jq -c '.excluded // []' "$result")"
               if [ "$exclusions" != '[]' ]; then
-                echo "::warning::Full-suite evidence for $tag_sha excludes disabled legs: $exclusions"
+                echo "::warning::Full-suite evidence for $tag_sha excludes families: $exclusions"
               fi
               accepted=true
               break

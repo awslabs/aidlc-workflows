@@ -1,6 +1,8 @@
+import { FAMILIES } from "./ci-live-filter.ts";
+
 export const FULL_SUITE_JOBS = [
   "plan", "native_terminal", "native_reconcile", "deterministic", "live_hosted",
-  "live_windows", "release_contract_windows", "live_kiro_windows",
+  "live_windows", "release_contract_windows",
 ] as const;
 
 type JobResult = "success" | "failure" | "cancelled" | "skipped";
@@ -10,9 +12,6 @@ export interface SuiteIdentity {
   runId: string;
   runAttempt: string;
 }
-export interface SuiteVariables {
-  kiro?: string;
-}
 export interface FullSuiteResult extends SuiteIdentity {
   passed: boolean;
   complete: boolean;
@@ -20,20 +19,16 @@ export interface FullSuiteResult extends SuiteIdentity {
   excluded: string[];
 }
 
-/** Only explicitly disabled, skipped families are exempt from the passing gate. */
+/** Every declared job must succeed; excluded families are never counted as coverage. */
 export function fullSuiteResult(
   needs: SuiteNeeds,
   identity: SuiteIdentity,
-  variables: SuiteVariables = {},
 ): FullSuiteResult {
   const legs = Object.fromEntries([...new Set([...FULL_SUITE_JOBS, ...Object.keys(needs)])]
     .map((job) => [job, needs[job]?.result ?? "missing"]));
-  const disabled: Record<string, boolean> = {
-    live_kiro_windows: variables.kiro !== "1",
-  };
-  const excluded = Object.keys(legs).filter((job) => legs[job] === "skipped" && disabled[job]);
-  const passed = /^[a-f0-9]{40}$/.test(identity.sha) && Object.entries(legs)
-    .every(([job, result]) => result === "success" || (result === "skipped" && disabled[job]));
+  const excluded = Object.entries(FAMILIES).filter(([, family]) => family.hosting === "excluded")
+    .map(([name]) => name).sort();
+  const passed = /^[a-f0-9]{40}$/.test(identity.sha) && Object.values(legs).every((result) => result === "success");
   return {
     ...identity,
     passed,
@@ -48,16 +43,14 @@ if (import.meta.main) {
     sha: process.env.FULL_SUITE_SHA ?? "",
     runId: process.env.GITHUB_RUN_ID ?? "",
     runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "",
-  }, {
-    kiro: process.env.AIDLC_NIGHTLY_KIRO_RUNNERS,
   });
   await Bun.write(process.argv[2] ?? "full-suite-result.json", `${JSON.stringify(result, null, 2)}\n`);
   if (result.excluded.length) {
-    console.error(`::warning::Full suite excluded disabled legs: ${result.excluded.join(", ")}`);
+    console.error(`::warning::Full suite excluded families: ${result.excluded.join(", ")}`);
   }
   if (!result.passed) {
     console.error(`Incomplete full suite for ${result.sha || process.env.FULL_SUITE_REF || "unknown ref"}: ` +
-      Object.entries(result.legs).filter(([job, status]) => status !== "success" && !result.excluded.includes(job))
+      Object.entries(result.legs).filter(([, status]) => status !== "success")
         .map(([job, status]) => `${job}=${status}`).join(", "));
     process.exitCode = 1;
   }
