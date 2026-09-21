@@ -990,6 +990,10 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW).not.toContain("REVIEW_CONTROL");
     expect(WORKFLOW).not.toContain("self-review is skipped");
     expect(WORKFLOW).toContain("AI reviewer controls changed; self-review uses head");
+    expect(WORKFLOW).toContain(
+      "Reviewer controls changed; self-review runs only from a pull_request event",
+    );
+    expect(WORKFLOW).toContain('[ "$EVENT_NAME" != "pull_request" ]');
     expect(WORKFLOW).toContain('echo "self_change=$control_change"');
     expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.md");
     expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.json");

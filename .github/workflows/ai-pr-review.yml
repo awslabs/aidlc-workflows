@@ -83,6 +83,7 @@ jobs:
       - name: Build immutable review context
         id: context
         env:
+          EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           REQUESTED_PR: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
@@ -151,6 +152,11 @@ jobs:
                 ;;
             esac
           done < <(git diff --name-only "$base...$head")
+          if [ "$control_change" = "true" ] && [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "::notice::Reviewer controls changed; self-review runs only from a pull_request event"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # pulls/<n>.base.sha can lag the default branch; controls must match
           # the workflow revision that runs them, not the immutable review base.
           # A controls PR self-reviews the exact immutable head it proposes.
