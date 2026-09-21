@@ -1394,7 +1394,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW).toContain("reviewed-merge");
     expect(WORKFLOW).toContain("review-error");
     expect(WORKFLOW).toContain("!cancelled()");
-    expect(WORKFLOW).toContain("issues: write");
+    expect(WORKFLOW).not.toContain("issues: write");
+    expect(WORKFLOW).toContain("pull-requests: write");
   });
 
   test("five specialist lenses feed a Sol judge and categorized publication contract", () => {
