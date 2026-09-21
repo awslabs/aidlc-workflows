@@ -66,6 +66,38 @@ function allSuccess(): SuiteNeeds {
 const identity = { sha: "a".repeat(40), runId: "123", runAttempt: "2" };
 
 describe("t345 complete nightly coverage", () => {
+  test("native terminal CI selects only executable platform units across every runner alias", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+    const matrix = ci.jobs.test_native_terminal.strategy!.matrix.include!;
+    const shared = ["runtime", "bun-process", "native-private-root", "native-fixture-cleanup"];
+    const owned: Record<string, string[]> = {
+      linux: ["bun-process-linux", "native-private-root-posix"],
+      darwin: ["bun-process-darwin", "native-private-root-posix"],
+      win32: ["native-private-root-windows"],
+    };
+    const files = [...new Bun.Glob("*.test.ts").scanSync({ cwd: join(REPO_ROOT, "tests/unit") })]
+      .map((file) => `tests/unit/${file}`);
+    expect(matrix.map((row) => platformOf(row.runner)).sort()).toEqual(Object.keys(owned).sort());
+    for (const row of matrix) {
+      const platform = platformOf(row.runner);
+      const filter = new RegExp(row.filter);
+      // Same OR matching as run-tests.ts: basename (with extension), legacy
+      // stem, and tier-qualified stem. The extension alias defeated lookaheads.
+      const selected = files.filter((file) => aliases(file).some((alias) => filter.test(alias))).sort();
+      const expected = [...shared, ...owned[platform]].map((name) => `tests/unit/t-tui-${name}.test.ts`).sort();
+      expect(selected, `${row.runner}: ${row.filter}`).toEqual(expected);
+      for (const file of selected) {
+        const suffix = /-(posix|windows|linux|darwin)\.test\.ts$/.exec(file)?.[1];
+        if (suffix) {
+          const allowed = suffix === "posix" ? ["linux", "darwin"] : [suffix === "windows" ? "win32" : suffix];
+          expect(allowed, `${row.runner} selected foreign-platform ${file}`).toContain(platform);
+        }
+      }
+    }
+  });
+
   test("credential process returns AWS Version 1 credentials without accepting missing inputs", () => {
     const env = {
       AWS_ACCESS_KEY_ID: "test-access-key",

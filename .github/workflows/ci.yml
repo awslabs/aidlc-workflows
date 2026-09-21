@@ -113,11 +113,11 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04-arm
-            filter: '^t-tui-(runtime|bun-process(-linux)?|native(?!.*-windows$).*)$'
+            filter: '^t-tui-(runtime|bun-process|bun-process-linux|native-private-root|native-private-root-posix|native-fixture-cleanup)$'
           - runner: macos-15
-            filter: '^t-tui-(runtime|bun-process(-darwin)?|native(?!.*-windows$).*)$'
+            filter: '^t-tui-(runtime|bun-process|bun-process-darwin|native-private-root|native-private-root-posix|native-fixture-cleanup)$'
           - runner: windows-latest
-            filter: '^t-tui-(runtime|bun-process|native(?!.*-posix$).*)$'
+            filter: '^t-tui-(runtime|bun-process|native-private-root|native-private-root-windows|native-fixture-cleanup)$'
     defaults:
       run:
         shell: bash
