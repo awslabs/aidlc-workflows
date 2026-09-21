@@ -1142,9 +1142,13 @@ user in a private checkout copy, using an explicit `sudo ... env -i` environment
 and root-owned readable/executable tools. They cannot read the launcher process's
 procfs environment, runner home, original checkout or Actions command files.
 Windows creates a standard Users-only account and ACL-isolated work/home/tools
-under `C:\aidlc-live`; `Start-Process -Credential -UseNewEnvironment` launches the
-same runner under that token. Its proof requires access denied for launcher
-modules/`PROCESS_VM_READ`, runner directories and private credential state.
+under `C:\aidlc-live`; Task Scheduler launches each body with a Limited batch
+logon under that identity, avoiding the runner session's desktop ACL. Jobs have
+a six-hour limit, explicit safe environment and UTF-8 identity/cwd/output logs;
+tasks are unregistered after completion. Secondary-logon `Start-Process` is a
+reported fallback only if task registration itself fails. Batch sessions may
+use session 0: the proof requires correct user identity and access denied for
+launcher modules/`PROCESS_VM_READ`, runner directories and private credential state.
 The broker stays under the runner identity; only nonsecret routes and model pins
 cross into the live user's environment. Failed isolation proofs block execution.
 

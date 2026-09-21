@@ -258,15 +258,15 @@ function Add-BrokerEnvironment($Environment) {
 }
 
 function New-LaunchScript($Environment, [string]$Body) {
-    $path = Join-Path $tools ('launch-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    $path = Join-Path (Join-Path $tools 'jobs') ('body-' + [Guid]::NewGuid().ToString('N') + '.ps1')
     $lines = [Collections.Generic.List[string]]::new()
     $lines.Add("Set-StrictMode -Version Latest`n`$ErrorActionPreference = 'Stop'")
     $lines.Add(@'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-# Inspect the raw alternate-logon environment before clearing even machine defaults.
+# Inspect the batch-logon environment before clearing even machine defaults.
 foreach ($key in [Environment]::GetEnvironmentVariables('Process').Keys) {
     if ($key -match '^(ACTIONS_|AWS_|BROKER_|GH_TOKEN$|GITHUB_TOKEN$|ANTHROPIC_API_KEY$|OPENAI_API_KEY$|KIRO_API_KEY$|CURSOR_API_KEY$)') {
-        [Console]::Error.WriteLine('Alternate logon inherited a forbidden environment variable.')
+        [Console]::Error.WriteLine('Batch logon inherited a forbidden environment variable.')
         exit 1
     }
 }
@@ -287,21 +287,72 @@ foreach ($key in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
 
 function Invoke-Isolated([string]$Label, $Environment, [string]$Body) {
     $script:stage = $Label
-    $wrapper = New-LaunchScript $Environment $Body
+    $bodyScript = New-LaunchScript $Environment $Body
     $id = $Label + '-' + [Guid]::NewGuid().ToString('N')
-    $logRoot = Join-Path $tools 'logs'
-    $stdout = Join-Path $logRoot ($id + '.stdout.log')
-    $stderr = Join-Path $logRoot ($id + '.stderr.log')
-    # -ArgumentList is joined by Start-Process; quote the complete -File path once.
+    $taskName = 'aidlc-live-' + $id
+    $logRoot = Join-Path (Join-Path $tools 'logs') $id
+    New-PrivateDirectory $logRoot
+    Set-RuntimeAcl $logRoot $sandboxSid 'Modify'
+    $stdout = Join-Path $logRoot 'stdout.log'
+    $stderr = Join-Path $logRoot 'stderr.log'
+    $wrapper = Join-Path (Join-Path $tools 'jobs') ($id + '.ps1')
+    $taskBody = @'
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+try {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $location = (Get-Location).Path
+    [IO.File]::AppendAllText(__STDOUT__, ('Started as {0}; cwd={1}; session={2}' -f $identity, $location, (Get-Process -Id $PID).SessionId) + "`r`n", [Text.UTF8Encoding]::new($true))
+    # Preserve body exit codes in a real child; native stderr must not trigger
+    # PS5.1's terminating NativeCommandError before it reaches the UTF-8 log.
+    $ErrorActionPreference = 'Continue'
+    & __POWERSHELL__ -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File __BODY__ 2>&1 | Out-File -LiteralPath __STDOUT__ -Encoding UTF8 -Append
+    $result = $LASTEXITCODE
+    exit $result
+} catch {
+    [IO.File]::AppendAllText(__STDERR__, $_.Exception.ToString() + "`r`n", [Text.UTF8Encoding]::new($true))
+    exit 1
+}
+'@
+    $taskBody = $taskBody.Replace('__STDOUT__', (ConvertTo-PSLiteral $stdout)).Replace('__STDERR__', (ConvertTo-PSLiteral $stderr)).Replace('__POWERSHELL__', (ConvertTo-PSLiteral $powershell)).Replace('__BODY__', (ConvertTo-PSLiteral $bodyScript))
+    [IO.File]::WriteAllText($wrapper, $taskBody, [Text.UTF8Encoding]::new($true))
+    Set-RuntimeAcl $wrapper $sandboxSid 'ReadAndExecute'
     $arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $wrapper + '"'
     $childExit = -1
+    $registered = $false
     try {
-        $process = Start-Process -FilePath $powershell -ArgumentList $arguments -Credential $credential `
-            -UseNewEnvironment -WorkingDirectory $work -Wait -NoNewWindow -PassThru `
-            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        $process.Refresh()
-        if ($null -eq $process.ExitCode) { throw 'Alternate-logon process did not report an exit code.' }
-        $childExit = [int]$process.ExitCode
+        $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $work
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 6) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        $plainPassword = $credential.GetNetworkCredential().Password
+        try {
+            Register-ScheduledTask -TaskName $taskName -Action $action -User $credential.UserName -Password $plainPassword -RunLevel Limited -Settings $settings -ErrorAction Stop | Out-Null
+            $registered = $true
+        } catch {
+            # Fallback only when registration fails, never after task execution.
+            [Console]::Error.WriteLine(('Task Scheduler registration failed ({0}); attempting secondary-logon fallback.' -f $_.Exception.GetType().Name))
+        } finally { $plainPassword = $null }
+        if ($registered) {
+            $previousRun = (Get-ScheduledTaskInfo -TaskName $taskName).LastRunTime
+            Start-ScheduledTask -TaskName $taskName
+            $deadline = [DateTime]::UtcNow.AddHours(6).AddMinutes(1)
+            do {
+                $task = Get-ScheduledTask -TaskName $taskName
+                $info = Get-ScheduledTaskInfo -TaskName $taskName
+                if ($task.State -eq 'Ready' -and $info.LastRunTime -gt $previousRun) {
+                    $childExit = [long]$info.LastTaskResult
+                    break
+                }
+                if ([DateTime]::UtcNow -ge $deadline) { throw 'Isolated scheduled task exceeded its deadline.' }
+                Start-Sleep -Milliseconds 200
+            } while ($true)
+        } else {
+            $process = Start-Process -FilePath $powershell -ArgumentList $arguments -Credential $credential `
+                -UseNewEnvironment -WorkingDirectory $work -Wait -NoNewWindow -PassThru
+            $process.Refresh()
+            if ($null -eq $process.ExitCode) { throw 'Alternate-logon process did not report an exit code.' }
+            $childExit = [long]$process.ExitCode
+        }
         $script:exitCode = $childExit
         if ($childExit -ne 0) { throw "Isolated $Label exited $childExit" }
         return $childExit
@@ -310,7 +361,6 @@ function Invoke-Isolated([string]$Label, $Environment, [string]$Body) {
             [IO.File]::AppendAllText($stderr, ($_.Exception.ToString() + "`r`n"))
         }
         [Console]::Error.WriteLine(('Isolated {0} exit code: {1}' -f $Label, $childExit))
-        # Tool output remains untrusted even on failures: sanitize before printing.
         & (Join-Path $tools 'bun.exe') (Join-Path $env:GITHUB_WORKSPACE 'scripts\ci-sanitize-logs.ts') $logRoot
         if ($LASTEXITCODE -eq 0) {
             $marker = 'aidlc-diagnostics-' + [Guid]::NewGuid().ToString('N')
@@ -325,8 +375,13 @@ function Invoke-Isolated([string]$Label, $Environment, [string]$Body) {
         } else { [Console]::Error.WriteLine('Child output sanitization failed; diagnostic text withheld.') }
         throw
     } finally {
-        # These are runner-created read-only files, not sandbox-authored paths.
-        if ([IO.File]::Exists($wrapper)) { [IO.File]::Delete($wrapper) }
+        if ($registered) {
+            Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        }
+        foreach ($scriptFile in @($wrapper, $bodyScript)) {
+            if ([IO.File]::Exists($scriptFile)) { [IO.File]::Delete($scriptFile) }
+        }
     }
 }
 
@@ -363,6 +418,8 @@ $expected = __SID__
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if ($identity.User.Value -ne $expected) { throw 'Wrong process identity.' }
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+# Batch logons may use session 0; identity and process/file access denial, not
+# interactive-session numbering, establish this hosted CLI boundary.
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Sandbox is an administrator.' }
 function Test-AccessDenied($Failure, [switch]$Win32) {
     $exception = $Failure.Exception
@@ -463,6 +520,7 @@ try {
         $createdRoot = $true
         foreach ($path in @($work, $sandboxHome, $tools)) { New-PrivateDirectory $path }
         New-PrivateDirectory (Join-Path $tools 'logs')
+        New-PrivateDirectory (Join-Path $tools 'jobs')
         $stage = 'copying checkout'
         # No .git auth config, user config, reparse targets, or credential files cross.
         Copy-PlainTree $workspace $work -Checkout
@@ -598,10 +656,7 @@ exit $LASTEXITCODE
         } else { [void][IO.Directory]::CreateDirectory($destination) }
         $launchLogs = Join-Path $destination ('windows-launch-' + [Guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($launchLogs)
-        foreach ($log in [IO.Directory]::EnumerateFiles((Join-Path $tools 'logs'), '*.log')) {
-            Assert-PlainPath $log
-            [IO.File]::Copy($log, (Join-Path $launchLogs ([IO.Path]::GetFileName($log))), $false)
-        }
+        Copy-PlainTree (Join-Path $tools 'logs') $launchLogs -RejectLinks
         Set-RuntimeAcl (Join-Path $workspace 'tests\logs') $null 'ReadAndExecute' -Tree
         [Console]::WriteLine('Collected runner-owned Windows logs for sanitization; sandbox logons are disabled.')
         exit 0
