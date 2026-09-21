@@ -56,7 +56,10 @@ carries, so adjacent tags such as `[Q1][Q2]` remain two visible tags, while
 `[Q1]` in a document that also defines `[Q1]: <url>` is a link and grounds
 nothing. A definition requires a non-empty CommonMark label, a well-formed
 destination, and a correctly separated optional title, inside a block quote or
-list item as well as at the top level. Multiline destinations still resolve
+list item as well as at the top level. A definition cannot interrupt a paragraph,
+so a definition-shaped line written directly under prose or a list item's text
+is that paragraph's visible continuation. An ordered list not starting at `1.`
+cannot interrupt a paragraph either. Multiline destinations still resolve
 references across the whole document. A line that merely looks like a
 definition, such as `[note]: some prose`, is the visible sentence it renders as
 and is inspected like any other claim; neither an inline title nor a different

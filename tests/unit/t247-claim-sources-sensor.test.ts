@@ -415,6 +415,131 @@ describe("t247 claim-sources sensor", () => {
     );
   });
 
+  test("a wrapped multi-line assumption confirmation still matches the retained assumption", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed for all international purchases over the annual threshold. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed for all international\n  purchases over the annual threshold. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("the issue #1118 confirmation shape matches: numbered entry, leading tag, wrapped, bullet options", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed for all international purchases over the annual threshold. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n1. [assumption] A procurement reviewer may be needed for all international\n   purchases over the annual threshold.\n\n- A. Accept assumptions\n- B. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  for (const [boundary, line] of [
+    ["thematic break", "***"],
+    ["heading", "### Options"],
+    ["table row", "| Option | Meaning |"],
+    ["html block", "<div>Choose one.</div>"],
+  ]) {
+    test(`a ${boundary} directly under a confirmation entry ends it, as it does in the deliverable`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "stakeholder-map.md",
+        "None.",
+        "- A procurement reviewer may be needed. [assumption]",
+      );
+      const questionsPath = join(dir, "intent-capture-questions.md");
+      writeFileSync(
+        questionsPath,
+        `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n${line}\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+        "utf-8",
+      );
+      const result = run(dir, "intent-capture-questions.md");
+      expect(result.pass).toBe(true);
+      expect(result.findings).toEqual([]);
+    });
+  }
+
+  test("option lines and the answer tag directly under the last entry are not assumption text", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\nA. Accept assumptions\nB. Convert to follow-up questions\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("a wrapped confirmation entry does not accept a retained assumption equal to its first line", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n  Legal review stays optional.\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "retained assumption is not listed in ## Assumption Confirmation",
+    );
+  });
+
+  test("a non-list paragraph in the confirmation section does not accept a retained assumption", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\nA procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "retained assumption is not listed in ## Assumption Confirmation",
+    );
+  });
+
   for (const answer of [
     "A. Accept assumptions? No",
     "A. Accept assumptions with caveats",
@@ -585,7 +710,7 @@ describe("t247 claim-sources sensor", () => {
     ],
     [
       "Markdown reference metadata",
-      'The initiative provides a local command that echoes supplied text. [documentation][evidence]\n[evidence]: https://example.invalid\n"hidden [desc] [Q1]"',
+      'The initiative provides a local command that echoes supplied text. [documentation][evidence]\n\n[evidence]: https://example.invalid\n"hidden [desc] [Q1]"',
     ],
     [
       "HTML attributes",
@@ -685,6 +810,340 @@ describe("t247 claim-sources sensor", () => {
       );
     });
   }
+
+  test("a definition-shaped line directly under a list item's text is visible prose, not a definition", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "- This is an unsupported assertion unless Q1 grounds it. [Q1]\n[Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("a definition-shaped line directly under top-level prose is visible prose", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion unless Q1 grounds it. [Q1]\n[Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("an ordered list not starting at one cannot interrupt a paragraph with a definition", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n\nSome prose\n2. [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  for (const marker of ["1.", "01.", "0001)"]) {
+    test(`an ordered list starting at one with '${marker}' can interrupt a paragraph with a definition`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\nSome prose\n${marker} [Q1]: /url`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "## Problem Statement: claim block has no source tag",
+      );
+    });
+  }
+
+  test("a new block quote permits a non-one ordered list to interrupt prose", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n\nSome prose\n> 2. [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "## Problem Statement: claim block has no source tag",
+    );
+  });
+
+  test("consecutive non-one ordered markers remain paragraph continuation", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n\nSome prose\n2. continuation\n3. [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("a lazy continuation preserves the list context for a sibling definition", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n1. paragraph\nlazy continuation\n2. [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "## Problem Statement: claim block has no source tag",
+    );
+  });
+
+  test("a paragraph after a blank line does not inherit the prior list context", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n- item\n\nSome prose\n2. [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  for (const [label, content] of [
+    ["a same-line HTML declaration", "<!DOCTYPE html>\n[Q1]: /url"],
+    ["an HTML declaration interrupting prose", "Some prose\n<!DOCTYPE html>\n[Q1]: /url"],
+    ["a multiline processing instruction", "<?php\n?>\n[Q1]: /url"],
+    ["an indented-code list item", "-     code\n[Q1]: /url"],
+    ["an exited block quote", "> prose\n2. [Q1]: /url"],
+    ["an exited quoted processing instruction", "> <?php\n[Q1]: /url"],
+    ["an exited quoted div block", "> <div>\n[Q1]: /url"],
+    ["an exited list-item processing instruction", "- <?php\n[Q1]: /url"],
+    ["a root processing instruction containing marker-like text", "<?php\n- raw content\n?>\n[Q1]: /url"],
+    ["a quoted processing instruction containing marker-like text", "> <?php\n> - raw content\n> ?>\n[Q1]: /url"],
+    ["a list-item processing instruction containing marker-like text", "- <?php\n  - raw content\n  ?>\n[Q1]: /url"],
+    ["an unindented quoted list-item processing instruction", "> - <?php\n> [Q1]: /url"],
+    ["an exited inner quote in a list-item processing instruction", "- > <?php\n  [Q1]: /url"],
+    ["an exited inline nested list-item HTML block", "- - item\n    <?php\n  [Q1]: /url"],
+    ["an exited multiline nested list-item HTML block", "- item\n  - nested\n    <?php\n  [Q1]: /url"],
+    ["an outer-item div following a nested item", "- outer\n  - nested\n  <div>\n[Q1]: /url"],
+    ["an inner-item div following an indented nested marker", "- outer\n  - nested\n    <div>\n  [Q1]: /url"],
+    ["nested bullet sibling prose", "- outer\n  - child prose\n  - [Q1]: /url"],
+    ["nested ordered sibling prose", "1. outer\n   1. child prose\n   2. [Q1]: /url"],
+    ["a start-one nested item interrupting prose", "- prose\n  1. [Q1]: /url"],
+    ["a start-one nested item after rejected continuation", "- prose\n  2. more\n  1. [Q1]: /url"],
+    ["a marker-only bullet sibling", "- prose\n*\n  [Q1]: /url"],
+    ["a marker-only setext underline", "Some prose\n-\n  [Q1]: /url"],
+  ] as const) {
+    test(`a reference definition after ${label} resolves document-wide`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\n${content}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "## Problem Statement: claim block has no source tag",
+      );
+    });
+  }
+
+  for (const [label, content] of [
+    ["a blank-terminated HTML block", "<div>\n[Q1]: /url\n</div>"],
+    ["a same-depth block quote", "> prose\n> 2. [Q1]: /url"],
+    ["an uninterrupted quoted div block", "> <div>\n> [Q1]: /url"],
+    ["an uninterrupted inner quote in a list-item processing instruction", "- > <?php\n  > [Q1]: /url"],
+    ["an uninterrupted inline nested list-item HTML block", "- - item\n    <?php\n    [Q1]: /url"],
+    ["a non-one nested item under prose", "- prose\n  2. [Q1]: /url"],
+    ["consecutive rejected nested items", "- prose\n  2. more\n  3. [Q1]: /url"],
+    ["a marker-only bullet under prose", "Some prose\n*\n  [Q1]: /url"],
+  ] as const) {
+    test(`a definition-shaped line in ${label} stays literal`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\n${content}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass, result.findings.join("\n")).toBe(true);
+      expect(result.findings).toEqual([]);
+    });
+  }
+
+  // GFM §6.9: a table continues until a blank line or another block structure.
+  test("a definition-shaped line directly under a table row is a table row, not a definition", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n\n| Claim |\n|---|\n| Some prose |\n[Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("consecutive definitions after a heading are all definitions", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "## Heading\n[desc]: /a\n[Q1]: /b\n\nThis is an unsupported assertion. [desc]\n\nThis is another unsupported assertion. [Q1]",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(
+      result.findings.filter((finding) => finding.includes("claim block has no source tag")),
+    ).toHaveLength(2);
+  });
+
+  for (const rule of ["- - -", "* * *"]) {
+    test(`a spaced thematic break '${rule}' before a definition does not hide the definition`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\n${rule}\n[Q1]: /url`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "## Problem Statement: claim block has no source tag",
+      );
+    });
+  }
+
+  for (const marker of ["+", "*", "1."]) {
+    test(`a marker-only list item line '${marker}' before an indented definition does not hide the definition`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\n${marker}\n  [Q1]: /url`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "## Problem Statement: claim block has no source tag",
+      );
+    });
+  }
+
+  test("a marker-only line under open prose is paragraph text, not a list item", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]\n+\n  [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
 
   // Definition detection has to agree with CommonMark's definition grammar in
   // both directions. A line that only looks like a definition is prose the

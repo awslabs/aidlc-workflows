@@ -7,6 +7,8 @@
     "inspection",
     "validation",
     "assessment",
+    "userExperience",
+    "decision",
     "findings",
     "residualRisk"
   ],
@@ -49,6 +51,62 @@
         },
         "risk": {
           "$ref": "#/$defs/assessment"
+        }
+      }
+    },
+    "userExperience": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "change", "before", "after", "example", "assessment"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["changed", "no-user-visible-change", "uncertain"]
+        },
+        "change": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "before": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "after": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "example": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "assessment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor", "action", "rationale"],
+      "properties": {
+        "actor": {
+          "type": "string",
+          "enum": ["author", "maintainer"]
+        },
+        "action": {
+          "type": "string",
+          "enum": ["change", "merge"]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
         }
       }
     },
