@@ -1296,8 +1296,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       '.state == \\"CHANGES_REQUESTED\\" or ((.body // \\"\\") | test(\\"<!-- ai-pr-review decision=(author/change|maintainer/merge) -->\\"))',
     );
     expect(WORKFLOW).toContain("Superseded by AI review of $HEAD_SHA");
-    expect(WORKFLOW).toContain("timeout-minutes: 100");
-    expect(WORKFLOW).toContain("        timeout-minutes: 95");
+    expect(WORKFLOW).toContain("timeout-minutes: 110");
     expect(WORKFLOW).toContain("              15m \\");
     expect(WORKFLOW).not.toContain("              35m \\");
     expect(WORKFLOW).toContain("      - edited");
@@ -1384,14 +1383,17 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW).toContain("Start AIDA review label state");
     expect(WORKFLOW).toContain("previous_outcome=");
     expect(WORKFLOW).toContain("label-state");
-    expect(WORKFLOW).toContain("RUN_CANCELLED: $" + "{{ cancelled() }}");
-    expect(WORKFLOW).toContain('outcome="$PREVIOUS_OUTCOME"');
-    expect(WORKFLOW).toContain("Canceled before AIDA changed the review label state");
+    expect(WORKFLOW).toContain("Restore AIDA review labels after cancellation");
+    expect(WORKFLOW).toContain("          cancelled()");
+    expect(WORKFLOW).toContain("steps.label_start.conclusion == 'success'");
+    expect(WORKFLOW).toContain(
+      '--outcome "$' + '{{ steps.label_start.outputs.previous_outcome }}"',
+    );
     expect(WORKFLOW).toContain("Reconcile AIDA review labels");
     expect(WORKFLOW).toContain("reviewed-change");
     expect(WORKFLOW).toContain("reviewed-merge");
     expect(WORKFLOW).toContain("review-error");
-    expect(WORKFLOW).not.toContain("!cancelled()");
+    expect(WORKFLOW).toContain("!cancelled()");
     expect(WORKFLOW).toContain("issues: write");
   });
 
