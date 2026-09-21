@@ -87,7 +87,8 @@ direction, user experience, scope, feasibility, dependencies, and open
 decisions. For a bug report, it may run up to five relevant existing tests in
 an isolated, network-disabled test process and reports the bounded result as
 evidence. It updates one advisory comment; it does not prioritize, approve,
-reject, label, assign, close, or implement the issue. The final assessment names
+reject, assign, close, or implement the issue. It also replaces deterministic
+`aida:*` assessment labels after a successful review. The final assessment names
 the next human decision: `author/clarify` when an aligned issue still has
 blocking questions, `maintainer/direction` when the proposal conflicts with the
 current AI-DLC direction, or `maintainer/plan` when the issue is ready to move

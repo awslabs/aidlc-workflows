@@ -175,9 +175,44 @@ jobs:
             echo "already_reviewed=$already_reviewed"
             echo "base=$base"
             echo "context_id=$context_id"
+            echo "existing_comment=$existing"
             echo "issue=$REQUESTED_ISSUE"
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Capture AIDA issue label state
+        id: label_start
+        if: >-
+          steps.authorization.outputs.authorized == 'true'
+          && steps.context.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.context.outputs.issue }}
+          REPO: ${{ github.repository }}
+        run: >-
+          bun .github/scripts/ai-issue-review.ts label-state
+          --repo "$REPO"
+          --issue "$ISSUE_NUMBER"
+          --output .ai-issue-review-context/previous-labels.json
+
+      - name: Reconcile existing AIDA issue labels
+        if: >-
+          steps.authorization.outputs.authorized == 'true'
+          && steps.context.outputs.skip != 'true'
+          && steps.context.outputs.already_reviewed == 'true'
+        env:
+          COMMENT_ID: ${{ steps.context.outputs.existing_comment }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.context.outputs.issue }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/issues/comments/$COMMENT_ID" --jq '.body' \
+            > /tmp/existing-aida-issue-review.md
+          bun .github/scripts/ai-issue-review.ts labels \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --comment /tmp/existing-aida-issue-review.md
 
       - name: Install pinned review CLIs
         if: >-
@@ -663,3 +698,19 @@ jobs:
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --input .ai-issue-review-final/labels.json
+
+      - name: Restore AIDA issue labels after cancellation
+        if: >-
+          cancelled()
+          && steps.authorization.outputs.authorized == 'true'
+          && steps.context.outputs.skip != 'true'
+          && steps.label_start.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.context.outputs.issue }}
+          REPO: ${{ github.repository }}
+        run: >-
+          bun .github/scripts/ai-issue-review.ts labels
+          --repo "$REPO"
+          --issue "$ISSUE_NUMBER"
+          --snapshot .ai-issue-review-context/previous-labels.json

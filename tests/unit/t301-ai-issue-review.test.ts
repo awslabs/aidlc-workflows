@@ -15,6 +15,7 @@ import {
   canonicalConversation,
   canonicalCurrentAidaReview,
   canonicalIssue,
+  labelStateFromIssueReview,
   labelStateForIssueReview,
   labelsForIssueReviewState,
   reconcileIssueReviewLabels,
@@ -462,6 +463,7 @@ describe("t301 AI issue intent review", () => {
     const payload = renderIssueReview(review(), bugVerification);
     expect(payload.body).toStartWith(`<!-- ai-issue-review issue=${ISSUE.number} -->`);
     expect(payload.body).toContain(`<!-- ai-issue-review context=${CONTEXT_ID} -->`);
+    expect(payload.body).toContain("<!-- ai-issue-review label-state=aligned/P1 -->");
     expect(payload.body).toContain(
       "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.**",
     );
@@ -496,6 +498,13 @@ describe("t301 AI issue intent review", () => {
       payload.body.indexOf("## Risks and Open Decisions"),
     );
     expect(payload.body).toEndWith("Reviewed by AIDA (AI-DLC Developer Agent).");
+  });
+
+  test("renderer orders category sections by their highest finding priority", () => {
+    const payload = renderIssueReview(review());
+    expect(payload.body.indexOf("## Scope and Outcomes")).toBeLessThan(
+      payload.body.indexOf("## Direction"),
+    );
   });
 
   test("validator binds the Issue decision to blocking questions and readiness", () => {
@@ -656,6 +665,7 @@ describe("t301 AI issue intent review", () => {
     const state = labelStateForIssueReview(review());
     expect(state).toEqual({ alignment: "aligned", priority: "P1" });
     expect(labelsForIssueReviewState(state)).toEqual(["aida:aligned", "aida:p1"]);
+    expect(labelStateFromIssueReview(renderIssueReview(review()).body)).toEqual(state);
 
     const clean = review();
     clean.findings = [];
@@ -672,23 +682,40 @@ describe("t301 AI issue intent review", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-issue-labels-"));
     try {
       const log = join(root, "calls.jsonl");
+      const stateFile = join(root, "state.json");
       const fakeGh = join(root, "gh");
+      writeFileSync(stateFile, JSON.stringify({
+        labels: ["enhancement", "aida:not-aligned", "aida:p0"],
+        failNextIssueLabelPost: false,
+      }));
       writeFileSync(fakeGh, `#!/usr/bin/env bun
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input }) + "\\n");
-if (args.some(value => value === "repos/acme/repo/issues/1285")) {
+const stateFile = ${JSON.stringify(stateFile)};
+const state = JSON.parse(readFileSync(stateFile, "utf8"));
+const endpoint = args.find(value => value.startsWith("repos/")) || "";
+if (endpoint === "repos/acme/repo/issues/1285") {
   process.stdout.write(JSON.stringify({
     number: 1285,
     state: "open",
-    labels: [
-      { name: "enhancement" },
-      { name: "aida:not-aligned" },
-      { name: "aida:p0" }
-    ]
+    labels: state.labels.map(name => ({ name }))
   }));
-} else if (args.some(value => value.startsWith("repos/acme/repo/labels/"))) {
+} else if (args.includes("DELETE") && endpoint.startsWith("repos/acme/repo/issues/1285/labels/")) {
+  const label = decodeURIComponent(endpoint.slice("repos/acme/repo/issues/1285/labels/".length));
+  state.labels = state.labels.filter(value => value !== label);
+  writeFileSync(stateFile, JSON.stringify(state));
+} else if (args.includes("POST") && endpoint === "repos/acme/repo/issues/1285/labels") {
+  if (state.failNextIssueLabelPost) {
+    state.failNextIssueLabelPost = false;
+    writeFileSync(stateFile, JSON.stringify(state));
+    process.exit(1);
+  }
+  const requested = JSON.parse(input).labels;
+  state.labels = [...new Set([...state.labels, ...requested])];
+  writeFileSync(stateFile, JSON.stringify(state));
+} else if (endpoint.startsWith("repos/acme/repo/labels/")) {
   process.exit(1);
 } else {
   process.stdout.write("{}");
@@ -726,6 +753,41 @@ if (args.some(value => value === "repos/acme/repo/issues/1285")) {
         "aida:p3",
         "aida:aligned",
         "aida:not-aligned",
+      ]);
+      expect(JSON.parse(readFileSync(stateFile, "utf8")).labels.sort()).toEqual([
+        "aida:aligned",
+        "aida:p2",
+        "enhancement",
+      ]);
+
+      writeFileSync(stateFile, JSON.stringify({
+        labels: ["enhancement", "aida:not-aligned", "aida:p0"],
+        failNextIssueLabelPost: true,
+      }));
+      expect(() => reconcileIssueReviewLabels(
+        "acme/repo",
+        1285,
+        { alignment: "aligned", priority: "P2" },
+        fakeGh,
+      )).toThrow();
+      expect(JSON.parse(readFileSync(stateFile, "utf8")).labels.sort()).toEqual([
+        "aida:not-aligned",
+        "aida:p0",
+        "enhancement",
+      ]);
+
+      expect(reconcileIssueReviewLabels(
+        "acme/repo",
+        1285,
+        labelStateFromIssueReview(
+          "<!-- ai-issue-review label-state=aligned/P2 -->",
+        ),
+        fakeGh,
+      )).toBe(true);
+      expect(JSON.parse(readFileSync(stateFile, "utf8")).labels.sort()).toEqual([
+        "aida:aligned",
+        "aida:p2",
+        "enhancement",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -788,6 +850,11 @@ if (args.some(value => value === "repos/acme/repo/issues/1285")) {
     );
     expect(WORKFLOW).toContain("ai-issue-review.ts labels");
     expect(WORKFLOW).toContain("--input .ai-issue-review-final/labels.json");
+    expect(WORKFLOW).toContain("Capture AIDA issue label state");
+    expect(WORKFLOW).toContain("Reconcile existing AIDA issue labels");
+    expect(WORKFLOW).toContain("--comment /tmp/existing-aida-issue-review.md");
+    expect(WORKFLOW).toContain("Restore AIDA issue labels after cancellation");
+    expect(WORKFLOW).toContain("--snapshot .ai-issue-review-context/previous-labels.json");
     expect(WORKFLOW).toContain('stable_marker="<!-- ai-issue-review issue=$ISSUE_NUMBER -->"');
     expect(WORKFLOW).toContain('--method PATCH "repos/$REPO/issues/comments/$existing_id"');
     expect(WORKFLOW).toContain("already_reviewed=true");

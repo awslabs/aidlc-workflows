@@ -11,6 +11,7 @@ const MAX_CONVERSATION_BODY_CHARACTERS = 8_000;
 const MAX_AIDA_REVIEW_CHARACTERS = 40_000;
 const MAX_BUG_TEST_FILES = 5;
 const AI_ISSUE_REVIEW_MARKER = "<!-- ai-issue-review issue=";
+const AI_ISSUE_LABEL_STATE_MARKER = "<!-- ai-issue-review label-state=";
 
 export type FindingLevel = "blocking-question" | "recommendation";
 export type FindingPriority = "P0" | "P1" | "P2" | "P3";
@@ -160,6 +161,10 @@ export interface IssueReviewLabelState {
   priority: FindingPriority | "none";
 }
 
+export interface IssueReviewLabelSnapshot {
+  labels: string[];
+}
+
 const ISSUE_REVIEW_LABELS = [
   {
     name: "aida:p0",
@@ -194,6 +199,9 @@ const ISSUE_REVIEW_LABELS = [
 ] as const;
 
 const PRIORITY_ORDER: FindingPriority[] = ["P0", "P1", "P2", "P3"];
+const MANAGED_ISSUE_REVIEW_LABELS = new Set<string>(
+  ISSUE_REVIEW_LABELS.map(definition => definition.name),
+);
 
 export interface BugTriage {
   issue: number;
@@ -265,11 +273,40 @@ function issueLabels(issue: Record<string, unknown>): string[] {
     : [];
 }
 
+function managedIssueLabels(issue: Record<string, unknown>): string[] {
+  return issueLabels(issue).filter(label => MANAGED_ISSUE_REVIEW_LABELS.has(label)).sort();
+}
+
+function sameLabels(left: string[], right: string[]): boolean {
+  const first = [...new Set(left)].sort();
+  const second = [...new Set(right)].sort();
+  return first.length === second.length &&
+    first.every((label, index) => label === second[index]);
+}
+
 function highestPriority(findings: Finding[]): FindingPriority | "none" {
   for (const priority of PRIORITY_ORDER) {
     if (findings.some(finding => finding.priority === priority)) return priority;
   }
   return "none";
+}
+
+function orderedFindingCategories(findings: Finding[]): typeof FINDING_CATEGORIES {
+  return [...FINDING_CATEGORIES].sort((left, right) => {
+    const leftPriority = highestPriority(
+      findings.filter(finding => finding.category === left.value),
+    );
+    const rightPriority = highestPriority(
+      findings.filter(finding => finding.category === right.value),
+    );
+    const leftIndex = leftPriority === "none"
+      ? PRIORITY_ORDER.length
+      : PRIORITY_ORDER.indexOf(leftPriority);
+    const rightIndex = rightPriority === "none"
+      ? PRIORITY_ORDER.length
+      : PRIORITY_ORDER.indexOf(rightPriority);
+    return leftIndex - rightIndex;
+  });
 }
 
 export function labelStateForIssueReview(
@@ -285,6 +322,18 @@ export function labelsForIssueReviewState(state: IssueReviewLabelState): string[
   const labels = [`aida:${state.alignment}`];
   if (state.priority !== "none") labels.push(`aida:${state.priority.toLowerCase()}`);
   return labels;
+}
+
+export function labelStateFromIssueReview(body: string): IssueReviewLabelState {
+  const escaped = AI_ISSUE_LABEL_STATE_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = body.match(
+    new RegExp(`^${escaped}(aligned|not-aligned)/(P[0-3]|none) -->$`, "m"),
+  );
+  if (!match) throw new Error("issue review does not contain a valid label-state marker");
+  return validateIssueReviewLabelState({
+    alignment: match[1],
+    priority: match[2],
+  });
 }
 
 function validateIssueReviewLabelState(value: unknown): IssueReviewLabelState {
@@ -304,53 +353,50 @@ function validateIssueReviewLabelState(value: unknown): IssueReviewLabelState {
   };
 }
 
-export function reconcileIssueReviewLabels(
+function validateIssueReviewLabelSnapshot(value: unknown): IssueReviewLabelSnapshot {
+  const candidate = record(value, "issue review label snapshot");
+  if (!Array.isArray(candidate.labels)) {
+    throw new Error("issue review label snapshot labels must be an array");
+  }
+  const labels = candidate.labels.map((value, index) => {
+    if (typeof value !== "string" || !MANAGED_ISSUE_REVIEW_LABELS.has(value)) {
+      throw new Error(`issue review label snapshot labels[${index}] is invalid`);
+    }
+    return value;
+  });
+  if (new Set(labels).size !== labels.length) {
+    throw new Error("issue review label snapshot labels must be unique");
+  }
+  return { labels: labels.sort() };
+}
+
+function readIssue(
   repository: string,
   issueNumber: number,
-  state: IssueReviewLabelState,
-  ghExecutable = "gh",
-): boolean {
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
-    throw new Error("repository must use owner/name format");
-  }
-  if (!Number.isInteger(issueNumber) || issueNumber < 1) {
-    throw new Error("issue number must be a positive integer");
-  }
-  const readIssue = (): Record<string, unknown> =>
-    record(
-      JSON.parse(ghRaw(["api", `repos/${repository}/issues/${issueNumber}`], ghExecutable)),
-      "issue",
-    );
-  const eligible = (issue: Record<string, unknown>): boolean =>
-    issue.state === "open" && issue.pull_request === undefined;
-  if (!eligible(readIssue())) return false;
+  ghExecutable: string,
+): Record<string, unknown> {
+  return record(
+    JSON.parse(ghRaw(["api", `repos/${repository}/issues/${issueNumber}`], ghExecutable)),
+    "issue",
+  );
+}
 
-  for (const definition of ISSUE_REVIEW_LABELS) {
-    const endpoint = `repos/${repository}/labels/${encodeURIComponent(definition.name)}`;
-    try {
-      ghRaw(["api", "--silent", endpoint], ghExecutable);
-    } catch {
-      try {
-        ghRaw(
-          ["api", "--method", "POST", `repos/${repository}/labels`, "--input", "-"],
-          ghExecutable,
-          `${JSON.stringify(definition)}\n`,
-        );
-      } catch {
-        ghRaw(["api", "--silent", endpoint], ghExecutable);
-      }
-    }
-  }
+function issueIsEligible(issue: Record<string, unknown>): boolean {
+  return issue.state === "open" && issue.pull_request === undefined;
+}
 
-  const issueBeforeMutation = readIssue();
-  if (!eligible(issueBeforeMutation)) return false;
-  const current = issueLabels(issueBeforeMutation);
-  const managed = new Set(ISSUE_REVIEW_LABELS.map(definition => definition.name));
-  const desired = new Set(labelsForIssueReviewState(state));
-  for (const label of current) {
-    if (!managed.has(label as typeof ISSUE_REVIEW_LABELS[number]["name"]) || desired.has(label)) {
-      continue;
-    }
+function applyManagedIssueLabels(
+  repository: string,
+  issueNumber: number,
+  desiredLabels: string[],
+  ghExecutable: string,
+): void {
+  const issueBeforeMutation = readIssue(repository, issueNumber, ghExecutable);
+  if (!issueIsEligible(issueBeforeMutation)) {
+    throw new Error("issue is no longer open and eligible for AIDA labels");
+  }
+  for (const label of managedIssueLabels(issueBeforeMutation)) {
+    if (desiredLabels.includes(label)) continue;
     ghRaw(
       [
         "api",
@@ -362,7 +408,13 @@ export function reconcileIssueReviewLabels(
       ghExecutable,
     );
   }
-  const missing = [...desired].filter(label => !current.includes(label));
+
+  const afterRemoval = readIssue(repository, issueNumber, ghExecutable);
+  if (!issueIsEligible(afterRemoval)) {
+    throw new Error("issue changed while AIDA labels were being reconciled");
+  }
+  const current = issueLabels(afterRemoval);
+  const missing = desiredLabels.filter(label => !current.includes(label));
   if (missing.length > 0) {
     ghRaw(
       [
@@ -378,7 +430,97 @@ export function reconcileIssueReviewLabels(
       `${JSON.stringify({ labels: missing })}\n`,
     );
   }
-  return eligible(readIssue());
+
+  const finalIssue = readIssue(repository, issueNumber, ghExecutable);
+  if (
+    !issueIsEligible(finalIssue) ||
+    !sameLabels(managedIssueLabels(finalIssue), desiredLabels)
+  ) {
+    throw new Error("final AIDA issue label state did not match the reviewed result");
+  }
+}
+
+export function currentIssueReviewLabelSnapshot(
+  repository: string,
+  issueNumber: number,
+  ghExecutable = "gh",
+): IssueReviewLabelSnapshot {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("repository must use owner/name format");
+  }
+  if (!Number.isInteger(issueNumber) || issueNumber < 1) {
+    throw new Error("issue number must be a positive integer");
+  }
+  return {
+    labels: managedIssueLabels(readIssue(repository, issueNumber, ghExecutable)),
+  };
+}
+
+export function restoreIssueReviewLabels(
+  repository: string,
+  issueNumber: number,
+  snapshot: IssueReviewLabelSnapshot,
+  ghExecutable = "gh",
+): boolean {
+  const validated = validateIssueReviewLabelSnapshot(snapshot);
+  if (!issueIsEligible(readIssue(repository, issueNumber, ghExecutable))) return false;
+  applyManagedIssueLabels(repository, issueNumber, validated.labels, ghExecutable);
+  return true;
+}
+
+export function reconcileIssueReviewLabels(
+  repository: string,
+  issueNumber: number,
+  state: IssueReviewLabelState,
+  ghExecutable = "gh",
+): boolean {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("repository must use owner/name format");
+  }
+  if (!Number.isInteger(issueNumber) || issueNumber < 1) {
+    throw new Error("issue number must be a positive integer");
+  }
+  if (!issueIsEligible(readIssue(repository, issueNumber, ghExecutable))) return false;
+  const previous = currentIssueReviewLabelSnapshot(
+    repository,
+    issueNumber,
+    ghExecutable,
+  );
+
+  try {
+    for (const definition of ISSUE_REVIEW_LABELS) {
+      const endpoint = `repos/${repository}/labels/${encodeURIComponent(definition.name)}`;
+      try {
+        ghRaw(["api", "--silent", endpoint], ghExecutable);
+      } catch {
+        try {
+          ghRaw(
+            ["api", "--method", "POST", `repos/${repository}/labels`, "--input", "-"],
+            ghExecutable,
+            `${JSON.stringify(definition)}\n`,
+          );
+        } catch {
+          ghRaw(["api", "--silent", endpoint], ghExecutable);
+        }
+      }
+    }
+
+    applyManagedIssueLabels(
+      repository,
+      issueNumber,
+      labelsForIssueReviewState(state),
+      ghExecutable,
+    );
+  } catch (error) {
+    try {
+      applyManagedIssueLabels(repository, issueNumber, previous.labels, ghExecutable);
+    } catch {
+      // The workflow cancellation recovery step makes another best-effort
+      // restoration from its persisted snapshot.
+    }
+    throw error;
+  }
+  return true;
 }
 
 export function canonicalIssue(value: unknown): IssueMetadata {
@@ -1052,9 +1194,11 @@ export function renderIssueReview(
 ): IssueCommentPayload {
   const blocking = review.findings.filter(finding => finding.level === "blocking-question").length;
   const recommendations = review.findings.length - blocking;
+  const labelState = labelStateForIssueReview(review);
   const lines = [
     `<!-- ai-issue-review issue=${review.issue} -->`,
     `<!-- ai-issue-review context=${review.contextId} -->`,
+    `${AI_ISSUE_LABEL_STATE_MARKER}${labelState.alignment}/${labelState.priority} -->`,
     `I reviewed issue #${review.issue} and its current conversation as a proposed product and workflow change.`,
     "",
     "## Final Assessment",
@@ -1107,7 +1251,7 @@ export function renderIssueReview(
     }
   }
 
-  for (const category of FINDING_CATEGORIES) {
+  for (const category of orderedFindingCategories(review.findings)) {
     lines.push("", `## ${category.heading}`);
     const categoryFindings = review.findings.filter(finding => finding.category === category.value);
     if (categoryFindings.length === 0) {
@@ -1266,19 +1410,38 @@ function main(): void {
     return;
   }
   if (command === "labels") {
-    const state = validateIssueReviewLabelState(
-      JSON.parse(readFileSync(argValue(args, "--input"), "utf8")),
-    );
-    const applied = reconcileIssueReviewLabels(
-      argValue(args, "--repo"),
-      Number(argValue(args, "--issue")),
-      state,
-    );
+    const repository = argValue(args, "--repo");
+    const issue = Number(argValue(args, "--issue"));
+    const applied = args.includes("--snapshot")
+      ? restoreIssueReviewLabels(
+        repository,
+        issue,
+        validateIssueReviewLabelSnapshot(
+          JSON.parse(readFileSync(argValue(args, "--snapshot"), "utf8")),
+        ),
+      )
+      : reconcileIssueReviewLabels(
+        repository,
+        issue,
+        args.includes("--comment")
+          ? labelStateFromIssueReview(readFileSync(argValue(args, "--comment"), "utf8"))
+          : validateIssueReviewLabelState(
+            JSON.parse(readFileSync(argValue(args, "--input"), "utf8")),
+          ),
+      );
     process.stdout.write(applied ? "applied\n" : "stale\n");
     return;
   }
+  if (command === "label-state") {
+    const snapshot = currentIssueReviewLabelSnapshot(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--issue")),
+    );
+    writeFileSync(argValue(args, "--output"), `${JSON.stringify(snapshot, null, 2)}\n`);
+    return;
+  }
   throw new Error(
-    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|build-context|validate-triage|validate|labels",
+    "usage: ai-issue-review.ts canonicalize|canonicalize-conversation|build-context|validate-triage|validate|label-state|labels",
   );
 }
 
