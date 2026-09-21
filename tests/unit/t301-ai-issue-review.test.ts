@@ -199,7 +199,7 @@ describe("t301 AI issue intent review", () => {
     }).basis).toBe("ai-review-label");
   });
 
-  test("conversation excludes AIDA output and marks maintainer authority", () => {
+  test("conversation excludes verified AIDA output but retains marker-like human text", () => {
     const raw = [
       ...RAW_COMMENTS,
       {
@@ -210,15 +210,24 @@ describe("t301 AI issue intent review", () => {
         created_at: "2026-09-21T01:02:00Z",
         updated_at: "2026-09-21T01:02:00Z",
       },
+      {
+        id: 13,
+        user: { login: "human-reviewer", type: "User" },
+        author_association: "CONTRIBUTOR",
+        body: `<!-- ai-issue-review issue=${ISSUE.number} -->\nHuman clarification`,
+        created_at: "2026-09-21T01:03:00Z",
+        updated_at: "2026-09-21T01:03:00Z",
+      },
     ];
     const conversation = canonicalConversation(raw, ISSUE.number);
-    expect(conversation.comments.map(comment => comment.id)).toEqual([10, 11]);
+    expect(conversation.comments.map(comment => comment.id)).toEqual([10, 11, 13]);
     expect(conversation.comments[0].actor.maintainer).toBe(false);
     expect(conversation.comments[1].actor).toEqual({
       login: "maintainer",
       association: "MEMBER",
       maintainer: true,
     });
+    expect(conversation.comments[2].body).toContain("Human clarification");
     expect(canonicalCurrentAidaReview(raw, ISSUE.number)).toEqual({
       id: 12,
       body: `<!-- ai-issue-review issue=${ISSUE.number} -->\nPrevious AIDA output`,
@@ -637,10 +646,9 @@ describe("t301 AI issue intent review", () => {
     expect(WORKFLOW).toContain("- created");
     expect(WORKFLOW).toContain("github.event.comment.user.type != 'Bot'");
     expect(WORKFLOW).toContain("github.event.sender.type != 'Bot'");
-    expect(WORKFLOW).toContain(
-      "!startsWith(github.event.comment.body, '<!-- ai-issue-review issue=')",
-    );
+    expect(WORKFLOW).not.toContain("startsWith(github.event.comment.body");
     expect(WORKFLOW).toContain("github.event.label.name == 'ai-review'");
+    expect(WORKFLOW).toContain("github.event.action == 'unlabeled'");
     expect(WORKFLOW).toContain("github.event.changes.title != null");
     expect(WORKFLOW).toContain("github.event.changes.body != null");
     expect(authorizationJob).toContain('repos/$REPO/collaborators/$GITHUB_ACTOR/permission');
@@ -661,10 +669,9 @@ describe("t301 AI issue intent review", () => {
     );
     expect(WORKFLOW).toContain("Coalesce rapid conversation updates");
     expect(WORKFLOW).toContain("run: sleep 45");
-    expect(WORKFLOW).toContain("cancel-in-progress: true");
-    expect(WORKFLOW).toContain("Cancel issue review after opt-in removal");
-    expect(WORKFLOW).toContain("github.event.action == 'unlabeled'");
-    expect(WORKFLOW).toContain("Canceled the in-progress review because ai-review was removed");
+    expect(reviewAdmission).toContain("cancel-in-progress: false");
+    expect(WORKFLOW).not.toContain("cancel-in-progress: true");
+    expect(WORKFLOW).not.toContain("Cancel issue review after opt-in removal");
     const jobTimeout = Number(WORKFLOW.match(/timeout-minutes: (\d+)/)?.[1]);
     expect(jobTimeout).toBeGreaterThanOrEqual(100);
     expect(WORKFLOW).toContain("--conversation .ai-issue-review-context/conversation.json");

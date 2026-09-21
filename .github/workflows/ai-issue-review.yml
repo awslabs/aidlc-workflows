@@ -28,21 +28,6 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
-  revoke:
-    name: Cancel issue review after opt-in removal
-    if: >-
-      github.event_name == 'issues'
-      && github.event.action == 'unlabeled'
-      && github.event.label.name == 'ai-review'
-    concurrency:
-      group: ai-issue-review-${{ github.event.issue.number }}
-      cancel-in-progress: true
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
-      - name: Record authorization revocation
-        run: echo "::notice::Canceled the in-progress review because ai-review was removed"
-
   authorize:
     name: Authorize issue-review trigger
     if: >-
@@ -52,13 +37,14 @@ jobs:
           && (github.event.action == 'opened'
               || (github.event.action == 'labeled'
                   && github.event.label.name == 'ai-review')
+              || (github.event.action == 'unlabeled'
+                  && github.event.label.name == 'ai-review')
               || (github.event.action == 'edited'
                   && (github.event.changes.title != null
                       || github.event.changes.body != null))))
       || (github.event_name == 'issue_comment'
           && github.event.issue.pull_request == null
-          && github.event.comment.user.type != 'Bot'
-          && !startsWith(github.event.comment.body, '<!-- ai-issue-review issue='))
+          && github.event.comment.user.type != 'Bot')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -121,7 +107,7 @@ jobs:
     if: needs.authorize.outputs.authorized == 'true'
     concurrency:
       group: ai-issue-review-${{ needs.authorize.outputs.issue }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ai-pr-review
     timeout-minutes: 120
