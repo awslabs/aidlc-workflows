@@ -101,8 +101,8 @@ describe("native private namespace", () => {
       "--experimental-strip-types", "--input-type=module", "-e",
       `const {ensurePrivateRoot}=await import(${JSON.stringify(new URL("../harness/tui-record-file.ts", import.meta.url).href)}); ensurePrivateRoot(process.argv[1]);`,
       resolve(f.root),
-    ], { encoding: "utf8", timeout: 15_000 });
+    ], { encoding: "utf8", timeout: process.platform === "win32" ? 75_000 : 15_000 });
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-  }, 20_000);
+  }, process.platform === "win32" ? 80_000 : 20_000);
 });

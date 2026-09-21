@@ -57,4 +57,25 @@ describe.skipIf(process.platform !== "win32")("native private namespace", () => 
     expect(() => ensurePrivateRoot(f.root)).toThrow("public allow ACE");
   });
 
+
+  test("Bun creates and reads private roots with no PowerShell on PATH", () => {
+    const f = fixture();
+    const root = join(f.root, "without-shell");
+    const result = Bun.spawnSync([process.execPath, "-e", `
+import { join } from 'node:path';
+import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord } from ${JSON.stringify(new URL("../harness/tui-record-file.ts", import.meta.url).href)};
+const root = process.argv[1];
+ensurePrivateRoot(root);
+const directory = join(root, 'session');
+ensurePrivateRoot(directory);
+const identity = privateDirectoryIdentity(directory);
+const file = join(directory, 'session.json');
+publishTuiRecord(file, { directoryIdentity: identity, token: 'native-only' }, identity);
+console.log(readPrivateRecord(directory, file).token);
+`, root], {
+      env: { ...process.env, PATH: "", Path: "" }, stdout: "pipe", stderr: "pipe", timeout: 10_000,
+    });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString().trim()).toBe("native-only");
+  });
 });

@@ -33,13 +33,27 @@ export function assertDirectoryIdentity(path: string, actual: DirectoryIdentity,
   }
 }
 
-function powershell(path: string, script: string): string {
-  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
-    env: { ...process.env, AIDLC_PRIVATE_PATH: resolve(path) }, encoding: "utf8", timeout: 10_000,
-    windowsHide: true,
+let windowsUserSid: string | undefined;
+
+function powershell(path: string, script: string): unknown {
+  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `
+$ErrorActionPreference = 'Stop'
+$privatePath = [IO.Path]::GetFullPath($env:AIDLC_PRIVATE_PATH)
+$sid = if ($env:AIDLC_PRIVATE_USER_SID) { [Security.Principal.SecurityIdentifier]::new($env:AIDLC_PRIVATE_USER_SID) } else { [Security.Principal.WindowsIdentity]::GetCurrent().User }
+$value = & { ${script} }
+@{ userSid = $sid.Value; value = $value } | ConvertTo-Json -Compress -Depth 5
+`], {
+    env: { ...process.env, AIDLC_PRIVATE_PATH: resolve(path), AIDLC_PRIVATE_USER_SID: windowsUserSid ?? "" },
+    encoding: "utf8", timeout: 60_000, windowsHide: true,
   });
   if (result.error || result.status !== 0) throw unsafe(path, `Windows security check failed: ${result.error ?? result.stderr}`);
-  return result.stdout.trim();
+  const response = JSON.parse(result.stdout.trim()) as { userSid?: unknown; value?: unknown };
+  if (typeof response.userSid !== "string" || !/^S-1-(?:\d+-)*\d+$/.test(response.userSid)) {
+    throw unsafe(path, "Windows security check returned an invalid current-user SID");
+  }
+  if (windowsUserSid !== undefined && response.userSid !== windowsUserSid) throw unsafe(path, "current-user SID changed");
+  windowsUserSid = response.userSid;
+  return response.value;
 }
 
 // Node's legacy client must never resolve bun:ffi. Only Windows Bun loads this
@@ -54,20 +68,24 @@ function validateWindowsSecurity(path: string): void {
     catch (error) { throw unsafe(path, String(error)); }
     return;
   }
-  powershell(path, `
-$ErrorActionPreference = 'Stop'
-$item = Get-Item -LiteralPath $env:AIDLC_PRIVATE_PATH -Force
-if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'reparse point is not allowed' }
-$acl = Get-Acl -LiteralPath $env:AIDLC_PRIVATE_PATH
-$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
-if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'owner SID differs from current user' }
-if ($null -eq ([Security.AccessControl.RawSecurityDescriptor]::new($acl.Sddl)).DiscretionaryAcl) { throw 'null DACL allows public access' }
-foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-  if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -in @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11')) {
-    throw 'public allow ACE (Everyone, BUILTIN\\Users or Authenticated Users)'
-  }
+  const summary = powershell(path, `
+$item = Get-Item -LiteralPath $privatePath -Force
+$resolvedPath = (Resolve-Path -LiteralPath $privatePath).ProviderPath
+$acl = Get-Acl -LiteralPath $resolvedPath
+$publicAllow = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
+  $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -in @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11')
+}).Count -ne 0
+@{
+  ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+  reparsePoint = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+  nullDacl = $null -eq ([Security.AccessControl.RawSecurityDescriptor]::new($acl.Sddl)).DiscretionaryAcl
+  publicAllow = $publicAllow
 }
-`);
+`) as { ownerSid?: unknown; reparsePoint?: unknown; nullDacl?: unknown; publicAllow?: unknown } | null;
+  if (summary?.reparsePoint !== false) throw unsafe(path, "symlink/reparse point is not allowed");
+  if (summary.ownerSid !== windowsUserSid) throw unsafe(path, "owner SID differs from current user");
+  if (summary.nullDacl !== false) throw unsafe(path, "null DACL allows public access");
+  if (summary.publicAllow !== false) throw unsafe(path, "public allow ACE (Everyone, BUILTIN\\Users or Authenticated Users)");
 }
 
 export function privateDirectoryIdentity(path: string, expected?: DirectoryIdentity): DirectoryIdentity {
@@ -82,20 +100,21 @@ export function privateDirectoryIdentity(path: string, expected?: DirectoryIdent
 /** Existing directories are verified, never chmod/ACL repaired. */
 export function ensurePrivateRoot(root: string): void {
   fs.mkdirSync(dirname(resolve(root)), { recursive: true, mode: 0o700 });
-  if (process.platform === "win32") {
+  if (windowsSecurity) {
+    try { windowsSecurity.createWindowsPrivateDirectory(root); }
+    catch (error) { throw unsafe(root, String(error)); }
+  } else if (process.platform === "win32") {
     try { fs.lstatSync(root); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       // Framework's Directory.CreateDirectory(path, security) passes a DACL to
       // CreateDirectoryW atomically. An existing/racing directory is NOT repaired.
       powershell(root, `
-$ErrorActionPreference = 'Stop'
-$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
 $acl = New-Object Security.AccessControl.DirectorySecurity
 $acl.SetOwner($sid)
 $acl.SetAccessRuleProtection($true, $false)
 $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
-[void][IO.Directory]::CreateDirectory($env:AIDLC_PRIVATE_PATH, $acl)
+[void][IO.Directory]::CreateDirectory($privatePath, $acl)
 `);
     }
   } else {
@@ -158,10 +177,10 @@ export function publishTuiRecord(path: string, value: unknown, directoryIdentity
     if (directoryIdentity && process.platform === "win32") {
       if (windowsSecurity) windowsSecurity.ownWindowsPrivateFile(temporary);
       else powershell(temporary, `
-$ErrorActionPreference = 'Stop'
-$acl = Get-Acl -LiteralPath $env:AIDLC_PRIVATE_PATH
-$acl.SetOwner([Security.Principal.WindowsIdentity]::GetCurrent().User)
-Set-Acl -LiteralPath $env:AIDLC_PRIVATE_PATH -AclObject $acl
+$resolvedPath = (Resolve-Path -LiteralPath $privatePath).ProviderPath
+$acl = Get-Acl -LiteralPath $resolvedPath
+$acl.SetOwner($sid)
+Set-Acl -LiteralPath $resolvedPath -AclObject $acl
 `);
       validateWindowsSecurity(temporary);
     }

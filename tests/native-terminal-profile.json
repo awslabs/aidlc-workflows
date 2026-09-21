@@ -1083,6 +1083,10 @@
           "cases": [
             {
               "classname": "native private namespace",
+              "name": "Bun creates and reads private roots with no PowerShell on PATH"
+            },
+            {
+              "classname": "native private namespace",
               "name": "Windows blocks directory replacement while the publication handle is open"
             },
             {
