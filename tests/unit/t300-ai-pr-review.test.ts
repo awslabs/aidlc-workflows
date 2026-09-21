@@ -1049,7 +1049,7 @@ process.stdout.write(JSON.stringify(value));
     expect(modelStep).toContain('"sol" \\\n            "AIDLC technical review"');
     expect(modelStep).toContain('"fable" \\\n            "User-experience review"');
     expect(modelStep).toContain('"fable" \\\n            "Direction review"');
-    expect(modelStep).toContain('"fable" \\\n            "Final review judge"');
+    expect(modelStep).toContain('"sol" \\\n            "Final review judge"');
     expect(modelStep).toContain(
       '"fable" \\\n            "User-experience review" \\\n            "high"',
     );
@@ -1057,8 +1057,9 @@ process.stdout.write(JSON.stringify(value));
       '"fable" \\\n            "Direction review" \\\n            "high"',
     );
     expect(modelStep).toContain(
-      '"fable" \\\n            "Final review judge" \\\n            "high"',
+      '"sol" \\\n            "Final review judge" \\\n            "high"',
     );
+    expect(modelStep).toContain("--output-schema");
     expect(modelStep).toContain("--output-format json --json-schema");
     expect(modelStep).toContain(".structured_output");
     expect(modelStep).toContain("ai-pr-review-judge-schema.json");
@@ -1076,7 +1077,7 @@ process.stdout.write(JSON.stringify(value));
     );
   });
 
-  test("five specialist lenses feed a Fable judge and categorized publication contract", () => {
+  test("five specialist lenses feed a Sol judge and categorized publication contract", () => {
     for (const lens of [
       "prompt-injection",
       "security",

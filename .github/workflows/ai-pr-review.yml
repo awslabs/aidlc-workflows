@@ -274,17 +274,30 @@ jobs:
             local output_dir
             local output_file
             local error_file
+            local schema_file
             local structured_file
+            local structured_filter
             local status
             local size
             local -a fable_output_args
+            local -a sol_output_args
 
             output_dir="$(sudo -u ai-pr-review mktemp -d -t aidlc-review.XXXXXX)"
             output_file="$output_dir/output"
             error_file="$output_dir/error"
             echo "Running $name..."
+            if [ -n "$schema" ]; then
+              schema_file="$output_dir/schema.json"
+              printf '%s' "$schema" \
+                | sudo -u ai-pr-review tee "$schema_file" >/dev/null
+            fi
             set +e
             if [ "$runtime" = "sol" ]; then
+              if [ -n "$schema" ]; then
+                sol_output_args=(--output-schema "$schema_file")
+              else
+                sol_output_args=()
+              fi
               sudo -u ai-pr-review -- timeout \
                 --signal=TERM \
                 --kill-after=30s \
@@ -302,6 +315,7 @@ jobs:
                 --config "model_reasoning_effort=\"$effort\"" \
                 --config 'shell_environment_policy.inherit="all"' \
                 --config 'shell_environment_policy.exclude=["AWS_*","ACTIONS_*","GITHUB_*","GH_*"]' \
+                "${sol_output_args[@]}" \
                 --output-last-message "$output_file" \
                 "$prompt" \
                 > /dev/null 2>&1
@@ -360,9 +374,14 @@ jobs:
 
             if [ -n "$schema" ]; then
               structured_file="$output_dir/structured-output"
+              if [ "$runtime" = "fable" ]; then
+                structured_filter='.structured_output | select(type == "object")'
+              else
+                structured_filter='select(type == "object")'
+              fi
               if ! sudo -u ai-pr-review -- /bin/bash -c \
-                'jq -c -e ".structured_output | select(type == \"object\")" "$1" >"$2"' \
-                bash "$output_file" "$structured_file"; then
+                'jq -c -e "$1" "$2" >"$3"' \
+                bash "$structured_filter" "$output_file" "$structured_file"; then
                 echo "::error::$name did not produce a structured JSON object"
                 sudo find "$output_dir" -depth -delete
                 return 1
@@ -491,7 +510,7 @@ jobs:
           )"
           judge_schema="$(jq -c . .ai-review-controls/prompts/ai-pr-review-judge-schema.json)"
           run_model \
-            "fable" \
+            "sol" \
             "Final review judge" \
             "high" \
             100000 \
