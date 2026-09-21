@@ -241,6 +241,9 @@ describe("t345 complete nightly coverage", () => {
       const env = sandboxEnvironment(family, "/home/aidlc-live", "/usr/local/lib/aidlc-live/bin:/usr/bin:/bin", inherited);
       expect(env.PATH).toBe("/usr/local/lib/aidlc-live/bin:/usr/bin:/bin");
       expect(env.HOME).toBe("/home/aidlc-live");
+      expect(env.TMPDIR).toBe("/home/aidlc-live/tmp");
+      expect(env.BUN_INSTALL).toBe("/home/aidlc-live/.bun");
+      expect(env.XDG_CACHE_HOME).toBe("/home/aidlc-live/.cache");
       expect(Object.keys(env).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key))).toEqual([]);
       expect(env).toMatchObject(FAMILIES[family].env);
     }

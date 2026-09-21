@@ -20,7 +20,7 @@ if ($PSVersionTable.PSEdition -ne 'Desktop') {
 }
 $root = 'C:\aidlc-live'
 $work = Join-Path $root 'work'
-$home = Join-Path $root 'home'
+$sandboxHome = Join-Path $root 'home'
 $tools = Join-Path $root 'tools'
 $userName = 'aidlc-live'
 $runnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -157,12 +157,12 @@ function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout
             Copy-PlainTree $entry $target -Checkout:$Checkout -RejectLinks:$RejectLinks
         } else {
             # Copy bytes, not source ACLs, alternate streams, or hard-link identity.
-            $input = [IO.File]::Open($entry, 'Open', 'Read', 'Read')
+            $sourceStream = [IO.File]::Open($entry, 'Open', 'Read', 'Read')
             try {
-                if ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($input) }
+                if ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($sourceStream) }
                 $output = [IO.File]::Open($target, 'CreateNew', 'Write', 'None')
-                try { $input.CopyTo($output) } finally { $output.Dispose() }
-            } finally { $input.Dispose() }
+                try { $sourceStream.CopyTo($output) } finally { $output.Dispose() }
+            } finally { $sourceStream.Dispose() }
         }
     }
 }
@@ -206,30 +206,30 @@ function Get-SafeEnvironment {
         USERNAME = $userName
         USERDOMAIN = $env:COMPUTERNAME
         COMPUTERNAME = $env:COMPUTERNAME
-        HOME = $home
-        USERPROFILE = $home
+        HOME = $sandboxHome
+        USERPROFILE = $sandboxHome
         HOMEDRIVE = 'C:'
         HOMEPATH = '\aidlc-live\home'
-        APPDATA = (Join-Path $home 'AppData\Roaming')
-        LOCALAPPDATA = (Join-Path $home 'AppData\Local')
-        TEMP = (Join-Path $home 'tmp')
-        TMP = (Join-Path $home 'tmp')
+        APPDATA = (Join-Path $sandboxHome 'AppData\Roaming')
+        LOCALAPPDATA = (Join-Path $sandboxHome 'AppData\Local')
+        TEMP = (Join-Path $sandboxHome 'tmp')
+        TMP = (Join-Path $sandboxHome 'tmp')
         CI = 'true'
         GITHUB_ACTIONS = 'true'
         TERM = 'xterm-256color'
         AIDLC_LIVE_ROOT = $work
-        AIDLC_LIVE_HOME = $home
+        AIDLC_LIVE_HOME = $sandboxHome
         AIDLC_LIVE_PATH = $livePath
         AIDLC_TEST_PACKAGE_READY = '1'
         AIDLC_NODE_BIN = (Join-Path $tools 'node.exe')
         AIDLC_BUN_BIN = (Join-Path $tools 'bun.exe')
         CLAUDE_CODE_GIT_BASH_PATH = 'C:\Program Files\Git\bin\bash.exe'
         GIT_CONFIG_NOSYSTEM = '1'
-        GIT_CONFIG_GLOBAL = (Join-Path $home '.gitconfig')
+        GIT_CONFIG_GLOBAL = (Join-Path $sandboxHome '.gitconfig')
         GIT_TERMINAL_PROMPT = '0'
-        npm_config_userconfig = (Join-Path $home 'empty.npmrc')
-        npm_config_globalconfig = (Join-Path $home 'empty-global.npmrc')
-        npm_config_cache = (Join-Path $home 'npm-cache')
+        npm_config_userconfig = (Join-Path $sandboxHome 'empty.npmrc')
+        npm_config_globalconfig = (Join-Path $sandboxHome 'empty-global.npmrc')
+        npm_config_cache = (Join-Path $sandboxHome 'npm-cache')
         npm_config_registry = 'https://registry.npmjs.org/'
     }
 }
@@ -432,7 +432,7 @@ try {
         $createdState = $true
         New-PrivateDirectory $root
         $createdRoot = $true
-        foreach ($path in @($work, $home, $tools)) { New-PrivateDirectory $path }
+        foreach ($path in @($work, $sandboxHome, $tools)) { New-PrivateDirectory $path }
         $stage = 'copying checkout'
         # No .git auth config, user config, reparse targets, or credential files cross.
         Copy-PlainTree $workspace $work -Checkout
@@ -445,9 +445,9 @@ try {
         Assert-PlainPath $git
         if (-not [IO.File]::Exists($git)) { throw 'Hosted Windows Git is required.' }
         foreach ($path in @('tmp', 'AppData\Roaming', 'AppData\Local', 'npm-cache')) {
-            [void][IO.Directory]::CreateDirectory((Join-Path $home $path))
+            [void][IO.Directory]::CreateDirectory((Join-Path $sandboxHome $path))
         }
-        foreach ($name in @('empty.npmrc', 'empty-global.npmrc')) { [IO.File]::WriteAllText((Join-Path $home $name), '') }
+        foreach ($name in @('empty.npmrc', 'empty-global.npmrc')) { [IO.File]::WriteAllText((Join-Path $sandboxHome $name), '') }
         $package = $null
         $pinName = $null
         switch ($Family) {
@@ -493,9 +493,9 @@ try {
         Set-RuntimeAcl $root $sandboxSid 'ReadAndExecute'
         Set-RuntimeAcl $tools $sandboxSid 'ReadAndExecute' -Tree
         Set-RuntimeAcl $work $sandboxSid 'Modify' -Tree
-        Set-RuntimeAcl $home $sandboxSid 'Modify' -Tree
+        Set-RuntimeAcl $sandboxHome $sandboxSid 'Modify' -Tree
         # A copied worktree is runner-owned; explicitly trust only this path.
-        [IO.File]::WriteAllText((Join-Path $home '.gitconfig'), "[safe]`n`tdirectory = C:/aidlc-live/work`n")
+        [IO.File]::WriteAllText((Join-Path $sandboxHome '.gitconfig'), "[safe]`n`tdirectory = C:/aidlc-live/work`n")
         $credential | Export-Clixml -LiteralPath $credentialFile
         Set-RuntimeAcl $credentialFile $null 'ReadAndExecute'
         $state = [pscustomobject]@{

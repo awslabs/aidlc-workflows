@@ -13,6 +13,8 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
       GIT_CONFIG_GLOBAL: join(home, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
       SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe",
     });
+  } else {
+    Object.assign(env, { TMPDIR: join(home, "tmp"), BUN_INSTALL: join(home, ".bun"), XDG_CACHE_HOME: join(home, ".cache") });
   }
   if (family === "release-contract") return env;
   const url = new URL(source.AIDLC_BROKER_URL ?? "");
