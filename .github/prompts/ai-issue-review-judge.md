@@ -67,6 +67,23 @@ Give readiness and risk integer scores from 1 through 5:
 Readiness 5/5 is best; Risk 1/5 is best. The scores are human decision support,
 not an automated verdict.
 
+Provide one explicit next decision:
+
+- `{"actor":"author","action":"clarify"}` means the issue author should resolve
+  the blocking questions before planning.
+- `{"actor":"maintainer","action":"plan"}` means the issue is ready for a
+  maintainer to move into planning or implementation.
+
+Use only those two actor/action combinations. Any surviving blocking question
+requires `author/clarify`. `maintainer/plan` is valid only when no blocking
+question survives, readiness is at least 4, and risk is at most 3.
+Recommendations may remain when they are bounded follow-up that does not
+prevent responsible planning. Explain the concrete next decision in
+`decision.rationale`; do not merely repeat the scores. This decision is
+advisory and does not prioritize, assign, close, or implement the issue.
+When no blocking question remains, readiness is at least 4, and risk is at most
+3, use `maintainer/plan`.
+
 Evidence rules:
 
 - Issue metadata: `{"source":"ISSUE_TITLE","quote":"exact quote"}` or

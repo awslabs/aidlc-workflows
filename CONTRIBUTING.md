@@ -87,7 +87,11 @@ direction, user experience, scope, feasibility, dependencies, and open
 decisions. For a bug report, it may run up to five relevant existing tests in
 an isolated, network-disabled test process and reports the bounded result as
 evidence. It updates one advisory comment; it does not prioritize, approve,
-reject, label, assign, close, or implement the issue.
+reject, label, assign, close, or implement the issue. The final assessment names
+the next human decision: `author/clarify` when blocking questions remain, or
+`maintainer/plan` when the issue is ready to move into planning or
+implementation. Planning requires no blocking question, readiness of at least
+4/5, and risk of at most 3/5.
 
 ## Contributing via Pull Requests
 
@@ -107,6 +111,22 @@ PRs produced by AI coding agents are welcome and follow the same process. Start 
 4. Make your changes (keep them focused)
 5. Use clear commit messages following [conventional commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`)
 6. Submit the PR and respond to feedback
+
+AIDA's PR review ends with an advisory next decision. `author/change` means the
+author should address the reported gaps. `maintainer/merge` means the review
+found no blocking issue and considers the PR ready for a maintainer's merge
+decision; AIDA does not approve or merge the PR. The merge decision requires no
+P0 or P1 finding, readiness of at least 4/5, and risk of at most 2/5.
+
+The PR workflow reflects its latest state through three label dimensions. A new
+review clears all six managed labels. A successfully published
+`author/change` review applies `aida:reviewed`, `next:author`, and
+`action:change`; `maintainer/merge` applies `aida:reviewed`,
+`next:maintainer`, and `action:merge`. A failed review applies only
+`aida:review-error`. Canceled, skipped, and superseded runs do not replace a
+newer state. The workflow creates missing managed labels with AIDA-specific
+descriptions and stable colors, but does not overwrite metadata on labels that
+already exist.
 
 ### PR closure
 

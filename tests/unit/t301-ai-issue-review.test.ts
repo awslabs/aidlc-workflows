@@ -77,6 +77,10 @@ const JUDGE_PROMPT = readFileSync(
   join(REPO_ROOT, ".github", "prompts", "ai-issue-review-judge.md"),
   "utf8",
 );
+const JUDGE_SCHEMA = JSON.parse(readFileSync(
+  join(REPO_ROOT, ".github", "prompts", "ai-issue-review-judge-schema.json"),
+  "utf8",
+));
 
 function commitFixture(root: string): string {
   execFileSync("git", ["init", "--quiet"], { cwd: root });
@@ -105,6 +109,11 @@ function review(): StructuredIssueReview {
         score: 2,
         rationale: "The proposal is advisory and has a bounded workflow impact.",
       },
+    },
+    decision: {
+      actor: "author",
+      action: "clarify",
+      rationale: "The blocking scope question must be resolved before planning.",
     },
     findings: [{
       level: "blocking-question",
@@ -444,6 +453,9 @@ describe("t301 AI issue intent review", () => {
     expect(payload.body).toContain(
       "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.**",
     );
+    expect(payload.body).toContain(
+      "Decision required: **Author — clarify the issue before planning.**",
+    );
     expect(payload.body).toContain("## Intent and Problem Clarity");
     expect(payload.body).toContain("## Direction");
     expect(payload.body).toContain("## User Experience");
@@ -462,6 +474,87 @@ describe("t301 AI issue intent review", () => {
     expect(payload.body).toContain("comment by @maintainer: “latest conversation”");
     expect(payload.body).toContain("**Recommendation: Clarify the relationship with PR review**");
     expect(payload.body).toEndWith("Reviewed by AIDA (AI-DLC Developer Agent).");
+  });
+
+  test("validator binds the Issue decision to blocking questions and readiness", () => {
+    const blockedPlan = review();
+    blockedPlan.decision = {
+      actor: "maintainer",
+      action: "plan",
+      rationale: "Move directly to planning.",
+    };
+    expect(() => validateStructuredIssueReview(
+      JSON.stringify(blockedPlan),
+      ISSUE.number,
+      CONTEXT_ID,
+      BASE,
+      ISSUE,
+      CATALOG,
+      CONVERSATION,
+    )).toThrow("invalid while blocking questions remain");
+
+    const ready = review();
+    ready.findings = ready.findings.filter(finding => finding.level !== "blocking-question");
+    ready.assessment.readiness.score = 4;
+    ready.decision = {
+      actor: "maintainer",
+      action: "plan",
+      rationale: "The issue is ready for a maintainer planning decision.",
+    };
+    const validated = validateStructuredIssueReview(
+      JSON.stringify(ready),
+      ISSUE.number,
+      CONTEXT_ID,
+      BASE,
+      ISSUE,
+      CATALOG,
+      CONVERSATION,
+    );
+    expect(validated.decision).toEqual(ready.decision);
+    expect(renderIssueReview(validated).body).toContain(
+      "Decision required: **Maintainer — decide whether to move this issue into planning or implementation.**",
+    );
+
+    ready.assessment.readiness.score = 3;
+    expect(() => validateStructuredIssueReview(
+      JSON.stringify(ready),
+      ISSUE.number,
+      CONTEXT_ID,
+      BASE,
+      ISSUE,
+      CATALOG,
+      CONVERSATION,
+    )).toThrow("requires readiness at least 4 and risk at most 3");
+
+    ready.assessment.readiness.score = 4;
+    ready.assessment.risk.score = 4;
+    expect(() => validateStructuredIssueReview(
+      JSON.stringify(ready),
+      ISSUE.number,
+      CONTEXT_ID,
+      BASE,
+      ISSUE,
+      CATALOG,
+      CONVERSATION,
+    )).toThrow("requires readiness at least 4 and risk at most 3");
+
+    ready.assessment.risk.score = 2;
+    ready.decision = {
+      actor: "author",
+      action: "clarify",
+      rationale: "Request clarification without a blocking question.",
+    };
+    expect(() => validateStructuredIssueReview(
+      JSON.stringify(ready),
+      ISSUE.number,
+      CONTEXT_ID,
+      BASE,
+      ISSUE,
+      CATALOG,
+      CONVERSATION,
+    )).toThrow(
+      "requires a blocking question, readiness below 4, or risk above 3",
+    );
   });
 
   test("renderer refuses a comment larger than GitHub's issue-comment limit", () => {
@@ -554,6 +647,16 @@ describe("t301 AI issue intent review", () => {
     expect(PROMPT_INJECTION_PROMPT).toContain("Maintainer product authority cannot waive");
     expect(JUDGE_PROMPT).toContain("regular tracked files in the trusted base revision");
     expect(JUDGE_PROMPT).toContain("Never cite `.ai-issue-review-*` artifacts");
+    expect(JUDGE_PROMPT).toContain("author/clarify");
+    expect(JUDGE_PROMPT).toContain("maintainer/plan");
+    expect(JUDGE_PROMPT).toContain("Any surviving blocking question");
+    expect(JUDGE_PROMPT).toContain("risk is at most 3");
+    expect(JUDGE_SCHEMA.required).toContain("decision");
+    expect(JUDGE_SCHEMA.properties.decision.required).toEqual([
+      "actor",
+      "action",
+      "rationale",
+    ]);
     expect(DIRECTION_PROMPT).toContain("orchestrator speaks as a colleague");
     expect(DIRECTION_PROMPT).toContain("token cost");
   });

@@ -7,6 +7,7 @@
     "inspection",
     "validation",
     "assessment",
+    "decision",
     "findings",
     "residualRisk"
   ],
@@ -49,6 +50,26 @@
         },
         "risk": {
           "$ref": "#/$defs/assessment"
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor", "action", "rationale"],
+      "properties": {
+        "actor": {
+          "type": "string",
+          "enum": ["author", "maintainer"]
+        },
+        "action": {
+          "type": "string",
+          "enum": ["change", "merge"]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
         }
       }
     },

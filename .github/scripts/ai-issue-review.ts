@@ -13,6 +13,9 @@ const MAX_BUG_TEST_FILES = 5;
 const AI_ISSUE_REVIEW_MARKER = "<!-- ai-issue-review issue=";
 
 export type FindingLevel = "blocking-question" | "recommendation";
+export type IssueDecision =
+  | { actor: "author"; action: "clarify"; rationale: string }
+  | { actor: "maintainer"; action: "plan"; rationale: string };
 export type FindingCategory =
   | "intent"
   | "direction"
@@ -135,6 +138,7 @@ export interface StructuredIssueReview {
       rationale: string;
     };
   };
+  decision: IssueDecision;
   findings: Finding[];
   residualRisk: string;
 }
@@ -729,12 +733,48 @@ export function validateStructuredIssueReview(
       ),
     };
   });
+  const decisionCandidate = record(candidate.decision, "decision");
+  const rationale = requiredText(decisionCandidate.rationale, "decision.rationale", 1000);
+  let decision: IssueDecision;
+  if (decisionCandidate.actor === "author" && decisionCandidate.action === "clarify") {
+    decision = { actor: "author", action: "clarify", rationale };
+  } else if (
+    decisionCandidate.actor === "maintainer" &&
+    decisionCandidate.action === "plan"
+  ) {
+    decision = { actor: "maintainer", action: "plan", rationale };
+  } else {
+    throw new Error("decision must be author/clarify or maintainer/plan");
+  }
+  const blocking = findings.some(finding => finding.level === "blocking-question");
+  if (decision.action === "plan" && blocking) {
+    throw new Error("decision maintainer/plan is invalid while blocking questions remain");
+  }
+  if (
+    decision.action === "plan" &&
+    (assessment.readiness.score < 4 || assessment.risk.score > 3)
+  ) {
+    throw new Error(
+      "decision maintainer/plan requires readiness at least 4 and risk at most 3",
+    );
+  }
+  if (
+    decision.action === "clarify" &&
+    !blocking &&
+    assessment.readiness.score >= 4 &&
+    assessment.risk.score <= 3
+  ) {
+    throw new Error(
+      "decision author/clarify requires a blocking question, readiness below 4, or risk above 3",
+    );
+  }
   return {
     issue: expectedIssue,
     contextId: expectedContextId,
     inspection: { status: "complete" },
     validation,
     assessment,
+    decision,
     findings,
     residualRisk: requiredText(candidate.residualRisk, "residualRisk", 1000),
   };
@@ -787,6 +827,12 @@ export function renderIssueReview(
     }`,
     "",
     `Risk: **${review.assessment.risk.score}/5** — ${markdownText(review.assessment.risk.rationale)}`,
+    "",
+    `Decision required: **${
+      review.decision.action === "clarify"
+        ? "Author — clarify the issue before planning."
+        : "Maintainer — decide whether to move this issue into planning or implementation."
+    }** ${markdownText(review.decision.rationale)}`,
     "",
     `Findings: ${blocking} blocking ${
       blocking === 1 ? "question" : "questions"

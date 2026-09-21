@@ -16,7 +16,9 @@ import {
   buildDiscussion,
   buildContext,
   authoritativeDiscussion,
+  labelsForOutcome,
   normalizeDiscussion,
+  reconcileReviewLabels,
   type ChangedFileManifest,
   type ReviewMetadata,
   type StructuredReview,
@@ -73,6 +75,17 @@ function review(priority?: "P0" | "P1" | "P2" | "P3"): StructuredReview {
         rationale: "The affected contract has a bounded but user-visible blast radius.",
       },
     },
+    decision: priority === "P0" || priority === "P1"
+      ? {
+          actor: "author",
+          action: "change",
+          rationale: "The blocking finding must be corrected before the PR proceeds.",
+        }
+      : {
+          actor: "maintainer",
+          action: "merge",
+          rationale: "The reviewed change is ready for a maintainer merge decision.",
+        },
     findings: priority
       ? [
           {
@@ -258,6 +271,10 @@ process.stdout.write(JSON.stringify(value));
     expect(payload.body).not.toContain("Risk: lower is better");
     expect(payload.body).toContain("Readiness: **2/5**");
     expect(payload.body).toContain("Risk: **4/5**");
+    expect(payload.body).toContain(
+      "Decision required: **Author — make changes before this PR proceeds.**",
+    );
+    expect(payload.body).toContain("<!-- ai-pr-review decision=author/change -->");
     expect(payload.body).toContain("Findings: 1 blocking, 0 advisory.");
     expect(payload.body).toContain("## Contracts & Compatibility");
     expect(payload.body).toContain("**P1: Generated contract is incomplete**");
@@ -271,6 +288,154 @@ process.stdout.write(JSON.stringify(value));
     expect(clean.event).toBe("COMMENT");
     expect(clean.body).toContain("Findings: 0 blocking, 0 advisory.");
     expect(clean.body).toContain("No findings.");
+    expect(clean.body).toContain(
+      "Decision required: **Maintainer — decide whether to merge this PR.**",
+    );
+  });
+
+  test("validator binds the PR decision to findings and assessment scores", () => {
+    const blockingMerge = review("P1");
+    blockingMerge.decision = {
+      actor: "maintainer",
+      action: "merge",
+      rationale: "Merge despite the blocker.",
+    };
+    expect(() => validate(JSON.stringify(blockingMerge))).toThrow(
+      "invalid while P0 or P1 findings remain",
+    );
+
+    const lowReadiness = review();
+    lowReadiness.assessment.readiness.score = 3;
+    expect(() => validate(JSON.stringify(lowReadiness))).toThrow(
+      "requires readiness at least 4 and risk at most 2",
+    );
+
+    const wrongPair = review() as unknown as {
+      decision: { actor: string; action: string; rationale: string };
+    };
+    wrongPair.decision = {
+      actor: "author",
+      action: "merge",
+      rationale: "Unsupported actor and action pair.",
+    };
+    expect(() => validate(JSON.stringify(wrongPair))).toThrow(
+      "decision must be author/change or maintainer/merge",
+    );
+
+    const unjustifiedChange = review();
+    unjustifiedChange.decision = {
+      actor: "author",
+      action: "change",
+      rationale: "Request changes without a material reason.",
+    };
+    expect(() => validate(JSON.stringify(unjustifiedChange))).toThrow(
+      "requires a finding, readiness below 4, or risk above 2",
+    );
+  });
+
+  test("review label outcomes replace the complete managed state", () => {
+    expect(labelsForOutcome("started")).toEqual([]);
+    expect(labelsForOutcome("review-error")).toEqual(["aida:review-error"]);
+    expect(labelsForOutcome("reviewed-change")).toEqual([
+      "aida:reviewed",
+      "next:author",
+      "action:change",
+    ]);
+    expect(labelsForOutcome("reviewed-merge")).toEqual([
+      "aida:reviewed",
+      "next:maintainer",
+      "action:merge",
+    ]);
+
+    const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-labels-"));
+    try {
+      const log = join(root, "calls.jsonl");
+      const fakeGh = join(root, "gh");
+      writeFileSync(fakeGh, `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const input = await Bun.stdin.text();
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input }) + "\\n");
+if (args.some(value => value === "repos/acme/repo/pulls/42")) {
+  process.stdout.write(JSON.stringify({
+    head: { sha: "${HEAD}" },
+    state: "open",
+    draft: false,
+    labels: [
+      { name: "aida:review-error" },
+      { name: "next:author" },
+      { name: "action:change" },
+      { name: "unrelated" }
+    ]
+  }));
+} else if (args.some(value => value.startsWith("repos/acme/repo/labels/"))) {
+  process.exit(1);
+} else {
+  process.stdout.write("{}");
+}
+`);
+      chmodSync(fakeGh, 0o755);
+      expect(reconcileReviewLabels(
+        "acme/repo",
+        42,
+        "reviewed-merge",
+        HEAD,
+        fakeGh,
+      )).toBe(true);
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const deleted = calls
+        .filter(call => call.args.includes("DELETE"))
+        .map(call => call.args.at(-1));
+      expect(deleted).toEqual([
+        "repos/acme/repo/issues/42/labels/aida%3Areview-error",
+        "repos/acme/repo/issues/42/labels/next%3Aauthor",
+        "repos/acme/repo/issues/42/labels/action%3Achange",
+      ]);
+      const applied = calls.find(
+        call => call.args.includes("repos/acme/repo/issues/42/labels") &&
+          call.args.includes("POST"),
+      );
+      expect(JSON.parse(applied.input)).toEqual({
+        labels: ["aida:reviewed", "next:maintainer", "action:merge"],
+      });
+      const created = calls
+        .filter(call => call.args.includes("repos/acme/repo/labels") && call.args.includes("POST"))
+        .map(call => JSON.parse(call.input).name);
+      expect(created).toEqual([
+        "aida:reviewed",
+        "aida:review-error",
+        "next:author",
+        "next:maintainer",
+        "action:change",
+        "action:merge",
+      ]);
+
+      writeFileSync(log, "");
+      const staleGh = join(root, "stale-gh");
+      writeFileSync(staleGh, `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.stdout.write(JSON.stringify({
+  head: { sha: "${BASE}" },
+  state: "open",
+  draft: false,
+  labels: []
+}));
+`);
+      chmodSync(staleGh, 0o755);
+      expect(reconcileReviewLabels(
+        "acme/repo",
+        42,
+        "review-error",
+        HEAD,
+        staleGh,
+      )).toBe(false);
+      expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+
+    expect(reconcileReviewLabels).toBeDefined();
   });
 
   test("validator rejects stale context, malformed JSON, category errors, and priority inversion", () => {
@@ -1049,7 +1214,7 @@ process.stdout.write(JSON.stringify(value));
     expect(modelStep).toContain('"sol" \\\n            "AIDLC technical review"');
     expect(modelStep).toContain('"fable" \\\n            "User-experience review"');
     expect(modelStep).toContain('"fable" \\\n            "Direction review"');
-    expect(modelStep).toContain('"fable" \\\n            "Final review judge"');
+    expect(modelStep).toContain('"sol" \\\n            "Final review judge"');
     expect(modelStep).toContain(
       '"fable" \\\n            "User-experience review" \\\n            "high"',
     );
@@ -1057,11 +1222,12 @@ process.stdout.write(JSON.stringify(value));
       '"fable" \\\n            "Direction review" \\\n            "high"',
     );
     expect(modelStep).toContain(
-      '"fable" \\\n            "Final review judge" \\\n            "high"',
+      '"sol" \\\n            "Final review judge" \\\n            "high"',
     );
-    expect(modelStep).toContain("--output-format json --json-schema");
-    expect(modelStep).toContain(".structured_output");
+    expect(modelStep).toContain("--output-schema");
+    expect(modelStep).toContain("structured_filter='select(type == \"object\")'");
     expect(modelStep).toContain("ai-pr-review-judge-schema.json");
+    expect(modelStep).toContain("--decision-output .ai-pr-review-final/decision.json");
     expect(modelStep).toContain("sudo -u ai-pr-review -- perl -i -pe");
     expect(modelStep).toContain('sudo -u ai-pr-review test -r "$destination"');
     expect(modelStep.indexOf("sudo -u ai-pr-review -- perl -i -pe")).toBeLessThan(
@@ -1074,9 +1240,16 @@ process.stdout.write(JSON.stringify(value));
     expect(publishStep.indexOf("published=\"$(gh api --method POST")).toBeLessThan(
       publishStep.indexOf("mapfile -t stale_reviews"),
     );
+    expect(WORKFLOW).toContain("Start AIDA review label state");
+    expect(WORKFLOW).toContain("Reconcile AIDA review labels");
+    expect(WORKFLOW).toContain("reviewed-change");
+    expect(WORKFLOW).toContain("reviewed-merge");
+    expect(WORKFLOW).toContain("review-error");
+    expect(WORKFLOW).toContain("!cancelled()");
+    expect(WORKFLOW).toContain("issues: write");
   });
 
-  test("five specialist lenses feed a Fable judge and categorized publication contract", () => {
+  test("five specialist lenses feed a Sol judge and categorized publication contract", () => {
     for (const lens of [
       "prompt-injection",
       "security",
@@ -1172,6 +1345,11 @@ process.stdout.write(JSON.stringify(value));
     expect(judge).toContain('"assessment"');
     expect(judge).toContain('"readiness"');
     expect(judge).toContain('"risk"');
+    expect(judge).toContain('"decision"');
+    expect(judge).toContain("author/change");
+    expect(judge).toContain("maintainer/merge");
+    expect(judge).toContain("readiness is at least 4");
+    expect(judge).toContain("risk is at most 2");
     expect(judge).toMatch(/integer score\s+from 1 through 5/);
     expect(judge).toContain("human merge decision");
     expect(judge).toContain("Readiness 5/5 is the best readiness result");
@@ -1182,10 +1360,16 @@ process.stdout.write(JSON.stringify(value));
       "inspection",
       "validation",
       "assessment",
+      "decision",
       "findings",
       "residualRisk",
     ]);
     expect(judgeSchema.properties.assessment.required).toEqual(["readiness", "risk"]);
+    expect(judgeSchema.properties.decision.required).toEqual([
+      "actor",
+      "action",
+      "rationale",
+    ]);
     expect(judgeSchema.properties.inspection.properties.status.enum).toEqual([
       "complete",
       "failed",
