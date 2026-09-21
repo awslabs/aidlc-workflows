@@ -747,29 +747,29 @@ function visibleHtmlText(text: string): string {
 // the marker only comes off for a run of one to four — and four spaces of
 // remaining indentation is an indented code block too, which the caller's
 // column test rejects.
+type ContainerStep = { kind: "quote" } | { kind: "indent"; columns: number };
+
 interface ContainerLine {
 	text: string;
 	context: string;
-	quotes: number;
-	indent: number;
+	steps: ContainerStep[];
 }
 
 function containerLine(line: string): ContainerLine {
 	let stripped = line;
 	const context: string[] = [];
-	let quotes = 0;
-	let indent = 0;
+	const steps: ContainerStep[] = [];
 	for (;;) {
 		const quote = /^ {0,3}> ?/.exec(stripped);
 		if (quote) {
 			stripped = stripped.slice(quote[0].length);
 			context.push("quote");
-			if (indent === 0) quotes++;
+			steps.push({ kind: "quote" });
 			continue;
 		}
 		// CommonMark gives thematic breaks precedence over list markers.
 		if (isThematicBreak(stripped)) {
-			return { text: stripped, context: context.join("/"), quotes, indent };
+			return { text: stripped, context: context.join("/"), steps };
 		}
 		const list = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(
 			stripped,
@@ -777,10 +777,10 @@ function containerLine(line: string): ContainerLine {
 		if (list) {
 			stripped = stripped.slice(list[0].length);
 			context.push("list");
-			indent += textColumns(list[0]);
+			steps.push({ kind: "indent", columns: textColumns(list[0]) });
 			continue;
 		}
-		return { text: stripped, context: context.join("/"), quotes, indent };
+		return { text: stripped, context: context.join("/"), steps };
 	}
 }
 
@@ -829,8 +829,7 @@ interface ReferenceAnalysis {
 }
 
 interface ActiveListContainer {
-	beforeQuotes: number;
-	contentIndent: number;
+	steps: ContainerStep[];
 	listContext: string;
 }
 
@@ -895,19 +894,33 @@ function stripIndentColumns(text: string, required: number): string | null {
 	return `${" ".repeat(column - required)}${text.slice(index)}`;
 }
 
-function stripLeadingQuotes(
+// Apply a container's raw requirements to a line: quote markers must be
+// present; indentation must be present unless the remainder is blank and no
+// quote requirement follows. Returns null when the container is not continued.
+function stripContainerSteps(
 	line: string,
-	count: number,
-): { text: string; contexts: string[] } | null {
+	steps: ContainerStep[],
+): { text: string; blank: boolean } | null {
 	let text = line;
-	const contexts: string[] = [];
-	for (let index = 0; index < count; index++) {
-		const quote = /^ {0,3}> ?/.exec(text);
-		if (!quote) return null;
-		text = text.slice(quote[0].length);
-		contexts.push("quote");
+	for (let index = 0; index < steps.length; index++) {
+		const step = steps[index];
+		if (step.kind === "quote") {
+			const quote = /^ {0,3}> ?/.exec(text);
+			if (!quote) return null;
+			text = text.slice(quote[0].length);
+			continue;
+		}
+		if (/^[ \t]*$/.test(text)) {
+			for (let later = index + 1; later < steps.length; later++) {
+				if (steps[later].kind === "quote") return null;
+			}
+			return { text: "", blank: true };
+		}
+		const stripped = stripIndentColumns(text, step.columns);
+		if (stripped === null) return null;
+		text = stripped;
 	}
-	return { text, contexts };
+	return { text, blank: /^[ \t]*$/.test(text) };
 }
 
 function explicitListContainer(
@@ -929,18 +942,20 @@ function explicitListContainer(
 	if (!marker) return null;
 	const after = containerLine(text.slice(marker[0].length));
 	const listContext = `list#${listItem}`;
+	const steps: ContainerStep[] = [
+		...before.map((): ContainerStep => ({ kind: "quote" })),
+		{ kind: "indent", columns: textColumns(marker[0]) },
+	];
 	return {
 		line: {
 			text: after.text,
 			context: [...before, listContext, ...contextParts(after.context)].join(
 				"/",
 			),
-			quotes: before.length,
-			indent: textColumns(marker[0]) + after.indent,
+			steps: [...steps, ...after.steps],
 		},
 		active: {
-			beforeQuotes: before.length,
-			contentIndent: textColumns(marker[0]),
+			steps,
 			listContext,
 		},
 	};
@@ -968,37 +983,27 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 			result.push({
 				text: line,
 				context: activeList?.listContext ?? "",
-				quotes: activeList?.beforeQuotes ?? 0,
-				indent: activeList?.contentIndent ?? 0,
+				steps: activeList?.steps ?? [],
 			});
 			continue;
 		}
 
 		if (activeList) {
-			const quoted = stripLeadingQuotes(line, activeList.beforeQuotes);
-			if (quoted && /^[ \t]*$/.test(quoted.text)) {
-				result.push({
-					text: "",
-					context: [...quoted.contexts, activeList.listContext].join("/"),
-					quotes: activeList.beforeQuotes,
-					indent: activeList.contentIndent,
-				});
-				continue;
-			}
-			const continuation = quoted
-				? stripIndentColumns(quoted.text, activeList.contentIndent)
-				: null;
-			if (quoted && continuation !== null) {
-				const after = containerLine(continuation);
+			const inside = stripContainerSteps(line, activeList.steps);
+			if (inside !== null) {
+				const listContext = activeList.listContext;
+				const context = activeList.steps.map((step) =>
+					step.kind === "quote" ? "quote" : listContext,
+				).join("/");
+				if (inside.blank) {
+					result.push({ text: "", context, steps: activeList.steps });
+					continue;
+				}
+				const after = containerLine(inside.text);
 				result.push({
 					text: after.text,
-					context: [
-						...quoted.contexts,
-						activeList.listContext,
-						...contextParts(after.context),
-					].join("/"),
-					quotes: activeList.beforeQuotes,
-					indent: activeList.contentIndent + after.indent,
+					context: [context, ...contextParts(after.context)].join("/"),
+					steps: [...activeList.steps, ...after.steps],
 				});
 				continue;
 			}
@@ -1235,8 +1240,7 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 	let block: "none" | "paragraph" | "html" = "none";
 	let blockContext = "";
 	let htmlEnd: RegExp | null = null;
-	let htmlQuotes = 0;
-	let htmlIndent = 0;
+	let htmlSteps: ContainerStep[] = [];
 
 	// CommonMark §4.7: a link reference definition cannot interrupt a paragraph.
 	// A definition-shaped line directly under prose is visible lazy continuation.
@@ -1247,13 +1251,12 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 			// CommonMark §4.6: HTML never continues lazily. It continues only while
 			// its container's raw quote markers and indentation are present; what
 			// the raw content looks like as Markdown is irrelevant.
-			const quoted = stripLeadingQuotes(visibleLines[index], htmlQuotes);
-			const blank = quoted !== null && /^[ \t]*$/.test(quoted.text);
-			if (quoted === null || (!blank && stripIndentColumns(quoted.text, htmlIndent) === null)) {
+			const inside = stripContainerSteps(visibleLines[index], htmlSteps);
+			if (inside === null) {
 				block = "none";
 				htmlEnd = null;
 			} else {
-				if (htmlEnd ? htmlEnd.test(quoted.text) : blank) {
+				if (htmlEnd ? htmlEnd.test(inside.text) : inside.blank) {
 					block = "none";
 					htmlEnd = null;
 				}
@@ -1295,8 +1298,7 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 					block = "none";
 				} else {
 					block = "html";
-					htmlQuotes = line.quotes;
-					htmlIndent = line.indent;
+					htmlSteps = line.steps;
 					htmlEnd = finite[1];
 				}
 				continue;
@@ -1306,8 +1308,7 @@ function referenceAnalysis(body: string): ReferenceAnalysis {
 				(block === "none" && HTML_INLINE_TAG_LINE_RE.test(rest))
 			) {
 				block = "html";
-				htmlQuotes = line.quotes;
-				htmlIndent = line.indent;
+				htmlSteps = line.steps;
 				htmlEnd = null;
 				continue;
 			}
