@@ -62,14 +62,20 @@ async function exited(child: Bun.Subprocess, timeout = 8_000): Promise<number> {
 }
 
 const fixtureSource = `
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadDarwinProcessCalls } from ${JSON.stringify(supervisorPath)};
 import { readDarwinProcessIdentity } from ${JSON.stringify(identityPath)};
 const library = await loadDarwinProcessCalls();
 const [role, dir, mode] = process.argv.slice(2);
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
-const record = (name) => writeFileSync(join(dir, name), JSON.stringify(
+// Each payload has one writer; existence of the final path means it is complete.
+function publish(name, content) {
+  const path = join(dir, name);
+  writeFileSync(path + ".tmp", content);
+  renameSync(path + ".tmp", path);
+}
+const record = (name) => publish(name, JSON.stringify(
   readDarwinProcessIdentity(process.pid, library.symbols),
   (_key, value) => typeof value === "bigint" ? String(value) : value,
 ));
@@ -92,7 +98,7 @@ if (role === "leaf") {
     process.exit(23);
   });
   record("target.stat");
-  writeFileSync(join(dir, "environment.json"), JSON.stringify({
+  publish("environment.json", JSON.stringify({
     cwd: process.cwd(), term: process.env.TERM, inherited: process.env.AIDLC_SUPERVISOR_FIXTURE,
     containment: process.env.AIDLC_TUI_CONTAINMENT,
     tty: [process.stdin.isTTY, process.stdout.isTTY, process.stderr.isTTY],
