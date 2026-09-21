@@ -78,8 +78,9 @@ Include:
 - Expected vs actual behavior
 - The platform, harness, and model you tested with
 
-AIDA's pre-implementation review starts when a maintainer opens, updates, or
-comments on a maintainer-owned issue. A maintainer can apply the `ai-review`
+AIDA's pre-implementation review starts when a maintainer opens, updates,
+comments on, or deletes a human comment from a maintainer-owned issue. A
+maintainer can apply the `ai-review`
 label to opt an external issue conversation into review; applying the label and
 later human comments then start new reviews. Maintainers can also dispatch the
 **AI Issue Intent Review** workflow with an issue number under the same opt-in
@@ -89,20 +90,31 @@ decisions. For a bug report, it may run up to five relevant existing tests in
 an isolated, network-disabled test process and reports the bounded result as
 evidence. Any human conversation change invalidates publication until an
 authorized review covers the complete updated conversation. Publication
-identity hashes every human comment; the bounded model context contains up to
-the 50 most recently updated comments, so editing older discussion brings it
-back into review. Reviews for one issue run serially so publication cannot be
-interrupted after it writes the advisory comment; rapid updates retain the
-latest pending review while the active review finishes its freshness checks.
+identity hashes every human comment and excludes bot comments; the bounded
+model context contains up to the 50 most recently updated comments, so editing
+older discussion brings it back into review. Reviews for one issue run serially
+so publication cannot be interrupted after it writes the advisory comment;
+rapid updates retain the latest pending review while the active review finishes
+its freshness checks.
 A pre-model freshness check exits successfully when setup has already been
 superseded. Removing `ai-review` prevents an external-issue review from
 publishing, while removing it from a maintainer-owned issue keeps the review
 authorized. Human comments that resemble AIDA output still trigger review
 because loop prevention trusts the comment author's bot identity rather than
-comment text. Other human comments do not start a replacement run without
+comment text. Deleted human comments trigger a replacement review so a
+published assessment cannot remain bound to removed conversation. Other human
+comments do not start a replacement run without
 authorization, but they prevent an older review from publishing until a
 maintainer retriggers it. The workflow updates one advisory comment; it does
 not prioritize, approve, reject, label, assign, close, or implement the issue.
+
+Both PR and issue final judges run without command, network, browser, or file
+tools. They receive a deterministic immutable evidence bundle capped at
+2,000,000 bytes, with individual text files capped at 400,000 bytes. The bundle
+contains changed PR evidence or issue context, prior AIDA continuity, trusted
+base contracts, and tracked base files cited by specialist passes. Binary
+content is represented by its byte length and SHA-256 digest. Evidence creation
+fails explicitly when a text or aggregate limit is exceeded.
 
 ## Contributing via Pull Requests
 

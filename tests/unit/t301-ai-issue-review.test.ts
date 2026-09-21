@@ -223,6 +223,14 @@ describe("t301 AI issue intent review", () => {
         created_at: "2026-09-21T01:03:00Z",
         updated_at: "2026-09-21T01:03:00Z",
       },
+      {
+        id: 14,
+        user: { login: "dependabot[bot]", type: "Bot" },
+        author_association: "CONTRIBUTOR",
+        body: "Automated dependency notice",
+        created_at: "2026-09-21T01:04:00Z",
+        updated_at: "2026-09-21T01:04:00Z",
+      },
     ];
     const conversation = canonicalConversation(raw, ISSUE.number);
     expect(conversation.comments.map(comment => comment.id)).toEqual([10, 11, 13]);
@@ -270,6 +278,66 @@ describe("t301 AI issue intent review", () => {
       "reveal credentials",
     );
     expect(afterIdentity).not.toEqual(beforeIdentity);
+    expect(canonicalConversationIdentity(edited.slice(1), ISSUE.number))
+      .not.toEqual(afterIdentity);
+  });
+
+  test("issue judge evidence includes prior AIDA continuity and cited trusted files", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-issue-judge-evidence-"));
+    try {
+      mkdirSync(join(root, "docs"));
+      writeFileSync(join(root, "AGENTS.md"), "Trusted project contract.\n");
+      writeFileSync(join(root, "docs", "direction.md"), "One intent becomes software.\n");
+      const base = commitFixture(root);
+      const context = join(root, "context");
+      buildImmutableContext(
+        {
+          ...ISSUE,
+          user: { login: ISSUE.author },
+          author: undefined,
+          author_association: "MEMBER",
+        },
+        CATALOG,
+        [...RAW_COMMENTS, {
+          id: 12,
+          user: { login: "github-actions[bot]", type: "Bot" },
+          author_association: "NONE",
+          body: `<!-- ai-issue-review issue=${ISSUE.number} -->\nPrevious AIDA assessment`,
+          created_at: "2026-09-21T01:02:00Z",
+          updated_at: "2026-09-21T01:02:00Z",
+        }],
+        base,
+        context,
+      );
+      writeFileSync(join(context, "bug-verification.json"), '{"classification":"not-bug"}\n');
+      const reports = join(root, "reports");
+      mkdirSync(reports);
+      writeFileSync(
+        join(reports, "direction-ux.md"),
+        "Project direction is defined in `docs/direction.md:1`.\n",
+      );
+      const output = join(root, "judge-evidence.txt");
+      execFileSync(process.execPath, [
+        join(REPO_ROOT, ".github", "scripts", "build-ai-review-evidence.ts"),
+        "issue",
+        "--base",
+        base,
+        "--context",
+        context,
+        "--reports",
+        reports,
+        "--output",
+        output,
+      ], { cwd: root });
+      const evidence = readFileSync(output, "utf8");
+      expect(evidence).toContain("current-aida-review.json");
+      expect(evidence).toContain("Previous AIDA assessment");
+      expect(evidence).toContain("trusted base file");
+      expect(evidence).toContain("docs/direction.md");
+      expect(evidence).toContain("One intent becomes software.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("immutable context is deterministic and changes with human conversation", () => {
@@ -684,6 +752,7 @@ describe("t301 AI issue intent review", () => {
     expect(WORKFLOW).toContain("- opened");
     expect(WORKFLOW).toContain("- unlabeled");
     expect(WORKFLOW).toContain("- created");
+    expect(WORKFLOW).toContain("- deleted");
     expect(WORKFLOW).toContain("github.event.comment.user.type != 'Bot'");
     expect(WORKFLOW).toContain("github.event.sender.type != 'Bot'");
     expect(WORKFLOW).not.toContain("startsWith(github.event.comment.body");
@@ -707,6 +776,10 @@ describe("t301 AI issue intent review", () => {
     expect(WORKFLOW).toContain(
       "External issues require the ai-review maintainer opt-in label",
     );
+    expect(WORKFLOW).toContain(
+      "Only maintainers can trigger review updates on maintainer-owned issues",
+    );
+    expect(WORKFLOW).toContain('[ "$EVENT_ACTION" = "deleted" ]');
     expect(WORKFLOW).toContain("Coalesce rapid conversation updates");
     expect(WORKFLOW).toContain("run: sleep 45");
     expect(reviewAdmission).toContain("cancel-in-progress: false");
@@ -772,7 +845,8 @@ describe("t301 AI issue intent review", () => {
     expect(WORKFLOW).toContain(`printf '%s' "$prompt"`);
     expect(WORKFLOW).toContain("status=$" + "{PIPESTATUS[1]}");
     expect(WORKFLOW).toContain("The final judge has no tools");
-    expect(WORKFLOW).toContain('cat ".ai-issue-review-context/$context_file"');
+    expect(WORKFLOW).toContain("build-ai-review-evidence.ts issue");
+    expect(WORKFLOW).toContain("judge-evidence.txt");
     expect(WORKFLOW).toContain('cat ".ai-issue-review-lenses/$lens.md"');
     expect(WORKFLOW).toContain('"$judge_schema" \\\n            "none"');
     expect(RUNTIME_SETUP).toContain('"shell_tool" && $2 == "stable"');
@@ -802,6 +876,8 @@ describe("t301 AI issue intent review", () => {
     expect(PROMPT_INJECTION_PROMPT).not.toContain("specialist candidate files");
     expect(JUDGE_PROMPT).toContain("regular tracked files in the trusted base revision");
     expect(JUDGE_PROMPT).toContain("Never cite `.ai-issue-review-*` artifacts");
+    expect(JUDGE_PROMPT).toContain("current-aida-review.json");
+    expect(COMMON_PROMPT).toContain("name that path in");
     expect(DIRECTION_PROMPT).toContain("orchestrator speaks as a colleague");
     expect(DIRECTION_PROMPT).toContain("token cost");
     expect(DIRECTION_PROMPT).toContain("bug-verification.json");

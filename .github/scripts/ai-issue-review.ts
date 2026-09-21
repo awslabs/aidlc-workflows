@@ -290,10 +290,8 @@ function canonicalConversationWithFilter(
         ? candidate.user as Record<string, unknown>
         : {};
       const login = text(user.login) || "[deleted]";
+      if (text(user.type) === "Bot") return null;
       const body = boundedConversationBody(candidate.body);
-      if (login === "github-actions[bot]" && body.startsWith(AI_ISSUE_REVIEW_MARKER)) {
-        return null;
-      }
       const association = text(candidate.author_association).toUpperCase();
       return {
         id: positiveInteger(candidate.id, `issue conversation[${index}].id`),
@@ -341,10 +339,8 @@ export function canonicalConversationIdentity(
         ? candidate.user as Record<string, unknown>
         : {};
       const login = text(user.login) || "[deleted]";
+      if (text(user.type) === "Bot") return null;
       const body = text(candidate.body);
-      if (login === "github-actions[bot]" && body.startsWith(AI_ISSUE_REVIEW_MARKER)) {
-        return null;
-      }
       return {
         id: positiveInteger(candidate.id, `issue conversation[${index}].id`),
         login,

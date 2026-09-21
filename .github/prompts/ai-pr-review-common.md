@@ -61,6 +61,11 @@ callers, consumers, tests, generated projections, protocols, and documentation
 from the base tree when they are needed to judge a changed line. Do not mistake
 a green test or a PR-description claim for proof.
 
+When a candidate relies on an unchanged repository file, name that path in
+backticks in the specialist report. The final no-tool judge receives immutable
+base copies of tracked paths cited this way and discards claims whose supporting
+unchanged source was not supplied.
+
 Classify the change as a bug fix, feature, or mixed change and use the
 highest-risk contract that applies. Check whether the trusted base already
 contains work that supersedes, duplicates, or invalidates the proposed

@@ -789,18 +789,25 @@ process.stdout.write(JSON.stringify(value));
     run("config", "user.email", "ai-review@example.invalid");
     writeFileSync(join(repo, "old.ts"), "one\ntwo\nthree\nfour\nfive\n");
     writeFileSync(join(repo, "tool.sh"), "#!/bin/sh\nexit 0\n");
-    run("add", "old.ts", "tool.sh");
+    writeFileSync(join(repo, "caller.ts"), "export const caller = 'trusted base caller';\n");
+    writeFileSync(join(repo, "asset.bin"), Buffer.from([0, 1, 2, 3]));
+    run("add", "old.ts", "tool.sh", "caller.ts", "asset.bin");
     run("commit", "--quiet", "-m", "base");
     const base = run("rev-parse", "HEAD");
 
     run("mv", "old.ts", "new.ts");
     writeFileSync(join(repo, "new.ts"), "one\ntwo\nTHREE\nfour\nfive\n");
     chmodSync(join(repo, "tool.sh"), 0o755);
-    run("add", "new.ts", "tool.sh");
+    writeFileSync(join(repo, "asset.bin"), Buffer.from([0, 4, 5, 6]));
+    run("add", "new.ts", "tool.sh", "asset.bin");
     run("commit", "--quiet", "-m", "head");
     const head = run("rev-parse", "HEAD");
 
-    const manifest = buildContext(base, head, join(repo, "context"), repo);
+    const context = join(repo, "context");
+    const manifest = buildContext(base, head, context, repo);
+    writeFileSync(join(context, "pr.json"), '{"number":1}\n');
+    writeFileSync(join(context, "discussion.json"), '{"reviews":[],"reviewComments":[]}\n');
+    writeFileSync(join(context, "current-ai-reviews.json"), "[]\n");
     const renamed = manifest.files.find(file => file.path === "new.ts");
     expect(renamed?.previousPath).toBe("old.ts");
     expect(renamed?.added).toEqual([{ start: 3, end: 3 }]);
@@ -810,6 +817,34 @@ process.stdout.write(JSON.stringify(value));
     expect(modeOnly?.added).toEqual([]);
     expect(modeOnly?.deleted).toEqual([]);
     expect(modeOnly?.fileLevelEvidence).toBe(true);
+
+    const reports = join(repo, "reports");
+    mkdirSync(reports);
+    writeFileSync(
+      join(reports, "security.md"),
+      "The unchanged caller is `caller.ts:1`.\n",
+    );
+    const evidence = join(repo, "judge-evidence.txt");
+    execFileSync(process.execPath, [
+      join(REPO_ROOT, ".github", "scripts", "build-ai-review-evidence.ts"),
+      "pr",
+      "--base",
+      base,
+      "--head",
+      head,
+      "--context",
+      context,
+      "--reports",
+      reports,
+      "--output",
+      evidence,
+    ], { cwd: repo });
+    const evidenceText = readFileSync(evidence, "utf8");
+    expect(evidenceText).toContain("trusted base file");
+    expect(evidenceText).toContain("caller.ts");
+    expect(evidenceText).toContain("trusted base caller");
+    expect(evidenceText).toContain('"binary":true');
+    expect(evidenceText).toContain("asset.bin");
   });
 
   test("context builder accepts large files, diffs, and aggregate snapshots", () => {
@@ -846,6 +881,24 @@ process.stdout.write(JSON.stringify(value));
     expect(statSync(join(output, "pr.diff")).size).toBeGreaterThan(5_000_000);
     expect(Math.max(...snapshotSizes)).toBeGreaterThan(1_000_000);
     expect(snapshotSizes.reduce((total, size) => total + size, 0)).toBeGreaterThan(20_000_000);
+    const reports = join(repo, "reports");
+    mkdirSync(reports);
+    expect(() =>
+      execFileSync(process.execPath, [
+        join(REPO_ROOT, ".github", "scripts", "build-ai-review-evidence.ts"),
+        "pr",
+        "--base",
+        base,
+        "--head",
+        head,
+        "--context",
+        output,
+        "--reports",
+        reports,
+        "--output",
+        join(repo, "judge-evidence.txt"),
+      ], { cwd: repo, stdio: "pipe" })
+    ).toThrow();
   });
 
   test("context builder still rejects more than 500 changed files", () => {
@@ -967,7 +1020,7 @@ process.stdout.write(JSON.stringify(value));
       "cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/",
     );
     const scriptSnapshot = WORKFLOW.indexOf(
-      "cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh",
+      "cp .github/scripts/ai-pr-review.ts",
     );
     expect(controlsSha).toBeGreaterThan(-1);
     expect(selfReviewCheckout).toBeGreaterThan(controlsSha);
@@ -992,6 +1045,8 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW).toContain('echo "self_change=$control_change"');
     expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.md");
     expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.json");
+    expect(WORKFLOW).toContain(".github/scripts/build-ai-review-evidence.ts");
+    expect(WORKFLOW).toContain("/tmp/ai-review-evidence-preflight.txt");
     expect(WORKFLOW).toContain('git diff --name-only "$base...$head"');
     expect(WORKFLOW).not.toContain('git diff --name-only "$base" "$head"');
     expect(WORKFLOW).toContain("Finalize existing SHA-bound review");
@@ -1070,10 +1125,9 @@ process.stdout.write(JSON.stringify(value));
     expect(modelStep).toContain(`printf '%s' "$prompt"`);
     expect(modelStep).toContain("status=$" + "{PIPESTATUS[1]}");
     expect(modelStep).toContain("The final judge has no tools");
-    expect(modelStep).toContain("Complete changed-file and changed-line manifest");
-    expect(modelStep).toContain("Complete SHA-anchored diff");
-    expect(modelStep).toContain('git show "$BASE_SHA:$base_path"');
-    expect(modelStep).toContain('cat ".ai-review-context/$snapshot"');
+    expect(modelStep).toContain("build-ai-review-evidence.ts pr");
+    expect(modelStep).toContain("Complete bounded immutable judge evidence");
+    expect(modelStep).toContain("judge-evidence.txt");
     expect(modelStep).toContain('cat ".ai-review-lenses/$lens.md"');
     expect(modelStep).toContain('"$judge_schema" \\\n            "none"');
     expect(modelStep).toContain("--output-schema");
@@ -1182,10 +1236,10 @@ process.stdout.write(JSON.stringify(value));
     expect(judge).toContain(".ai-review-lenses/direction.md");
     expect(judge).toContain("First try to kill every candidate");
     expect(judge).toContain("Review the code that exists");
-    expect(judge).toContain("The runner verifies");
-    expect(judge).toContain("publisher records the immutable");
-    expect(judge).toContain('Return `inspection.status` as `"complete"` only');
-    expect(judge).toContain('return `"failed"`');
+    expect(judge).toContain("evidence bundle contains every changed");
+    expect(judge).toContain("Bundle creation fails before judgment");
+    expect(judge).toContain('`inspection.status` as `"complete"` only');
+    expect(judge).toContain('Return `"failed"`');
     expect(judge).toContain('"inspection": {"status": "complete"}');
     expect(judge).toContain('"assessment"');
     expect(judge).toContain('"readiness"');
