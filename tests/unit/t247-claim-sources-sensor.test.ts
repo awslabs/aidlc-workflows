@@ -981,6 +981,8 @@ describe("t247 claim-sources sensor", () => {
     ["a list-item processing instruction containing marker-like text", "- <?php\n  - raw content\n  ?>\n[Q1]: /url"],
     ["an unindented quoted list-item processing instruction", "> - <?php\n> [Q1]: /url"],
     ["an exited inner quote in a list-item processing instruction", "- > <?php\n  [Q1]: /url"],
+    ["an exited inline nested list-item HTML block", "- - item\n    <?php\n  [Q1]: /url"],
+    ["an exited multiline nested list-item HTML block", "- item\n  - nested\n    <?php\n  [Q1]: /url"],
   ] as const) {
     test(`a reference definition after ${label} resolves document-wide`, () => {
       const dir = makeStageDir();
@@ -1010,6 +1012,7 @@ describe("t247 claim-sources sensor", () => {
     ["a same-depth block quote", "> prose\n> 2. [Q1]: /url"],
     ["an uninterrupted quoted div block", "> <div>\n> [Q1]: /url"],
     ["an uninterrupted inner quote in a list-item processing instruction", "- > <?php\n  > [Q1]: /url"],
+    ["an uninterrupted inline nested list-item HTML block", "- - item\n    <?php\n    [Q1]: /url"],
   ] as const) {
     test(`a definition-shaped line in ${label} stays literal`, () => {
       const dir = makeStageDir();

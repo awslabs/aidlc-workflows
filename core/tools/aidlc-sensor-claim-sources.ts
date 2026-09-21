@@ -945,6 +945,7 @@ function explicitListContainer(
 	const steps: ContainerStep[] = [
 		...before.map((): ContainerStep => ({ kind: "quote" })),
 		{ kind: "indent", columns: textColumns(marker[0]) },
+		...after.steps,
 	];
 	return {
 		line: {
@@ -952,7 +953,7 @@ function explicitListContainer(
 			context: [...before, listContext, ...contextParts(after.context)].join(
 				"/",
 			),
-			steps: [...steps, ...after.steps],
+			steps,
 		},
 		active: {
 			steps,
@@ -989,21 +990,39 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 		}
 
 		if (activeList) {
-			const inside = stripContainerSteps(line, activeList.steps);
-			if (inside !== null) {
+			// Continue the deepest item whose raw requirements this line meets;
+			// inner items close when only an outer prefix matches.
+			let matched: ContainerStep[] | null = null;
+			let inside: { text: string; blank: boolean } | null = null;
+			for (let count = activeList.steps.length; count > 0; count--) {
+				if (activeList.steps[count - 1].kind !== "indent") continue;
+				const prefix = activeList.steps.slice(0, count);
+				inside = stripContainerSteps(line, prefix);
+				if (inside !== null) {
+					matched = prefix;
+					break;
+				}
+			}
+			if (matched !== null && inside !== null) {
 				const listContext = activeList.listContext;
-				const context = activeList.steps.map((step) =>
-					step.kind === "quote" ? "quote" : listContext,
-				).join("/");
+				let firstIndent = true;
+				const context = matched.map((step) => {
+					if (step.kind === "quote") return "quote";
+					if (!firstIndent) return "list";
+					firstIndent = false;
+					return listContext;
+				}).join("/");
 				if (inside.blank) {
-					result.push({ text: "", context, steps: activeList.steps });
+					result.push({ text: "", context, steps: matched });
 					continue;
 				}
 				const after = containerLine(inside.text);
+				const steps = [...matched, ...after.steps];
+				activeList.steps = steps;
 				result.push({
 					text: after.text,
 					context: [context, ...contextParts(after.context)].join("/"),
-					steps: [...activeList.steps, ...after.steps],
+					steps,
 				});
 				continue;
 			}
