@@ -470,6 +470,41 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ).toBe(ide.slice(ideStart, ide.indexOf(nextAnchor, ideStart)).trim());
     }
   });
+  test("Kiro CLI conductor surfaces defer rule delivery to the native-preload protocol", () => {
+    const citation = '`stage-protocol.md` § "For subagent stages" step 2';
+    const residualPaste = /\bpaste\b[^.\n]*(?:rule|steering) bundle[^.\n]*\bverbatim\b|\b(?:complete|accumulated) (?:rule|steering) bundle verbatim\b|briefs with artifacts by path and rules as the accumulated load-steering bundle/i;
+    for (const [skillRoot, protocolRoot] of [
+      ["harness/kiro/skills/aidlc", "core/aidlc-common/protocols"],
+      ["dist/kiro/.kiro/skills/aidlc", "dist/kiro/.kiro/aidlc-common/protocols"],
+    ]) {
+      const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const protocol = read(`${protocolRoot}/stage-protocol.md`);
+      expect(protocol).toContain("Kiro CLI `resources`");
+      expect(protocol).toContain("through that preload instead of pasting it");
+
+      const skill = read(`${skillRoot}/SKILL.md`);
+      expect(skill, skillRoot).not.toMatch(residualPaste);
+      for (const anchor of ["| `run-stage` |", "**Per-unit batch waves (optional).**"]) {
+        const instruction = skill.split("\n").find((line) => line.startsWith(anchor));
+        expect(instruction, `${skillRoot}: ${anchor}`).toContain(citation);
+        expect(instruction, `${skillRoot}: ${anchor}`).toContain("native preload");
+        expect(instruction, `${skillRoot}: ${anchor}`).toContain("verbatim paste otherwise");
+      }
+
+      const ensemble = read(`${protocolRoot}/stage-protocol-ensemble.md`);
+      const cliStart = ensemble.indexOf("### Kiro CLI\n");
+      const ideStart = ensemble.indexOf("### Kiro IDE\n", cliStart);
+      expect(cliStart).toBeGreaterThan(-1);
+      expect(ideStart).toBeGreaterThan(cliStart);
+      const binding = ensemble.slice(cliStart, ideStart);
+      expect(binding, protocolRoot).toContain(citation);
+      expect(binding, protocolRoot).toContain("native preload");
+      expect(binding, protocolRoot).not.toMatch(residualPaste);
+
+      const construction = read(`${protocolRoot}/stage-protocol-construction.md`);
+      expect(construction, protocolRoot).not.toMatch(residualPaste);
+    }
+  });
 
 
   test("every conductor stops for summary confirmation before artifact work", () => {
