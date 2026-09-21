@@ -23188,10 +23188,22 @@ function lifecycleResetRemedies(
     return [
       {
         op: "redo-jump",
+        // Name the cheap route first. A revising stage does not have to be
+        // thrown away: once a review verdict covers the revised output, the
+        // revision can simply be reported finished, which reopens the approval
+        // gate and re-asks nothing. The freeze hook shows the first executable
+        // remedy's action, so leading with the jump made the costlier route
+        // look like the only one and operators paid a summary re-confirmation
+        // they did not owe.
         action:
-          "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
-          `/aidlc --stage ${input.stage} (your recorded answers survive; you will ` +
-          "re-confirm the summary once).",
+          "This stage is mid-revision. Once a review verdict covers the revised " +
+          `output, finish the revision with aidlc-orchestrate.ts report --stage ${input.stage} ` +
+          "--result revised: that reopens the approval gate without re-running the " +
+          "stage or re-asking anything. Restarting the stage from the top with a " +
+          `redo jump (/aidlc --stage ${input.stage}) also works and costs more: your ` +
+          "recorded answers survive, but you re-confirm the summary once and then " +
+          "save every output document again, so each one descends from the new " +
+          "confirmation.",
         ...guardOperation({ kind: "restart-stage", stage: input.stage }),
         requiresHuman: true,
         executableNow: true,

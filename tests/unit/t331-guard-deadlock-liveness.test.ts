@@ -570,6 +570,42 @@ describe("bounded guard-remedy liveness", () => {
     ).toBe(false);
   });
 
+  // A revising stage has two ways out, and the write-freeze hook shows the
+  // FIRST executable remedy's action as its guidance. Leading with the redo
+  // jump made the expensive route look like the only one, so operators paid a
+  // summary re-confirmation they did not owe; and the jump's own cost was
+  // understated, because a new attempt unauthorizes every output document still
+  // stamped with the old confirmation.
+  test("the mid-revision remedy leads with finishing the revision and prices the jump honestly", () => {
+    const refusal = evaluateGuardRefusal({
+      code: "REVISION_TEST",
+      blockedAction: "review",
+      stage: "functional-design",
+      stateContent: state("R"),
+      invariant: "A revising stage reopens its gate before it completes.",
+      userMessage: "blocked",
+      attempt: {
+        recovery: "spent",
+        summaryCoverage: "current",
+        reviewCoverage: "current",
+        sourceCoverage: "current",
+      },
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    expect(refusal.state).toBe("revising");
+    const guidance = refusal.remedies.find((remedy) => remedy.executableNow);
+    expect(guidance?.action).toContain("mid-revision");
+    expect(guidance?.action).toContain(
+      "aidlc-orchestrate.ts report --stage functional-design --result revised",
+    );
+    // The cheap route comes first; the jump is still offered, with the re-save
+    // it actually costs.
+    expect(guidance!.action.indexOf("--result revised")).toBeLessThan(
+      guidance!.action.indexOf("/aidlc --stage functional-design"),
+    );
+    expect(guidance?.action).toContain("save every output document again");
+  });
+
   // "Record the verdict" is not a command. Closing a review is the request
   // command with --verdict added, which is why operators went looking for a
   // recorder that does not exist.
