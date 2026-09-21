@@ -51,11 +51,13 @@
 // driver subprocess remains the source of the `tui` mechanism evidence.
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import {
   absentReason, captureOrientationStatusline, ORIENTATION_MARKER, type OrientationSample,
 } from "../harness/tui-orientation.ts";
 
-const ABSENT_REASON = process.env.AIDLC_TUI_LIVE === "1" ? absentReason() : "set AIDLC_TUI_LIVE=1";
+const DRIVER = join(import.meta.dir, "../harness/tui-drive.ts");
+const ABSENT_REASON = absentReason({ command: ["claude", "--dangerously-skip-permissions"] });
 
 describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you are here')", () => {
   const sampleCount = process.platform === "win32" ? 3 : 1;
@@ -64,7 +66,10 @@ describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you ar
     if (SAMPLES === null) {
       SAMPLES = Array.from(
         { length: sampleCount },
-        (_, index) => captureOrientationStatusline(index + 1),
+        (_, index) => captureOrientationStatusline(index + 1, {
+          driver: DRIVER,
+          command: ["claude", "--dangerously-skip-permissions"],
+        }),
       );
     }
     return SAMPLES;

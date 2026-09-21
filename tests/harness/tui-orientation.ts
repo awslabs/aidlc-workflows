@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { AIDLC_SRC, cleanupTuiProject, setupTuiProject } from "./tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "./tui-runtime.ts";
 
-const DRIVER = join(import.meta.dir, "tui-drive.ts");
 const FIXTURE = join(import.meta.dir, "..", "fixtures", "state-mid-ideation.md");
 export const ORIENTATION_MARKER = "default · fixture · IDEATION";
 const STARTUP_TIMEOUT_MS = 15_000;
@@ -16,8 +15,8 @@ interface Run {
   stdout: string;
   stderr: string;
 }
-function drive(args: string[]): Run {
-  const { bin, prefix } = resolveTuiRuntime(DRIVER);
+function drive(driver: string, args: string[]): Run {
+  const { bin, prefix } = resolveTuiRuntime(driver);
   const res = spawnSync(bin, [...prefix, ...args], { encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
@@ -25,14 +24,14 @@ function drive(args: string[]): Run {
 // Claude is needed on every platform; the distributable +
 // the fixture must be present. A creds-less / binary-less machine SKIPs with a
 // reason — never a hard fail (the P10 live-leg posture).
-export function absentReason(): string | null {
+export function absentReason({ command }: { command: readonly [string, ...string[]] }): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live Claude TUI orientation render (watched tier)";
   }
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
-    return "claude CLI not found";
+  if (spawnSync(command[0], ["--version"], { encoding: "utf-8" }).status !== 0) {
+    return `${command[0]} CLI not found`;
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
   if (!existsSync(FIXTURE)) return `fixture missing: ${FIXTURE}`;
@@ -48,7 +47,10 @@ export interface OrientationSample {
 // captured pane once the orientation-bearing workflow statusline has painted.
 // Every launch uses a unique session and proves its process tree is gone before
 // the next launch can begin.
-export function captureOrientationStatusline(sampleIndex: number): OrientationSample {
+export function captureOrientationStatusline(
+  sampleIndex: number,
+  { driver, command }: { driver: string; command: readonly [string, ...string[]] },
+): OrientationSample {
   const session = `aidlc_tui_journey_orient_${process.pid}_${sampleIndex}`;
   // setupTuiProject seeds the per-intent shell (default space's record + cursors)
   // and writes the mid-ideation state into it; secondSpace seeds a non-default
@@ -66,7 +68,7 @@ export function captureOrientationStatusline(sampleIndex: number): OrientationSa
     );
 
     const launchStartedAt = Date.now();
-    const started = drive([
+    const started = drive(driver, [
       "start",
       "--session",
       session,
@@ -77,15 +79,14 @@ export function captureOrientationStatusline(sampleIndex: number): OrientationSa
       "--height",
       "40",
       "--",
-      "claude",
-      "--dangerously-skip-permissions",
+      ...command,
     ]);
     expect(started.rc).toBe(0);
 
     // One bounded grid-driven startup loop handles both old Claude modal paths
     // and the current preseeded path. A visible trust / bypass modal is answered;
     // otherwise the already-painted orientation statusline returns immediately.
-    const startup = drive([
+    const startup = drive(driver, [
       "startup",
       "--session",
       session,
@@ -94,7 +95,7 @@ export function captureOrientationStatusline(sampleIndex: number): OrientationSa
       "--timeout-ms",
       String(STARTUP_TIMEOUT_MS),
     ]);
-    const pane = drive(["capture", "--session", session]).stdout;
+    const pane = drive(driver, ["capture", "--session", session]).stdout;
     if (startup.rc !== 0) {
       throw new Error(
         `orientation statusline "${ORIENTATION_MARKER}" never painted.\n` +
@@ -110,8 +111,8 @@ export function captureOrientationStatusline(sampleIndex: number): OrientationSa
     launchError = error;
   }
 
-  const killed = drive(["kill", "--session", session]);
-  const dead = drive([
+  const killed = drive(driver, ["kill", "--session", session]);
+  const dead = drive(driver, [
     "wait-dead",
     "--session",
     session,

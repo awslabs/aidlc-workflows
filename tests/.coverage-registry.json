@@ -8686,6 +8686,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/e2e/t-tui-journey-orientation-windows.serial.test.ts",
+          "mechanism": "tui"
+        },
+        {
           "file": "tests/e2e/t-tui-journey-orientation.serial.test.ts",
           "mechanism": "tui"
         },

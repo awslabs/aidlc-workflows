@@ -119,6 +119,11 @@ describe("t345 complete nightly coverage", () => {
     expect(new RegExp(liveFilter([portable], "linux")).test(aliases(portable)[2])).toBe(true);
     const windows = "tests/e2e/t-tui-journey-orientation-windows.serial.test.ts";
     expect(PLATFORM_ONLY[windows]).toEqual(["win32"]);
+    const orientation = discoverClaudeRequiredTests().filter(({ file }) => file === portable || file === windows);
+    expect(orientation).toEqual([
+      { file: windows, dependencies: ["tui"] },
+      { file: portable, dependencies: ["tui"] },
+    ]);
   });
 
   test("new provider files and plugin dispatchers are classified without filename lists", () => {
