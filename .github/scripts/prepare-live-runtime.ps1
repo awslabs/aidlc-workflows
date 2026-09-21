@@ -74,6 +74,85 @@ public static class AidlcFileBoundary {
 }
 '@
 
+# C# 5-compatible: Windows PowerShell 5.1 uses the .NET Framework compiler.
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+public static class AidlcBatchLogon {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LsaObjectAttributes {
+        public uint Length;
+        public IntPtr RootDirectory;
+        public IntPtr ObjectName;
+        public uint Attributes;
+        public IntPtr SecurityDescriptor;
+        public IntPtr SecurityQualityOfService;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LsaUnicodeString {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+    [DllImport("advapi32.dll")]
+    private static extern uint LsaOpenPolicy(IntPtr systemName, ref LsaObjectAttributes attributes, uint access, out IntPtr policy);
+    [DllImport("advapi32.dll")]
+    private static extern uint LsaAddAccountRights(IntPtr policy, [In] byte[] sid, [In] LsaUnicodeString[] rights, uint count);
+    [DllImport("advapi32.dll")]
+    private static extern uint LsaEnumerateAccountRights(IntPtr policy, [In] byte[] sid, out IntPtr rights, out uint count);
+    [DllImport("advapi32.dll")]
+    private static extern uint LsaNtStatusToWinError(uint status);
+    [DllImport("advapi32.dll")]
+    private static extern uint LsaFreeMemory(IntPtr buffer);
+    [DllImport("advapi32.dll")]
+    private static extern uint LsaClose(IntPtr policy);
+
+    private static void Check(uint status, string operation) {
+        if (status == 0) { return; }
+        uint error = LsaNtStatusToWinError(status);
+        throw new Win32Exception(unchecked((int)error), operation + " failed (NTSTATUS 0x" + status.ToString("X8") + ", Win32 " + error + "): " + new Win32Exception(unchecked((int)error)).Message);
+    }
+
+    public static void Grant(string sidString) {
+        SecurityIdentifier identity = new SecurityIdentifier(sidString);
+        byte[] sid = new byte[identity.BinaryLength];
+        identity.GetBinaryForm(sid, 0);
+        LsaObjectAttributes attributes = new LsaObjectAttributes();
+        attributes.Length = (uint)Marshal.SizeOf(typeof(LsaObjectAttributes));
+        IntPtr policy = IntPtr.Zero;
+        IntPtr rightBuffer = IntPtr.Zero;
+        IntPtr granted = IntPtr.Zero;
+        try {
+            // POLICY_CREATE_ACCOUNT | POLICY_LOOKUP_NAMES; no service-logon grant.
+            Check(LsaOpenPolicy(IntPtr.Zero, ref attributes, 0x10 | 0x800, out policy), "LsaOpenPolicy");
+            const string name = "SeBatchLogonRight";
+            rightBuffer = Marshal.StringToHGlobalUni(name);
+            LsaUnicodeString right = new LsaUnicodeString();
+            right.Length = (ushort)(name.Length * 2);
+            right.MaximumLength = (ushort)(right.Length + 2);
+            right.Buffer = rightBuffer;
+            Check(LsaAddAccountRights(policy, sid, new LsaUnicodeString[] { right }, 1), "LsaAddAccountRights");
+            uint count;
+            Check(LsaEnumerateAccountRights(policy, sid, out granted, out count), "LsaEnumerateAccountRights");
+            int size = Marshal.SizeOf(typeof(LsaUnicodeString));
+            bool found = false;
+            for (uint index = 0; index < count; index++) {
+                LsaUnicodeString item = (LsaUnicodeString)Marshal.PtrToStructure(IntPtr.Add(granted, checked((int)index * size)), typeof(LsaUnicodeString));
+                string value = Marshal.PtrToStringUni(item.Buffer, item.Length / 2);
+                if (String.Equals(value, name, StringComparison.Ordinal)) { found = true; }
+            }
+            if (!found) { throw new InvalidOperationException("LsaEnumerateAccountRights did not report SeBatchLogonRight."); }
+        } finally {
+            if (granted != IntPtr.Zero) { LsaFreeMemory(granted); }
+            if (rightBuffer != IntPtr.Zero) { Marshal.FreeHGlobal(rightBuffer); }
+            if (policy != IntPtr.Zero) { LsaClose(policy); }
+        }
+    }
+}
+'@
+
 function Assert-PlainPath([string]$Path) {
     # Check ancestors too: testing just the final component misses junction roots.
     $cursor = [IO.Path]::GetFullPath($Path)
@@ -285,11 +364,39 @@ foreach ($key in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
     return $path
 }
 
+function Invoke-NativeChecked([string]$File, [string[]]$Arguments, [switch]$BestEffort) {
+    $nativeExit = -1
+    $captured = @()
+    $previousPreference = $ErrorActionPreference
+    try {
+        # PS5.1 otherwise promotes native stderr into terminating errors.
+        $ErrorActionPreference = 'Continue'
+        $captured = @(& $File @Arguments 2>&1)
+        $nativeExit = $LASTEXITCODE
+    } catch {
+        $captured += $_.Exception.ToString()
+    } finally { $ErrorActionPreference = $previousPreference }
+    if ($nativeExit -ne 0) {
+        [Console]::Error.WriteLine(('{0} failed with exit code {1}' -f $File, $nativeExit))
+        $marker = 'aidlc-native-' + [Guid]::NewGuid().ToString('N')
+        [Console]::WriteLine(('::stop-commands::{0}' -f $marker))
+        foreach ($line in $captured) { [Console]::Error.WriteLine([string]$line) }
+        [Console]::WriteLine(('::{0}::' -f $marker))
+        if (-not $BestEffort) { throw ('{0} failed with exit code {1}' -f $File, $nativeExit) }
+    }
+}
+
 function Grant-BatchLogonRight {
+    try {
+        [AidlcBatchLogon]::Grant($sandboxSid.Value)
+        [Console]::WriteLine('LSA granted and verified SeBatchLogonRight for the sandbox identity.')
+        return
+    } catch {
+        [Console]::Error.WriteLine(('LSA batch-logon grant failed; trying secedit fallback: {0}' -f $_.Exception.ToString()))
+    }
     $policy = Join-Path $stateRoot 'batch-logon.inf'
     $database = Join-Path $stateRoot 'batch-logon.sdb'
-    & secedit.exe /export /cfg $policy /areas USER_RIGHTS /quiet
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot export local user rights.' }
+    Invoke-NativeChecked secedit.exe @('/export', '/cfg', $policy, '/areas', 'USER_RIGHTS', '/quiet')
     $lines = [Collections.Generic.List[string]]::new()
     $lines.AddRange([IO.File]::ReadAllLines($policy))
     $section = -1
@@ -311,10 +418,8 @@ function Grant-BatchLogonRight {
         $lines.Add('SeBatchLogonRight = ' + $entry)
     }
     [IO.File]::WriteAllLines($policy, $lines, [Text.Encoding]::Unicode)
-    & secedit.exe /configure /db $database /cfg $policy /areas USER_RIGHTS /quiet
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot grant sandbox batch logon.' }
-    & secedit.exe /export /cfg $policy /areas USER_RIGHTS /quiet
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot verify sandbox batch logon.' }
+    Invoke-NativeChecked secedit.exe @('/configure', '/db', $database, '/cfg', $policy, '/areas', 'USER_RIGHTS', '/quiet')
+    Invoke-NativeChecked secedit.exe @('/export', '/cfg', $policy, '/areas', 'USER_RIGHTS', '/quiet')
     $verified = @([IO.File]::ReadAllLines($policy) | Where-Object { $_ -match '^\s*SeBatchLogonRight\s*=' })
     if ($verified.Count -ne 1) { throw 'Expected one batch logon policy entry.' }
     $principals = @((($verified[0] -split '=', 2)[1] -split ',') | ForEach-Object { $_.Trim() })
@@ -401,6 +506,9 @@ try {
         }
         $script:exitCode = $childExit
         if ($childExit -ne 0) { throw "Isolated $Label exited $childExit" }
+        if ($Label -eq 'batch-logon' -and [IO.File]::Exists($stdout)) {
+            Get-Content -LiteralPath $stdout -Encoding UTF8 | ForEach-Object { [Console]::WriteLine([string]$_) }
+        }
         return $childExit
     } catch {
         [IO.File]::AppendAllText($stderr, ($_.Exception.ToString() + "`r`n"))
@@ -615,7 +723,7 @@ try {
         [void][IO.Directory]::CreateDirectory((Join-Path $tools 'npm'))
         [void][IO.Directory]::CreateDirectory((Join-Path $tools 'git-template'))
         Start-Service seclogon
-        try { & wevtutil.exe sl 'Microsoft-Windows-TaskScheduler/Operational' /e:true 2>&1 | Out-Null } catch { }
+        Invoke-NativeChecked wevtutil.exe @('sl', 'Microsoft-Windows-TaskScheduler/Operational', '/e:true') -BestEffort
         $stage = 'creating identity'
         $random = [byte[]]::new(48)
         $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -646,8 +754,7 @@ try {
         Set-RuntimeAcl $work $sandboxSid 'Modify' -Tree
         Set-RuntimeAcl $sandboxHome $sandboxSid 'Modify' -Tree
         $stage = 'transferring sandbox worktree ownership'
-        & icacls.exe $work /setowner ($env:COMPUTERNAME + '\' + $userName) /T /C /Q
-        if ($LASTEXITCODE -ne 0) { throw 'Cannot transfer sandbox worktree ownership.' }
+        Invoke-NativeChecked icacls.exe @($work, '/setowner', ($env:COMPUTERNAME + '\' + $userName), '/T', '/C', '/Q')
         # The sandbox owns its worktree; keep an explicit path-only Git trust record.
         [IO.File]::WriteAllText((Join-Path $sandboxHome '.gitconfig'), "[safe]`n`tdirectory = C:/aidlc-live/work`n")
         [Console]::WriteLine(('Sandbox worktree owner: {0}' -f (Get-Acl -LiteralPath $work).Owner))
