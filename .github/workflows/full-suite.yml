@@ -40,14 +40,22 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: "${{ inputs.ref }}"
+          fetch-depth: 0
+      - name: "Resolve immutable source"
+        id: source
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$sha" origin/main || {
+            echo "::error::full-suite only runs source already on main"
+            exit 1
+          }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
       - run: "bun install --frozen-lockfile"
-      - name: "Resolve immutable source"
-        id: source
-        run: |
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: "Prepare native obligations"
         run: |
           bun tests/reconcile-tests.ts prepare --profile tests/native-terminal-profile.json --cohort "nightly-${{ github.run_id }}-${{ github.run_attempt }}" --repo . --output "$RUNNER_TEMP/native-plan.json"
@@ -122,7 +130,7 @@ jobs:
           path: tests/logs/
           include-hidden-files: true
   native_reconcile:
-    if: "${{ always() }}"
+    if: "${{ always() && needs.plan.result == 'success' }}"
     needs: [plan, native_terminal]
     runs-on: ubuntu-latest
     steps:
@@ -427,10 +435,21 @@ jobs:
           $sessions = & cmd /c "query user 2>&1"
           Write-Host ($sessions -join "`n")
           if ($LASTEXITCODE -ne 0) { throw 'query user failed; an interactive user session is required' }
-          $userPattern = '^\s*>?\s*' + [regex]::Escape($env:USERNAME) + '\s+'
-          if (-not ($sessions | Where-Object { "$_" -match $userPattern })) {
-            throw "No interactive session listed for current user $env:USERNAME; run the agent as a logged-on-session scheduled task"
+          $sessionId = (Get-Process -Id $PID).SessionId
+          Write-Host "Runner process session ID: $sessionId"
+          if ($sessionId -eq 0) { throw 'Runner is in session 0; run it as a logged-on-session scheduled task, not a service' }
+          $sessionPattern = '^\s*>?\s*' + [regex]::Escape($env:USERNAME) + '\s+(?:\S+\s+)?(?<id>\d+)\s+(?<state>\S+)(?:\s|$)'
+          $sessionState = $null
+          foreach ($row in $sessions) {
+            if ("$row" -match $sessionPattern -and [int]$Matches.id -eq $sessionId) {
+              $sessionState = $Matches.state
+              break
+            }
           }
+          if ($null -eq $sessionState) {
+            throw "No session $sessionId listed for current user $env:USERNAME; the runner must share the interactive desktop"
+          }
+          Write-Host "Runner user: $env:USERNAME; session ID: $sessionId; state: $sessionState"
           foreach ($tool in @('bun', 'node', 'git', 'kiro-cli')) {
             $command = Get-Command $tool -ErrorAction Stop | Select-Object -First 1
             Write-Host "$tool path: $($command.Source)"
@@ -542,16 +561,25 @@ jobs:
     needs: [plan, native_terminal, native_reconcile, deterministic, live_hosted, live_kiro_linux, live_kiro_windows, live_cursor]
     runs-on: ubuntu-latest
     steps:
+      - name: "Reject unauthorized source without executing repository code"
+        if: "${{ needs.plan.result != 'success' }}"
+        run: |
+          echo "::error::Full-suite source authorization or planning failed"
+          exit 1
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: "${{ needs.plan.result == 'success' }}"
         with:
-          ref: "${{ needs.plan.outputs.sha || inputs.ref }}"
+          ref: "${{ needs.plan.outputs.sha }}"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: "${{ needs.plan.result == 'success' }}"
         with:
           bun-version: "${{ env.BUN_VERSION }}"
       - name: "Bind result to checked-out SHA"
+        if: "${{ needs.plan.result == 'success' }}"
         run: |
           echo "FULL_SUITE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: "Require every declared leg"
+        if: "${{ needs.plan.result == 'success' }}"
         env:
           FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
           FULL_SUITE_REF: "${{ inputs.ref }}"

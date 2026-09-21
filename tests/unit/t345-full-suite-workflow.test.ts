@@ -115,9 +115,31 @@ describe("t345 complete nightly coverage", () => {
   test("self-hosted Windows inventories its desktop and uses Windows PowerShell 5.1 for every command", () => {
     const job = workflow.jobs.live_kiro_windows;
     expect(job.steps[0]).toMatchObject({ name: "Inventory self-hosted Windows host", shell: "powershell" });
+    expect(job.steps[0].run).toContain("(Get-Process -Id $PID).SessionId");
+    expect(job.steps[0].run).toContain("if ($sessionId -eq 0) { throw");
+    expect(job.steps[0].run).toContain("[int]$Matches.id -eq $sessionId");
     for (const step of job.steps) {
       if (!step.run) continue;
       expect(step.shell ?? job.defaults?.run?.shell).toBe("powershell");
+    }
+  });
+
+  test("every source-executing job depends on main-source authorization", () => {
+    const plan = workflow.jobs.plan;
+    const authorization = plan.steps.find((step) => step.name === "Resolve immutable source")!;
+    expect(plan.steps[0].with?.["fetch-depth"]).toBe(0);
+    expect(authorization.run).toContain("git fetch --no-tags origin main");
+    expect(authorization.run).toContain('git merge-base --is-ancestor "$sha" origin/main');
+    expect(plan.steps.indexOf(authorization)).toBeLessThan(plan.steps.findIndex((step) => step.run?.includes("bun install")));
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      if (name === "plan") continue;
+      expect(Array.isArray(job.needs) ? job.needs : [job.needs], name).toContain("plan");
+    }
+    expect(workflow.jobs.native_reconcile.if).toContain("needs.plan.result == 'success'");
+    for (const step of workflow.jobs.result.steps) {
+      if (step.with?.ref || step.uses?.startsWith("oven-sh/setup-bun@") || step.run?.includes("git rev-parse") || step.run?.includes("bun scripts/")) {
+        expect(step.if).toBe(`\${{ needs.plan.result == 'success' }}`);
+      }
     }
   });
 

@@ -172,6 +172,14 @@ tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
 hosted Claude/Codex/opencode/release-contract and Linux mixed-provider suites,
 self-hosted Kiro ACP/TUI and Windows IDE, plus opt-in Cursor legs. Copilot is
 excluded by account policy; there is no macOS Kiro IDE runner.
+Only source already on `main` passes the plan's ancestry gate. Self-hosted Kiro
+runners must be dedicated CI hosts with a CI-only Kiro/IdC identity, never personal
+or development machines. Register them in an organization runner group restricted
+to selected workflows, pinned to
+`awslabs/aidlc-workflows/.github/workflows/full-suite.yml@refs/heads/main`:
+repository-wide runner visibility lets any workflow on any branch bypass an
+in-workflow check. Windows inventory also rejects session 0 and requires the
+runner process's own session to be listed for the current user.
 The self-hosted Windows runner needs only Windows PowerShell 5.1 and Git for
 Windows for its shell environment, alongside the documented Bun/Node/Kiro tools.
 Its steps never rely on `bash`: `C:\Windows\System32\bash.exe` is the WSL launcher.

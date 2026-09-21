@@ -888,9 +888,11 @@ receipts and requires the separately declared live/GUI jobs before publishing.
 ### Nightly full-suite matrix and provisioning
 
 `Full Suite` is callable with an explicit `ref` and manually dispatchable
-(default `main`). Its plan job resolves that ref once; all matrix legs check out
-the resulting immutable SHA. `preview-release.yml` calls it after the normal CI
-gate and cannot publish unless the complete matrix passes. Stable releases
+(default `main`). Its plan job resolves that ref once and requires the SHA to
+already be an ancestor of `origin/main` before installing dependencies or
+dispatching source-executing jobs. All matrix legs check out the authorized
+immutable SHA. `preview-release.yml` calls it after the normal CI gate and cannot
+publish unless the complete matrix passes. Stable releases
 download `full-suite-result` from successful preview runs for the exact tag SHA;
 an expired, missing, wrong-source or incomplete artifact blocks publication.
 
@@ -948,8 +950,17 @@ Provision these repository/environment settings before expecting a green run:
 - Repository variable `AIDLC_NIGHTLY_KIRO_RUNNERS=1` enables runner labels
   `[self-hosted, Linux, kiro]` and `[self-hosted, Windows, kiro]`.
   The hosts supply signed-in `kiro-cli`; the Windows host also supplies Kiro IDE.
+  These must be dedicated CI hosts using a CI-only Kiro/IdC identity, **never a
+  personal or development machine**. Register them in an organization runner
+  group restricted to selected workflows, pinned to
+  `awslabs/aidlc-workflows/.github/workflows/full-suite.yml@refs/heads/main`.
+  A runner visible to the whole repository is reachable by any workflow on any
+  branch regardless of in-workflow source checks; the runner-group restriction
+  is required in addition to the plan's main-ancestry check.
   Register the Windows runner as a logged-on-session scheduled task, **not a
-  service**: GUI automation must share the interactive user's desktop.
+  service**: GUI automation must share the interactive user's desktop. Inventory
+  rejects session 0 and requires `query user` to match both the current user and
+  the runner process's own session ID; another session for that user is not enough.
   Its shell requirements are Windows PowerShell 5.1 and Git for Windows; PowerShell
   7 (`pwsh`) is not required. These Windows steps never rely on `bash`, because
   `C:\Windows\System32\bash.exe` is the WSL launcher, not Git Bash.
