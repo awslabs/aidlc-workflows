@@ -491,7 +491,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
 
   test.each(["missing", "partial", "wrong-batch", "wrong-start-set", "foreign-start-member"] as const)(
     "%s convergence cannot turn a run-stage marker into grouped authority", (kind) => {
-      const pd = fixture();
+      const pd = fixture({ applicationSourceOnly: true });
       for (const unit of UNITS) beginCodeGeneration(pd, { unit });
       if (kind !== "missing") converge(pd, {
         ...(kind === "partial" ? { units: ["beta"] } : {}),
@@ -501,8 +501,10 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       });
       publish(pd, "run-stage");
       for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
-      expect(guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved").code).toBe(2);
-      expect(guard(pd, "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units alpha,beta").code).toBe(0);
+      const report = guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved");
+      expect(report.code, `${report.out}\n${report.err}`).toBe(2);
+      const checkpoint = guard(pd, "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units alpha,beta");
+      expect(checkpoint.code, `${checkpoint.out}\n${checkpoint.err}`).toBe(0);
       expect(gates(pd)).toBe(0);
     }, 30_000,
   );

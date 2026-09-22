@@ -1025,26 +1025,23 @@ public static class AidlcCodexHostedGui {
         if (Environment.GetEnvironmentVariable("AIDLC_CODEX_GUI_DIAGNOSTICS") == "1")
             Console.WriteLine("Codex GUI inheritance verified: session=0; station=" + station + "; desktop=" + desktop);
     }
-    private static void RequireAdministrator() {
-        RequireSessionZero();
+    public static void ValidateStationWorker(string sid, int session) {
+        if (sid != "S-1-5-18" || session != 0)
+            throw new InvalidOperationException("Codex station operations require SYSTEM in session 0.");
+    }
+    private static void RequireStationWorker() {
         using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent()) {
-            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true" ||
-                Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") != "github-hosted" ||
-                !new System.Security.Principal.WindowsPrincipal(identity).IsInRole(
-                    System.Security.Principal.WindowsBuiltInRole.Administrator))
-                throw new InvalidOperationException("Codex station preparation requires a fresh GitHub-hosted administrator.");
+            ValidateStationWorker(identity.User.Value, System.Diagnostics.Process.GetCurrentProcess().SessionId);
         }
     }
-    public static string InspectForPreparation() {
-        RequireAdministrator();
+    public static string InspectForPreparation(string trustedAdministrator) {
+        RequireStationWorker();
         IntPtr station = OpenWindowStationW("WinSta0", false, 0x20002);
         if (station == IntPtr.Zero) throw Error("Open session-0 WinSta0");
         try {
             string owner = Read(station).Owner.Value;
-            using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent()) {
-                if (owner != "S-1-5-18" && owner != "S-1-5-32-544" && owner != identity.User.Value)
-                    throw new InvalidOperationException("Untrusted WinSta0 owner.");
-            }
+            if (owner != "S-1-5-18" && owner != "S-1-5-32-544" && owner != trustedAdministrator)
+                throw new InvalidOperationException("Untrusted WinSta0 owner.");
             return owner;
         } finally { CloseWindowStation(station); }
     }
@@ -1087,7 +1084,7 @@ public static class AidlcCodexHostedGui {
         return security;
     }
     public static void UpdateStation(string owner, string controller, string[] children, bool remove) {
-        RequireAdministrator();
+        RequireStationWorker();
         IntPtr station = OpenWindowStationW("WinSta0", false, 0x60002); // administrator READ_CONTROL/WRITE_DAC only
         if (station == IntPtr.Zero) throw Error("Open WinSta0 for owned SID cleanup/preparation");
         try {
@@ -1170,16 +1167,297 @@ public static class AidlcCodexHostedGui {
 '@
 }
 
-function Import-CodexHostedGui {
-    if (-not ('AidlcCodexHostedGui' -as [Type])) {
-        Add-Type -TypeDefinition ("using System;`r`n" + (Get-CodexHostedGuiSource))
+function Assert-CodexHostedParent {
+    $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    $context = [ordered]@{
+        githubActionsBool = ($env:GITHUB_ACTIONS -ceq 'true')
+        githubHostedBool = ($env:RUNNER_ENVIRONMENT -ceq 'github-hosted')
+        administratorBool = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId
+    }
+    $json = $context | ConvertTo-Json -Compress
+    [Console]::WriteLine(('Codex station parent context: ' + $json))
+    if ($null -ne $stateRoot -and [IO.Directory]::Exists($stateRoot)) {
+        $path = Join-Path $stateRoot 'codex-parent-context.json'
+        if (-not (Test-Path -LiteralPath $path)) {
+            [IO.File]::WriteAllText($path, $json)
+            Set-RuntimeAcl $path $null 'ReadAndExecute'
+        }
+    }
+    if (-not $context.githubActionsBool -or -not $context.githubHostedBool -or -not $context.administratorBool) {
+        throw 'Codex station preparation requires the GitHub-hosted runner administrator.'
+    }
+    return $context
+}
+
+function Assert-CodexStationControl([string]$Path) {
+    Assert-PlainPath $Path
+    $acl = Get-Acl -LiteralPath $Path
+    $trusted = @($runnerSid.Value, $systemSid.Value, $adminSid.Value)
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) { throw 'Untrusted station control owner.' }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $trusted) {
+            throw 'Station control is not administrator-only.'
+        }
+    }
+    if ([IO.File]::Exists($Path)) { [AidlcFileBoundary]::RequireSingleLink($Path) }
+}
+
+function Get-CodexStationWorkerScript {
+    # Two immutable scripts are generated before models: prepare and cleanup.
+    # Neither accepts parameters, commands, source paths, or environment from a
+    # model. The fixed assembly and authorization hashes are sealed into both.
+    return @'
+#requires -Version 5.1
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$operation = __OPERATION__
+$taskRoot = __TASK_ROOT__
+$receiptPath = __RECEIPT__
+$runnerSid = __RUNNER_SID__
+$generation = __GENERATION__
+$trusted = @($runnerSid, 'S-1-5-18', 'S-1-5-32-544')
+$result = [ordered]@{ generation = $generation; operation = $operation; sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId; system = ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ceq 'S-1-5-18'); exitCode = 1; error = $null }
+$controlSafe = $false
+$pins = [Collections.Generic.List[IDisposable]]::new()
+function Check-Control([string]$Path) {
+    $cursor = [IO.Path]::GetFullPath($Path)
+    while ($cursor) {
+        if ([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked station control path.' }
+        $parent = [IO.Directory]::GetParent($cursor)
+        if ($null -eq $parent) { break }
+        $cursor = $parent.FullName
+    }
+    $acl = Get-Acl -LiteralPath $Path
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) { throw 'Untrusted station control owner.' }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $trusted) { throw 'Station control is not administrator-only.' }
+    }
+}
+function Pin-Hash([string]$Path, [string]$Expected) {
+    Check-Control $Path
+    $stream = [IO.File]::Open($Path, 'Open', 'Read', 'Read')
+    $pins.Add($stream)
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { $actual = ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+    finally { $hash.Dispose() }
+    if ($actual -cne $Expected) { throw 'Station control digest mismatch.' }
+    $stream.Position = 0
+    return $stream
+}
+try {
+    if (-not $result.system -or $result.sessionId -ne 0) { throw 'Station worker must be SYSTEM in session 0.' }
+    if (-not [String]::Equals($PSScriptRoot, $taskRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected station worker location.' }
+    Check-Control ([IO.Path]::GetDirectoryName($taskRoot))
+    Check-Control $taskRoot
+    Check-Control $PSCommandPath
+    $controlSafe = $true
+    # A SYSTEM task has its own machine environment, not the runner's process
+    # environment. Explicitly discard any provider/broker credentials regardless.
+    foreach ($name in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+        if ($name -match '^(AWS_|BROKER_|AIDLC_BROKER|ANTHROPIC_|OPENAI_|GITHUB_TOKEN$|GH_TOKEN$|ACTIONS_.*TOKEN)') {
+            [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+        }
+    }
+    $authorizationPath = Join-Path $taskRoot 'authorization.json'
+    $authorizationStream = Pin-Hash $authorizationPath __AUTH_HASH__
+    $assemblyPath = Join-Path $taskRoot 'station.dll'
+    $assemblyStream = Pin-Hash $assemblyPath __ASSEMBLY_HASH__
+    Add-Type -Path $assemblyPath
+    [AidlcStationFileBoundary]::RequireSingleLink($authorizationStream)
+    [AidlcStationFileBoundary]::RequireSingleLink($assemblyStream)
+    $authorization = Get-Content -LiteralPath $authorizationPath -Raw | ConvertFrom-Json
+    if ($authorization.Version -ne 1 -or $authorization.Generation -cne $generation -or
+        $authorization.RunnerSid -cne $runnerSid -or -not $authorization.GitHubActions -or
+        -not $authorization.GitHubHosted -or $authorization.RuntimeRoot -cne 'C:\aidlc-live' -or
+        $authorization.SandboxSids.Count -ne 2) { throw 'Invalid fixed station authorization.' }
+    if ($operation -eq 'prepare') {
+        if (Test-Path -LiteralPath $receiptPath) { throw 'Refusing an existing station receipt.' }
+        $owner = [AidlcCodexHostedGui]::InspectForPreparation($runnerSid)
+        # Persist intent before the native DACL write, including its owner.
+        $receipt = [ordered]@{
+            Version = 1; SessionId = 0; Station = 'WinSta0'; OwnerSid = $owner
+            RunnerSid = $runnerSid; ControllerSid = $authorization.ControllerSid
+            SandboxSids = [string[]]$authorization.SandboxSids; RuntimeRoot = $authorization.RuntimeRoot
+            Generation = $generation
+        }
+        $receipt | ConvertTo-Json | Set-Content -LiteralPath $receiptPath -Encoding UTF8
+        Check-Control $receiptPath
+        [AidlcCodexHostedGui]::UpdateStation($owner, $authorization.ControllerSid, [string[]]$authorization.SandboxSids, $false)
+    } elseif ($operation -eq 'cleanup') {
+        if ([IO.File]::Exists($receiptPath)) {
+            Check-Control $receiptPath
+            $stream = [IO.File]::Open($receiptPath, 'Open', 'Read', 'Read')
+            try {
+                [AidlcStationFileBoundary]::RequireSingleLink($stream)
+                $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+                if ($receipt.Version -ne 1 -or $receipt.SessionId -ne 0 -or $receipt.Station -cne 'WinSta0' -or
+                    $receipt.Generation -cne $generation -or $receipt.RunnerSid -cne $runnerSid -or
+                    $receipt.RuntimeRoot -cne $authorization.RuntimeRoot -or
+                    $receipt.ControllerSid -cne $authorization.ControllerSid -or
+                    (@($receipt.SandboxSids | Sort-Object) -join ',') -cne (@($authorization.SandboxSids | Sort-Object) -join ',')) {
+                    throw 'Station receipt binding mismatch.'
+                }
+                [AidlcCodexHostedGui]::UpdateStation($receipt.OwnerSid, $authorization.ControllerSid, [string[]]$authorization.SandboxSids, $true)
+            } finally { $stream.Dispose() }
+            [IO.File]::Delete($receiptPath)
+        }
+    } else { throw 'Unsupported station operation.' }
+    $result.exitCode = 0
+} catch {
+    $message = $_.Exception.GetBaseException().Message
+    $result.error = $message.Substring(0, [Math]::Min(1024, $message.Length))
+} finally {
+    for ($index = $pins.Count - 1; $index -ge 0; $index--) { $pins[$index].Dispose() }
+    if ($controlSafe) {
+        $result | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $taskRoot ($operation + '.result.json')) -Encoding UTF8
+    }
+}
+exit $result.exitCode
+'@
+}
+
+function New-CodexStationTaskControl($Context) {
+    $taskRoot = Join-Path $stateRoot 'codex-station-task'
+    New-PrivateDirectory $taskRoot
+    $authorization = [ordered]@{
+        Version = 1; Generation = [Guid]::NewGuid().ToString('N')
+        RunnerSid = $runnerSid.Value; ControllerSid = $sandboxSid.Value
+        SandboxSids = [string[]]$codexSandboxSids; RuntimeRoot = $root
+        GitHubActions = [bool]$Context.githubActionsBool; GitHubHosted = [bool]$Context.githubHostedBool
+        ParentSessionId = $Context.sessionId
+    }
+    $authorizationPath = Join-Path $taskRoot 'authorization.json'
+    $authorization | ConvertTo-Json | Set-Content -LiteralPath $authorizationPath -Encoding UTF8
+    $boundary = @'
+public static class AidlcStationFileBoundary {
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct Info {
+        public uint Attributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME Created, Accessed, Written;
+        public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle handle, out Info info);
+    public static void RequireSingleLink(System.IO.FileStream stream) {
+        Info info;
+        if (!GetFileInformationByHandle(stream.SafeFileHandle, out info))
+            throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+        if (info.Links != 1 || (info.Attributes & 0x400) != 0)
+            throw new System.IO.IOException("Linked station control file.");
+    }
+}
+'@
+    $compilerRoot = Join-Path $taskRoot 'compiler'
+    New-PrivateDirectory $compilerRoot
+    $compiler = [CodeDom.Compiler.CompilerParameters]::new()
+    $compiler.GenerateInMemory = $false
+    $compiler.OutputAssembly = Join-Path $taskRoot 'station.dll'
+    $compiler.CompilerOptions = '/platform:x64 /optimize+'
+    $compiler.TempFiles = [CodeDom.Compiler.TempFileCollection]::new($compilerRoot, $false)
+    [void]$compiler.ReferencedAssemblies.Add('System.dll')
+    $provider = [Microsoft.CSharp.CSharpCodeProvider]::new()
+    try {
+        $compiled = $provider.CompileAssemblyFromSource($compiler, ("using System;`r`n" + (Get-CodexHostedGuiSource) + "`r`n" + $boundary))
+        if ($compiled.Errors.HasErrors) { throw 'Could not compile the fixed station helper.' }
+    } finally { $provider.Dispose(); $compiler.TempFiles.Delete() }
+    $assemblyHash = (Get-FileHash -LiteralPath $compiler.OutputAssembly -Algorithm SHA256).Hash.ToLowerInvariant()
+    $authorizationHash = (Get-FileHash -LiteralPath $authorizationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    foreach ($operation in @('prepare', 'cleanup')) {
+        $body = (Get-CodexStationWorkerScript).Replace('__OPERATION__', (ConvertTo-PSLiteral $operation)).
+            Replace('__TASK_ROOT__', (ConvertTo-PSLiteral $taskRoot)).
+            Replace('__RECEIPT__', (ConvertTo-PSLiteral (Join-Path $stateRoot 'codex-station.json'))).
+            Replace('__RUNNER_SID__', (ConvertTo-PSLiteral $runnerSid.Value)).
+            Replace('__GENERATION__', (ConvertTo-PSLiteral $authorization.Generation)).
+            Replace('__AUTH_HASH__', (ConvertTo-PSLiteral $authorizationHash)).
+            Replace('__ASSEMBLY_HASH__', (ConvertTo-PSLiteral $assemblyHash))
+        [IO.File]::WriteAllText((Join-Path $taskRoot ($operation + '.ps1')), $body, [Text.UTF8Encoding]::new($true))
+    }
+    $hashes = [ordered]@{}
+    foreach ($name in @('authorization.json', 'station.dll', 'prepare.ps1', 'cleanup.ps1')) {
+        $hashes[$name] = (Get-FileHash -LiteralPath (Join-Path $taskRoot $name) -Algorithm SHA256).Hash
+    }
+    $hashes | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskRoot 'hashes.json') -Encoding UTF8
+    Set-RuntimeAcl $taskRoot $null 'ReadAndExecute' -Tree -RejectLinks
+}
+
+function Invoke-CodexStationTask([ValidateSet('prepare', 'cleanup')][string]$Operation) {
+    [void](Assert-CodexHostedParent)
+    $taskRoot = Join-Path $stateRoot 'codex-station-task'
+    Assert-CodexStationControl $taskRoot
+    $activePath = Join-Path $taskRoot 'active-task.json'
+    if (Test-Path -LiteralPath $activePath) {
+        Assert-CodexStationControl $activePath
+        throw 'A previous station task was not confirmed retired; refusing another operation.'
+    }
+    $hashPath = Join-Path $taskRoot 'hashes.json'
+    Assert-CodexStationControl $hashPath
+    $hashes = Get-Content -LiteralPath $hashPath -Raw | ConvertFrom-Json
+    foreach ($name in @('authorization.json', 'station.dll', 'prepare.ps1', 'cleanup.ps1')) {
+        $path = Join-Path $taskRoot $name
+        Assert-CodexStationControl $path
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne $hashes.$name) { throw 'Station task source digest mismatch.' }
+    }
+    $authorization = Get-Content -LiteralPath (Join-Path $taskRoot 'authorization.json') -Raw | ConvertFrom-Json
+    if ($authorization.RunnerSid -cne $runnerSid.Value -or $authorization.RuntimeRoot -cne $root) { throw 'Station authorization owner mismatch.' }
+    $resultPath = Join-Path $taskRoot ($Operation + '.result.json')
+    if (Test-Path -LiteralPath $resultPath) { Assert-CodexStationControl $resultPath; [IO.File]::Delete($resultPath) }
+    $scheduler = New-Object -ComObject 'Schedule.Service'
+    $scheduler.Connect()
+    $folder = $scheduler.GetFolder('\')
+    $definition = $scheduler.NewTask(0)
+    $definition.Principal.UserId = 'S-1-5-18'
+    $definition.Principal.LogonType = 5 # TASK_LOGON_SERVICE_ACCOUNT
+    $definition.Principal.RunLevel = 1
+    $definition.Settings.ExecutionTimeLimit = 'PT1M'
+    $definition.Settings.DisallowStartIfOnBatteries = $false
+    $definition.Settings.StopIfGoingOnBatteries = $false
+    $action = $definition.Actions.Create(0)
+    $action.Path = $powershell
+    $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path $taskRoot ($Operation + '.ps1')) + '"'
+    $action.WorkingDirectory = $taskRoot
+    $taskName = 'aidlc-codex-station-' + [Guid]::NewGuid().ToString('N')
+    $taskAcl = 'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;' + $runnerSid.Value + ')'
+    $registered = $null
+    try {
+        $registered = $folder.RegisterTaskDefinition($taskName, $definition, 0x12, 'SYSTEM', $null, 5, $taskAcl)
+        @{ task = $taskName; operation = $Operation; generation = $authorization.Generation } |
+            ConvertTo-Json | Set-Content -LiteralPath $activePath -Encoding UTF8
+        $previousRun = $registered.LastRunTime
+        [void]$registered.Run($null)
+        $deadline = [DateTime]::UtcNow.AddSeconds(60)
+        do {
+            if ($registered.LastRunTime -gt $previousRun -and $registered.GetInstances(0).Count -eq 0) { break }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'Session-0 station task exceeded its deadline.' }
+            Start-Sleep -Milliseconds 200
+        } while ($true)
+        if (-not [IO.File]::Exists($resultPath)) { throw ('Station task returned {0} without a result.' -f $registered.LastTaskResult) }
+        Assert-CodexStationControl $resultPath
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        if ($result.generation -cne $authorization.Generation -or $result.operation -cne $Operation -or
+            $result.sessionId -ne 0 -or $result.system -ne $true) { throw 'Untrusted station task result.' }
+        [Console]::WriteLine(('Codex station task result: ' + ($result | ConvertTo-Json -Compress)))
+        if ($registered.LastTaskResult -ne 0 -or $result.exitCode -ne 0) { throw 'Session-0 station operation failed.' }
+    } finally {
+        if ($null -ne $registered) {
+            if ($registered.GetInstances(0).Count -ne 0) {
+                try { $registered.Stop(0) }
+                catch { if ($registered.GetInstances(0).Count -ne 0) { throw } }
+            }
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            while ($registered.GetInstances(0).Count -ne 0) {
+                if ([DateTime]::UtcNow -ge $deadline) { throw 'Station worker retirement was not confirmed; retaining control files.' }
+                Start-Sleep -Milliseconds 200
+            }
+            $folder.DeleteTask($taskName, 0)
+            if ([IO.File]::Exists($activePath)) { [IO.File]::Delete($activePath) }
+        }
     }
 }
 
 function Initialize-CodexHostedStationAccess {
-    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
-        [Diagnostics.Process]::GetCurrentProcess().SessionId -ne 0 -or
-        -not $createdRoot -or -not $createdState -or $null -eq $createdUserSid -or
+    $context = Assert-CodexHostedParent
+    if (-not $createdRoot -or -not $createdState -or $null -eq $createdUserSid -or
         $createdUserSid.Value -cne $sandboxSid.Value -or $codexSandboxSids.Count -ne 2) {
         throw 'Hosted GUI preparation requires this freshly created GitHub runtime.'
     }
@@ -1187,26 +1465,46 @@ function Initialize-CodexHostedStationAccess {
         $account = Get-RecordedLocalUser ([Security.Principal.SecurityIdentifier]::new($sid))
         if ($null -eq $account -or -not $account.Enabled) { throw 'Prepared GUI identity is absent or disabled.' }
     }
-    Import-CodexHostedGui
-    $owner = [AidlcCodexHostedGui]::InspectForPreparation()
     $receiptPath = Join-Path $stateRoot 'codex-station.json'
     if (Test-Path -LiteralPath $receiptPath) { throw 'Refusing an existing GUI preparation receipt.' }
-    # Record intent before the native write so failure collection can remove
-    # precisely these entries even if preparation stops immediately afterward.
-    [pscustomobject]@{
-        Version = 1; SessionId = 0; Station = 'WinSta0'; OwnerSid = $owner
-        RunnerSid = $runnerSid.Value; ControllerSid = $sandboxSid.Value
-        SandboxSids = [string[]]$codexSandboxSids; RuntimeRoot = $root
-    } | ConvertTo-Json | Set-Content -LiteralPath $receiptPath -Encoding UTF8
-    Set-RuntimeAcl $receiptPath $null 'ReadAndExecute'
-    [AidlcCodexHostedGui]::UpdateStation($owner, $sandboxSid.Value, [string[]]$codexSandboxSids, $false)
+    New-CodexStationTaskControl $context
+    Invoke-CodexStationTask 'prepare'
+    Assert-CodexStationControl $receiptPath
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
     [Console]::WriteLine('Prepared exact runtime SID access to session-0 WinSta0; Default desktop unchanged.')
-    return $owner
+    return $receipt.OwnerSid
 }
 
 function Remove-CodexHostedStationAccess([string]$ControllerSid, [string[]]$SandboxSids) {
     $receiptPath = Join-Path $stateRoot 'codex-station.json'
-    if (-not [IO.File]::Exists($receiptPath)) { return }
+    $taskRoot = Join-Path $stateRoot 'codex-station-task'
+    if (-not [IO.Directory]::Exists($taskRoot)) {
+        if ([IO.File]::Exists($receiptPath)) { throw 'Station receipt lacks its fixed task control.' }
+        return
+    }
+    Assert-CodexStationControl $taskRoot
+    if (-not [IO.File]::Exists((Join-Path $taskRoot 'hashes.json'))) {
+        if ((Test-Path -LiteralPath $receiptPath) -or (Test-Path -LiteralPath (Join-Path $taskRoot 'active-task.json'))) {
+            throw 'Incomplete station control has evidence of an armed operation.'
+        }
+        # Compilation/sealing did not finish, so Invoke-CodexStationTask could
+        # not register or start a worker. There is no station grant to undo.
+        return
+    }
+    $authorizationPath = Join-Path $taskRoot 'authorization.json'
+    Assert-CodexStationControl $authorizationPath
+    $authorization = Get-Content -LiteralPath $authorizationPath -Raw | ConvertFrom-Json
+    if ($authorization.RunnerSid -cne $runnerSid.Value -or $authorization.RuntimeRoot -cne $root -or
+        $authorization.ControllerSid -cne $ControllerSid -or $authorization.SandboxSids.Count -ne 2 -or
+        (@($authorization.SandboxSids | Sort-Object) -join ',') -cne (@($SandboxSids | Sort-Object) -join ',')) {
+        throw 'Station task authorization does not match the drained identities.'
+    }
+    if (-not [IO.File]::Exists($receiptPath)) {
+        # Preparation may have stopped before a station write or result.
+        # The fixed cleanup worker decides from its own protected receipt.
+        Invoke-CodexStationTask 'cleanup'
+        return
+    }
     Assert-PlainPath $receiptPath
     [AidlcFileBoundary]::RequireSingleLink($receiptPath)
     $acl = Get-Acl -LiteralPath $receiptPath
@@ -1225,16 +1523,11 @@ function Remove-CodexHostedStationAccess([string]$ControllerSid, [string[]]$Sand
         throw 'GUI receipt does not belong to this retired runtime.'
     }
     # Every caller has already disabled new logons and drained these exact SIDs.
-    Import-CodexHostedGui
-    [AidlcCodexHostedGui]::UpdateStation($receipt.OwnerSid, $ControllerSid, [string[]]$SandboxSids, $true)
-    [IO.File]::Delete($receiptPath)
+    Invoke-CodexStationTask 'cleanup'
 }
 
 function Initialize-CodexRuntime {
-    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
-        [Diagnostics.Process]::GetCurrentProcess().SessionId -ne 0) {
-        throw 'Native Codex GUI provisioning requires a fresh GitHub-hosted session-0 runner.'
-    }
+    [void](Assert-CodexHostedParent)
     $nativeDirectory = Get-VerifiedCodexDirectory
     # Setup rotates fixed machine-wide accounts. A fresh CI host is mandatory;
     # never reset an operator's existing Codex users or provision homes serially.
@@ -1571,7 +1864,12 @@ function Save-PreparationFailure($Failure, [bool]$IncludeLaunchLogs) {
     [IO.File]::WriteAllText((Join-Path $evidence 'preparation.log'), $summary + "`r`n", [Text.UTF8Encoding]::new($true))
     if ($Family -eq 'codex') {
         # Explicit diagnostic allowlist. Never traverse or copy sandbox-secrets.
-        $diagnostics = @((Join-Path $stateRoot 'codex-setup.stdout.log'), (Join-Path $stateRoot 'codex-setup.stderr.log'))
+        $diagnostics = @(
+            (Join-Path $stateRoot 'codex-parent-context.json'),
+            (Join-Path $stateRoot 'codex-setup.stdout.log'), (Join-Path $stateRoot 'codex-setup.stderr.log'),
+            (Join-Path $stateRoot 'codex-station-task\prepare.result.json'),
+            (Join-Path $stateRoot 'codex-station-task\cleanup.result.json')
+        )
         $sandboxLogs = Join-Path $codexSeed '.sandbox'
         if ([IO.Directory]::Exists($sandboxLogs)) {
             $diagnostics += @([IO.Directory]::GetFiles($sandboxLogs, 'sandbox*.log', [IO.SearchOption]::TopDirectoryOnly))

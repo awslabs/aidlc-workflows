@@ -78,6 +78,13 @@ public static class NativeOutputFixture {
       VerifyAcls(); return 0;
     }
     if (args.Length == 1 && args[0] == "--reject-foreign-controller") {
+      AidlcCodexHostedGui.ValidateStationWorker("S-1-5-18", 0);
+      int refusedWorkers = 0;
+      foreach (string sid in new string[] { Controller, "S-1-5-18" }) {
+        try { AidlcCodexHostedGui.ValidateStationWorker(sid, sid == Controller ? 0 : 1); }
+        catch (InvalidOperationException) { refusedWorkers++; }
+      }
+      Check(refusedWorkers == 2, "Station worker accepted a non-SYSTEM identity or session 1.");
       try { AidlcCodexHostedGui.RunOnPrivateDesktop("S-1-5-18", Controller, Children,
         (_desktop) => { throw new Exception("Native callback must not run."); }); }
       catch (InvalidOperationException error) {
