@@ -14,7 +14,7 @@ export function writeWindowsExecutable(executable: string, source: string): stri
   const compiled = spawnSync(
     compiler,
     ["/nologo", "/optimize+", "/target:exe", `/out:${executable}`, sourcePath],
-    { encoding: "utf-8", timeout: 5_000 },
+    { encoding: "utf-8", timeout: 15_000 },
   );
   if (compiled.error || compiled.status !== 0) {
     throw new Error(`Native fixture compile failed (${executable}): ${compiled.error?.message || compiled.stderr || compiled.stdout}`);

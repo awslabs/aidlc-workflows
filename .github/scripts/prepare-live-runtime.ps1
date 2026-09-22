@@ -951,7 +951,290 @@ try {
         "`r`n" + (Get-CodexGuiBootstrap)
 }
 
+function Get-CodexHostedGuiSource {
+    return @'
+public static class AidlcCodexHostedGui {
+    private const int ControllerStationRights = 0x2006b; // includes CREATE_DESKTOP
+    private const int SandboxStationRights = 0x20063;
+    private const int ControllerDesktopRights = 0x20087;
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct Attributes { public int Size; public IntPtr Security; public int Inherit; }
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+    private static extern IntPtr OpenWindowStationW(string name, bool inherit, uint access);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
+    private static extern bool CloseWindowStation(IntPtr station);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetProcessWindowStation();
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetThreadDesktop(uint thread);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern void SetLastError(uint error);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
+    private static extern bool SetProcessWindowStation(IntPtr station);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
+    private static extern bool SetThreadDesktop(IntPtr desktop);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+    private static extern IntPtr CreateDesktopW(string name, IntPtr device, IntPtr mode, uint flags, uint access, ref Attributes attributes);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
+    private static extern bool CloseDesktop(IntPtr desktop);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
+    private static extern bool GetUserObjectSecurity(IntPtr handle, ref uint sections, byte[] data, uint length, out uint needed);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
+    private static extern bool SetUserObjectSecurity(IntPtr handle, ref uint sections, byte[] data);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+    private static extern bool GetUserObjectInformationW(IntPtr handle, int index, IntPtr data, uint length, out uint needed);
+    private static Exception Error(string operation) {
+        return new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error(), operation);
+    }
+    private static System.Security.AccessControl.RawSecurityDescriptor Read(IntPtr station) {
+        uint sections = 7, needed;
+        GetUserObjectSecurity(station, ref sections, null, 0, out needed);
+        byte[] data = new byte[needed];
+        if (!GetUserObjectSecurity(station, ref sections, data, needed, out needed)) throw Error("Read WinSta0 security");
+        return new System.Security.AccessControl.RawSecurityDescriptor(data, 0);
+    }
+    private static void RequireSessionZero() {
+        if (System.Diagnostics.Process.GetCurrentProcess().SessionId != 0)
+            throw new InvalidOperationException("Codex hosted GUI requires session 0.");
+    }
+    private static string ObjectName(IntPtr handle) {
+        uint needed;
+        GetUserObjectInformationW(handle, 2, IntPtr.Zero, 0, out needed);
+        IntPtr buffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)needed);
+        try {
+            if (!GetUserObjectInformationW(handle, 2, buffer, needed, out needed)) throw Error("Read inherited GUI object name");
+            return System.Runtime.InteropServices.Marshal.PtrToStringUni(buffer);
+        } finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer); }
+    }
+    public static void VerifyInheritedDesktop(string controller, string expectedDesktop) {
+        RequireSessionZero();
+        using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent()) {
+            if (identity.User.Value != controller || new System.Security.Principal.WindowsPrincipal(identity).IsInRole(
+                System.Security.Principal.WindowsBuiltInRole.Administrator))
+                throw new InvalidOperationException("GUI inheritance probe requires the prepared low controller.");
+        }
+        if (!System.Text.RegularExpressions.Regex.IsMatch(expectedDesktop, "^AidlcCodexController-[0-9a-f]{32}$"))
+            throw new InvalidOperationException("Invalid expected private desktop.");
+        string station = ObjectName(GetProcessWindowStation());
+        string desktop = ObjectName(GetThreadDesktop(GetCurrentThreadId()));
+        if (station != "WinSta0" || desktop != expectedDesktop)
+            throw new InvalidOperationException("GUI inheritance mismatch: expected WinSta0\\" + expectedDesktop +
+                "; observed " + station + "\\" + desktop);
+        if (Environment.GetEnvironmentVariable("AIDLC_CODEX_GUI_DIAGNOSTICS") == "1")
+            Console.WriteLine("Codex GUI inheritance verified: session=0; station=" + station + "; desktop=" + desktop);
+    }
+    private static void RequireAdministrator() {
+        RequireSessionZero();
+        using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent()) {
+            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true" ||
+                Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") != "github-hosted" ||
+                !new System.Security.Principal.WindowsPrincipal(identity).IsInRole(
+                    System.Security.Principal.WindowsBuiltInRole.Administrator))
+                throw new InvalidOperationException("Codex station preparation requires a fresh GitHub-hosted administrator.");
+        }
+    }
+    public static string InspectForPreparation() {
+        RequireAdministrator();
+        IntPtr station = OpenWindowStationW("WinSta0", false, 0x20002);
+        if (station == IntPtr.Zero) throw Error("Open session-0 WinSta0");
+        try {
+            string owner = Read(station).Owner.Value;
+            using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent()) {
+                if (owner != "S-1-5-18" && owner != "S-1-5-32-544" && owner != identity.User.Value)
+                    throw new InvalidOperationException("Untrusted WinSta0 owner.");
+            }
+            return owner;
+        } finally { CloseWindowStation(station); }
+    }
+    private static void ValidateSids(string controller, string[] children) {
+        var parent = new System.Security.Principal.SecurityIdentifier(controller);
+        if (!parent.IsAccountSid() || children.Length != 2 || children[0] == children[1])
+            throw new InvalidOperationException("Expected three distinct prepared local identities.");
+        foreach (string value in children) {
+            var child = new System.Security.Principal.SecurityIdentifier(value);
+            if (!child.IsAccountSid() || child.Equals(parent) || !child.AccountDomainSid.Equals(parent.AccountDomainSid))
+                throw new InvalidOperationException("Unexpected sandbox identity.");
+        }
+    }
+    // Pure descriptor operation: no native handles or writes. Validate all
+    // owned entries on a copy before the administrator can publish the DACL.
+    public static System.Security.AccessControl.RawSecurityDescriptor EditOwnedEntries(
+        System.Security.AccessControl.RawSecurityDescriptor original, string controller, string[] children, bool remove) {
+        ValidateSids(controller, children);
+        if (original.DiscretionaryAcl == null) throw new InvalidOperationException("Missing station DACL.");
+        byte[] originalBytes = new byte[original.BinaryLength];
+        original.GetBinaryForm(originalBytes, 0);
+        var security = new System.Security.AccessControl.RawSecurityDescriptor(originalBytes, 0);
+        string[] values = new string[] { controller, children[0], children[1] };
+        for (int target = 0; target < values.Length; target++) {
+            var sid = new System.Security.Principal.SecurityIdentifier(values[target]);
+            int rights = target == 0 ? ControllerStationRights : SandboxStationRights;
+            for (int i = security.DiscretionaryAcl.Count - 1; i >= 0; i--) {
+                var known = security.DiscretionaryAcl[i] as System.Security.AccessControl.KnownAce;
+                if (known == null || !known.SecurityIdentifier.Equals(sid)) continue;
+                var ace = known as System.Security.AccessControl.CommonAce;
+                if (!remove || ace == null || ace.AceFlags != System.Security.AccessControl.AceFlags.None ||
+                    ace.AceQualifier != System.Security.AccessControl.AceQualifier.AccessAllowed || ace.AccessMask != rights)
+                    throw new InvalidOperationException("WinSta0 already contains an unexpected entry for a runtime SID.");
+                security.DiscretionaryAcl.RemoveAce(i);
+            }
+            if (!remove) security.DiscretionaryAcl.InsertAce(security.DiscretionaryAcl.Count,
+                new System.Security.AccessControl.CommonAce(System.Security.AccessControl.AceFlags.None,
+                    System.Security.AccessControl.AceQualifier.AccessAllowed, rights, sid, false, null));
+        }
+        return security;
+    }
+    public static void UpdateStation(string owner, string controller, string[] children, bool remove) {
+        RequireAdministrator();
+        IntPtr station = OpenWindowStationW("WinSta0", false, 0x60002); // administrator READ_CONTROL/WRITE_DAC only
+        if (station == IntPtr.Zero) throw Error("Open WinSta0 for owned SID cleanup/preparation");
+        try {
+            var security = Read(station);
+            if (security.Owner.Value != owner || security.DiscretionaryAcl == null)
+                throw new InvalidOperationException("WinSta0 ownership or DACL changed.");
+            security = EditOwnedEntries(security, controller, children, remove);
+            byte[] bytes = new byte[security.BinaryLength];
+            security.GetBinaryForm(bytes, 0);
+            uint sections = 4;
+            if (!SetUserObjectSecurity(station, ref sections, bytes)) throw Error("Update exact WinSta0 runtime entries");
+        } finally { CloseWindowStation(station); }
+    }
+    public static int RunOnPrivateDesktop(string owner, string controller, string[] children, Func<string, int> run) {
+        RequireSessionZero();
+        ValidateSids(controller, children);
+        using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent()) {
+            if (identity.User.Value != controller || new System.Security.Principal.WindowsPrincipal(identity).IsInRole(
+                System.Security.Principal.WindowsBuiltInRole.Administrator))
+                throw new InvalidOperationException("Codex GUI launcher requires its prepared low controller.");
+        }
+        int result = 1;
+        Exception failure = null;
+        // A new thread has no windows/hooks, as SetThreadDesktop requires.
+        var thread = new System.Threading.Thread(() => {
+            IntPtr originalStation = GetProcessWindowStation(), originalDesktop = GetThreadDesktop(GetCurrentThreadId());
+            IntPtr station = IntPtr.Zero, desktop = IntPtr.Zero;
+            bool stationChanged = false, desktopChanged = false;
+            try {
+                station = OpenWindowStationW("WinSta0", false, ControllerStationRights);
+                if (station == IntPtr.Zero) throw Error("Open prepared WinSta0");
+                if (Read(station).Owner.Value != owner) throw new InvalidOperationException("Prepared WinSta0 owner changed.");
+                if (!SetProcessWindowStation(station)) throw Error("Select prepared WinSta0");
+                stationChanged = true;
+                string sddl = "D:P(A;;0x20087;;;" + controller + ")";
+                foreach (string child in children) sddl += "(A;;0x20087;;;" + child + ")";
+                var security = new System.Security.AccessControl.RawSecurityDescriptor(sddl);
+                byte[] bytes = new byte[security.BinaryLength];
+                security.GetBinaryForm(bytes, 0);
+                var pin = System.Runtime.InteropServices.GCHandle.Alloc(bytes, System.Runtime.InteropServices.GCHandleType.Pinned);
+                string desktopName = "AidlcCodexController-" + Guid.NewGuid().ToString("N");
+                try {
+                    var attributes = new Attributes {
+                        Size = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Attributes)), Security = pin.AddrOfPinnedObject()
+                    };
+                    SetLastError(0);
+                    desktop = CreateDesktopW(desktopName,
+                        IntPtr.Zero, IntPtr.Zero, 0, ControllerDesktopRights, ref attributes);
+                    if (desktop == IntPtr.Zero) throw Error("Create private controller desktop");
+                    if (System.Runtime.InteropServices.Marshal.GetLastWin32Error() == 183)
+                        throw new InvalidOperationException("Refusing an existing controller desktop.");
+                } finally { pin.Free(); }
+                var actualDesktop = Read(desktop);
+                if (actualDesktop.Owner.Value != controller ||
+                    actualDesktop.GetSddlForm(System.Security.AccessControl.AccessControlSections.Access) !=
+                    security.GetSddlForm(System.Security.AccessControl.AccessControlSections.Access))
+                    throw new InvalidOperationException("Controller desktop ownership or access differs from its private policy.");
+                if (!SetThreadDesktop(desktop)) throw Error("Select private controller desktop");
+                desktopChanged = true;
+                result = run(desktopName);
+            } catch (Exception error) { failure = error; }
+            finally {
+                // Never open or grant access to WinSta0\\Default.
+                if (stationChanged && !SetProcessWindowStation(originalStation) && failure == null)
+                    failure = Error("Restore controller station");
+                if (desktopChanged && !SetThreadDesktop(originalDesktop) && failure == null)
+                    failure = Error("Restore controller desktop");
+                if (desktop != IntPtr.Zero && !CloseDesktop(desktop) && failure == null)
+                    failure = Error("Close private controller desktop");
+                if (station != IntPtr.Zero && !CloseWindowStation(station) && failure == null)
+                    failure = Error("Close controller station handle");
+            }
+        });
+        thread.Start();
+        thread.Join();
+        if (failure != null) throw failure;
+        return result;
+    }
+}
+'@
+}
+
+function Import-CodexHostedGui {
+    if (-not ('AidlcCodexHostedGui' -as [Type])) {
+        Add-Type -TypeDefinition ("using System;`r`n" + (Get-CodexHostedGuiSource))
+    }
+}
+
+function Initialize-CodexHostedStationAccess {
+    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+        [Diagnostics.Process]::GetCurrentProcess().SessionId -ne 0 -or
+        -not $createdRoot -or -not $createdState -or $null -eq $createdUserSid -or
+        $createdUserSid.Value -cne $sandboxSid.Value -or $codexSandboxSids.Count -ne 2) {
+        throw 'Hosted GUI preparation requires this freshly created GitHub runtime.'
+    }
+    foreach ($sid in @($sandboxSid.Value) + $codexSandboxSids) {
+        $account = Get-RecordedLocalUser ([Security.Principal.SecurityIdentifier]::new($sid))
+        if ($null -eq $account -or -not $account.Enabled) { throw 'Prepared GUI identity is absent or disabled.' }
+    }
+    Import-CodexHostedGui
+    $owner = [AidlcCodexHostedGui]::InspectForPreparation()
+    $receiptPath = Join-Path $stateRoot 'codex-station.json'
+    if (Test-Path -LiteralPath $receiptPath) { throw 'Refusing an existing GUI preparation receipt.' }
+    # Record intent before the native write so failure collection can remove
+    # precisely these entries even if preparation stops immediately afterward.
+    [pscustomobject]@{
+        Version = 1; SessionId = 0; Station = 'WinSta0'; OwnerSid = $owner
+        RunnerSid = $runnerSid.Value; ControllerSid = $sandboxSid.Value
+        SandboxSids = [string[]]$codexSandboxSids; RuntimeRoot = $root
+    } | ConvertTo-Json | Set-Content -LiteralPath $receiptPath -Encoding UTF8
+    Set-RuntimeAcl $receiptPath $null 'ReadAndExecute'
+    [AidlcCodexHostedGui]::UpdateStation($owner, $sandboxSid.Value, [string[]]$codexSandboxSids, $false)
+    [Console]::WriteLine('Prepared exact runtime SID access to session-0 WinSta0; Default desktop unchanged.')
+    return $owner
+}
+
+function Remove-CodexHostedStationAccess([string]$ControllerSid, [string[]]$SandboxSids) {
+    $receiptPath = Join-Path $stateRoot 'codex-station.json'
+    if (-not [IO.File]::Exists($receiptPath)) { return }
+    Assert-PlainPath $receiptPath
+    [AidlcFileBoundary]::RequireSingleLink($receiptPath)
+    $acl = Get-Acl -LiteralPath $receiptPath
+    $trusted = @($runnerSid.Value, $systemSid.Value, $adminSid.Value)
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) { throw 'Untrusted GUI receipt owner.' }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $trusted) {
+            throw 'GUI receipt is not administrator-only.'
+        }
+    }
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    if ($receipt.Version -ne 1 -or $receipt.SessionId -ne 0 -or $receipt.Station -cne 'WinSta0' -or
+        $receipt.RunnerSid -cne $runnerSid.Value -or $receipt.RuntimeRoot -cne $root -or
+        $receipt.ControllerSid -cne $ControllerSid -or $receipt.SandboxSids.Count -ne 2 -or
+        (@($receipt.SandboxSids | Sort-Object) -join ',') -cne (@($SandboxSids | Sort-Object) -join ',')) {
+        throw 'GUI receipt does not belong to this retired runtime.'
+    }
+    # Every caller has already disabled new logons and drained these exact SIDs.
+    Import-CodexHostedGui
+    [AidlcCodexHostedGui]::UpdateStation($receipt.OwnerSid, $ControllerSid, [string[]]$SandboxSids, $true)
+    [IO.File]::Delete($receiptPath)
+}
+
 function Initialize-CodexRuntime {
+    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+        [Diagnostics.Process]::GetCurrentProcess().SessionId -ne 0) {
+        throw 'Native Codex GUI provisioning requires a fresh GitHub-hosted session-0 runner.'
+    }
     $nativeDirectory = Get-VerifiedCodexDirectory
     # Setup rotates fixed machine-wide accounts. A fresh CI host is mandatory;
     # never reset an operator's existing Codex users or provision homes serially.
@@ -1013,16 +1296,23 @@ function Initialize-CodexRuntime {
     Set-RuntimeAcl $codexSeed $sandboxSid 'ReadAndExecute' -Tree -RejectLinks
     $initializer = Join-Path $tools 'codex-initialize-home.ps1'
     [IO.File]::WriteAllText($initializer, (Get-CodexHomeInitializer), [Text.UTF8Encoding]::new($true))
+    $hostedStationOwner = Initialize-CodexHostedStationAccess
     $launcher = @'
 using System;
 using System.Diagnostics;
 using System.Text;
 using System.Threading.Tasks;
+__HOSTED_GUI_SOURCE__
 public static class AidlcCodexLauncher {
     private const string Native = __NATIVE__;
     private const string PackageRoot = __PACKAGE_ROOT__;
     private const string PowerShell = __POWERSHELL__;
     private const string Initializer = __INITIALIZER__;
+    private const string GuiProbe = __GUI_PROBE__;
+    private const bool HostedGui = __HOSTED_GUI__;
+    private const string StationOwner = __STATION_OWNER__;
+    private const string ControllerSid = __CONTROLLER_SID__;
+    private static readonly string[] SandboxSids = __SANDBOX_SIDS__;
     // Quote each argv element with the CommandLineToArgvW backslash rules.
     // No command shell, expansion, or user-controlled command-line fragment.
     private static string Quote(string value) {
@@ -1072,6 +1362,18 @@ public static class AidlcCodexLauncher {
                     "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", Initializer
                 }, 30000);
                 if (initialized != 0) return initialized;
+                // The accepted Service-station initializer runs first. Bind
+                // only this launcher and native Codex to the prepared station;
+                // the test runner stays on its original service desktop.
+                if (HostedGui) return AidlcCodexHostedGui.RunOnPrivateDesktop(
+                    StationOwner, ControllerSid, SandboxSids, (desktopName) => {
+                        // Same .NET Process.Start settings and calling thread
+                        // as Codex. Prove lpDesktop=NULL inheritance explicitly.
+                        int probed = Run(GuiProbe, new string[] { desktopName }, 15000);
+                        if (probed != 0) throw new InvalidOperationException(
+                            "Codex GUI inheritance probe failed before native CLI start (exit " + probed + ").");
+                        return Run(Native, args, -1);
+                    });
             }
             return Run(Native, args, -1);
         } catch (Exception error) {
@@ -1081,10 +1383,36 @@ public static class AidlcCodexLauncher {
     }
 }
 '@
+    $launcher = $launcher.Replace('__HOSTED_GUI_SOURCE__', (Get-CodexHostedGuiSource)).
+        Replace('__HOSTED_GUI__', 'true').
+        Replace('__STATION_OWNER__', (ConvertTo-Json -InputObject $hostedStationOwner -Compress)).
+        Replace('__CONTROLLER_SID__', (ConvertTo-Json -InputObject $sandboxSid.Value -Compress)).
+        Replace('__SANDBOX_SIDS__', ('new string[] { ' + (($codexSandboxSids | ForEach-Object {
+            ConvertTo-Json -InputObject $_ -Compress
+        }) -join ', ') + ' }'))
     $launcher = $launcher.Replace('__NATIVE__', (ConvertTo-Json -InputObject (Join-Path $nativeDirectory 'bin\codex.exe') -Compress))
     $launcher = $launcher.Replace('__PACKAGE_ROOT__', (ConvertTo-Json -InputObject $nativeDirectory -Compress))
     $launcher = $launcher.Replace('__POWERSHELL__', (ConvertTo-Json -InputObject $powershell -Compress))
     $launcher = $launcher.Replace('__INITIALIZER__', (ConvertTo-Json -InputObject $initializer -Compress))
+    $launcher = $launcher.Replace('__GUI_PROBE__', (ConvertTo-Json -InputObject (Join-Path $tools 'codex-gui-probe.exe') -Compress))
+    $guiProbeSource = @'
+using System;
+__HOSTED_GUI_SOURCE__
+public static class AidlcCodexGuiProbe {
+    public static int Main(string[] args) {
+        try {
+            if (args.Length != 1) throw new InvalidOperationException("Expected one private desktop name.");
+            AidlcCodexHostedGui.VerifyInheritedDesktop(__CONTROLLER_SID__, args[0]);
+            return 0;
+        } catch (Exception error) {
+            Console.Error.WriteLine("Codex GUI inheritance probe: " + error.Message);
+            return 1;
+        }
+    }
+}
+'@
+    $guiProbeSource = $guiProbeSource.Replace('__HOSTED_GUI_SOURCE__', (Get-CodexHostedGuiSource)).
+        Replace('__CONTROLLER_SID__', (ConvertTo-Json -InputObject $sandboxSid.Value -Compress))
     $compilerTemp = Join-Path $stateRoot 'codex-compiler-temp'
     New-PrivateDirectory $compilerTemp
     $compiler = [CodeDom.Compiler.CompilerParameters]::new()
@@ -1098,8 +1426,11 @@ public static class AidlcCodexLauncher {
     try {
         $compiled = $provider.CompileAssemblyFromSource($compiler, $launcher)
         if ($compiled.Errors.HasErrors) { throw 'Could not compile the trusted native Codex launcher.' }
+        $compiler.OutputAssembly = Join-Path $tools 'codex-gui-probe.exe'
+        $compiled = $provider.CompileAssemblyFromSource($compiler, $guiProbeSource)
+        if ($compiled.Errors.HasErrors) { throw 'Could not compile the native GUI inheritance probe.' }
     } finally { $provider.Dispose(); $compiler.TempFiles.Delete() }
-    foreach ($name in @('codex-initialize-home.ps1', 'codex-managed.exe')) {
+    foreach ($name in @('codex-initialize-home.ps1', 'codex-managed.exe', 'codex-gui-probe.exe')) {
         Set-RuntimeAcl (Join-Path $tools $name) $sandboxSid 'ReadAndExecute' -RejectLinks
     }
     # Only executable inputs, never tools/jobs or tools/logs (which can contain
@@ -1125,6 +1456,7 @@ $ErrorActionPreference = 'Stop'
 $native = __NATIVE__
 $bun = __BUN__
 $env:CODEX_MANAGED_PACKAGE_ROOT = __PACKAGE_ROOT__
+$env:AIDLC_CODEX_GUI_DIAGNOSTICS = '1'
 $expectedSids = __SIDS__
 $initializer = __INITIALIZER__
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -1288,6 +1620,7 @@ function Collect-PreparationFailure([bool]$FamilyProvided) {
         # still identifies any remaining token/process; never disable a new user
         # that happens to have reused the same account name.
         Stop-SandboxProcesses -Disable -AdditionalSids $codexSandboxSids
+        Remove-CodexHostedStationAccess $script:sandboxSid.Value $codexSandboxSids
     }
     $destination = Join-Path $workspace 'tests\logs'
     Assert-PlainPath $destination
@@ -1573,6 +1906,7 @@ exit $LASTEXITCODE
     $Family = $state.Family
     if ($Mode -eq 'collect') {
         Stop-SandboxProcesses -Disable -AdditionalSids $codexSandboxSids
+        Remove-CodexHostedStationAccess $sandboxSid.Value $codexSandboxSids
         $source = Join-Path $work 'tests\logs'
         Assert-PlainPath (Join-Path $work 'tests')
         Assert-PlainPath $source
@@ -1630,6 +1964,7 @@ exit $LASTEXITCODE
                 $ownedUser = Get-LocalUser -Name $userName
                 if ($ownedUser.SID.Value -eq $createdUserSid.Value) {
                     Stop-SandboxProcesses -Disable -AdditionalSids $codexSandboxSids
+                    Remove-CodexHostedStationAccess $createdUserSid.Value $codexSandboxSids
                     $mayRemoveRoot = $true
                     Remove-LocalUser -SID $createdUserSid
                 }

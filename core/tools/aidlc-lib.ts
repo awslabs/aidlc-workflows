@@ -24976,6 +24976,12 @@ function releaseReapClaim(receipt: OwnerStampedLockReceipt): boolean {
 // PID, or a genuinely old missing-stamp directory. The fixed owner-stamped reap
 // gate blocks acquisition while canonical ownership is moved or restored.
 function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
+  // A live/ambiguous owner cannot be reaped. Avoid taking and publishing the
+  // coordination gate merely to rediscover that fact: blocked contenders can
+  // otherwise starve the owner's release. This read authorizes no mutation;
+  // re-read and validate the candidate under the gate below.
+  const observed = reapCandidate(lockDir);
+  if (observed === null || (!reapUnstamped && observed.owner === null)) return false;
   const claim = acquireReapClaim(lockDir);
   if (!claim) return false;
   let releaseClaim = true;
@@ -25140,6 +25146,9 @@ function acquireOwnerStampedLock(
   reapLiveOwnerAfterStale = true,
 ): OwnerStampedLockReceipt | null {
   const create = (): OwnerStampedLockReceipt | null => {
+    // Negative fast path only. A missing name still goes through the complete
+    // coordinated create/recovery protocol and its exclusive mkdir.
+    if (existsSync(lockDir)) return null;
     const gate = acquireReapClaim(lockDir);
     if (!gate) return null;
     try {

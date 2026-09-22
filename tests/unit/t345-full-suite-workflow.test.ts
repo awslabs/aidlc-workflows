@@ -82,6 +82,12 @@ function platformOf(runner: string | string[]): string {
 function matrixOf(job: Job): Matrix {
   const matrix = job.strategy?.matrix;
   if (typeof matrix !== "string") return matrix ?? {};
+  if (matrix === `\${{ fromJSON(needs.plan.outputs.live_prepare_matrix) }}`) {
+    // Preparation fans out by runner, not by family/file. Match the workflow's
+    // projection of the real full plan without counting preparation as coverage.
+    const planned = [...liveMatrix("hosted").include, ...liveMatrix("windows").include];
+    return { runner: [...new Set(planned.map(row => row.runner))] };
+  }
   for (const kind of ["hosted", "windows"] as const) {
     if (matrix === `\${{ fromJSON(needs.plan.outputs.live_${kind}_matrix) }}`) {
       return { include: liveMatrix(kind).include.map((row) => ({ ...row })) };
@@ -673,10 +679,17 @@ describe("t345 complete nightly coverage", () => {
     expect(plan.indexOf(discovery)).toBeGreaterThan(plan.findIndex((step) => step.id === "source"));
     expect(plan.indexOf(discovery)).toBeGreaterThan(plan.findIndex((step) => step.run === "bun install --frozen-lockfile"));
     expect(discovery.if).toBeUndefined();
+    expect(discovery.env?.VERIFICATION_TEST).toBe(`\${{ steps.source.outputs.verification_test }}`);
+    expect(matrixOf(workflow.jobs.live_prepare)).toEqual({
+      runner: [...new Set(["live_hosted", "live_windows"].flatMap(name =>
+        matrixOf(workflow.jobs[name]).include!.map(row => row.runner)))],
+    });
+    expect(rows(workflow.jobs.live_prepare)).toEqual([]);
     for (const kind of ["hosted", "windows"] as const) {
       const job = workflow.jobs[`live_${kind}`];
       expect(discovery.run).toContain(`bun scripts/ci-live-filter.ts --matrix ${kind}`);
       expect(discovery.run).toContain('--family "$VERIFICATION_FAMILY"');
+      expect(discovery.run).toContain('--test "$VERIFICATION_TEST"');
       expect(workflow.jobs.plan.outputs?.[`live_${kind}_matrix`]).toBe(`\${{ steps.live_matrix.outputs.${kind} }}`);
       expect(job.strategy?.matrix).toBe(`\${{ fromJSON(needs.plan.outputs.live_${kind}_matrix) }}`);
       expect(job.strategy?.["max-parallel"]).toBe(kind === "hosted" ? 12 : 6);
@@ -816,6 +829,8 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.plan.outputs?.purpose).toBe(`\${{ steps.source.outputs.purpose }}`);
     expect(steps(workflow.jobs.plan).find((step) => step.id === "source")?.env?.LIVE_VERIFICATION)
       .toBe(`\${{ inputs.live_verification == true }}`);
+    expect(steps(workflow.jobs.plan).find((step) => step.id === "source")?.env?.VERIFICATION_TEST)
+      .toBe(`\${{ inputs.verification_test || '' }}`);
     for (const job of LIVE_VERIFICATION_OMITTED_JOBS) {
       expect(workflow.jobs[job].if, job).toContain("needs.plan.outputs.purpose == 'release'");
     }

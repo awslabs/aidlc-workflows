@@ -371,7 +371,7 @@ async function runWorkflowStep(
 }
 
 describe("t332 preview publication pipeline", () => {
-  for (const [name, event, flag, sha, head, ancestor, purpose, selectedFamily = "all"] of [
+  for (const [name, event, flag, sha, head, ancestor, purpose, selectedFamily = "all", selectedTest = ""] of [
     ["release call can test an older main commit", "workflow_call", "false", SOURCE_A, TARGET, true, "release"],
     ["release schedule stays main-bound", "schedule", "false", SOURCE_A, SOURCE_A, true, "release"],
     ["normal dispatch rejects branch source", "workflow_dispatch", "false", SOURCE_A, SOURCE_A, false, null],
@@ -392,6 +392,21 @@ describe("t332 preview publication pipeline", () => {
     ["unknown verification family fails closed", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, null, "unknown"],
     ["empty verification family fails closed", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, null, ""],
     ["release-contract is not a verification family", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, null, "release-contract"],
+    ["manual exact Codex test verification", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, "live-verification", "codex", "tests/e2e/t-exec-codex-status.serial.test.ts"],
+    ["manual exact SDK test on main stays verification-only", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, "live-verification", "claude-sdk", "tests/integration/t238-user-stories-mob.sdk.test.ts"],
+    ["manual exact plugin test path reaches planning", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, "live-verification", "claude-sdk", "plugins/test-pro/tests/plugin.test.ts"],
+    ["exact test requires one family", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, null, "all", "tests/e2e/t-exec-codex-status.serial.test.ts"],
+    ["release cannot select an exact test", "workflow_dispatch", "false", SOURCE_A, SOURCE_A, true, null, "all", "tests/e2e/t-exec-codex-status.serial.test.ts"],
+    ["ordinary family call cannot select an exact test", "workflow_call", "false", SOURCE_A, SOURCE_A, true, null, "codex", "tests/e2e/t-exec-codex-status.serial.test.ts"],
+    ["verification call cannot select an exact test", "workflow_call", "true", SOURCE_A, SOURCE_A, true, null, "codex", "tests/e2e/t-exec-codex-status.serial.test.ts"],
+    ["scheduled verification cannot select an exact test", "schedule", "true", SOURCE_A, SOURCE_A, true, null, "codex", "tests/e2e/t-exec-codex-status.serial.test.ts"],
+    ["PR verification cannot select an exact test", "pull_request", "true", SOURCE_A, SOURCE_A, true, null, "codex", "tests/e2e/t-exec-codex-status.serial.test.ts"],
+    ["exact test cannot authorize another source head", "workflow_dispatch", "true", SOURCE_A, TARGET, true, null, "codex", "tests/e2e/t-exec-codex-status.serial.test.ts"],
+    ["test globs are rejected", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, null, "codex", "tests/e2e/t-exec-codex-*.test.ts"],
+    ["test traversal is rejected", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, null, "codex", "tests/e2e/../t-exec-codex-status.serial.test.ts"],
+    ["absolute test paths are rejected", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, null, "codex", "/tests/e2e/t-exec-codex-status.serial.test.ts"],
+    ["native separators are not repository test paths", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, null, "codex", "tests\\e2e\\t-exec-codex-status.serial.test.ts"],
+    ["line breaks cannot add source outputs", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, null, "codex", "tests/e2e/t-exec-codex-status.serial.test.ts\npurpose=release"],
   ] as const) {
     test(`Full Suite source authorization: ${name}`, async () => {
       const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
@@ -418,13 +433,13 @@ describe("t332 preview publication pipeline", () => {
       const result = await runWorkflowStep(script, root, {
         PATH: `${bin}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
         FIXTURE_SHA: sha, FIXTURE_ANCESTOR: ancestor ? "0" : "1", FIXTURE_GIT_CALLS: calls,
-        LIVE_VERIFICATION: flag, VERIFICATION_FAMILY: selectedFamily,
+        LIVE_VERIFICATION: flag, VERIFICATION_FAMILY: selectedFamily, VERIFICATION_TEST: selectedTest,
         GITHUB_EVENT_NAME: event, GITHUB_SHA: head, GITHUB_OUTPUT: output,
       });
       expect(result.status, result.stdout + result.stderr).toBe(purpose === null ? 1 : 0);
-      expect(readFileSync(output, "utf8")).toBe(purpose === null ? "" : `sha=${sha}\npurpose=${purpose}\nverification_family=${selectedFamily}\n`);
+      expect(readFileSync(output, "utf8")).toBe(purpose === null ? "" : `sha=${sha}\npurpose=${purpose}\nverification_family=${selectedFamily}\nverification_test=${selectedTest}\n`);
       const commands = readFileSync(calls, "utf8");
-      if (flag === "false" && selectedFamily === "all") {
+      if (flag === "false" && selectedFamily === "all" && selectedTest === "") {
         expect(commands).toContain("fetch --no-tags origin main");
         expect(commands).toContain(`merge-base --is-ancestor ${sha} origin/main`);
       } else {

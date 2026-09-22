@@ -722,6 +722,30 @@ describe("t161 stale-lock reaper", () => {
     }
   });
 
+  test("blocked contenders leave a live owner's coordination gate available for release", () => {
+    const token = randomUUID();
+    stampOwner(424_242, 0, token, "live-generation");
+    const lockDir = auditLockDir(PD, INTENT, "default");
+    const before = readFileSync(join(lockDir, "owner.json"), "utf8");
+    let gatePublications = 0;
+    _setAuditLockFaultHooksForTests({
+      processProbe: () => ({ alive: true, generation: "live-generation" }),
+      beforeGateOwnerStamp: () => { gatePublications++; },
+    });
+    try {
+      for (let contender = 0; contender < 5; contender++) {
+        expect(acquireAuditLock(PD, 1, 1, INTENT, "default")).toBe(false);
+      }
+      expect(gatePublications).toBe(0);
+      expect(existsSync(`${lockDir}.reap`)).toBe(false);
+      expect(existsSync(`${lockDir}.gate-mutex`)).toBe(false);
+      expect(readFileSync(join(lockDir, "owner.json"), "utf8")).toBe(before);
+    } finally {
+      _setAuditLockFaultHooksForTests(null);
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
   test("generation probe failure is bounded, fail-closed, and doctor-visible", () => {
     const projectDir = `${PD}-generation-unavailable`;
     const lockDir = auditLockDir(projectDir);
@@ -1026,6 +1050,7 @@ describe("t161 active-directive owner lock and doctor findings", () => {
   }, 10000);
 
   test("post-grace unstamped locks recover through one-generation tombstones while legacy debris stays manual", () => {
+    const started = performance.now();
     const fixture = markerProject();
     const lockDir = join(fixture.recordDir, ".aidlc-engine/active-directive.lock");
     // Debris from the pre-lock marker writer lives at the record root, not in the engine dir.
@@ -1045,13 +1070,40 @@ describe("t161 active-directive owner lock and doctor findings", () => {
       cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(fixture.projectDir, ".claude"), { recursive: true });
       cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(fixture.projectDir, ".claude", "tools", "aidlc-lib.ts"));
       cpSync(join(REPO_ROOT, "core", "tools", "aidlc-utility.ts"), join(fixture.projectDir, ".claude", "tools", "aidlc-utility.ts"));
-      const doctor = spawnSync(process.execPath, [
+      const doctorArgs = [
         join(fixture.projectDir, ".claude", "tools", "aidlc-utility.ts"),
         "doctor",
         "--project-dir",
         fixture.projectDir,
-      ], { encoding: "utf-8" });
+      ];
+      const doctorStarted = performance.now();
+      const doctor = spawnSync(process.execPath, doctorArgs, {
+        encoding: "utf-8",
+        // Leave room inside the Windows case deadline to report a stalled
+        // subprocess and restore the fixture before the runner stops it.
+        timeout: process.platform === "win32" ? 50_000 : undefined,
+      });
       const doctorOutput = `${doctor.stdout ?? ""}\n${doctor.stderr ?? ""}`;
+      const diagnostic = JSON.stringify({
+        command: [process.execPath, ...doctorArgs],
+        fixtureMs: doctorStarted - started,
+        doctorMs: performance.now() - doctorStarted,
+        status: doctor.status,
+        signal: doctor.signal,
+        error: doctor.error ? {
+          name: doctor.error.name,
+          message: doctor.error.message,
+          code: (doctor.error as NodeJS.ErrnoException).code,
+        } : null,
+        stdout: doctor.stdout,
+        stderr: doctor.stderr,
+      });
+      console.error(`t161 doctor diagnostics: ${diagnostic}`);
+      expect(doctor.error, diagnostic).toBeUndefined();
+      expect(doctor.signal, diagnostic).toBeNull();
+      // Doctor reports retained legacy debris as a failed finding, even when
+      // it successfully clears the separate, eligible unstamped lock.
+      expect(doctor.status, diagnostic).toBe(1);
       expect(doctorOutput).toContain("active-directive lock");
       expect(doctorOutput).toContain("unstamped) - cleared");
       expect(doctorOutput).toContain("legacy active-directive transaction");
@@ -1073,5 +1125,5 @@ describe("t161 active-directive owner lock and doctor findings", () => {
       delete process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
       rmSync(fixture.projectDir, { recursive: true, force: true });
     }
-  });
+  }, process.platform === "win32" ? 60_000 : undefined);
 });

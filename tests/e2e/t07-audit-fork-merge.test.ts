@@ -502,12 +502,14 @@ describe("t07 Phase B — edge cases", () => {
   test("B4: prefix-hash mismatch — merge refuses after a length-preserving main-audit edit", () => {
     const p = makeFixture();
     createWorktree(p, "e4");
-    runAudit(["audit-fork", "--slug", "e4", "--project-dir", p]);
-    runAudit([
+    const fork = runAudit(["audit-fork", "--slug", "e4", "--project-dir", p]);
+    expect(fork.status, fork.out).toBe(0);
+    const appended = runAudit([
       "append", "STAGE_STARTED",
       "--field", "Stage=foo", "--field", "Agent=bar",
       "--project-dir", wtDir(p, "e4"),
     ]);
+    expect(appended.status, appended.out).toBe(0);
     // Flip one byte in the header (length-preserving) — it lives in the prefix
     // that Source Audit Hash covers, so the recomputed hash will differ.
     const edited = readFileSync(auditPath(p), "utf-8").replace(
@@ -519,7 +521,9 @@ describe("t07 Phase B — edge cases", () => {
     const merge = runAudit(["audit-merge", "--slug", "e4", "--project-dir", p]);
     expect(merge.status).not.toBe(0); // B4.1
     expect(merge.out).toContain("prefix-hash"); // B4.2
-  }, 30000);
+    // Windows must finish fixture creation and both setup commands before the
+    // negative merge assertion; d353 hit the outer 30s cap during this case.
+  }, process.platform === "win32" ? 90_000 : 30_000);
 
   test("B5: lock contention — staggered N=2 mergers both exit 0, exactly 2 AUDIT_MERGED rows", async () => {
     const p = makeFixture();

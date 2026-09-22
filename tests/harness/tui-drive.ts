@@ -973,7 +973,7 @@ export function filterSpawnOwnedWindowsDescendants(
   };
 }
 
-function validateWindowsSpawnIdentity(
+export function validateWindowsSpawnIdentity(
   spawn: WindowsSpawnAuthority,
   current: WindowsProcessIdentity,
 ):
@@ -1140,27 +1140,26 @@ function discoverTargetExitWindowsDescendants(
   );
 }
 
-export function liveOwnedWindowsProcesses(
-  recorded: WindowsProcessIdentity[],
+export function queryWindowsProcessIdentities(
+  requestedPids: number[],
   timeoutMs: number,
   context: string,
   run: typeof runBoundedCommand = runBoundedCommand,
 ): WindowsProcessQuery<WindowsProcessIdentity[]> {
-  if (recorded.length === 0) return { status: "ok", value: [] };
+  if (requestedPids.length === 0) return { status: "ok", value: [] };
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return { status: "error", message: `process identity liveness query timed out for ${context}` };
   }
   if (shouldInjectCimFailure(context)) {
     return { status: "error", message: `injected CIM failure for ${context}` };
   }
-  const pids = [...new Set(recorded.map((identity) => identity.pid))];
-  if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff) ||
-    recorded.some((identity) => !Number.isFinite(Date.parse(identity.creationDate)))) {
+  const pids = [...new Set(requestedPids)];
+  if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff)) {
     return { status: "error", message: `invalid recorded process identity for ${context}` };
   }
-  // Rechecking N known identities must not pay N PowerShell startups, each
-  // killed at 750ms on a busy host. One filtered snapshot shares the caller's
-  // remaining deadline, without extending the cleanup budget or caching PIDs.
+  // Rechecking N identities must not pay N PowerShell startups, each killed
+  // at 750ms on a busy host. One filtered snapshot shares the caller's remaining
+  // deadline and retains creation identities and command lines for validation.
   const script = [
     "$ErrorActionPreference = 'Stop'",
     `$rows = @(Get-CimInstance Win32_Process -Filter "${pids.map((pid) => `ProcessId = ${pid}`).join(" OR ")}" | ForEach-Object {`,
@@ -1176,6 +1175,10 @@ export function liveOwnedWindowsProcesses(
   ].join("\n");
   const startedAt = Date.now();
   const result = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], timeoutMs);
+  writeCimTrace(
+    `identity-snapshot context=${context} count=${pids.length} budget=${timeoutMs}ms ` +
+      `elapsed=${Date.now() - startedAt}ms status=${result.status} timedOut=${result.timedOut}`,
+  );
   if (result.timedOut || result.errorCode || result.status !== 0) {
     return {
       status: "error",
@@ -1198,11 +1201,98 @@ export function liveOwnedWindowsProcesses(
     // Only a completed, valid snapshot can establish absence or PID reuse.
     return {
       status: "ok",
-      value: recorded.filter((identity) => rows.some((row) => sameWindowsProcess(row, identity))),
+      value: rows,
     };
   } catch {
     return { status: "error", message: `process identity liveness query returned invalid JSON for ${context}` };
   }
+}
+
+export function liveOwnedWindowsProcesses(
+  recorded: WindowsProcessIdentity[],
+  timeoutMs: number,
+  context: string,
+  run: typeof runBoundedCommand = runBoundedCommand,
+): WindowsProcessQuery<WindowsProcessIdentity[]> {
+  if (recorded.some((identity) => !Number.isFinite(Date.parse(identity.creationDate)))) {
+    return { status: "error", message: `invalid recorded process identity for ${context}` };
+  }
+  const snapshot = queryWindowsProcessIdentities(recorded.map((identity) => identity.pid), timeoutMs, context, run);
+  if (snapshot.status !== "ok") return snapshot;
+  return {
+    status: "ok",
+    value: recorded.filter((identity) => snapshot.value.some((row) => sameWindowsProcess(row, identity))),
+  };
+}
+
+export function liveWindowsCleanupProcesses(
+  discovered: WindowsProcessIdentity[],
+  registered: WindowsProcessIdentity[],
+  timeoutMs: number,
+  context: string,
+  run: typeof runBoundedCommand = runBoundedCommand,
+): WindowsProcessQuery<WindowsProcessIdentity[]> {
+  // Both sets have session authority. Initial absence does not remove a
+  // registered identity from the fresh verification required before a kill.
+  return liveOwnedWindowsProcesses(
+    mergeWindowsProcessIdentities([...discovered, ...registered]), timeoutMs, context, run,
+  );
+}
+
+function processFromSnapshot(
+  snapshot: WindowsProcessQuery<WindowsProcessIdentity[]>,
+  pid: number,
+): WindowsProcessQuery<WindowsProcessIdentity> {
+  if (snapshot.status !== "ok") return snapshot;
+  const value = snapshot.value.find((row) => row.pid === pid);
+  return value ? { status: "ok", value } : { status: "absent" };
+}
+
+export function createWindowsCleanupIdentityReader(
+  initialPids: number[],
+  deadline: number,
+  options: {
+    now?: () => number;
+    query?: (pids: number[], budget: number, context: string) => WindowsProcessQuery<WindowsProcessIdentity[]>;
+  } = {},
+): (pid: number, context: string, budget?: number, refresh?: boolean) => WindowsProcessQuery<WindowsProcessIdentity> {
+  const now = options.now ?? Date.now;
+  const query = options.query ?? queryWindowsProcessIdentities;
+  const pids = new Set(initialPids);
+  const readPids = new Set<number>();
+  let positives = new Map<number, WindowsProcessIdentity>();
+  return (pid, context, budget = deadline - now(), refresh = false) => {
+    const started = now();
+    const allowance = Math.min(budget, deadline - started);
+    if (!Number.isFinite(allowance) || allowance <= 0) {
+      positives.clear();
+      return { status: "error", message: `cleanup identity deadline exhausted for ${context}` };
+    }
+    const repeated = readPids.has(pid);
+    readPids.add(pid);
+    if (shouldInjectCimFailure(context)) {
+      positives.clear();
+      return { status: "error", message: `injected CIM failure for ${context}` };
+    }
+    // Only first positive observations may share a batch. Missing rows are
+    // never cached as absence; repeated reads and explicit rechecks are fresh.
+    if (refresh || repeated || !positives.has(pid)) {
+      pids.add(pid);
+      positives.clear();
+      const observed = query([...pids], allowance, context);
+      if (observed.status !== "ok") {
+        return observed.status === "error" ? observed
+          : { status: "error", message: `cleanup identity snapshot unavailable for ${context}` };
+      }
+      positives = new Map(observed.value.map((row) => [row.pid, row]));
+    }
+    if (now() >= started + allowance) {
+      positives.clear();
+      return { status: "error", message: `cleanup identity observation exceeded deadline for ${context}` };
+    }
+    const value = positives.get(pid);
+    return value ? { status: "ok", value } : { status: "absent" };
+  };
 }
 
 function mergeWindowsProcessIdentities(
@@ -1670,12 +1760,21 @@ const win32Backend: Backend = {
       meta?.session === session &&
       typeof meta.ownerToken === "string";
 
+    // Share the initial ownership read, before sending any shutdown request.
+    // The liveness/force-kill loop below always obtains fresh snapshots and
+    // compares creation identities again; it never kills from this read alone.
+    const targetAtEntry = readJsonFile<WindowsSpawnAuthority>(targetSpawnPath);
+    const snapshotPids = [
+      daemonPid, childPid,
+      ...(ownership?.daemonChildren ?? []).map((entry) => entry.pid),
+      ownership?.child?.pid,
+      ...(ownership?.orphans ?? []).map((entry) => entry.pid),
+      targetAtEntry && isWindowsSpawnAuthority(targetAtEntry) ? targetAtEntry.pid : null,
+    ].filter((pid): pid is number => typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0);
+    const queryInitialIdentity = createWindowsCleanupIdentityReader(snapshotPids, deadline);
+
     if (daemonPid !== null) {
-      const query = windowsProcessQuery(
-        daemonPid,
-        Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
-        "kill-daemon",
-      );
+      const query = queryInitialIdentity(daemonPid, "kill-daemon");
       if (query.status === "error") {
         daemonStatus = "error";
       } else if (query.status === "absent") {
@@ -1711,11 +1810,7 @@ const win32Backend: Backend = {
       verificationErrors.push("ownership metadata remained unreadable");
     }
     if (daemonStatus === "error" && daemonPid !== null && remaining() > 0) {
-      const recheck = windowsProcessQuery(
-        daemonPid,
-        Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
-        "kill-daemon-recheck",
-      );
+      const recheck = queryInitialIdentity(daemonPid, "kill-daemon-recheck", remaining(), true);
       if (recheck.status === "error") {
         verificationErrors.push(recheck.message);
       } else if (recheck.status === "absent") {
@@ -1779,13 +1874,10 @@ const win32Backend: Backend = {
         message: "target liveness query did not run",
       };
       while (Date.now() < targetDeadline) {
-        current = windowsProcessQuery(
+        current = queryInitialIdentity(
           targetSpawn.pid,
-          Math.min(
-            WIN_PROCESS_QUERY_TIMEOUT_MS,
-            Math.max(1, targetDeadline - Date.now()),
-          ),
           "kill-target-live",
+          Math.max(1, targetDeadline - Date.now()),
         );
         if (current.status === "ok") {
           const validated = validateWindowsSpawnIdentity(
@@ -1932,23 +2024,17 @@ const win32Backend: Backend = {
       }
     }
 
-    if (validOwnership) {
-      for (const recorded of [
+    const recordedProcesses = validOwnership ? mergeWindowsProcessIdentities([
         ...(validOwnership.daemonChildren ?? []),
         ...(validOwnership.child ? [validOwnership.child] : []),
         ...(validOwnership.orphans ?? []),
-      ]) {
+      ]) : [];
+    if (validOwnership) {
+      for (const recorded of recordedProcesses) {
         if (remaining() <= 0) break;
         let query: WindowsProcessQuery<WindowsProcessIdentity>;
         do {
-          query = windowsProcessQuery(
-            recorded.pid,
-            Math.min(
-              WIN_PROCESS_QUERY_TIMEOUT_MS,
-              Math.max(1, remaining()),
-            ),
-            "kill-owned-process",
-          );
+          query = queryInitialIdentity(recorded.pid, "kill-owned-process");
           if (query.status !== "error") break;
           if (remaining() > 0) sleepSync(Math.min(100, remaining()));
         } while (remaining() > 0);
@@ -2012,9 +2098,13 @@ const win32Backend: Backend = {
       }
     }
     sleepSync(Math.min(WIN_KILL_GRACE_MS, remaining()));
-    let liveQuery = liveOwnedWindowsProcesses(
-      mergeWindowsProcessIdentities(ownedProcesses),
-      Math.max(1, remaining()),
+    // A registered process absent in an earlier snapshot may become visible
+    // later. Keep every authenticated recorded identity in all final probes;
+    // only a fresh matching creation identity can enter the force-kill list.
+    let liveQuery = liveWindowsCleanupProcesses(
+      ownedProcesses,
+      recordedProcesses,
+      remaining(),
       "kill-liveness",
     );
     if (liveQuery.status === "error") {
@@ -2025,9 +2115,10 @@ const win32Backend: Backend = {
     while (survivors.length > 0 && remaining() > 0) {
       forceKillWindowsProcessesWithinDeadline(survivors, deadline);
       if (remaining() > 0) sleepSync(Math.min(100, remaining()));
-      liveQuery = liveOwnedWindowsProcesses(
-        survivors,
-        Math.max(1, remaining()),
+      liveQuery = liveWindowsCleanupProcesses(
+        ownedProcesses,
+        recordedProcesses,
+        remaining(),
         "kill-liveness",
       );
       if (liveQuery.status === "error") {
@@ -2204,22 +2295,17 @@ async function runWinChildWrapper(a: Args): Promise<void> {
     const fallback = windowsProcessFallbackQuery(
       child.pid,
       process.pid,
-      Math.min(
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        Math.max(1, identityDeadline - Date.now()),
-      ),
+      Math.max(1, identityDeadline - Date.now()),
       "target-start-fallback",
     );
     if (fallback.status === "ok") {
       childIdentity = fallback.value;
       break;
     }
+    if (Date.now() >= identityDeadline) break;
     const query = windowsProcessQuery(
       child.pid,
-      Math.min(
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        Math.max(1, identityDeadline - Date.now()),
-      ),
+      Math.max(1, identityDeadline - Date.now()),
       "target-start",
     );
     if (query.status === "ok") {
@@ -2328,42 +2414,32 @@ async function runWinDaemon(a: Args): Promise<void> {
   });
   writeFileSync(join(dir, "child.pid"), String(child.pid));
   const childIdentityDeadline = Date.now() + 2_000;
-  let childIdentityQuery: WindowsProcessQuery<WindowsProcessIdentity>;
-  do {
-    childIdentityQuery = windowsProcessQuery(
-      child.pid,
-      Math.min(
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        Math.max(1, childIdentityDeadline - Date.now()),
-      ),
-      "child-start",
-    );
-    if (childIdentityQuery.status === "ok") break;
+  const startupSnapshot = queryWindowsProcessIdentities(
+    [child.pid, process.pid],
+    Math.max(1, childIdentityDeadline - Date.now()),
+    "child-start",
+  );
+  let childIdentityQuery = processFromSnapshot(startupSnapshot, child.pid);
+  while (childIdentityQuery.status !== "ok" && Date.now() < childIdentityDeadline) {
     const fallback = windowsProcessFallbackQuery(
       child.pid,
       process.pid,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
+      Math.max(1, childIdentityDeadline - Date.now()),
       "child-start-fallback",
     );
     if (fallback.status === "ok") {
       childIdentityQuery = fallback;
       break;
     }
-    if (Date.now() < childIdentityDeadline) sleepSync(100);
-  } while (Date.now() < childIdentityDeadline);
-  if (childIdentityQuery.status !== "ok") {
-    childIdentityQuery = windowsProcessFallbackQuery(
-      child.pid,
-      process.pid,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
-      "child-start-fallback",
-    );
+    childIdentityQuery = fallback;
+    if (Date.now() < childIdentityDeadline) sleepSync(Math.min(100, childIdentityDeadline - Date.now()));
   }
-  const daemonIdentityQuery = windowsProcessQuery(
-    process.pid,
-    WIN_PROCESS_QUERY_TIMEOUT_MS,
-    "daemon-start",
-  );
+  const daemonIdentityQuery: WindowsProcessQuery<WindowsProcessIdentity> =
+    shouldInjectCimFailure("daemon-start")
+      ? { status: "error", message: "injected CIM failure for daemon-start" }
+      : startupSnapshot.status === "ok"
+        ? processFromSnapshot(startupSnapshot, process.pid)
+        : windowsProcessQuery(process.pid, WIN_PROCESS_QUERY_TIMEOUT_MS, "daemon-start");
   let daemonChildren: WindowsProcessIdentity[] = [];
   if (daemonIdentityQuery.status === "ok") {
     const childrenQuery = windowsDirectChildrenQuery(

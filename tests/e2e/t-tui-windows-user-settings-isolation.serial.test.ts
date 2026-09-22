@@ -23,6 +23,7 @@ import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearOwnedClaudeFixtureStartup } from "../harness/claude-fixture-startup.ts";
+import { winSessionDir } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import {
   assertTuiDriveKill,
@@ -168,11 +169,17 @@ function runProbe(
   expectedMarker: string,
   cleanupState: ProbeCleanupState,
 ): { pane: string; trace: TraceRecord[] } {
-  const env: NodeJS.ProcessEnv = { ...baseEnv, AIDLC_TUI_TRACE_FILE: tracePath };
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    AIDLC_TUI_TRACE_FILE: tracePath,
+    AIDLC_TUI_CIM_TRACE_FILE: tracePath.replace(/\.ndjson$/, ".cim.log"),
+  };
   // Validate before start: the Windows driver preseeds Claude onboarding.
   expect(env.HOME).toBe(ownedUserHome);
   expect(env.USERPROFILE).toBe(ownedUserHome);
   expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+  let probeFailure: Error | undefined;
+  let probeResult: { pane: string; trace: TraceRecord[] } | undefined;
   try {
     const started = drive(
       [
@@ -273,12 +280,37 @@ function runProbe(
       "turn-completion wait",
     );
     expect(completionWait.stableMs).toBe(600);
-    return { pane, trace };
-  } finally {
+    probeResult = { pane, trace };
+  } catch (error) {
+    probeFailure = error instanceof Error ? error : new Error(String(error));
+    try {
+      const daemonError = join(winSessionDir(session), "daemon-error.txt");
+      if (existsSync(daemonError)) {
+        process.stderr.write(`Legacy TUI daemon diagnostics:\n${readFileSync(daemonError, "utf8")}\n`);
+      }
+    } catch {
+      // Preserve the probe failure if the daemon retires its files meanwhile.
+    }
+  }
+  let cleanupFailure: Error | undefined;
+  try {
     const killed = drive(["kill", "--session", session], env);
     if (killed.rc !== 0) cleanupState.allKillsSucceeded = false;
     assertTuiDriveKill(killed, session);
+  } catch (error) {
+    cleanupState.allKillsSucceeded = false;
+    cleanupFailure = error instanceof Error ? error : new Error(String(error));
   }
+  if (probeFailure && cleanupFailure) {
+    throw new AggregateError(
+      [probeFailure, cleanupFailure],
+      `Probe failed: ${probeFailure.message}\nCleanup also failed: ${cleanupFailure.message}`,
+    );
+  }
+  if (probeFailure) throw probeFailure;
+  if (cleanupFailure) throw cleanupFailure;
+  if (!probeResult) throw new Error("TUI probe returned no result");
+  return probeResult;
 }
 
 describe("Windows Claude TUI user-settings isolation", () => {

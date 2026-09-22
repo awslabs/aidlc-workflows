@@ -330,5 +330,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
     expect(readFileSync(activeStatePath(p), "utf-8")).toContain(
       "- **Status**: Completed",
     );
-  }, 60_000); // The same full journey, including three Operation approvals and their artifacts.
+    // Includes three Operation approvals and their artifacts. Windows reached
+    // observability approval when the previous 60s case deadline killed report.
+  }, process.platform === "win32" ? 120_000 : 60_000);
 });

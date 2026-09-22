@@ -192,6 +192,8 @@ describe("deployment execution fallback after a conditionally skipped pipeline",
   for (const scope of ["bugfix", "refactor"] as const) {
     test(`${scope} deploys through the existing workspace pipeline without fabricated pipeline artifacts`, () => {
       runSkipFallback(scope);
-    }, 30000);
+      // A fresh installed fixture plus the full CLI journey shares this budget;
+      // Windows hit 30s while intent-create was still running.
+    }, process.platform === "win32" ? 90_000 : 30_000);
   }
 });

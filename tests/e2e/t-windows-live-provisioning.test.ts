@@ -1,5 +1,5 @@
 // Deterministic Windows account/ACL tests; no CLI download or model calls.
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -14,16 +14,79 @@ const runnerProbeOnly = process.env.AIDLC_CODEX_RUNNER_PROBE_ONLY === "1";
 if (runnerProbeOnly && !runnerProbe) throw new Error("Runner-only probing requires AIDLC_CODEX_RUNNER_PROBE.");
 
 describe.skipIf(process.platform !== "win32")("Windows live provisioning boundary", () => {
-  test.each([
-    ["version", ["--version"]],
-    ["initialized", ["sandbox", "two words", 'a"quote', "\\tail\\", "& () %PATH%"]],
-  ] as const)("native Codex launcher preserves child output and arguments: %s", (_name, args) => {
-    const root = mkdtempSync(join(tmpdir(), "aidlc-native launcher &-"));
-    try {
-      const native = writeWindowsExecutable(join(root, "native-fixture.exe"), `using System;
+  describe("native Codex launcher", () => {
+    let root: string | undefined;
+    let executable: string;
+    let native: string;
+    beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), "aidlc-native launcher &-"));
+      const script = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+      const guiMatch = script.match(/function Get-CodexHostedGuiSource \{\r?\n\s*return @'\r?\n([\s\S]*?)\r?\n'@/);
+      expect(guiMatch).not.toBeNull();
+      const guiSource = guiMatch![1];
+      native = writeWindowsExecutable(join(root, "native-fixture.exe"), `using System;
 using System.Text;
+using System.Security.AccessControl;
+using System.Security.Principal;
+${guiSource}
 public static class NativeOutputFixture {
+  private const string Controller = "S-1-5-21-111-222-333-1001";
+  private static readonly string[] Children = { "S-1-5-21-111-222-333-1002", "S-1-5-21-111-222-333-1003" };
+  private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
+  private static string Bytes(GenericSecurityDescriptor value) {
+    byte[] bytes = new byte[value.BinaryLength]; value.GetBinaryForm(bytes, 0);
+    return Convert.ToBase64String(bytes);
+  }
+  private static void VerifyAcls() {
+    var original = new RawSecurityDescriptor("O:SYG:BAD:P(D;;0x4;;;S-1-5-21-111-222-333-1999)(A;;GA;;;SY)(A;OICIIO;GR;;;BA)");
+    string originalBytes = Bytes(original);
+    var prepared = AidlcCodexHostedGui.EditOwnedEntries(original, Controller, Children, false);
+    Check(Bytes(original) == originalBytes, "Preparation changed its input descriptor.");
+    Check(prepared.Owner.Equals(original.Owner) && prepared.Group.Equals(original.Group) &&
+      prepared.ControlFlags == original.ControlFlags, "Descriptor owner/group/control changed.");
+    Check(prepared.DiscretionaryAcl.Count == original.DiscretionaryAcl.Count + 3, "Wrong grant count.");
+    for (int i = 0; i < 3; i++) {
+      var ace = (CommonAce)prepared.DiscretionaryAcl[original.DiscretionaryAcl.Count + i];
+      Check(ace.SecurityIdentifier.Value == (i == 0 ? Controller : Children[i - 1]) &&
+        ace.AccessMask == (i == 0 ? 0x2006b : 0x20063) && ace.AceFlags == AceFlags.None &&
+        ace.AceQualifier == AceQualifier.AccessAllowed, "Wrong explicit runtime grant.");
+    }
+    // An unrelated entry can arrive between prepare and collect. Preserve it.
+    var other = new CommonAce(AceFlags.None, AceQualifier.AccessAllowed, 0x20002,
+      new SecurityIdentifier("S-1-5-21-111-222-333-1998"), false, null);
+    prepared.DiscretionaryAcl.InsertAce(prepared.DiscretionaryAcl.Count, other);
+    original.DiscretionaryAcl.InsertAce(original.DiscretionaryAcl.Count, other);
+    var removed = AidlcCodexHostedGui.EditOwnedEntries(prepared, Controller, Children, true);
+    Check(Bytes(removed) == Bytes(original), "Cleanup lost an unrelated ACL entry.");
+    Check(Bytes(AidlcCodexHostedGui.EditOwnedEntries(removed, Controller, Children, true)) == Bytes(removed),
+      "Repeated cleanup was not idempotent.");
+    bool refused = false;
+    string before = Bytes(prepared);
+    try { AidlcCodexHostedGui.EditOwnedEntries(prepared, Controller, Children, false); }
+    catch (InvalidOperationException) { refused = true; }
+    Check(refused && Bytes(prepared) == before, "Existing runtime entries were accepted or modified.");
+    // A changed grant for one of our SIDs cannot authorize deleting other ACEs.
+    ((CommonAce)prepared.DiscretionaryAcl[3]).AccessMask |= 0x40000;
+    before = Bytes(prepared); refused = false;
+    try { AidlcCodexHostedGui.EditOwnedEntries(prepared, Controller, Children, true); }
+    catch (InvalidOperationException) { refused = true; }
+    Check(refused && Bytes(prepared) == before, "Ambiguous cleanup changed its input.");
+    Console.Out.WriteLine("owned-station-acls-verified");
+  }
   public static int Main(string[] args) {
+    if (args.Length == 1 && args[0] == "--verify-owned-station-acls") {
+      VerifyAcls(); return 0;
+    }
+    if (args.Length == 1 && args[0] == "--reject-foreign-controller") {
+      try { AidlcCodexHostedGui.RunOnPrivateDesktop("S-1-5-18", Controller, Children,
+        (_desktop) => { throw new Exception("Native callback must not run."); }); }
+      catch (InvalidOperationException error) {
+        Check(error.Message == "Codex GUI launcher requires its prepared low controller." ||
+          error.Message == "Codex hosted GUI requires session 0.", "Unexpected refusal.");
+        Console.Out.WriteLine("foreign-controller-refused"); return 0;
+      }
+      throw new Exception("Foreign controller was accepted.");
+    }
     Console.Out.WriteLine("stdout-marker:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(string.Join("\\0", args))));
     Console.Error.WriteLine("stderr-marker");
     return 7;
@@ -33,15 +96,30 @@ public static class NativeOutputFixture {
       writeFileSync(initializer, "exit 0\n");
       // Compile the actual authored bridge with inert child commands. This
       // exercises its native process boundary without creating sandbox users.
-      const script = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
       const match = script.match(/\$launcher = @'\r?\n([\s\S]*?)\r?\n'@/);
       expect(match).not.toBeNull();
       let launcher = match![1];
+      launcher = launcher.replaceAll("__HOSTED_GUI_SOURCE__", guiSource)
+        .replaceAll("__HOSTED_GUI__", "false")
+        .replaceAll("__STATION_OWNER__", JSON.stringify("S-1-5-18"))
+        .replaceAll("__CONTROLLER_SID__", JSON.stringify("S-1-5-21-111-222-333-1001"))
+        .replaceAll("__SANDBOX_SIDS__", 'new string[] { "S-1-5-21-111-222-333-1002", "S-1-5-21-111-222-333-1003" }');
       for (const [marker, value] of [
         ["__NATIVE__", native], ["__PACKAGE_ROOT__", root], ["__INITIALIZER__", initializer],
+        ["__GUI_PROBE__", native],
         ["__POWERSHELL__", join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe")],
       ]) launcher = launcher.replaceAll(marker, JSON.stringify(value));
-      const executable = writeWindowsExecutable(join(root, "managed.exe"), launcher);
+      executable = writeWindowsExecutable(join(root, "managed.exe"), launcher);
+    }, 45_000);
+    afterAll(() => {
+      if (root) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+    // Both invocations use the same immutable executables. Compile once, while
+    // keeping each process boundary and its literal-argv assertions independent.
+    test.each([
+      ["version", ["--version"]],
+      ["initialized", ["sandbox", "two words", 'a"quote', "\\tail\\", "& () %PATH%"]],
+    ] as const)("preserves child output and arguments: %s", (_name, args) => {
       const result = spawnSync(executable, args, {
         encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15_000,
       });
@@ -49,10 +127,18 @@ public static class NativeOutputFixture {
       expect(result.status, result.stderr).toBe(7);
       expect(result.stdout.trim()).toBe(`stdout-marker:${Buffer.from(args.join("\0")).toString("base64")}`);
       expect(result.stderr.trim()).toBe("stderr-marker");
-    } finally {
-      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    }
-  }, 30_000);
+    }, 20_000);
+    test("preserves unrelated station ACL entries and refuses ambiguous cleanup", () => {
+      const result = spawnSync(native, ["--verify-owned-station-acls"], { encoding: "utf8", timeout: 15_000 });
+      expect(result.status, `${result.error ?? ""}\n${result.stderr}`).toBe(0);
+      expect(result.stdout.trim()).toBe("owned-station-acls-verified");
+    }, 20_000);
+    test("refuses a foreign hosted controller before opening WinSta0", () => {
+      const result = spawnSync(native, ["--reject-foreign-controller"], { encoding: "utf8", timeout: 15_000 });
+      expect(result.status, `${result.error ?? ""}\n${result.stderr}`).toBe(0);
+      expect(result.stdout.trim()).toBe("foreign-controller-refused");
+    }, 20_000);
+  });
 
   for (const [name, expected] of [
     ["seal", { singleLinkTools: true, lowUserWriteDenied: true }],
