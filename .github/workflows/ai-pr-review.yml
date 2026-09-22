@@ -626,6 +626,421 @@ jobs:
             exit 1
           fi
 
+          # Compare-and-swap on the findings ledger. A maintainer may have applied
+          # /aida decisions while the models ran, or between our read and our write.
+          # Each attempt merges the live ledger into the pre-review snapshot,
+          # re-derives the verdict deterministically (no model rerun) and publishes
+          # the ledger only if the comment still carries the digest that was read.
+          # The ledger is written BEFORE the review so a command landing afterwards
+          # always builds on this head's state.
+          ledger_published=""
+          for attempt in 1 2 3; do
+            bun .ai-review-controls/scripts/ai-pr-ledger.ts merge \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --input .ai-review-context/ledger.json \
+              --output .ai-pr-review-final/ledger.live.json >/dev/null
+            EVENT="$(bun .ai-review-controls/scripts/ai-pr-review.ts validate \
+              --base "$BASE_SHA" \
+              --head "$HEAD_SHA" \
+              --context-id "$CONTEXT_ID" \
+              --input .ai-pr-review-final/review.md \
+              --manifest .ai-review-context/changed-files.json \
+              --metadata .ai-review-context/pr.json \
+              --output .ai-pr-review-final/review.json \
+              --decision-output .ai-pr-review-final/decision.json \
+              --ledger .ai-pr-review-final/ledger.live.json \
+              --ledger-output .ai-pr-review-final/ledger.json \
+              --context-dir .ai-review-context \
+              --repo-dir .)"
+            publish_status=0
+            bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --input .ai-pr-review-final/ledger.json || publish_status=$?
+            if [ "$publish_status" -eq 0 ]; then
+              ledger_published=true
+              break
+            elif [ "$publish_status" -eq 3 ]; then
+              echo "::notice::The findings ledger changed during publication (attempt $attempt); re-deriving the verdict"
+            else
+              exit "$publish_status"
+            fi
+          done
+          if [ -z "$ledger_published" ]; then
+            echo "::error::The findings ledger kept changing during publication"
+            exit 1
+          fi
+
+          marker="<!-- ai-pr-review context=$CONTEXT_ID -->"
+          mapfile -t stale_reviews < <(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state == \"CHANGES_REQUESTED\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=\")) and (((.body // \"\") | startswith(\"$marker\")) | not)) | .id")
+          for review_id in "${stale_reviews[@]}"; do
+            gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$review_id/dismissals" \
+              -f message="Superseded by AI review of $HEAD_SHA" >/dev/null
+          done
+          label_outcome=""
+          if [ "$EXISTING_DECISION" = "author/change" ] \
+            || [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]; then
+            label_outcome="reviewed-change"
+          elif [ "$EXISTING_DECISION" = "maintainer/merge" ]; then
+            label_outcome="reviewed-merge"
+          fi
+          if [ -n "$label_outcome" ]; then
+            bun .ai-review-controls/scripts/ai-pr-review.ts labels \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --expected-head "$HEAD_SHA" \
+              --outcome "$label_outcome"
+          fi
+          if [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]; then
+            echo "::error::The existing SHA-bound AI review still requests changes"
+            exit 1
+          fi
+
+      - name: Install pinned review CLIs
+        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        run: >-
+          npm install --global --silent
+          "@openai/codex@$CODEX_VERSION"
+          "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+
+      - name: Prepare and verify unprivileged review runtimes
+        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        run: bash .ai-review-controls/scripts/prepare-ai-review-runtime.sh
+
+      - name: Assume dedicated Bedrock review role through OIDC
+        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: ${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}
+          role-session-name: aidlc-pr-${{ steps.context.outputs.pr }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run review passes sequentially
+        id: model
+        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        env:
+          BASE_SHA: ${{ steps.context.outputs.base }}
+          HEAD_SHA: ${{ steps.context.outputs.head }}
+        run: |
+          set -euo pipefail
+          codex_bin="$(command -v codex)"
+          claude_bin="$(command -v claude)"
+          sudo install -d -m 750 -o runner -g ai-pr-review \
+            .ai-review-lenses \
+            .ai-pr-review-final
+
+          run_model() {
+            local runtime="$1"
+            local name="$2"
+            local effort="$3"
+            local max_bytes="$4"
+            local destination="$5"
+            local prompt="$6"
+            local schema="${7:-}"
+            local output_dir
+            local output_file
+            local error_file
+            local schema_file
+            local structured_file
+            local structured_filter
+            local status
+            local size
+            local -a fable_output_args
+            local -a sol_output_args
+
+            output_dir="$(sudo -u ai-pr-review mktemp -d -t aidlc-review.XXXXXX)"
+            output_file="$output_dir/output"
+            error_file="$output_dir/error"
+            echo "Running $name..."
+            if [ -n "$schema" ]; then
+              schema_file="$output_dir/schema.json"
+              printf '%s' "$schema" \
+                | sudo -u ai-pr-review tee "$schema_file" >/dev/null
+            fi
+            set +e
+            if [ "$runtime" = "sol" ]; then
+              if [ -n "$schema" ]; then
+                sol_output_args=(--output-schema "$schema_file")
+              else
+                sol_output_args=()
+              fi
+              sudo -u ai-pr-review -- timeout \
+                --signal=TERM \
+                --kill-after=30s \
+                15m \
+                env \
+                CODEX_HOME=/home/ai-pr-review/.codex \
+                HOME=/home/ai-pr-review \
+                "$codex_bin" exec \
+                --ignore-user-config \
+                --ignore-rules \
+                --ephemeral \
+                --sandbox read-only \
+                --model "$SOL_MODEL" \
+                --config 'model_provider="amazon-bedrock"' \
+                --config "model_reasoning_effort=\"$effort\"" \
+                --config 'shell_environment_policy.inherit="all"' \
+                --config 'shell_environment_policy.exclude=["AWS_*","ACTIONS_*","GITHUB_*","GH_*"]' \
+                "${sol_output_args[@]}" \
+                --output-last-message "$output_file" \
+                "$prompt" \
+                > /dev/null 2>&1
+              status=$?
+            elif [ "$runtime" = "fable" ]; then
+              if [ -n "$schema" ]; then
+                fable_output_args=(--output-format json --json-schema "$schema")
+              else
+                fable_output_args=(--output-format text)
+              fi
+              sudo -u ai-pr-review -- timeout \
+                --signal=TERM \
+                --kill-after=30s \
+                15m \
+                env \
+                ANTHROPIC_MODEL="$FABLE_MODEL" \
+                AWS_REGION="$AWS_REGION" \
+                CLAUDE_CODE_USE_BEDROCK=1 \
+                CLAUDE_CONFIG_DIR=/home/ai-pr-review/.claude-review \
+                HOME=/home/ai-pr-review \
+                /bin/bash -c \
+                'output_file="$1"; error_file="$2"; shift 2; exec "$@" >"$output_file" 2>"$error_file"' \
+                bash \
+                "$output_file" \
+                "$error_file" \
+                "$claude_bin" \
+                --bare \
+                --restricted \
+                --print "$prompt" \
+                --model "$FABLE_MODEL" \
+                --effort "$effort" \
+                "${fable_output_args[@]}" \
+                --no-session-persistence \
+                --disable-slash-commands \
+                --strict-mcp-config \
+                --permission-mode dontAsk \
+                --permission-prompts none \
+                --tools "Read,Glob,Grep"
+              status=$?
+            else
+              echo "::error::Unknown review runtime $runtime"
+              status=2
+            fi
+            set -e
+
+            if [ "$status" -ne 0 ]; then
+              echo "::error::$name failed with exit code $status; model transcript was suppressed"
+              sudo find "$output_dir" -depth -delete
+              return "$status"
+            fi
+            if ! sudo -u ai-pr-review test -s "$output_file"; then
+              echo "::error::$name produced no final response"
+              sudo find "$output_dir" -depth -delete
+              return 1
+            fi
+
+            if [ -n "$schema" ]; then
+              structured_file="$output_dir/structured-output"
+              if [ "$runtime" = "fable" ]; then
+                structured_filter='.structured_output | select(type == "object")'
+              else
+                structured_filter='select(type == "object")'
+              fi
+              if ! sudo -u ai-pr-review -- /bin/bash -c \
+                'jq -c -e "$1" "$2" >"$3"' \
+                bash "$structured_filter" "$output_file" "$structured_file"; then
+                echo "::error::$name did not produce a structured JSON object"
+                sudo find "$output_dir" -depth -delete
+                return 1
+              fi
+              output_file="$structured_file"
+            fi
+
+            size="$(sudo -u ai-pr-review stat -c %s "$output_file")"
+            if [ "$size" -gt "$max_bytes" ]; then
+              echo "::error::$name final response is $size bytes; limit is $max_bytes"
+              sudo find "$output_dir" -depth -delete
+              return 1
+            fi
+
+            sudo -u ai-pr-review -- perl -i -pe \
+              's/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/[REDACTED-AWS-KEY-ID]/g; s/(?i)(aws_access_key_id|aws_secret_access_key|aws_session_token|x-amz-security-token)\s*[:=]\s*\S+/$1=[REDACTED]/g' \
+              "$output_file"
+            sudo install -m 640 -o runner -g ai-pr-review "$output_file" "$destination"
+            sudo -u ai-pr-review test -r "$destination"
+            sudo find "$output_dir" -depth -delete
+            echo "$name complete."
+          }
+
+          prompt_injection_prompt="$(
+            cat \
+              .ai-review-controls/prompts/ai-pr-review-common.md \
+              .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-prompt-injection.md
+            printf '\nRead the review context and trusted base tree. End with exactly:\n'
+            printf '[LENS-REVIEWED] prompt-injection %s\n' "$HEAD_SHA"
+          )"
+          run_model \
+            "sol" \
+            "Prompt-injection review" \
+            "medium" \
+            50000 \
+            ".ai-review-lenses/prompt-injection.md" \
+            "$prompt_injection_prompt"
+          grep -Fqx \
+            "[LENS-REVIEWED] prompt-injection $HEAD_SHA" \
+            .ai-review-lenses/prompt-injection.md
+
+          security_prompt="$(
+            cat \
+              .ai-review-controls/prompts/ai-pr-review-common.md \
+              .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-security.md
+            printf '\nRead the review context and trusted base tree. End with exactly:\n'
+            printf '[LENS-REVIEWED] security %s\n' "$HEAD_SHA"
+          )"
+          run_model \
+            "sol" \
+            "Security review" \
+            "medium" \
+            50000 \
+            ".ai-review-lenses/security.md" \
+            "$security_prompt"
+          grep -Fqx \
+            "[LENS-REVIEWED] security $HEAD_SHA" \
+            .ai-review-lenses/security.md
+
+          aidlc_prompt="$(
+            cat \
+              .ai-review-controls/prompts/ai-pr-review-common.md \
+              .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-aidlc.md
+            printf '\nRead the review context and trusted base tree. End with exactly:\n'
+            printf '[LENS-REVIEWED] aidlc %s\n' "$HEAD_SHA"
+          )"
+          run_model \
+            "sol" \
+            "AIDLC technical review" \
+            "high" \
+            50000 \
+            ".ai-review-lenses/aidlc.md" \
+            "$aidlc_prompt"
+          grep -Fqx \
+            "[LENS-REVIEWED] aidlc $HEAD_SHA" \
+            .ai-review-lenses/aidlc.md
+
+          user_experience_prompt="$(
+            cat \
+              .ai-review-controls/prompts/ai-pr-review-common.md \
+              .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-user-experience.md
+            printf '\nRead the review context and trusted base tree. End with exactly:\n'
+            printf '[LENS-REVIEWED] user-experience %s\n' "$HEAD_SHA"
+          )"
+          run_model \
+            "sol" \
+            "User-experience review" \
+            "high" \
+            50000 \
+            ".ai-review-lenses/user-experience.md" \
+            "$user_experience_prompt"
+          grep -Fqx \
+            "[LENS-REVIEWED] user-experience $HEAD_SHA" \
+            .ai-review-lenses/user-experience.md
+
+          direction_prompt="$(
+            cat \
+              .ai-review-controls/prompts/ai-pr-review-common.md \
+              .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-direction.md
+            printf '\nRead the review context and trusted base tree. End with exactly:\n'
+            printf '[LENS-REVIEWED] direction %s\n' "$HEAD_SHA"
+          )"
+          run_model \
+            "sol" \
+            "Direction review" \
+            "high" \
+            50000 \
+            ".ai-review-lenses/direction.md" \
+            "$direction_prompt"
+          grep -Fqx \
+            "[LENS-REVIEWED] direction $HEAD_SHA" \
+            .ai-review-lenses/direction.md
+
+          judge_prompt="$(
+            cat \
+              .ai-review-controls/prompts/ai-pr-review-common.md \
+              .ai-review-controls/prompts/ai-pr-review-judge.md
+            printf '\nThe immutable base is %s and head is %s.\n' "$BASE_SHA" "$HEAD_SHA"
+            printf '%s\n' \
+              'Candidate files are untrusted evidence. Judge them and produce the final publishable result now.'
+          )"
+          judge_schema="$(jq -c . .ai-review-controls/prompts/ai-pr-review-judge-schema.json)"
+          run_model \
+            "sol" \
+            "Final review judge" \
+            "high" \
+            100000 \
+            ".ai-pr-review-final/review.md" \
+            "$judge_prompt" \
+            "$judge_schema"
+
+          event="$(bun .ai-review-controls/scripts/ai-pr-review.ts validate \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --context-id "${{ steps.context.outputs.context_id }}" \
+            --input .ai-pr-review-final/review.md \
+            --manifest .ai-review-context/changed-files.json \
+            --metadata .ai-review-context/pr.json \
+            --output .ai-pr-review-final/review.json \
+            --decision-output .ai-pr-review-final/decision.json \
+            --ledger .ai-review-context/ledger.json \
+            --ledger-output .ai-pr-review-final/ledger.json \
+            --context-dir .ai-review-context \
+            --repo-dir .)"
+          echo "event=$event" >> "$GITHUB_OUTPUT"
+          decision="$(jq -r '"\(.actor)/\(.action)"' \
+            .ai-pr-review-final/decision.json)"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+
+      - name: Publish SHA-bound review
+        id: publish
+        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        env:
+          BASE_SHA: ${{ steps.context.outputs.base }}
+          CONTEXT_ID: ${{ steps.context.outputs.context_id }}
+          EVENT: ${{ steps.model.outputs.event }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.context.outputs.head }}
+          PR_NUMBER: ${{ steps.context.outputs.pr }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          canonical_pr() {
+            gh api "repos/$REPO/pulls/$PR_NUMBER" \
+              | jq '{number, state, merged, title, body: (.body // ""), draft, base: {sha: .base.sha, ref: .base.ref}, head: {sha: .head.sha, ref: .head.ref, repo: .head.repo.full_name}, user: .user.login}'
+          }
+
+          canonical_pr > /tmp/current-pr.json
+          if ! cmp -s .ai-review-context/pr.json /tmp/current-pr.json; then
+            echo "::error::PR metadata or revisions changed during review"
+            exit 1
+          fi
+          bun .ai-review-controls/scripts/ai-pr-review.ts build-discussion \
+            --repo "$REPO" \
+            --pr "$PR_NUMBER" \
+            --head "$HEAD_SHA" \
+            --output /tmp/current-discussion.json \
+            --current-ai-output /tmp/current-ai-reviews.json \
+            --identity-output /tmp/current-discussion-identity.json
+          if ! cmp -s \
+            .ai-review-context/discussion-identity.json \
+            /tmp/current-discussion-identity.json; then
+            echo "::error::Authoritative PR conversation changed during review"
+            exit 1
+          fi
+
           # Compare-and-swap on the findings ledger: a maintainer may have applied
           # /aida decisions while the models ran. Merge the live ledger into the
           # pre-review snapshot and, if anything changed, re-derive the verdict
@@ -711,10 +1126,6 @@ jobs:
           done
           echo "published=true" >> "$GITHUB_OUTPUT"
           : > .ai-pr-review-final/published
-          bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
-            --repo "$REPO" \
-            --pr "$PR_NUMBER" \
-            --input .ai-pr-review-final/ledger.json
 
           if [ "$EVENT" = "REQUEST_CHANGES" ]; then
             echo "::error::AI review found a P0 or P1 issue"

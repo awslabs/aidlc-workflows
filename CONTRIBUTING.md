@@ -155,17 +155,23 @@ A comment is applied all-or-nothing: if one line is invalid, nothing is applied
 and AIDA replies naming the line. The workflow verifies the commenter's
 permission through GitHub's collaborators API before applying anything and
 reacts 👍 (applied), 👎 (no write access), or 😕 (usage error, with a reply).
-After a command changes the effective verdict of the current head, AIDA
-refreshes the managed labels and, when no open blocking finding remains,
-dismisses its own `CHANGES_REQUESTED` review so the head can proceed without
-an artificial commit. An open P0/P1 that a later review omits while its code
-is unchanged is *retained*: it stays in the review and keeps the next action
-with the author until the code changes or a maintainer accepts it.
+After a command changes the ledger, AIDA re-derives the decision for the
+reviewed head from persisted state under the same rules the review uses (open
+findings at that head, readiness, risk), refreshes the managed labels and, when
+that decision is `maintainer/merge`, dismisses its own `CHANGES_REQUESTED`
+review so the head can proceed without an artificial commit. The check of the
+original review run is not rewritten. An open P0/P1 that a later review omits
+while at least one of its cited lines is provably unchanged is *retained*: it
+stays in the review and keeps the next action with the author until the code
+changes or a maintainer accepts it. A finding whose cited code is gone, or
+cannot be evaluated at the new head, resolves when a review no longer reports
+it.
 
-The ledger comment carries a digest of its data; a hand-edited ledger is
-detected, its decisions are reset, and only `/aida` commands can restate them.
-Decisions written anywhere other than through these commands are not decisions
-to AIDA.
+The ledger comment carries a digest of its data. Do not edit it: AIDA refuses
+to run on an edited or unreadable ledger and says so. To recover, restore the
+body from the comment's edit history or delete the comment to start a fresh
+ledger (earlier reviews keep every finding). Decisions written anywhere other
+than through these commands are not decisions to AIDA.
 
 Every PR review includes a User Experience section before its UX assessment.
 For user-visible changes, it explains the affected user, the previous and

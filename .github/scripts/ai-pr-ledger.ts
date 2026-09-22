@@ -9,16 +9,17 @@
 // permission API on every command, is the only authority. Decisions enter the
 // ledger only through this script after that check; the reviewing model never
 // treats text it reads as a decision. The rendered comment carries a digest of
-// its JSON; a hand edit is detected, its decisions are reset before ANY further
-// use (review or command), and only an explicit command recreates them.
+// its JSON; an edited comment fails verification and is refused (fail closed):
+// nothing downstream ever treats unverified state as authenticated.
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
-export const LEDGER_MARKER = "<!-- aida-ledger v1";
-export const LEDGER_VERSION = 1 as const;
+export const LEDGER_MARKER = "<!-- aida-ledger";
+export const LEDGER_VERSION = 2 as const;
+const LEGACY_LEDGER_VERSION = 1;
 const MAX_REASON_LENGTH = 500;
 const MAX_LEDGER_BYTES = 200_000;
 const MAX_FINDINGS = 200;
@@ -31,9 +32,10 @@ export type LedgerStatus = "open" | "resolved" | "accepted" | "rejected";
 export type CommandKind = "accept" | "reject" | "reopen" | "status";
 
 export interface LedgerAnchor {
-  kind: "line" | "file" | "quote";
+  kind: "line" | "position" | "file" | "quote";
   path?: string;
   side?: DiffSide;
+  line?: number;
   sha256: string;
 }
 
@@ -75,18 +77,33 @@ export interface LedgerEvent {
   commentId?: number;
 }
 
+// The verdict AIDA published for a head, kept so a later /aida command can
+// re-derive the decision under the SAME invariants without rerunning models.
+export interface LedgerReview {
+  head: string;
+  readiness: number;
+  risk: number;
+  decision: "merge" | "change";
+}
+
 export interface Ledger {
   version: typeof LEDGER_VERSION;
   pullRequest: number;
   nextId: number;
   findings: LedgerFinding[];
   events: LedgerEvent[];
+  review?: LedgerReview;
 }
 
 export interface LoadedLedger {
   ledger: Ledger;
   commentId: number | null;
-  tampered: boolean;
+  // The digest string the comment carried when read; the compare-and-swap on
+  // publication refuses to overwrite a comment that no longer carries it.
+  digest: string | null;
+  // true when the comment held a version-1 ledger: its anchors cannot be
+  // evaluated against any head and its decisions were reset on migration.
+  migrated: boolean;
 }
 
 export interface LedgerCommand {
@@ -104,6 +121,8 @@ export interface ReviewFindingInput {
 
 export interface ReconcileResult<T extends ReviewFindingInput> {
   ledger: Ledger;
+  // `priority` on a kept entry is the ledger's effective priority: a restatement
+  // never lowers an open finding's priority.
   kept: Array<T & { ledgerId: string }>;
   restatedAccepted: Array<T & { ledgerId: string }>;
   suppressed: Array<T & { ledgerId: string; decision: LedgerDecision }>;
@@ -171,8 +190,10 @@ export function quoteAnchor(quote: string): LedgerAnchor {
   return { kind: "quote", sha256: sha256(`quote\0${quote.trim()}`) };
 }
 
+// The fallback when a cited line has no readable text. Its presence at a head is
+// unknowable, so it identifies a finding but never retains one.
 export function positionAnchor(path: string, line: number, side: DiffSide): LedgerAnchor {
-  return { kind: "line", path, side, sha256: sha256(`position\0${path}\0${line}\0${side}`) };
+  return { kind: "position", path, side, line, sha256: sha256(`position\0${path}\0${line}\0${side}`) };
 }
 
 // --- validation ---------------------------------------------------------------
@@ -185,8 +206,11 @@ const EVENT_KINDS: readonly LedgerEventKind[] = [
 
 function validateAnchor(value: unknown, label: string): LedgerAnchor {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
-  if (value.kind !== "line" && value.kind !== "file" && value.kind !== "quote") {
+  if (value.kind !== "line" && value.kind !== "position" && value.kind !== "file" && value.kind !== "quote") {
     throw new Error(`${label}.kind is invalid`);
+  }
+  if (value.line !== undefined && (!Number.isInteger(value.line) || Number(value.line) < 1)) {
+    throw new Error(`${label}.line must be a positive integer`);
   }
   if (!/^[0-9a-f]{64}$/.test(text(value.sha256))) throw new Error(`${label}.sha256 is invalid`);
   if (value.path !== undefined && (typeof value.path !== "string" || value.path.length === 0)) {
@@ -201,6 +225,7 @@ function validateAnchor(value: unknown, label: string): LedgerAnchor {
     kind: value.kind,
     ...(typeof value.path === "string" ? { path: value.path } : {}),
     ...(value.side === "LEFT" || value.side === "RIGHT" ? { side: value.side } : {}),
+    ...(typeof value.line === "number" ? { line: value.line } : {}),
     sha256: text(value.sha256),
   };
 }
@@ -283,7 +308,46 @@ export function validateLedger(value: unknown): Ledger {
   });
   const maxId = findings.reduce((max, finding) => Math.max(max, Number(finding.id.slice(1))), 0);
   if (Number(value.nextId) <= maxId) throw new Error("ledger.nextId must exceed every finding id");
-  return { version: LEDGER_VERSION, pullRequest: Number(value.pullRequest), nextId: Number(value.nextId), findings, events };
+  const ledger: Ledger = { version: LEDGER_VERSION, pullRequest: Number(value.pullRequest), nextId: Number(value.nextId), findings, events };
+  if (value.review !== undefined) ledger.review = validateReview(value.review);
+  return ledger;
+}
+
+function validateReview(value: unknown): LedgerReview {
+  if (!isRecord(value)) throw new Error("ledger.review must be an object");
+  if (!/^[0-9a-f]{40}$/.test(text(value.head))) throw new Error("ledger.review.head is invalid");
+  const score = (name: "readiness" | "risk"): number => {
+    const raw = value[name];
+    if (!Number.isInteger(raw) || Number(raw) < 1 || Number(raw) > 5) throw new Error(`ledger.review.${name} must be 1..5`);
+    return Number(raw);
+  };
+  if (value.decision !== "merge" && value.decision !== "change") throw new Error("ledger.review.decision is invalid");
+  return { head: text(value.head), readiness: score("readiness"), risk: score("risk"), decision: value.decision };
+}
+
+// Migration of a version-1 ledger. Findings and ids survive so nothing is
+// renumbered. Version-1 anchors (side-less, whitespace-normalized hashes) cannot
+// be evaluated against any head: they become position anchors, which identify
+// a finding but never retain one, so the next review resolves the ones the judge
+// no longer reports. Decisions cannot be authenticated under the new digest and
+// are reset. Any hash or shape change to the ledger MUST bump LEDGER_VERSION and
+// extend this function in the same commit.
+export function migrateLegacyLedger(value: unknown, at: string): Ledger {
+  if (!isRecord(value) || value.version !== LEGACY_LEDGER_VERSION || !Array.isArray(value.findings)) {
+    throw new Error("not a version-1 ledger");
+  }
+  const findings = value.findings.map(entry => {
+    if (!isRecord(entry) || !Array.isArray(entry.anchors)) return entry;
+    const anchors = entry.anchors.map(anchor =>
+      isRecord(anchor)
+        ? { kind: "position", ...(typeof anchor.path === "string" ? { path: anchor.path } : {}), sha256: anchor.sha256 }
+        : anchor,
+    );
+    return { ...entry, anchors };
+  });
+  const ledger = validateLedger({ ...value, version: LEDGER_VERSION, findings, review: undefined });
+  resetDecisions(ledger, at, "ledger schema migration");
+  return ledger;
 }
 
 // --- comment rendering + parsing ---------------------------------------------
@@ -303,13 +367,13 @@ export function openBlockingCount(ledger: Ledger): number {
   return ledger.findings.filter(finding => finding.status === "open" && isBlocking(finding.priority)).length;
 }
 
-export function renderLedgerComment(input: Ledger, tampered = false): string {
+export function renderLedgerComment(input: Ledger, migrated = false): string {
   const ledger = validateLedger(input);
   const digest = ledgerDigest(ledger);
-  const lines = [`${LEDGER_MARKER} digest=${digest} -->`, "## AIDA findings ledger", ""];
-  if (tampered) {
+  const lines = [`${LEDGER_MARKER} v${LEDGER_VERSION} digest=${digest} -->`, "## AIDA findings ledger", ""];
+  if (migrated) {
     lines.push(
-      "> ⚠️ This comment was edited outside AIDA. Decisions recorded by that edit were reset (an unreadable edit resets the whole ledger); restate them with `/aida` commands.",
+      "> ℹ️ Migrated from ledger schema v1. Earlier decisions were reset; restate them with `/aida` commands. Findings recorded under the old schema resolve once a review no longer reports them.",
       "",
     );
   }
@@ -335,6 +399,7 @@ export function renderLedgerComment(input: Ledger, tampered = false): string {
     "Maintainer commands (repository write access) — put them on the first lines of a comment, one per line, several ids per line allowed:",
     "`/aida accept F# [F#…] <reason>` · `/aida reject F# [F#…] <reason>` · `/aida reopen F# [F#…]` · `/aida status`",
     "P0 and P1 findings can be accepted (visible, risk owned by the maintainer) but not rejected. A comment is applied all-or-nothing.",
+    "Do not edit this comment: AIDA verifies its digest and refuses to run on an edited ledger. To start over, delete it.",
     "",
     "<details><summary>ledger.json</summary>",
     "",
@@ -346,7 +411,15 @@ export function renderLedgerComment(input: Ledger, tampered = false): string {
   return lines.join("\n");
 }
 
-export function parseLedgerComment(body: string): { ledger: Ledger; tampered: boolean } | null {
+// Returns null for a comment that is not a ledger. Throws for a ledger comment
+// that cannot be trusted (unreadable JSON, invalid shape, digest mismatch): the
+// caller fails closed rather than acting on unverified state. A version-1
+// ledger is migrated instead of verified; `digest` is the marker's digest as
+// read, for the publish-time compare-and-swap.
+export function parseLedgerComment(
+  body: string,
+  at = new Date().toISOString(),
+): { ledger: Ledger; migrated: boolean; digest: string | null } | null {
   const markerLine = body.split("\n").find(line => line.startsWith(LEDGER_MARKER));
   if (!markerLine) return null;
   const digestMatch = /digest=([0-9a-f]{64})/.exec(markerLine);
@@ -361,8 +434,13 @@ export function parseLedgerComment(body: string): { ledger: Ledger; tampered: bo
   } catch {
     throw new Error("ledger JSON is malformed");
   }
+  const digest = digestMatch ? digestMatch[1] : null;
+  if (isRecord(parsed) && parsed.version === LEGACY_LEDGER_VERSION) {
+    return { ledger: migrateLegacyLedger(parsed, at), migrated: true, digest };
+  }
   const ledger = validateLedger(parsed);
-  return { ledger, tampered: !digestMatch || digestMatch[1] !== ledgerDigest(ledger) };
+  if (digest !== ledgerDigest(ledger)) throw new Error("ledger comment was edited outside AIDA (digest mismatch)");
+  return { ledger, migrated: false, digest };
 }
 
 // --- decisions ----------------------------------------------------------------
@@ -378,18 +456,56 @@ function pushEvent(ledger: Ledger, event: LedgerEvent): void {
   if (ledger.events.length > MAX_EVENTS) ledger.events = ledger.events.slice(ledger.events.length - MAX_EVENTS);
 }
 
-// Decisions written by a hand edit were never verified. Reset them so nothing
-// downstream — a review or an unrelated command — can authenticate them.
-export function resetUnverifiedDecisions(ledger: Ledger, at: string): string[] {
+// Reopens every decided finding (used by schema migration, where decisions can
+// no longer be authenticated). Only an explicit /aida command recreates them.
+export function resetDecisions(ledger: Ledger, at: string, reason: string): string[] {
   const reset: string[] = [];
   for (const entry of ledger.findings) {
     if (entry.status !== "accepted" && entry.status !== "rejected") continue;
     entry.status = "open";
     delete entry.decision;
-    pushEvent(ledger, { at, kind: "reopened", by: "aida", id: entry.id, reason: "unverified ledger edit" });
+    pushEvent(ledger, { at, kind: "reopened", by: "aida", id: entry.id, reason });
     reset.push(entry.id);
   }
   return reset;
+}
+
+// The one decision rule shared by the review (after ledger decisions apply) and
+// by a later /aida command (without rerunning models). Mirrors the validator's
+// invariants: merge needs no open blocker and readiness >= 4, risk <= 2; a
+// stored `change` flips to merge only when no open finding remains at all.
+export function deriveDecision(
+  stored: "merge" | "change",
+  openBlocking: number,
+  openAny: number,
+  readiness: number,
+  risk: number,
+): "merge" | "change" {
+  if (openBlocking > 0) return "change";
+  const scoresPermitMerge = readiness >= 4 && risk <= 2;
+  if (stored === "merge") return scoresPermitMerge ? "merge" : "change";
+  return openAny === 0 && scoresPermitMerge ? "merge" : "change";
+}
+
+export interface LedgerVerdict {
+  head: string;
+  decision: "merge" | "change";
+  openBlocking: number;
+}
+
+// The effective verdict for the head AIDA last reviewed, from persisted state
+// alone: the open findings that were reported or retained at that head plus the
+// stored scores and decision.
+export function ledgerVerdict(ledger: Ledger): LedgerVerdict | null {
+  const review = ledger.review;
+  if (!review) return null;
+  const atHead = ledger.findings.filter(entry => entry.status === "open" && entry.lastSeen.head === review.head);
+  const openBlocking = atHead.filter(entry => isBlocking(entry.priority)).length;
+  return {
+    head: review.head,
+    openBlocking,
+    decision: deriveDecision(review.decision, openBlocking, atHead.length, review.readiness, review.risk),
+  };
 }
 
 // Commands are the leading block of a comment: consecutive non-blank lines that
@@ -497,7 +613,6 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   const result: ReconcileResult<T> = {
     ledger, kept: [], restatedAccepted: [], suppressed: [], reopenedIds: [], retained: [], resolvedIds: [],
   };
-  if (loaded.tampered) resetUnverifiedDecisions(ledger, at);
   const matchedIds = new Set<string>();
   const push = (kind: LedgerEventKind, id: string, extra: Partial<LedgerEvent> = {}): void => {
     pushEvent(ledger, { at, kind, by: "aida", id, head, ...extra });
@@ -505,8 +620,15 @@ export function reconcileLedger<T extends ReviewFindingInput>(
 
   for (const finding of findings) {
     const hashes = anchorSet(finding.anchors);
+    // Identity is a defect fingerprint: the same category AND at least one shared
+    // exact anchor. A different category on the same lines is a different
+    // finding and never inherits another finding's decision.
     const match = ledger.findings.find(
-      entry => entry.status !== "resolved" && !matchedIds.has(entry.id) && entry.anchors.some(anchor => hashes.has(anchor.sha256)),
+      entry =>
+        entry.status !== "resolved" &&
+        !matchedIds.has(entry.id) &&
+        entry.category === finding.category &&
+        entry.anchors.some(anchor => hashes.has(anchor.sha256)),
     );
     if (!match) {
       const id = `F${ledger.nextId}`;
@@ -547,27 +669,38 @@ export function reconcileLedger<T extends ReviewFindingInput>(
       push("seen", match.id);
     }
     for (const anchor of finding.anchors) if (!known.has(anchor.sha256)) match.anchors.push(anchor);
-    match.priority = finding.priority;
-    match.title = finding.title;
-    match.category = finding.category;
-    result.kept.push({ ...finding, ledgerId: match.id });
+    // A restatement never lowers an open finding's priority: the ledger keeps the
+    // higher one (and its title). Only changed code or a maintainer decision
+    // retires a blocker.
+    if (rank(finding.priority) <= rank(match.priority)) {
+      match.priority = finding.priority;
+      match.title = finding.title;
+    }
+    result.kept.push({ ...finding, priority: match.priority, ledgerId: match.id });
   }
 
   for (const entry of ledger.findings) {
     if (entry.status !== "open" || matchedIds.has(entry.id)) continue;
-    // Conservative closure: an open finding the judge did not restate is resolved
-    // only when every anchor is positively gone from the head. Unknown presence
-    // (deleted lines, fallback positions, metadata quotes) never resolves it. An
-    // unresolved open blocker stays verdict-bearing: it is retained.
+    // Retention needs positive presence. An open finding the judge did not
+    // restate is retained (verdict-bearing when blocking) only while at least
+    // one of its anchors is provably still at the head. Otherwise it resolves:
+    // either the cited code is gone, or nothing about it can be evaluated (a
+    // deleted line, a position, a quote, a migrated anchor) and the judge, who
+    // read the head, no longer reports it. Unknown never means retained forever.
     const verdicts = entry.anchors.map(anchor => presentAtHead(anchor));
-    if (verdicts.length > 0 && verdicts.every(verdict => verdict === false)) {
-      entry.status = "resolved";
+    if (verdicts.some(verdict => verdict === true)) {
+      if (!isBlocking(entry.priority)) continue;
       entry.lastSeen = { head, at };
-      push("resolved", entry.id);
-      result.resolvedIds.push(entry.id);
-    } else if (isBlocking(entry.priority)) {
+      push("seen", entry.id, { reason: "retained: not restated, cited code unchanged" });
       result.retained.push(structuredClone(entry));
+      continue;
     }
+    entry.status = "resolved";
+    entry.lastSeen = { head, at };
+    push("resolved", entry.id, {
+      reason: verdicts.every(verdict => verdict === false) ? "cited code is gone" : "not restated; cited code not evaluable at this head",
+    });
+    result.resolvedIds.push(entry.id);
   }
   return result;
 }
@@ -647,19 +780,17 @@ export function headFileSha256(contextDir: string, path: string): string | null 
 }
 
 // true: the anchored content is still present at the head; false: positively
-// gone; null: unknown (deleted-line, fallback-position, and metadata anchors are
-// never resolved from head contents alone).
+// gone (including a file that no longer exists at the head); null: unknown
+// (deleted-line, position, and quote anchors cannot be evaluated from head
+// contents).
 export function headContainsAnchor(contextDir: string, anchor: LedgerAnchor): boolean | null {
-  if (!anchor.path) return null;
-  if (anchor.kind === "file") {
-    const current = headFileSha256(contextDir, anchor.path);
-    if (current === null) return null;
-    return fileAnchor(anchor.path, current).sha256 === anchor.sha256;
-  }
-  if (anchor.kind !== "line" || anchor.side !== "RIGHT") return null;
+  if (!anchor.path || anchor.kind === "position" || anchor.kind === "quote") return null;
+  if (anchor.kind === "line" && anchor.side !== "RIGHT") return null;
   const target = confined(resolve(contextDir, "head"), anchor.path);
-  if (!target || !existsSync(target)) return null;
+  if (!target) return null;
+  if (!existsSync(target)) return false;
   const path = anchor.path;
+  if (anchor.kind === "file") return fileAnchor(path, sha256(readFileSync(target))).sha256 === anchor.sha256;
   return readFileSync(target, "utf8").split("\n").some(lineText => lineAnchor(path, "RIGHT", lineText).sha256 === anchor.sha256);
 }
 
@@ -677,7 +808,12 @@ function assertRepository(repository: string): void {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error("repository must use owner/name format");
 }
 
-export function loadLedgerComment(repository: string, pullRequest: number, ghExecutable = "gh"): LoadedLedger {
+export function loadLedgerComment(
+  repository: string,
+  pullRequest: number,
+  ghExecutable = "gh",
+  at = new Date().toISOString(),
+): LoadedLedger {
   assertRepository(repository);
   const pages = ghJson(["api", "--paginate", "--slurp", `repos/${repository}/issues/${pullRequest}/comments`], ghExecutable);
   const comments = Array.isArray(pages) ? pages.flat() : [];
@@ -686,31 +822,52 @@ export function loadLedgerComment(repository: string, pullRequest: number, ghExe
     const body = text(comment.body);
     if (!body.startsWith(LEDGER_MARKER)) continue;
     const commentId = typeof comment.id === "number" ? comment.id : null;
-    let parsed: { ledger: Ledger; tampered: boolean } | null;
+    let parsed: ReturnType<typeof parseLedgerComment>;
     try {
-      parsed = parseLedgerComment(body);
-    } catch {
-      // A hand edit that left the JSON unreadable is still a tamper, not an
-      // outage: start from an empty ledger flagged tampered so the review runs
-      // and the republished comment says what happened. Prior review bodies
-      // still hold every finding that was ever reported.
-      return { ledger: emptyLedger(pullRequest), commentId, tampered: true };
+      parsed = parseLedgerComment(body, at);
+    } catch (error) {
+      // Fail closed. An edited or unreadable ledger is never replaced by a guess
+      // (an empty ledger would advertise zero blockers). A maintainer restores
+      // the body from the comment's edit history or deletes the comment to start
+      // a fresh ledger; earlier review bodies keep every finding ever reported.
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `ledger comment ${commentId ?? "?"} on PR #${pullRequest} cannot be used (${reason}). Restore its body from the comment's edit history, or delete the comment to start a fresh ledger. Nothing was changed.`,
+      );
     }
     if (!parsed || parsed.ledger.pullRequest !== pullRequest) continue;
-    return { ledger: parsed.ledger, commentId, tampered: parsed.tampered };
+    return { ledger: parsed.ledger, commentId, digest: parsed.digest, migrated: parsed.migrated };
   }
-  return { ledger: emptyLedger(pullRequest), commentId: null, tampered: false };
+  return { ledger: emptyLedger(pullRequest), commentId: null, digest: null, migrated: false };
 }
 
+export class LedgerConflictError extends Error {}
+
+// Compare-and-swap: when `expectedDigest` is given, the comment is re-read right
+// before the write and the write is refused (LedgerConflictError) if its marker
+// no longer carries that digest, i.e. another writer got there first. Callers
+// retry from a fresh read.
 export function publishLedgerComment(
-  repository: string, pullRequest: number, ledger: Ledger, commentId: number | null, tampered = false, ghExecutable = "gh",
+  repository: string,
+  pullRequest: number,
+  ledger: Ledger,
+  commentId: number | null,
+  migrated = false,
+  ghExecutable = "gh",
+  expectedDigest: string | null = null,
 ): number {
   assertRepository(repository);
-  const payload = `${JSON.stringify({ body: renderLedgerComment(ledger, tampered) })}\n`;
+  const payload = `${JSON.stringify({ body: renderLedgerComment(ledger, migrated) })}\n`;
   if (commentId === null) {
     const created = ghJson(["api", "--method", "POST", `repos/${repository}/issues/${pullRequest}/comments`, "--input", "-"], ghExecutable, payload);
     if (!isRecord(created) || typeof created.id !== "number") throw new Error("ledger comment creation returned no id");
     return created.id;
+  }
+  if (expectedDigest !== null) {
+    const current = ghJson(["api", `repos/${repository}/issues/comments/${commentId}`], ghExecutable);
+    const marker = isRecord(current) ? text(current.body).split("\n")[0] : "";
+    const match = /digest=([0-9a-f]{64})/.exec(marker);
+    if (!match || match[1] !== expectedDigest) throw new LedgerConflictError("ledger comment changed since it was read");
   }
   ghJson(["api", "--method", "PATCH", `repos/${repository}/issues/comments/${commentId}`, "--input", "-"], ghExecutable, payload);
   return commentId;
@@ -742,7 +899,12 @@ export interface CommandOutcome {
   status: "applied" | "denied" | "ignored" | "rejected";
   message: string;
   openBlocking: number | null;
+  // The re-derived verdict for the last reviewed head when a command changed
+  // state; null for status-only comments and for anything not applied.
+  refresh: LedgerVerdict | null;
 }
+
+const PUBLISH_ATTEMPTS = 3;
 
 export function runCommand(
   repository: string, pullRequest: number, commentId: number, actorLogin: string,
@@ -752,38 +914,49 @@ export function runCommand(
   const comment = ghJson(["api", `repos/${repository}/issues/comments/${commentId}`], ghExecutable);
   if (!isRecord(comment) || !isRecord(comment.user)) throw new Error("comment is unreadable");
   if (comment.user.login !== actorLogin) throw new Error("comment author does not match the event actor");
-  if (comment.user.type === "Bot") return { status: "ignored", message: "bot author", openBlocking: null };
+  if (comment.user.type === "Bot") return { status: "ignored", message: "bot author", openBlocking: null, refresh: null };
   let commands: LedgerCommand[];
   try {
     commands = parseCommands(text(comment.body));
   } catch (error) {
     react(repository, commentId, "confused", ghExecutable);
-    return { status: "rejected", message: error instanceof Error ? error.message : String(error), openBlocking: null };
+    return { status: "rejected", message: error instanceof Error ? error.message : String(error), openBlocking: null, refresh: null };
   }
-  if (commands.length === 0) return { status: "ignored", message: "not a command", openBlocking: null };
+  if (commands.length === 0) return { status: "ignored", message: "not a command", openBlocking: null, refresh: null };
   if (!actorHasWrite(repository, actorLogin, ghExecutable)) {
     react(repository, commentId, "-1", ghExecutable);
-    return { status: "denied", message: `${actorLogin} lacks write permission`, openBlocking: null };
+    return { status: "denied", message: `${actorLogin} lacks write permission`, openBlocking: null, refresh: null };
   }
-  const loaded = loadLedgerComment(repository, pullRequest, ghExecutable);
-  const ledger = structuredClone(loaded.ledger);
-  if (loaded.tampered) resetUnverifiedDecisions(ledger, now);
-  let applied: { ledger: Ledger; messages: string[] };
-  try {
-    applied = applyCommands(ledger, commands, { login: actorLogin, at: now, commentId });
-  } catch (error) {
-    react(repository, commentId, "confused", ghExecutable);
-    const message = error instanceof Error ? error.message : String(error);
-    ghJson(
-      ["api", "--method", "POST", `repos/${repository}/issues/${pullRequest}/comments`, "--input", "-"],
-      ghExecutable,
-      `${JSON.stringify({ body: `@${actorLogin} ${message}.\n\n${USAGE}` })}\n`,
-    );
-    return { status: "rejected", message, openBlocking: null };
+  for (let attempt = 1; ; attempt++) {
+    const loaded = loadLedgerComment(repository, pullRequest, ghExecutable, now);
+    let applied: { ledger: Ledger; messages: string[] };
+    try {
+      applied = applyCommands(structuredClone(loaded.ledger), commands, { login: actorLogin, at: now, commentId });
+    } catch (error) {
+      react(repository, commentId, "confused", ghExecutable);
+      const message = error instanceof Error ? error.message : String(error);
+      ghJson(
+        ["api", "--method", "POST", `repos/${repository}/issues/${pullRequest}/comments`, "--input", "-"],
+        ghExecutable,
+        `${JSON.stringify({ body: `@${actorLogin} ${message}.\n\n${USAGE}` })}\n`,
+      );
+      return { status: "rejected", message, openBlocking: null, refresh: null };
+    }
+    try {
+      publishLedgerComment(repository, pullRequest, applied.ledger, loaded.commentId, loaded.migrated, ghExecutable, loaded.digest);
+    } catch (error) {
+      if (error instanceof LedgerConflictError && attempt < PUBLISH_ATTEMPTS) continue;
+      throw error;
+    }
+    react(repository, commentId, "+1", ghExecutable);
+    const changed = commands.some(command => command.kind !== "status");
+    return {
+      status: "applied",
+      message: applied.messages.join(" "),
+      openBlocking: openBlockingCount(applied.ledger),
+      refresh: changed ? ledgerVerdict(applied.ledger) : null,
+    };
   }
-  publishLedgerComment(repository, pullRequest, applied.ledger, loaded.commentId, false, ghExecutable);
-  react(repository, commentId, "+1", ghExecutable);
-  return { status: "applied", message: applied.messages.join(" "), openBlocking: openBlockingCount(applied.ledger) };
 }
 
 // --- CLI ----------------------------------------------------------------------
@@ -794,23 +967,36 @@ function argValue(args: string[], name: string): string {
   return args[index + 1];
 }
 
-function readLedgerFile(path: string): { ledger: Ledger; tampered: boolean } {
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-  const tampered = parsed.tampered === true;
-  delete parsed.tampered;
-  return { ledger: validateLedger(parsed), tampered };
+// The ledger file passed between workflow steps: the ledger plus two transport
+// fields — `migrated` (render the migration note) and `expectedDigest` (the
+// live comment's digest when it was read, for the compare-and-swap).
+export interface LedgerFile {
+  ledger: Ledger;
+  migrated: boolean;
+  expectedDigest: string | null;
 }
 
-function writeLedgerFile(path: string, ledger: Ledger, tampered: boolean): void {
-  writeFileSync(path, `${JSON.stringify({ ...ledger, tampered }, null, 2)}\n`);
+export function readLedgerFile(path: string): LedgerFile {
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  const migrated = parsed.migrated === true;
+  const expectedDigest = typeof parsed.expectedDigest === "string" ? parsed.expectedDigest : null;
+  delete parsed.migrated;
+  delete parsed.expectedDigest;
+  return { ledger: validateLedger(parsed), migrated, expectedDigest };
 }
+
+export function writeLedgerFile(path: string, ledger: Ledger, migrated: boolean, expectedDigest: string | null): void {
+  writeFileSync(path, `${JSON.stringify({ ...ledger, migrated, expectedDigest }, null, 2)}\n`);
+}
+
+export const LEDGER_CONFLICT_EXIT = 3;
 
 function main(): void {
   const [command, ...args] = process.argv.slice(2);
   if (command === "fetch") {
     const loaded = loadLedgerComment(argValue(args, "--repo"), Number(argValue(args, "--pr")));
-    writeLedgerFile(argValue(args, "--output"), loaded.ledger, loaded.tampered);
-    process.stdout.write(`${loaded.commentId === null ? "new" : `comment ${loaded.commentId}`} tampered=${loaded.tampered}\n`);
+    writeLedgerFile(argValue(args, "--output"), loaded.ledger, loaded.migrated, loaded.digest);
+    process.stdout.write(`${loaded.commentId === null ? "new" : `comment ${loaded.commentId}`} migrated=${loaded.migrated}\n`);
     return;
   }
   if (command === "merge") {
@@ -819,13 +1005,9 @@ function main(): void {
     // models ran are applied before the verdict is published.
     const snapshot = readLedgerFile(argValue(args, "--input"));
     const live = loadLedgerComment(argValue(args, "--repo"), Number(argValue(args, "--pr")));
-    const base = structuredClone(snapshot.ledger);
-    if (snapshot.tampered) resetUnverifiedDecisions(base, new Date().toISOString());
-    const liveLedger = structuredClone(live.ledger);
-    if (live.tampered) resetUnverifiedDecisions(liveLedger, new Date().toISOString());
-    const merged = mergeLedgers(base, liveLedger);
-    writeLedgerFile(argValue(args, "--output"), merged, false);
-    process.stdout.write(`${ledgerDigest(merged) === ledgerDigest(base) ? "unchanged" : "changed"}\n`);
+    const merged = mergeLedgers(snapshot.ledger, live.ledger);
+    writeLedgerFile(argValue(args, "--output"), merged, snapshot.migrated || live.migrated, live.digest);
+    process.stdout.write(`${ledgerDigest(merged) === ledgerDigest(snapshot.ledger) ? "unchanged" : "changed"}\n`);
     return;
   }
   if (command === "publish") {
@@ -833,8 +1015,14 @@ function main(): void {
     const pullRequest = Number(argValue(args, "--pr"));
     const input = readLedgerFile(argValue(args, "--input"));
     const existing = loadLedgerComment(repository, pullRequest);
-    const id = publishLedgerComment(repository, pullRequest, input.ledger, existing.commentId, false);
-    process.stdout.write(`comment ${id}\n`);
+    try {
+      const id = publishLedgerComment(repository, pullRequest, input.ledger, existing.commentId, input.migrated, "gh", input.expectedDigest);
+      process.stdout.write(`comment ${id}\n`);
+    } catch (error) {
+      if (!(error instanceof LedgerConflictError)) throw error;
+      process.stderr.write("::notice::ai-pr-ledger publish: the ledger comment changed since it was read\n");
+      process.exit(LEDGER_CONFLICT_EXIT);
+    }
     return;
   }
   if (command === "command") {

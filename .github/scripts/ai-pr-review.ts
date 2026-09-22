@@ -10,19 +10,21 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 import {
   acceptedRisks,
+  deriveDecision,
   fileAnchor,
   headContainsAnchor,
   headFileSha256,
   isBlocking,
-  type LedgerAnchor,
-  type LedgerFinding,
-  type LoadedLedger,
   lineAnchor,
   positionAnchor,
   quoteAnchor,
   readContextLine,
+  readLedgerFile,
   reconcileLedger,
-  validateLedger,
+  type LedgerAnchor,
+  type LedgerFinding,
+  type LoadedLedger,
+  writeLedgerFile,
 } from "./ai-pr-ledger.ts";
 
 const MAX_CHANGED_FILES = 500;
@@ -224,7 +226,7 @@ export interface ReviewLedgerSummary {
   reopened: number;
   resolvedIds: string[];
   open: number;
-  tampered: boolean;
+  migrated: boolean;
   decisionAdjusted: boolean;
 }
 
@@ -1113,36 +1115,54 @@ export function applyLedgerToReview(
     finding,
   }));
   const result = reconcileLedger(loaded, inputs, review.head, at, presence);
-  const kept = result.kept.map(entry => ({ ...entry.finding, ledgerId: entry.ledgerId }));
+  // The ledger's effective priority wins: a restatement never lowers an open
+  // finding's priority.
+  const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, ledgerId: entry.ledgerId }));
   const retained = result.retained.filter(entry => isBlocking(entry.priority));
   const accepted = acceptedRisks(result.ledger, presence);
   const removed = result.restatedAccepted.length + result.suppressed.length;
   let decision = review.decision;
   let decisionAdjusted = false;
-  if (retained.length > 0 && decision.action !== "change") {
-    decision = {
-      actor: "author",
-      action: "change",
-      rationale: `${review.decision.rationale} Re-derived from the ledger: ${retained.length} open blocking finding${
-        retained.length === 1 ? "" : "s"
-      } (${retained.map(entry => entry.id).join(", ")}) ${
-        retained.length === 1 ? "was" : "were"
-      } not restated this run and the cited code is unchanged, so the author still needs to act.`,
-    };
-    decisionAdjusted = true;
-  } else if (retained.length === 0 && removed > 0 && decision.action === "change") {
-    const error = decisionInvariantError(kept, review.assessment, decision);
-    if (error !== null) {
-      decision = {
-        actor: "maintainer",
-        action: "merge",
-        rationale: `${review.decision.rationale} Re-derived after applying ${removed} maintainer ledger decision${
-          removed === 1 ? "" : "s"
-        }: no blocking finding remains and the assessment permits a merge decision.`,
-      };
+  if (retained.length > 0 || removed > 0) {
+    // Same rule a later /aida command applies from persisted state (deriveDecision).
+    const openBlocking = retained.length + kept.filter(finding => isBlocking(finding.priority)).length;
+    const derived = deriveDecision(
+      review.decision.action,
+      openBlocking,
+      retained.length + kept.length,
+      review.assessment.readiness.score,
+      review.assessment.risk.score,
+    );
+    if (derived !== review.decision.action) {
       decisionAdjusted = true;
+      decision =
+        derived === "change"
+          ? {
+              actor: "author",
+              action: "change",
+              rationale: `${review.decision.rationale} Re-derived from the ledger: ${retained.length} open blocking finding${
+                retained.length === 1 ? "" : "s"
+              } (${retained.map(entry => entry.id).join(", ")}) ${
+                retained.length === 1 ? "was" : "were"
+              } not restated this run and the cited code is unchanged, so the author still needs to act.`,
+            }
+          : {
+              actor: "maintainer",
+              action: "merge",
+              rationale: `${review.decision.rationale} Re-derived after applying ${removed} maintainer ledger decision${
+                removed === 1 ? "" : "s"
+              }: no blocking finding remains and the assessment permits a merge decision.`,
+            };
     }
   }
+  // Persist this head's verdict so a later /aida command re-derives the decision
+  // under the same invariants without rerunning models.
+  result.ledger.review = {
+    head: review.head,
+    readiness: review.assessment.readiness.score,
+    risk: review.assessment.risk.score,
+    decision: decision.action,
+  };
   const adjusted: StructuredReview = {
     ...review,
     findings: kept,
@@ -1154,7 +1174,7 @@ export function applyLedgerToReview(
       reopened: result.reopenedIds.length,
       resolvedIds: result.resolvedIds,
       open: result.ledger.findings.filter(entry => entry.status === "open").length,
-      tampered: loaded.tampered,
+      migrated: loaded.migrated,
       decisionAdjusted,
     },
   };
@@ -1303,7 +1323,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       }${summary.resolvedIds.length > 0 ? `, resolved ${summary.resolvedIds.join(", ")}` : ""}.${
         summary.decisionAdjusted ? " The next decision was re-derived from the ledger." : ""
       }${
-        summary.tampered ? " The ledger comment was edited outside AIDA; its unverified decisions were reset." : ""
+        summary.migrated ? " The ledger was migrated from schema v1; earlier decisions were reset." : ""
       } Maintainers act on findings with \`/aida\` commands in the ledger comment.`,
     );
   }
@@ -1429,16 +1449,12 @@ function main(): void {
     lastValidateInput = readFileSync(input, "utf8");
     let review: StructuredReview;
     if (args.includes("--ledger")) {
-      const ledgerRaw = JSON.parse(readFileSync(argValue(args, "--ledger"), "utf8")) as Record<
-        string,
-        unknown
-      >;
-      const tampered = ledgerRaw.tampered === true;
-      delete ledgerRaw.tampered;
+      const ledgerFile = readLedgerFile(argValue(args, "--ledger"));
       const loaded: LoadedLedger = {
-        ledger: validateLedger(ledgerRaw),
+        ledger: ledgerFile.ledger,
         commentId: null,
-        tampered,
+        digest: ledgerFile.expectedDigest,
+        migrated: ledgerFile.migrated,
       };
       const applied = applyLedgerToReview(
         parseStructuredReview(lastValidateInput, base, head, manifest, metadata),
@@ -1448,10 +1464,9 @@ function main(): void {
       );
       review = applied.review;
       if (args.includes("--ledger-output")) {
-        writeFileSync(
-          argValue(args, "--ledger-output"),
-          `${JSON.stringify({ ...applied.ledger, tampered: false }, null, 2)}\n`,
-        );
+        // Transport fields ride along: the migration note and the live digest for
+        // the publish-time compare-and-swap.
+        writeLedgerFile(argValue(args, "--ledger-output"), applied.ledger, loaded.migrated, loaded.digest);
       }
     } else {
       review = validateStructuredReview(lastValidateInput, base, head, manifest, metadata);
