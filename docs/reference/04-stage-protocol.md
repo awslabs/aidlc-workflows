@@ -1007,9 +1007,12 @@ omits the reviewer block entirely and the stage runs reviewless.
 `*-questions` artifacts are writable human inputs. Their file manifest entry is
 `summary-input:sha256:<digest>`: after normalizing line endings,
 `summaryInputReviewFingerprint` masks only one visible summary-confirmation
-answer value (blank, `Looks correct`, or `Request changes`). Trailing comments
-and examples inside code fences remain bound. Every other part of
-the questions remains bound; an absent or ambiguous confirmation section/answer
+answer value (blank, `Looks correct`, or `Request changes`). Recognition uses
+the vendored CommonMark/GFM parser's `visibleMarkdownLines` projection, shared
+with summary confirmation and Plan Approval tag selection: raw HTML block
+content is never an answer or tag. Trailing comments and examples inside code
+fences or raw HTML remain bound. Every other part of the questions remains
+bound; an absent or ambiguous confirmation section/answer
 leaves the full normalized content bound. Missing and non-file entries remain
 distinct. Required-file presence and safe capture checks still apply, and
 snapshots retain the actual bytes for swarm merging. Only confirmation
@@ -1030,9 +1033,12 @@ outputs regenerated or re-saved under that authorization, and the required
 fresh review through normal recovery. Editing questions grants no permission
 to edit frozen outputs or approve a plan. An `if-present` obligation persists
 once a summary-confirmation decision or confirmation participated in the
-current attempt, even if the questions file is deleted. Older question
-fingerprint projections may require fresh review through normal recovery;
-stored receipts are not rewritten and their format does not change. See
+current attempt, even if the questions file is deleted. Identities for documents
+unaffected by the parser upgrade are unchanged. Older question fingerprint
+projections remain usable when recomputation matches; only a mismatch requires
+the existing re-save / re-review recovery, with parser-semantics changes as a
+possible cause. Stored receipts are not rewritten and their format does not
+change. See
 [Summary inputs and reviewed outputs](12-state-machine.md#stage-machine).
 
 1. **Invoke.** Before every dispatch - the first, a NOT-READY re-invoke, or a
