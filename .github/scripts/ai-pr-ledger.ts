@@ -22,6 +22,8 @@ export const LEDGER_VERSION = 2 as const;
 const LEGACY_LEDGER_VERSION = 1;
 const MAX_REASON_LENGTH = 500;
 const MAX_LEDGER_BYTES = 200_000;
+// The writer compacts to this before publishing so the reader's cap is never hit.
+const TARGET_LEDGER_BYTES = 150_000;
 const MAX_FINDINGS = 200;
 const MAX_EVENTS = 1000;
 const MAX_COMMANDS_PER_COMMENT = 20;
@@ -367,8 +369,26 @@ export function openBlockingCount(ledger: Ledger): number {
   return ledger.findings.filter(finding => finding.status === "open" && isBlocking(finding.priority)).length;
 }
 
+// Keeps the serialized ledger under the reader's budget. History goes first
+// (oldest events), then the oldest resolved findings; open, accepted and rejected
+// findings and ids are never dropped. Earlier review bodies keep the full record.
+export function compactLedger(input: Ledger, budget = TARGET_LEDGER_BYTES): Ledger {
+  const ledger = structuredClone(input);
+  const size = (): number => Buffer.byteLength(canonicalJson(ledger), "utf8");
+  while (size() > budget && ledger.events.length > 0) {
+    ledger.events.splice(0, Math.max(1, Math.floor(ledger.events.length / 10)));
+  }
+  while (size() > budget) {
+    const index = ledger.findings.findIndex(entry => entry.status === "resolved");
+    if (index === -1) break;
+    ledger.findings.splice(index, 1);
+  }
+  if (size() > MAX_LEDGER_BYTES) throw new Error("ledger cannot be compacted under the size budget");
+  return ledger;
+}
+
 export function renderLedgerComment(input: Ledger, migrated = false): string {
-  const ledger = validateLedger(input);
+  const ledger = compactLedger(validateLedger(input));
   const digest = ledgerDigest(ledger);
   const lines = [`${LEDGER_MARKER} v${LEDGER_VERSION} digest=${digest} -->`, "## AIDA findings ledger", ""];
   if (migrated) {
@@ -499,12 +519,15 @@ export interface LedgerVerdict {
 export function ledgerVerdict(ledger: Ledger): LedgerVerdict | null {
   const review = ledger.review;
   if (!review) return null;
-  const atHead = ledger.findings.filter(entry => entry.status === "open" && entry.lastSeen.head === review.head);
-  const openBlocking = atHead.filter(entry => isBlocking(entry.priority)).length;
+  // Every open finding counts, whatever head last saw it: a finding the judge was
+  // told not to restate (accepted) and a maintainer then reopens is open at this
+  // head even though no review has restated it yet.
+  const open = ledger.findings.filter(entry => entry.status === "open");
+  const openBlocking = open.filter(entry => isBlocking(entry.priority)).length;
   return {
     head: review.head,
     openBlocking,
-    decision: deriveDecision(review.decision, openBlocking, atHead.length, review.readiness, review.risk),
+    decision: deriveDecision(review.decision, openBlocking, open.length, review.readiness, review.risk),
   };
 }
 
@@ -638,6 +661,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
         anchors: finding.anchors, status: "open", firstSeen: { head, at }, lastSeen: { head, at },
       });
       push("opened", id);
+      matchedIds.add(id);
       result.kept.push({ ...finding, ledgerId: id });
       continue;
     }

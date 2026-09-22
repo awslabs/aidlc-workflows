@@ -7,6 +7,7 @@ import {
   acceptedRisks,
   applyCommands,
   deriveDecision,
+  compactLedger,
   emptyLedger,
   fileAnchor,
   headContainsAnchor,
@@ -414,7 +415,9 @@ describe("t345 AIDA findings ledger", () => {
     );
     expect(result.kept.map(item => item.ledgerId)).toEqual(["F1", "F8"]);
     // F2 and F6 keep a provably present anchor: retained, verdict-bearing, seen at this head.
+    // The newly opened F8 is reported once: never also "retained" in the same run.
     expect(result.retained.map(item => item.id)).toEqual(["F2", "F6"]);
+    expect(result.ledger.events.filter(event => event.id === "F8").map(event => event.kind)).toEqual(["opened"]);
     expect(result.ledger.findings.find(item => item.id === "F2")?.lastSeen).toEqual(seen(HEAD, AT));
     // F3 is gone; F4 (deleted line) and F5 (migrated/position) cannot be evaluated: the judge who
     // read the head no longer reports them, so they resolve instead of being retained forever.
@@ -445,7 +448,7 @@ describe("t345 AIDA findings ledger", () => {
     const ledger = ledgerWith(
       { ...entry("F1", "P1", "open", [A42]), lastSeen: seen(HEAD) },
       { ...entry("F2", "P2", "open", [A43]), lastSeen: seen(HEAD) },
-      entry("F3", "P1", "open", [lineAnchor(PATH, "RIGHT", "older head")]),
+      entry("F3", "P1", "resolved", [lineAnchor(PATH, "RIGHT", "older head")]),
     );
     expect(ledgerVerdict(ledger)).toBeNull();
     ledger.review = { head: HEAD, readiness: 4, risk: 2, decision: "change" };
@@ -457,6 +460,40 @@ describe("t345 AIDA findings ledger", () => {
     expect(ledgerVerdict(cleared)).toEqual({ head: HEAD, decision: "merge", openBlocking: 0 });
     cleared.review = { head: HEAD, readiness: 2, risk: 4, decision: "change" };
     expect(ledgerVerdict(cleared)?.decision).toBe("change");
+
+    // Reopening an accepted blocker the judge was told not to restate (so it was last seen at an
+    // older head) puts it straight back into the verdict.
+    const merged = ledgerWith({ ...entry("F1", "P1", "accepted", [A42], "owned"), lastSeen: seen(OLD_HEAD) });
+    merged.review = { head: HEAD, readiness: 5, risk: 1, decision: "merge" };
+    expect(ledgerVerdict(merged)).toEqual({ head: HEAD, decision: "merge", openBlocking: 0 });
+    const reopened = applyCommands(merged, parseCommands("/aida reopen F1"), { login: "maint", at: LATER }).ledger;
+    expect(ledgerVerdict(reopened)).toEqual({ head: HEAD, decision: "change", openBlocking: 1 });
+  });
+
+  test("the writer compacts the ledger under the reader's byte budget; open findings and ids survive", () => {
+    const ledger = ledgerWith(
+      entry("F1", "P1", "open", [A42]),
+      entry("F2", "P2", "resolved", [A43]),
+      entry("F3", "P1", "accepted", [lineAnchor(PATH, "RIGHT", "x")], "owned"),
+    );
+    ledger.nextId = 4;
+    for (let index = 0; index < 1000; index++) {
+      ledger.events.push({ at: AT, kind: "seen", by: "aida", id: "F1", head: HEAD, reason: "r".repeat(500) });
+    }
+    expect(Buffer.byteLength(JSON.stringify(ledger), "utf8")).toBeGreaterThan(200_000);
+    const body = renderLedgerComment(ledger);
+    const parsed = parseLedgerComment(body);
+    expect(parsed?.ledger.findings.map(item => `${item.id}:${item.status}`)).toEqual(["F1:open", "F2:resolved", "F3:accepted"]);
+    expect(parsed?.ledger.events.length).toBeLessThan(1000);
+    expect(parsed?.ledger.nextId).toBe(4);
+    expect(Buffer.byteLength(JSON.stringify(parsed?.ledger), "utf8")).toBeLessThan(150_001);
+
+    // When history alone is not enough, the oldest resolved findings go; open ones never do.
+    const compact = compactLedger(ledger, 1_200);
+    expect(compact.events).toEqual([]);
+    expect(compact.findings.map(item => item.id)).toEqual(["F1", "F3"]);
+    expect(compact.nextId).toBe(4);
+    expect(() => compactLedger(ledger, 10)).not.toThrow();
   });
 
   test("accepted risks come from persisted state and omit risks whose code is gone", () => {
