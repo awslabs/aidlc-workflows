@@ -97,10 +97,20 @@ const forwardingPath = (dir: string) =>
  *  prompt carries only harness-authored prose plus this path, so a repository document
  *  relayed through `/aidlc knowledge …` can no longer reach the privileged context. */
 function relayedOutput(dir: string): string {
+  return terminalRelay(dir, "last-output.txt");
+}
+
+/** The pre-dispatched directive, which no longer travels in the prompt either. The
+ *  packet carries only harness-authored prose plus this path. */
+function relayedDirective(dir: string): string {
+  return terminalRelay(dir, "last-directive.json");
+}
+
+function terminalRelay(dir: string, file: string): string {
   const root = join(dir, "aidlc", ".aidlc-sessions", "kiro-terminal");
   const buckets = readdirSync(root);
   expect(buckets.length, `exactly one terminal bucket under ${root}`).toBe(1);
-  return readFileSync(join(root, buckets[0], "last-output.txt"), "utf-8");
+  return readFileSync(join(root, buckets[0], file), "utf-8");
 }
 
 describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
@@ -451,7 +461,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      expect(r.stdout).toContain(
+      expect(relayedDirective(dir)).toContain(
         "aidlc.ts engine intent create --scope poc --arguments 'build auth'",
       );
       expect(r.stdout).not.toContain("Intent created:");
@@ -471,8 +481,8 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      expect(r.stdout).toContain('"kind":"print"');
-      expect(r.stdout).toContain("config trust --show --json");
+      expect(relayedDirective(dir)).toContain('"kind":"print"');
+      expect(relayedDirective(dir)).toContain("config trust --show --json");
       const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
         turn?: number;
         flag?: string;
@@ -523,8 +533,8 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      expect(r.stdout).toContain('"kind":"print"');
-      expect(r.stdout).toContain(
+      expect(relayedDirective(dir)).toContain('"kind":"print"');
+      expect(relayedDirective(dir)).toContain(
         "aidlc.ts engine intent create --scope feature",
       );
       expect(existsSync(counterPath(dir))).toBe(true);
@@ -547,7 +557,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      expect(r.stdout).toContain("Dispatch the composer agent");
+      expect(relayedDirective(dir)).toContain("Dispatch the composer agent");
       expect(existsSync(forwardingPath(dir))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -566,7 +576,18 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
       expect(r.stdout).toContain("next --scope poc --stage requirements-analysis --single");
-      expect(r.stdout).not.toContain("--- DIRECTIVE ---");
+      // Not published, asserted by ABSENCE on disk: the packet is a path reference now,
+      // so a `not.toContain` on the old fence would pass however wrongly it published.
+      expect(
+        existsSync(join(
+          dir,
+          "aidlc",
+          ".aidlc-sessions",
+          "kiro-terminal",
+          (readdirSync(join(dir, "aidlc", ".aidlc-sessions", "kiro-terminal"))[0] ?? "absent"),
+          "last-directive.json",
+        )),
+      ).toBe(false);
       const forwarding = JSON.parse(readFileSync(forwardingPath(dir), "utf-8"));
       expect(forwarding.args).toEqual(["--scope", "poc", "--stage", "requirements-analysis", "--single"]);
       expect(forwarding.turn).toBe(1);

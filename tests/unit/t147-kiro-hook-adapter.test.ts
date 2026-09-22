@@ -291,6 +291,24 @@ function seedActiveSpaceMemory(projectDir: string): void {
   );
 }
 
+/** One of the two files the prompt-submit relay parks for the model to read: the
+ *  command output, or the pre-dispatched directive. Neither travels in the prompt any
+ *  more, so the assertions about their CONTENT belong here. Found rather than
+ *  constructed: the directory is keyed by a hash of the session id. */
+function terminalRelay(projectDir: string, file: string): string {
+  return readFileSync(terminalRelayPath(projectDir, file), "utf-8");
+}
+
+/** The relay file's path, so a test can assert a directive was NOT published by its
+ *  absence. The packet is a path reference now, so there is no fence left to look for
+ *  and an assertion about a vanished marker would pass however wrongly it published. */
+function terminalRelayPath(projectDir: string, file: string): string {
+  const root = join(projectDir, "aidlc", ".aidlc-sessions", "kiro-terminal");
+  const buckets = existsSync(root) ? readdirSync(root) : [];
+  expect(buckets.length <= 1, `at most one terminal bucket under ${root}`).toBe(true);
+  return join(root, buckets[0] ?? "absent", file);
+}
+
 function openDelegationWindow(projectDir: string, agent: string): void {
   const r = runAdapter(projectDir, "log-subagent", {
     hook_event_name: "PreToolUse",
@@ -765,10 +783,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       // The output no longer travels in the prompt -- it is parked in the session's
       // own directory and the prompt carries the path -- so the sanitizer's contract
       // is asserted where the bytes actually are.
-      const relayRoot = join(dir, "aidlc", ".aidlc-sessions", "kiro-terminal");
-      const buckets = readdirSync(relayRoot);
-      expect(buckets.length, `exactly one terminal bucket under ${relayRoot}`).toBe(1);
-      const relayed = readFileSync(join(relayRoot, buckets[0], "last-output.txt"), "utf-8");
+      const relayed = terminalRelay(dir, "last-output.txt");
       expect(r.stdout).toContain("last-output.txt");
       expect(relayed).toContain("Unicode: ─ ✓ █▒ ⇄");
       expect(relayed).toContain("Path: C:\\work\\file.txt");
@@ -915,7 +930,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("3d: only complete non-steering packets within the 10 KiB UTF-8 hook budget are pre-dispatched", () => {
+  test("3d: a non-steering directive of any size is pre-dispatched as a reference", () => {
     const dir = scratchProject(false);
     try {
       const args = ["--depth", "Standard"];
@@ -925,37 +940,32 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const first = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
       expect(first.code).toBe(0);
       expect(first.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      const framing = Buffer.byteLength(first.stdout) - Buffer.byteLength(empty);
-      expect(framing).toBeGreaterThan(0);
-      for (const packetBytes of [10 * 1024 - 1, 10 * 1024, 10 * 1024 + 1]) {
-        const remaining = packetBytes - framing - Buffer.byteLength(empty);
-        // UTF-8 exceeds JS string length, so a character-count bound fails here.
-        const message = "界".repeat(Math.floor(remaining / 3)) + "x".repeat(remaining % 3);
+      expect(first.stdout).toContain("last-directive.json");
+      // This test used to construct directives at 10 KiB ± 1 and assert that the
+      // oversized one fell back to the forwarding latch. That premise is gone by
+      // construction: the packet is a PATH, so its size no longer tracks the
+      // directive's, the hook budget can never be the reason a directive is withheld,
+      // and an oversized non-steering directive reaches the conductor on the first pass
+      // instead of making the model re-run `next`. The `load-steering` exclusion is
+      // unchanged and is asserted by 3e.
+      const packetBytes = Buffer.byteLength(first.stdout);
+      expect(packetBytes).toBeLessThan(10 * 1024);
+
+      for (const weight of [1, 4_000, 40_000]) {
+        const message = "界".repeat(weight);
         const response = JSON.stringify({ kind: "print", message });
-        expect(Buffer.byteLength(response) + framing).toBe(packetBytes);
-        expect(response.length + framing).toBeLessThan(10 * 1024);
         writeFileSync(join(dir, "next-response.txt"), response);
         const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
-        expect(result.code).toBe(0);
-        const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
-        if (packetBytes <= 10 * 1024) {
-          expect(Buffer.byteLength(result.stdout)).toBe(packetBytes);
-          // The fence carries a per-invocation nonce, so match it rather than a
-          // fixed marker - and use a backreference, which also proves the two ends
-          // carry the SAME nonce. That is the property the injection fix rests on:
-          // a body that reproduces one marker still cannot close the block.
-          const fenced = result.stdout.match(
-            /--- DIRECTIVE ([0-9a-f]{12}) ---\n([\s\S]*?)\n--- END DIRECTIVE \1 ---/,
-          );
-          expect(fenced, "the directive is fenced with a matching nonce").not.toBeNull();
-          expect(fenced?.[2]).toBe(response);
-          expect(existsSync(latch)).toBe(false);
-        } else {
-          expect(result.stdout).toContain("deterministic argument forwarding");
-          expect(result.stdout).not.toContain("ALREADY");
-          expect(result.stdout).not.toContain(message);
-          expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(args);
-        }
+        expect(result.code, `${weight}`).toBe(0);
+        // The same fixed-size packet whatever the directive weighs, and no fallback.
+        expect(Buffer.byteLength(result.stdout), `${weight}`).toBe(packetBytes);
+        expect(
+          existsSync(join(dir, "aidlc", ".aidlc-forwarding-latch")),
+          `${weight}`,
+        ).toBe(false);
+        // Not one directive byte in the privileged prompt; the file carries it exactly.
+        expect(result.stdout, `${weight}`).not.toContain(message.slice(0, 64));
+        expect(terminalRelay(dir, "last-directive.json").trim(), `${weight}`).toBe(response);
       }
       expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
         .toEqual(Array.from({ length: 4 }, () => ["next", ...args]));
@@ -1008,7 +1018,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       writeFileSync(join(dir, "next-response.txt"), '{"kind":"print","message":"incomplete');
       const incomplete = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${raw}` });
       expect(incomplete.stdout).toContain("deterministic argument forwarding");
-      expect(incomplete.stdout).not.toContain("--- DIRECTIVE ---");
+      // The directive is not published, and now that the packet is a path reference
+      // that has to be asserted by its ABSENCE on disk: `not.toContain` on a fence
+      // that no longer exists would pass however wrongly a directive was published.
+      expect(existsSync(terminalRelayPath(dir, "last-directive.json"))).toBe(false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -1019,7 +1032,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       stubNext(dir, response);
       const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: "/aidlc --config" });
       expect(result.code).toBe(0);
-      expect(result.stdout).toContain(response);
+      expect(terminalRelay(dir, "last-directive.json").trim()).toBe(response);
+      expect(result.stdout).not.toContain(response);
       expect(result.stdout).toContain("deterministic engine pre-dispatch");
       expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-readonly-latch"), "utf8")).source)
         .toBe("config-alias");
@@ -1110,7 +1124,8 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         cwd: dir, prompt: "/aidlc --stage reverse-engineering",
       }, [], env);
       expect(ordinary.code).toBe(0);
-      expect(ordinary.stdout).toContain("compiled next response");
+      expect(terminalRelay(dir, "last-directive.json")).toContain("compiled next response");
+      expect(ordinary.stdout).toContain("deterministic engine pre-dispatch");
       expect(JSON.parse(readFileSync(called, "utf8")))
         .toEqual(["engine", "orchestrate", "next", "--stage", "reverse-engineering"]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
