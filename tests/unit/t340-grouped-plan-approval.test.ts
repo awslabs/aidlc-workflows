@@ -10,7 +10,7 @@ import {
   authorizedVerificationCommand,
   readAuditShardEvents, readPlanApprovalReceipt, readUnitSourceManifest, reviewArtifactFingerprint,
   serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
-  workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
+  workspaceSourceFingerprint, workspaceSourceListing, workspaceSourceState, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   approvalFingerprint, beginCodeGeneration, codeGenerationRecordDir, evaluateCodeGenerationApproval,
@@ -119,7 +119,9 @@ function approve(pd: string, grouped = true): void {
   }
 }
 
-function fixture(options: { dirty?: boolean; legacy?: boolean; grouped?: boolean } = {}): string {
+function fixture(options: {
+  dirty?: boolean; legacy?: boolean; grouped?: boolean; applicationSourceOnly?: boolean;
+} = {}): string {
   const pd = setupIntegrationProject();
   projects.push(pd);
   writeFileSync(seededStateFile(pd), `# State
@@ -156,10 +158,17 @@ ${options.legacy ? "" : "- **Construction Checkpoints**: enabled\n- **Constructi
   seedBoltDagBatches(pd, [UNITS]);
   mkdirSync(join(pd, "src"));
   for (const unit of UNITS) writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+  const sourceBefore = options.applicationSourceOnly ? workspaceSourceState(pd) : null;
   for (const args of [
     ["init", "-q"], ["config", "user.name", "AI-DLC Tests"], ["config", "user.email", "tests@example.com"],
-    ["add", "-A"], ["commit", "-qm", "baseline"],
+    options.applicationSourceOnly ? ["add", "--", "src"] : ["add", "-A"],
+    ["commit", "-qm", "baseline"],
   ]) git(pd, args);
+  if (options.applicationSourceOnly) {
+    expect(sourceBefore).not.toBeNull();
+    expect([...sourceBefore!.listing.keys()]).toEqual(UNITS.map((unit) => `\0src/${unit}.ts`));
+    expect(workspaceSourceFingerprint(pd)).toBe(sourceBefore!.fingerprint);
+  }
   if (options.dirty) writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
@@ -415,7 +424,10 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
   }, 60_000);
 
   test("split successful starts of the same approved group preserve its checkpoint successor", () => {
-    const pd = fixture();
+    // Keep the full installed runtime and approval flow, but avoid hashing its
+    // excluded files into Git. The fixture verifies application identity stays
+    // unchanged by this smaller committed baseline.
+    const pd = fixture({ applicationSourceOnly: true });
     for (const unit of UNITS) beginCodeGeneration(pd, { unit });
     converge(pd, { splitStarts: true });
     const checkpoint = next(pd);

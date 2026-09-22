@@ -66,12 +66,14 @@
 // surfaces a partial DriveResult, not a hang.
 
 import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc, readAuditEvents, readAuditText } from "../harness/sdk-drive.ts";
+import { auditDirFor, type DriveResult, driveAidlc, readAuditEvents, readAuditText, stateFilePathFor } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
 // Timeout budget. Explicit init on Opus/Bedrock is a few minutes; honour the
@@ -90,6 +92,65 @@ function countEvent(events: string[], event: string): number {
   return events.filter((e) => e === event).length;
 }
 
+function reportInitFailure(projectDir: string, result: DriveResult | undefined): void {
+  const inspect = (read: () => unknown): unknown => {
+    try { return read(); } catch (error) { return { error: String(error) }; }
+  };
+  const terminal = result?.resultEvent;
+  console.error(`t54 init diagnostics:\n${JSON.stringify({
+    projectDir,
+    canonicalProjectDir: inspect(() => realpathSync(projectDir)),
+    processCwd: process.cwd(),
+    projectEntries: inspect(() => readdirSync(projectDir).slice(0, 80)),
+    workflowEntries: inspect(() => readdirSync(join(projectDir, "aidlc")).slice(0, 80)),
+    selection: inspect(() => {
+      const spacePath = join(projectDir, "aidlc", "active-space");
+      const space = existsSync(spacePath) ? readFileSync(spacePath, "utf8").trim() || "default" : "default";
+      const intentPath = join(projectDir, "aidlc", "spaces", space, "intents", "active-intent");
+      return { space, intentPath, intent: existsSync(intentPath) ? readFileSync(intentPath, "utf8").slice(0, 200) : null };
+    }),
+    state: inspect(() => {
+      const path = stateFilePathFor(projectDir);
+      return { path, exists: existsSync(path), capturedLength: result?.stateFile?.length };
+    }),
+    audit: inspect(() => {
+      const path = auditDirFor(projectDir);
+      return {
+        path, entries: existsSync(path) ? readdirSync(path).slice(0, 80) : null,
+        eventCount: result?.auditEvents?.length, events: result?.auditEvents?.slice(-50),
+      };
+    }),
+    hasDriveResult: result !== undefined,
+    timedOut: result?.timedOut,
+    stoppedAfterToolResult: result?.stoppedAfterToolResult,
+    stoppedAfterAskUserQuestion: result?.stoppedAfterAskUserQuestion,
+    terminal: terminal ? {
+      subtype: terminal.subtype, is_error: terminal.is_error, num_turns: terminal.num_turns,
+      permissionDenialsCount: terminal.permissionDenialsCount,
+      errors: terminal.errors?.slice(0, 5).map((error) => String(error).slice(0, 2000)),
+      resultPreview: terminal.result?.slice(-4000),
+    } : null,
+    askedQuestionCount: result?.askedQuestions.length,
+    toolResultCount: result?.toolResults.length,
+    omittedToolResults: Math.max(0, (result?.toolResults.length ?? 0) - 12),
+    tools: result?.toolResults.slice(-12).map((tool) => {
+      const initOffset = tool.resultText.indexOf(INIT_STATE_SUMMARY);
+      return {
+        toolName: tool.toolName, toolUseId: tool.toolUseId, isError: tool.isError,
+        input: Object.fromEntries(Object.entries(tool.input)
+          .filter(([key, value]) => ["command", "file_path", "path", "skill", "args"].includes(key) && typeof value === "string")
+          .map(([key, value]) => [key, (value as string).slice(0, 2000)])),
+        resultLength: tool.resultText.length,
+        matchesInitBoundary: tool.toolName === STOP_AFTER_INIT.toolName && initOffset >= 0,
+        resultExcerpt: initOffset >= 0
+          ? tool.resultText.slice(Math.max(0, initOffset - 200), initOffset + 1800)
+          : tool.resultText.slice(-2000),
+      };
+    }),
+    assistantTextTail: result?.assistantText.slice(-4000),
+  }, null, 2)}`);
+}
+
 describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
   // -------------------------------------------------------------------------
   // Fresh project: the audit.md structure lands at explicit init. Assert the header,
@@ -100,8 +161,9 @@ describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
     "init writes a structurally complete audit log: header, canonical fields, separators, ISO timestamps, no duplicate SESSION_STARTED",
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
+      let r: DriveResult | undefined;
       try {
-        const r = await driveAidlc("/aidlc --init --scope bugfix", {
+        r = await driveAidlc("/aidlc --init --scope bugfix", {
           projectDir: proj,
           answerScript: "default",
           timeoutMs: DRIVE_TIMEOUT_MS,
@@ -145,6 +207,12 @@ describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
 
         // The audit's reason to exist: the WORKFLOW_STARTED creation event fired.
         assertAuditEvent(r, "WORKFLOW_STARTED");
+      } catch (error) {
+        // Preserve bounded SDK evidence before finally removes the fixture.
+        try { reportInitFailure(proj, r); } catch (diagnosticError) {
+          console.error(`t54 init diagnostics unavailable: ${String(diagnosticError)}`);
+        }
+        throw error;
       } finally {
         cleanupTestProject(proj);
       }

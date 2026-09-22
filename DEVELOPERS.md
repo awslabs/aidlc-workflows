@@ -66,12 +66,26 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
   -f 'ref=<exact-workflow-head-sha>' -f live_verification=true
 ```
 
+To repeat only Codex coverage, use:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f live_verification=true \
+  -f verification_family=codex
+```
+
+The family choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`,
+and `opencode`. Scoped verification preserves the selected family's shard
+identities and skips Windows release contracts. It cannot be requested for an
+ordinary release-purpose run or through a reusable-workflow call.
+
 This manual-only mode requires the source SHA to equal the selected workflow
-head. It executes hosted live and release-contract tests using the existing
-isolated credential flow, while native/deterministic/production-guard jobs are
-intentionally skipped. It does not replace the ordinary CI checks.
+head. It executes the selected hosted live coverage, including release contracts
+when the family is `all`, using the existing isolated credential flow.
+Native/deterministic/production-guard jobs are intentionally skipped. It does
+not replace the ordinary CI checks.
 Inspect `full-suite-live-verification-result/full-suite-result.json` for
-`purpose: "live-verification"` and the live job results. A successful run still
+`purpose: "live-verification"`, `verificationFamily`, and the live job results. A successful run still
 has `complete: false` and is never release evidence, even when run on `main`.
 Normal Full Suite runs keep `live_verification=false`, the main-source gate,
 all required jobs, and the ordinary `full-suite-result` artifact.
@@ -137,7 +151,8 @@ rename or republish the preview binaries.
 2. **Obtain evidence for the final commit.** Wait for, or manually start, a
    preview on that commit. Confirm the run succeeds and its `full-suite-result`
    artifact contains `full-suite-result.json` with the exact commit SHA,
-   matching run identity, `purpose: "release"`, no omitted jobs, current coverage
+   matching run identity, `purpose: "release"`, `verificationFamily: "all"`,
+   no omitted jobs, current coverage
    policy and successful required jobs.
    The release-preparation commit needs its own evidence;
    evidence from before the metadata change cannot satisfy the release gate.

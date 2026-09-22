@@ -27,6 +27,8 @@ export const FAMILIES = {
   "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false },
 } as const satisfies Record<string, Family>;
 export type LiveFamily = keyof typeof FAMILIES;
+export const VERIFICATION_FAMILIES = ["all", "claude-sdk", "claude-tui", "codex", "opencode"] as const;
+export type VerificationFamily = (typeof VERIFICATION_FAMILIES)[number];
 
 let invocationFiles: Map<LiveFamily, string[]> | undefined;
 function liveInvocationFiles(): Map<LiveFamily, string[]> {
@@ -121,8 +123,9 @@ export function selectedLiveFiles(family: LiveFamily, platform: NodeJS.Platform,
 }
 
 /** Workflow matrices share discovery and platform eligibility with execution. */
-export function liveMatrix(kind: "hosted" | "windows"): { include: LiveMatrixRow[] } {
+export function liveMatrix(kind: "hosted" | "windows", selectedFamily: VerificationFamily = "all"): { include: LiveMatrixRow[] } {
   if (kind !== "hosted" && kind !== "windows") throw new Error(`unknown live matrix: ${kind}`);
+  if (!VERIFICATION_FAMILIES.includes(selectedFamily)) throw new Error(`unknown verification family: ${selectedFamily}`);
   const partition = liveInvocationFiles();
   const platforms = kind === "hosted" ? ["linux", "darwin"] as const : ["win32"] as const;
   const include: LiveMatrixRow[] = [];
@@ -140,7 +143,11 @@ export function liveMatrix(kind: "hosted" | "windows"): { include: LiveMatrixRow
   if (!include.length) throw new Error(`${kind} has no selected live files`);
   // Start the first file for every family/platform before its second file.
   include.sort((a, b) => Number(a.shard.split("/")[0]) - Number(b.shard.split("/")[0]));
-  return { include };
+  // Filter only after discovery and shard assignment; N/M and slice identities
+  // stay identical to the full run for the selected family.
+  const selected = selectedFamily === "all" ? include : include.filter((row) => row.family === selectedFamily);
+  if (!selected.length) throw new Error(`${kind}/${selectedFamily} has no selected live files`);
+  return { include: selected };
 }
 
 /** Qualify tiers (and plugin names) to avoid collisions in all three runner aliases. */
@@ -191,7 +198,10 @@ if (import.meta.main) {
   try {
     const [family, ...options] = process.argv.slice(2);
     const matrix = family === "--matrix";
-    if (matrix && (options.length !== 1 || !["hosted", "windows"].includes(options[0]))) throw new Error("expected --matrix hosted|windows");
+    if (matrix && (!["hosted", "windows"].includes(options[0]) ||
+      (options.length !== 1 && !(options.length === 3 && options[1] === "--family")))) {
+      throw new Error("expected --matrix hosted|windows [--family FAMILY]");
+    }
     let platform: NodeJS.Platform | undefined;
     let shard: string | undefined;
     let mode: "filter" | "args" | "run" = "filter";
@@ -210,7 +220,7 @@ if (import.meta.main) {
       } else throw new Error(`invalid option: ${option}`);
     }
     if (matrix) {
-      console.log(JSON.stringify(liveMatrix(options[0] as "hosted" | "windows")));
+      console.log(JSON.stringify(liveMatrix(options[0] as "hosted" | "windows", (options[2] ?? "all") as VerificationFamily)));
     } else if (family === "--list" && mode === "filter" && shard === undefined) {
       console.log(JSON.stringify(Object.fromEntries(classifyLiveFiles(REPO_ROOT)), null, 2));
     } else if (Object.hasOwn(FAMILIES, family ?? "")) {
@@ -229,7 +239,7 @@ if (import.meta.main) {
     } else throw new Error(`unknown family: ${family}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    console.error(`Usage: bun scripts/ci-live-filter.ts --matrix hosted|windows\n       bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--shard N/M] [--args | --run -- RUNNER_ARGS...]`);
+    console.error(`Usage: bun scripts/ci-live-filter.ts --matrix hosted|windows [--family ${VERIFICATION_FAMILIES.join("|")}]\n       bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--shard N/M] [--args | --run -- RUNNER_ARGS...]`);
     process.exitCode = 2;
   }
 }

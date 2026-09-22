@@ -168,6 +168,9 @@ Release-contract suites contain intentional platform-conditional cases and do
 not use strict coverage; live provider families require executed coverage.
 
 PR CI and Full Suite share `.github/workflows/deterministic-tests.yml`.
+The runner sets Bun's default case deadline to 15 seconds on Windows and
+5 seconds on Linux/macOS. Explicit case and hook deadlines take precedence;
+performance assertions keep their own bounds.
 PR CI runs Linux smoke, eight weighted unit shards, and deterministic integration.
 Full Suite runs smoke, the same eight unit shards, and deep (integration plus
 isolated e2e) on Linux/macOS/Windows. Each call checks out its supplied commit,
@@ -201,6 +204,12 @@ The distinct `full-suite-live-verification-result` artifact records
 `purpose: "live-verification"`, `omittedLegs` and `complete: false`.
 All required live jobs must succeed and omitted jobs must be skipped, never
 missing or failed. This artifact cannot qualify for release, even on `main`.
+For a focused repeat, add `verification_family=codex` to the dispatch inputs.
+Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, and `opencode`.
+Non-all choices require manual live verification, select only that family's
+unchanged per-platform shards, and omit the separate Windows release-contract
+job. Results record `verificationFamily`; ordinary release evidence requires
+`all` even if an incorrectly scoped report claims `passed: true`.
 
 `live_prepare` installs dependencies and packages projections without OIDC,
 handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
@@ -238,7 +247,8 @@ requires no excluded families and remains false with the documented exclusions.
 Missing, failed, cancelled or skipped required jobs fail readiness.
 `full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
 Stable promotion requires the matching SHA and run ID,
-`purpose: "release"`, `coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
+`purpose: "release"`, `verificationFamily: "all"`,
+`coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
 `disabledLegs: []`, `omittedLegs: []`,
 and every declared job successful. Historical disabled-live reports cannot
 qualify; documented excluded families remain warnings. Outside the native

@@ -43,6 +43,9 @@ import type { E2eLimits, E2eTask } from "./lib/e2e-scheduler.ts";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const BUN = process.execPath;
+// Hosted Windows takes about three times as long for the same subprocess-heavy
+// unit inventory. Explicit test/hook deadlines still override this default.
+const DEFAULT_CASE_TIMEOUT_MS = process.platform === "win32" ? 15_000 : 5_000;
 const PACKAGE_READY_ENV = "AIDLC_TEST_PACKAGE_READY";
 const PACKAGE_LOCK = join(REPO_ROOT, ".aidlc", "test-package.lock");
 const UNIT_SHARD_CONFIG = join(SCRIPT_DIR, "unit-shard-weights.json");
@@ -982,7 +985,7 @@ async function runBunTestFile(
   if (streamPath) writeFileSync(streamPath, `Test: ${base}\nFile: ${actualFile}\nStatus: RUNNING\n\n--- Output ---\n`);
   const run = await runSpawnCapture(
     BUN,
-    ["test", actualFile, "--reporter=junit", `--reporter-outfile=${junitXml}`],
+    ["test", actualFile, `--timeout=${DEFAULT_CASE_TIMEOUT_MS}`, "--reporter=junit", `--reporter-outfile=${junitXml}`],
     env,
     debugPrefix,
     context,

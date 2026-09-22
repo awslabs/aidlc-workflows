@@ -40,7 +40,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockEndpointConfig, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
@@ -118,9 +118,13 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
       ``,
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
       `profile = ${JSON.stringify(AWS_PROFILE)}`,
       `region = ${JSON.stringify(AWS_REGION)}`,
+      ``,
+      `[shell_environment_policy]`,
+      `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       ``,
       `[projects.${JSON.stringify(proj)}]`,
       `trust_level = "trusted"`,

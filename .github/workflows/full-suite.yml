@@ -18,6 +18,12 @@ on:
         description: "Run only live coverage for this workflow head; evidence cannot qualify for release"
         type: boolean
         default: false
+      verification_family:
+        description: "Limit manual live verification to one family; release runs require all"
+        type: choice
+        required: true
+        default: all
+        options: [all, claude-sdk, claude-tui, codex, opencode]
 permissions:
   contents: read
 defaults:
@@ -39,6 +45,7 @@ jobs:
     outputs:
       sha: "${{ steps.source.outputs.sha }}"
       purpose: "${{ steps.source.outputs.purpose }}"
+      verification_family: "${{ steps.source.outputs.verification_family }}"
       live_hosted_matrix: "${{ steps.live_matrix.outputs.hosted }}"
       live_windows_matrix: "${{ steps.live_matrix.outputs.windows }}"
     steps:
@@ -50,9 +57,19 @@ jobs:
         id: source
         env:
           LIVE_VERIFICATION: "${{ inputs.live_verification == true }}"
+          VERIFICATION_FAMILY: "${{ inputs.verification_family || 'all' }}"
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
+          family="${VERIFICATION_FAMILY-all}"
+          case "$family" in
+            all|claude-sdk|claude-tui|codex|opencode) ;;
+            *) echo "::error::invalid verification family"; exit 1 ;;
+          esac
+          if [ "$family" != all ] && [ "${LIVE_VERIFICATION:-false}" != true ]; then
+            echo "::error::verification_family requires live_verification=true"
+            exit 1
+          fi
           case "${LIVE_VERIFICATION:-false}" in
             true)
               if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$sha" != "$GITHUB_SHA" ]; then
@@ -71,17 +88,19 @@ jobs:
               ;;
             *) echo "::error::invalid live verification mode"; exit 1 ;;
           esac
-          printf 'sha=%s\npurpose=%s\n' "$sha" "$purpose" >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\npurpose=%s\nverification_family=%s\n' "$sha" "$purpose" "$family" >> "$GITHUB_OUTPUT"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
       - run: "bun install --frozen-lockfile"
       - name: Plan live file matrices
         id: live_matrix
+        env:
+          VERIFICATION_FAMILY: "${{ steps.source.outputs.verification_family }}"
         run: |
           set -euo pipefail
-          hosted="$(bun scripts/ci-live-filter.ts --matrix hosted)"
-          windows="$(bun scripts/ci-live-filter.ts --matrix windows)"
+          hosted="$(bun scripts/ci-live-filter.ts --matrix hosted --family "$VERIFICATION_FAMILY")"
+          windows="$(bun scripts/ci-live-filter.ts --matrix windows --family "$VERIFICATION_FAMILY")"
           printf 'hosted=%s\nwindows=%s\n' "$hosted" "$windows" >> "$GITHUB_OUTPUT"
       - name: "Prepare native obligations"
         if: steps.source.outputs.purpose == 'release'
@@ -551,6 +570,7 @@ jobs:
           include-hidden-files: true
   release_contract_windows:
     needs: plan
+    if: needs.plan.outputs.verification_family == 'all'
     runs-on: windows-latest
     timeout-minutes: 55
     strategy:
@@ -612,6 +632,7 @@ jobs:
           FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
           FULL_SUITE_REF: "${{ inputs.ref }}"
           FULL_SUITE_PURPOSE: "${{ needs.plan.outputs.purpose }}"
+          FULL_SUITE_VERIFICATION_FAMILY: "${{ needs.plan.outputs.verification_family }}"
         run: |
           bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
       - if: "${{ always() }}"

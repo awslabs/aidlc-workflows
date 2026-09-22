@@ -4,7 +4,7 @@
 // live harness variables: every assertion crosses the shipped CLI boundary and
 // reads the compiled routing result or the state written by intent-create.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -39,8 +39,8 @@ const EXPRESS_STAGES = [
   "observability-setup",
 ].sort();
 
-afterAll(() => {
-  for (const project of projects) cleanupTestProject(project);
+afterEach(() => {
+  while (projects.length > 0) cleanupTestProject(projects.pop()!);
 });
 
 function project(): string {
@@ -289,7 +289,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
     expect(readFileSync(activeStatePath(p), "utf-8")).toContain(
       "- **Status**: Completed",
     );
-  }, 30000);
+  }, 60_000); // Seven next/continue handshakes plus six reports across the full journey.
 
   test("engine completes the Express deploy tail using explicit workspace fallbacks", () => {
     const p = project();
@@ -330,5 +330,5 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
     expect(readFileSync(activeStatePath(p), "utf-8")).toContain(
       "- **Status**: Completed",
     );
-  }, 30000);
+  }, 60_000); // The same full journey, including three Operation approvals and their artifacts.
 });

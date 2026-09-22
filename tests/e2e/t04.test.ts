@@ -53,7 +53,7 @@
 //     in the SAME fixture before the max-age=0 stale check, isolating that the
 //     non-zero is the window, not an absent event.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -81,8 +81,10 @@ const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 
 const fixtures: string[] = [];
-afterAll(() => {
-  for (const f of fixtures) cleanupWorktreeFixture(f);
+// Every case owns its fixtures. Avoid accumulating all worktrees for one
+// cleanup hook, and release their disk space before the next case starts.
+afterEach(() => {
+  while (fixtures.length > 0) cleanupWorktreeFixture(fixtures.pop()!);
 });
 
 /** Fresh git-repo fixture on `main` + aidlc-docs/, registered for cleanup. */

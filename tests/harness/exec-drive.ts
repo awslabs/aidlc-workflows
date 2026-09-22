@@ -66,6 +66,21 @@ export function codexWindowsSandboxConfig(
   return platform === "win32" ? ["", "[windows]", 'sandbox = "elevated"'] : [];
 }
 
+/** Route every scratch Codex home through the CI broker when one is configured. */
+export function codexBedrockEndpointConfig(env: NodeJS.ProcessEnv = process.env): string[] {
+  if (!env.AIDLC_BROKER_URL) return [];
+  const url = new URL(env.AIDLC_BROKER_URL);
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port ||
+    url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("Expected a loopback Codex credential broker");
+  }
+  return [
+    "[model_providers.amazon-bedrock]",
+    `base_url = ${JSON.stringify(`${url.origin}/openai/v1`)}`,
+    "",
+  ];
+}
+
 // A scratch install: dist/codex copied verbatim, git-initialized (project
 // hooks.json discovery requires a git repo), a scratch CODEX_HOME with Bedrock
 // provider + project trust + the trust pre-seed from `package.ts codex trust`
@@ -105,11 +120,7 @@ export function setupCodexProject(): CodexProject {
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
       ``,
-      ...(process.env.AIDLC_BROKER_URL ? [
-        `[model_providers.amazon-bedrock]`,
-        `base_url = ${JSON.stringify(`${process.env.AIDLC_BROKER_URL}/openai/v1`)}`,
-        "",
-      ] : []),
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
       `profile = ${JSON.stringify(AWS_PROFILE)}`,
       `region = ${JSON.stringify(AWS_REGION)}`,

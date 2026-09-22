@@ -2229,7 +2229,16 @@ async function runWinChildWrapper(a: Args): Promise<void> {
   if (pendingExit) writeTargetExit(pendingExit);
   // Stay alive as the stable ConPTY root until the daemon has cleaned every
   // other console member and terminates this wrapper.
-  await new Promise<never>(() => {});
+  await waitForWindowsWrapperRetirement();
+}
+
+/** An unresolved promise alone lets Node exit once the target's handles close. */
+export function waitForWindowsWrapperRetirement(): Promise<never> {
+  return new Promise<never>(() => {
+    // The daemon owns termination. Keep this stable ConPTY root alive while it
+    // verifies/reaps the remaining console members, without reading their input.
+    setInterval(() => {}, 60_000);
+  });
 }
 
 async function runWinDaemon(a: Args): Promise<void> {

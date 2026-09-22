@@ -1,11 +1,12 @@
 // Token-free calibration of the public driver commands, using real native PTYs.
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import {
   existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import fs from "node:fs";
-import { connect } from "node:net";
+import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bunSessionPaths, createBunBackend } from "../harness/tui-bun-backend.ts";
@@ -89,10 +90,16 @@ function record(session: string) {
   return JSON.parse(readFileSync(bunSessionPaths(session, env).record, "utf8"));
 }
 
-async function request(session: string, body: string, options: { allowReset?: boolean } = {}): Promise<string> {
+async function request(session: string, body: string, options: {
+  allowReset?: boolean;
+  label?: string;
+  openSocket?: () => Socket;
+} = {}): Promise<string> {
   return new Promise((accept, reject) => {
-    const socket = connect(record(session).endpoint);
+    const socket = options.openSocket?.() ?? connect(record(session).endpoint);
     let response = "";
+    let offset = 0;
+    let completedWrites = 0;
     let settled = false;
     let fragmentTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (error?: Error) => {
@@ -104,7 +111,10 @@ async function request(session: string, body: string, options: { allowReset?: bo
       if (error) reject(error);
       else accept(response);
     };
-    const deadline = setTimeout(() => finish(new Error("probe IPC timed out")), 5000);
+    const deadline = setTimeout(() => finish(new Error(
+      `probe IPC timed out (${options.label ?? "request"}; sent=${offset}/${body.length}; ` +
+      `completedWrites=${completedWrites}; received=${response.length}; readableEnded=${socket.readableEnded})`,
+    )), 5000);
     const onError = (error: NodeJS.ErrnoException) => {
       if (options.allowReset && response === "" && ["ECONNRESET", "EPIPE"].includes(error.code ?? "")) finish();
       else finish(error);
@@ -116,16 +126,24 @@ async function request(session: string, body: string, options: { allowReset?: bo
       // The protocol completes a reply at its newline, independently of socket teardown.
       if (response.includes("\n")) finish();
     });
-    socket.on("close", () => finish());
+    const receiveClosed = () => finish(
+      options.allowReset && response === ""
+        ? undefined
+        : new Error(`probe IPC closed before a complete reply (${options.label ?? "request"})`),
+    );
+    // A rejecting peer can send EOF while our final fragment's write callback
+    // is still pending. Waiting for local writable teardown can then time out.
+    socket.on("end", receiveClosed);
+    socket.on("close", receiveClosed);
     socket.on("connect", () => {
       const size = Math.max(1, Math.min(Math.floor(body.length / 2), 16 * 1024));
-      let offset = 0;
       const writeFragment = () => {
         if (settled) return;
         const fragment = body.slice(offset, offset + size);
         offset += fragment.length;
         // Bound queued output so a peer rejecting a large request can close promptly.
         socket.write(fragment, (error) => {
+          completedWrites++;
           if (error) onError(error);
           else if (!settled && offset < body.length) fragmentTimer = setTimeout(writeFragment, 10);
         });
@@ -142,6 +160,39 @@ afterAll(async () => {
   if (failed.length) throw new Error(`native calibration cleanup failed; inspect ${root}: ${JSON.stringify(failed)}`);
   rmSync(scratch, { recursive: true, force: true });
 }, 30_000);
+
+describe("native IPC probe completion", () => {
+  for (const allowReset of [true, false]) {
+    test(`peer EOF settles a pending write for ${allowReset ? "oversized rejection" : "incomplete reply"}`, async () => {
+      let pendingWrite = false;
+      let closed = false;
+      class EofSocket extends EventEmitter {
+        readableEnded = false;
+        setEncoding() { return this; }
+        write(_fragment: string, _callback: unknown) {
+          pendingWrite = true;
+          // Model peer EOF while the final local write callback cannot
+          // complete. Receiving EOF must settle independently of that callback.
+          queueMicrotask(() => { this.readableEnded = true; this.emit("end"); });
+          return false;
+        }
+        destroy() { closed = true; this.emit("close"); return this; }
+      }
+      const socket = new EofSocket();
+      const result = request("synthetic-peer", "x".repeat(300_000), {
+        allowReset, label: "pending-write EOF",
+        openSocket: () => {
+          queueMicrotask(() => socket.emit("connect"));
+          return socket as unknown as Socket;
+        },
+      });
+      if (allowReset) expect(await result).toBe("");
+      else await expect(result).rejects.toThrow("closed before a complete reply");
+      expect(pendingWrite).toBe(true);
+      expect(closed).toBe(true);
+    }, 10_000);
+  }
+});
 
 describe.skipIf(!supported)("native launch namespace security", () => {
   test("an explicit root symlink/junction is refused without touching its target", async () => {
@@ -579,14 +630,14 @@ setTimeout(() => process.exit(99), 30000);
     const session = await start("protocol");
     try {
       const { token } = record(session);
-      const reply = JSON.parse(await request(session, `${JSON.stringify({ id: "fragmented", token, method: "capture" })}\n`));
+      const reply = JSON.parse(await request(session, `${JSON.stringify({ id: "fragmented", token, method: "capture" })}\n`, { label: "fragmented capture" }));
       expect(reply).toMatchObject({ id: "fragmented", ok: true });
       expect(reply.result.text).toContain("READY protocol");
-      const refused = JSON.parse(await request(session, `${JSON.stringify({ id: "wrong", token: randomUUID(), method: "kill" })}\n`));
+      const refused = JSON.parse(await request(session, `${JSON.stringify({ id: "wrong", token: randomUUID(), method: "kill" })}\n`, { label: "wrong ownership" }));
       expect(refused.ok).toBe(false);
       expect(refused.error).toContain("ownership");
-      expect(JSON.parse(await request(session, "{malformed}\n")).ok).toBe(false);
-      expect(await request(session, `${"x".repeat(300_000)}\n`, { allowReset: true })).toBe("");
+      expect(JSON.parse(await request(session, "{malformed}\n", { label: "malformed JSON" })).ok).toBe(false);
+      expect(await request(session, `${"x".repeat(300_000)}\n`, { allowReset: true, label: "oversized request" })).toBe("");
       expect((await frame(session)).text).toContain("READY protocol");
       const invalidResize = await drive(["resize", "--session", session, "--width", "1", "--height", "20"]);
       expect(invalidResize.code).not.toBe(0);

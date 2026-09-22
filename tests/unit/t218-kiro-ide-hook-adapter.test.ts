@@ -44,6 +44,7 @@ import {
   writeActiveDirectiveMarker,
   stateDigest,
   workspaceSourceFingerprint,
+  workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -144,18 +145,24 @@ function seedCodeGenerationDirective(dir: string, unit?: string): void {
   });
 }
 
-function initGitWorkspace(dir: string): void {
+function initGitWorkspace(dir: string, options: { applicationSourceOnly?: boolean } = {}): void {
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "base.ts"), "export const base = true;\n");
+  const sourceBefore = options.applicationSourceOnly ? workspaceSourceState(dir) : null;
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"],
-    ["add", "-A"],
+    options.applicationSourceOnly ? ["add", "--", "src"] : ["add", "-A"],
     ["commit", "-qm", "baseline"],
   ]) {
     const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
     expect(result.status, result.stderr).toBe(0);
+  }
+  if (options.applicationSourceOnly) {
+    expect(sourceBefore).not.toBeNull();
+    expect([...sourceBefore!.listing.keys()]).toEqual(["\0src/base.ts"]);
+    expect(workspaceSourceFingerprint(dir)).toBe(sourceBefore!.fingerprint);
   }
 }
 
@@ -2031,7 +2038,10 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   test("legacy mediation records both approval tags from a section that carries neither", () => {
     const dir = scratchProject(true);
     try {
-      initGitWorkspace(dir);
+      // The real adapter still uses the installed runtime. Its files and the
+      // record tree are excluded from application identity, so do not commit
+      // those installed fixture files just to establish an application HEAD.
+      initGitWorkspace(dir, { applicationSourceOnly: true });
       seedCodeGenerationDirective(dir);
       const choices = seedLegacyDirectiveChoices(dir);
       expect(runIde(dir, "session-start", null).code).toBe(0);

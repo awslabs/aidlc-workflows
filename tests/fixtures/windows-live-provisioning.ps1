@@ -6,6 +6,29 @@ $ErrorActionPreference = 'Stop'
 
 function Check([bool]$Value, [string]$Message) { if (-not $Value) { throw $Message } }
 
+function Remove-FixtureProfile([Security.Principal.SecurityIdentifier]$Sid) {
+    # Task completion and process exit precede User Profile Service releasing
+    # NTUSER.DAT on hosted runners. Retry only that teardown race, for this
+    # fixture's exact SID; unrelated CIM/permission failures remain fatal.
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $lastFailure = 'profile is still loaded'
+    do {
+        $profile = Get-CimInstance Win32_UserProfile -Filter ("SID='" + $Sid.Value + "'")
+        if ($null -eq $profile) { return }
+        if (-not $profile.Loaded) {
+            try {
+                $profile | Remove-CimInstance -ErrorAction Stop
+                return
+            } catch {
+                if ($_.FullyQualifiedErrorId -notmatch '\b0x800700(?:20|21)\b') { throw }
+                $lastFailure = $_.Exception.Message
+            }
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw ("Fixture profile cleanup timed out for SID {0}: {1}" -f $Sid.Value, $lastFailure)
+}
+
 # Load the actual production functions and native boundary checks without
 # executing main's fixed C:\aidlc-live/user/profile setup on a developer host.
 $source = Join-Path $SourceRoot '.github\scripts\prepare-live-runtime.ps1'
@@ -86,6 +109,7 @@ $deniedLink = Join-Path $tools 'npm\protected-link'
 $junction = Join-Path $tools 'npm\linked-directory'
 $poisonedLog = Join-Path $tools 'logs\linked.log'
 $result = [ordered]@{ case = $Case }
+$fixtureFailure = $null
 
 try {
     Set-RuntimeAcl $FixtureRoot $null 'ReadAndExecute'
@@ -227,19 +251,29 @@ exit 0
         $result['summaryArtifacts'] = $summaries.Count
     }
     $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $FixtureRoot 'result.json') -Encoding UTF8
+} catch {
+    $fixtureFailure = $_
+    throw
 } finally {
-    if ($null -ne $createdUserSid) {
-        $existing = Get-LocalUser -SID $createdUserSid -ErrorAction SilentlyContinue
-        if ($null -ne $existing) {
-            Stop-SandboxProcesses -Disable
-            [AidlcFixtureAccountCleanup]::RemoveRights($createdUserSid.Value)
-            Remove-LocalUser -SID $createdUserSid
+    try {
+        if ($null -ne $createdUserSid) {
+            $existing = Get-LocalUser -SID $createdUserSid -ErrorAction SilentlyContinue
+            if ($null -ne $existing) {
+                Stop-SandboxProcesses -Disable
+                [AidlcFixtureAccountCleanup]::RemoveRights($createdUserSid.Value)
+                Remove-LocalUser -SID $createdUserSid
+            }
+            Remove-FixtureProfile $createdUserSid
         }
-        Get-CimInstance Win32_UserProfile -Filter ("SID='" + $createdUserSid.Value + "'") |
-            Remove-CimInstance
+        if ([IO.File]::Exists($deniedLink)) { [IO.File]::Delete($deniedLink) }
+        if ([IO.File]::Exists($poisonedLog)) { [IO.File]::Delete($poisonedLog) }
+        if ([IO.Directory]::Exists($junction)) { [IO.Directory]::Delete($junction) }
+    } catch {
+        if ($null -eq $fixtureFailure) { throw }
+        # Preserve the boundary assertion that failed; finally must not replace
+        # it with a secondary cleanup exception.
+        [Console]::Error.WriteLine(('Additional fixture cleanup failure: ' + $_.Exception.ToString()))
+    } finally {
+        $credential = $null
     }
-    if ([IO.File]::Exists($deniedLink)) { [IO.File]::Delete($deniedLink) }
-    if ([IO.File]::Exists($poisonedLog)) { [IO.File]::Delete($poisonedLog) }
-    if ([IO.Directory]::Exists($junction)) { [IO.Directory]::Delete($junction) }
-    $credential = $null
 }

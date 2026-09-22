@@ -22,7 +22,8 @@ the release unless all of these conditions hold:
   main-branch `workflow_dispatch` run of `full-suite.yml`, supplies a
   `full-suite-result` artifact with that exact `.sha`, the downloaded run's
   `.runId`, `.coveragePolicy == "required-hosted-live-v1"`, `.passed == true`,
-  `.purpose == "release"`, `.disabledLegs == []`, `.omittedLegs == []`,
+  `.purpose == "release"`, `.verificationFamily == "all"`,
+  `.disabledLegs == []`, `.omittedLegs == []`,
   and every declared job in `.legs` equal to `success`.
 
 Old-policy, missing, expired, wrong-source/run, disabled-live or unsuccessful
@@ -49,6 +50,14 @@ deterministic and production-guard jobs. Its artifact is named
 and `complete: false`; a successful result requires the live jobs to succeed
 and the omissions to be explicitly skipped. Stable release rejects this
 purpose even if `passed` is true, including for verification run on `main`.
+
+Manual verification can additionally select `verification_family` as
+`claude-sdk`, `claude-tui`, `codex`, or `opencode`; its default is `all`.
+Scoped runs keep the same exact-head authorization, run only the chosen
+family's existing shards, and require Windows release-contract coverage to be
+explicitly skipped. The result records `verificationFamily` and its omissions.
+Release-purpose runs refuse scoped selections, and the stable consumer requires
+`verificationFamily: "all"` independently of `passed` and the job statuses.
 
 POSIX preparation obtains a pinned official Node distribution and transports
 its complete prefix with the validated dependency archive. Credentialed jobs
@@ -188,7 +197,8 @@ gate.
 2. Wait for (or dispatch) `preview-release.yml` on the intended release SHA while
    it is `main`'s tip, and confirm the `full-suite-result` artifact records that
    exact SHA, matching run ID, `.coveragePolicy == "required-hosted-live-v1"`,
-   `.purpose == "release"`, `.passed == true`, `.disabledLegs == []`,
+   `.purpose == "release"`, `.verificationFamily == "all"`,
+   `.passed == true`, `.disabledLegs == []`,
    `.omittedLegs == []`, and every declared job successful.
    Required live jobs use the existing `ai-pr-review` environment's
    `AWS_AI_PR_REVIEW_ROLE_ARN`; verify its OIDC/model permissions and one-hour

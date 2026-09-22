@@ -1,4 +1,4 @@
-import { FAMILIES } from "./ci-live-filter.ts";
+import { FAMILIES, VERIFICATION_FAMILIES, type VerificationFamily } from "./ci-live-filter.ts";
 
 export const FULL_SUITE_JOBS = [
   "plan", "native_terminal", "native_reconcile", "deterministic", "production_guards", "live_prepare", "live_hosted",
@@ -21,6 +21,7 @@ export interface SuiteIdentity {
 }
 export interface FullSuiteResult extends SuiteIdentity {
   purpose: SuitePurpose;
+  verificationFamily: VerificationFamily;
   coveragePolicy: typeof FULL_SUITE_COVERAGE_POLICY;
   passed: boolean;
   complete: boolean;
@@ -30,22 +31,27 @@ export interface FullSuiteResult extends SuiteIdentity {
   omittedLegs: string[];
 }
 
-/** Required jobs succeed; only live verification may intentionally omit non-live jobs. */
+/** Required jobs succeed; only live verification may intentionally omit declared jobs. */
 export function fullSuiteResult(
   needs: SuiteNeeds,
   identity: SuiteIdentity,
   purpose: SuitePurpose = "release",
+  verificationFamily: VerificationFamily = "all",
 ): FullSuiteResult {
   const legs = Object.fromEntries([...new Set([...FULL_SUITE_JOBS, ...Object.keys(needs)])]
     .map((job) => [job, needs[job]?.result ?? "missing"]));
   const excluded = Object.entries(FAMILIES).filter(([, family]) => family.hosting === "excluded")
     .map(([name]) => name).sort();
   const omittedLegs: string[] = purpose === "live-verification" ? [...LIVE_VERIFICATION_OMITTED_JOBS] : [];
+  if (purpose === "live-verification" && verificationFamily !== "all") omittedLegs.push("release_contract_windows");
   const passed = /^[a-f0-9]{40}$/.test(identity.sha) &&
+    VERIFICATION_FAMILIES.includes(verificationFamily) &&
+    (purpose === "live-verification" || verificationFamily === "all") &&
     Object.entries(legs).every(([job, status]) => status === (omittedLegs.includes(job) ? "skipped" : "success"));
   return {
     ...identity,
     purpose,
+    verificationFamily,
     coveragePolicy: FULL_SUITE_COVERAGE_POLICY,
     passed,
     complete: purpose === "release" && passed && excluded.length === 0,
@@ -63,16 +69,24 @@ if (import.meta.main) {
     console.error(`::error::Invalid full-suite purpose: ${purpose}`);
     process.exit(1);
   }
+  const verificationFamily = process.env.FULL_SUITE_VERIFICATION_FAMILY ?? "all";
+  if (!VERIFICATION_FAMILIES.includes(verificationFamily as VerificationFamily)) {
+    console.error(`::error::Invalid verification family: ${verificationFamily}`);
+    process.exit(1);
+  }
   const result = fullSuiteResult(JSON.parse(process.env.FULL_SUITE_NEEDS ?? "{}") as SuiteNeeds, {
     sha: process.env.FULL_SUITE_SHA ?? "",
     runId: process.env.GITHUB_RUN_ID ?? "",
     runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "",
-  }, purpose);
+  }, purpose, verificationFamily as VerificationFamily);
   await Bun.write(process.argv[2] ?? "full-suite-result.json", `${JSON.stringify(result, null, 2)}\n`);
   if (result.excluded.length) {
     console.error(`::warning::Full suite excluded families: ${result.excluded.join(", ")}`);
   }
   if (!result.passed) {
+    if (purpose === "release" && verificationFamily !== "all") {
+      console.error("::error::Release evidence requires verificationFamily=all");
+    }
     console.error(`::error::Incomplete full suite for ${result.sha || process.env.FULL_SUITE_REF || "unknown ref"}: ` +
       Object.entries(result.legs).filter(([job, status]) => status !== (result.omittedLegs.includes(job) ? "skipped" : "success"))
         .map(([job, status]) => `${job}=${status}`).join(", "));

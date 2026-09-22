@@ -116,6 +116,14 @@
             {
               "classname": "native record publication races",
               "name": "open failures propagate immediately without retrying or consuming record content"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for oversized rejection"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for incomplete reply"
             }
           ]
         },
@@ -955,6 +963,14 @@
             {
               "classname": "native record publication races",
               "name": "open failures propagate immediately without retrying or consuming record content"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for oversized rejection"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for incomplete reply"
             }
           ]
         },
@@ -1807,6 +1823,14 @@
             {
               "classname": "native record publication races",
               "name": "open failures propagate immediately without retrying or consuming record content"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for oversized rejection"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for incomplete reply"
             }
           ]
         },
@@ -2654,6 +2678,10 @@
             {
               "classname": "Windows cleanup identity snapshots",
               "name": "an invalid recorded creation time refuses without treating its PID as gone"
+            },
+            {
+              "classname": "",
+              "name": "the stable Windows wrapper stays alive until its owner terminates it"
             }
           ]
         }

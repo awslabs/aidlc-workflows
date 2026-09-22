@@ -35,7 +35,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockEndpointConfig, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import {
   activeSpace,
   getField,
@@ -136,11 +136,13 @@ function setupCodexJourney(): WorkspaceJourney {
       `model_reasoning_effort = "low"`,
       `sandbox_mode = "workspace-write"`,
       ``,
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
       `profile = ${JSON.stringify(AWS_PROFILE)}`,
       `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
+      `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
       // Space switches repoint the project's native memory include. Like the

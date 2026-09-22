@@ -64,7 +64,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockEndpointConfig, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 // The ten shipped stock scopes. A composed scope whose name is NOT one of
@@ -150,11 +150,13 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       // makes it a shell-policy key instead of selecting the sandbox mode.
       `sandbox_mode = "workspace-write"`,
       ``,
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
       `profile = ${JSON.stringify(AWS_PROFILE)}`,
       `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
+      `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
       // Under workspace-write, codex carves the project-root `.codex/` out of

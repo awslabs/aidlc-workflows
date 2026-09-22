@@ -903,7 +903,7 @@ describe("t326 pinned team Unit merge", () => {
   // Two full gate-and-land cycles measure ~110 s alone on an M3 Pro (each tool call is a fresh bun process), so 120 s leaves no headroom under --parallel 4.
   }, 300000);
 
-  test("moved refs require re-pin and released attempts cannot pin", () => {
+  test("moved refs require re-pin", () => {
     const { seed, remote } = makeSeed();
     const first = prepareCandidate(remote, "alpha", "move-team");
     const pin = run(UNIT, ["pin", "alpha"], seed);
@@ -942,7 +942,9 @@ describe("t326 pinned team Unit merge", () => {
     expect(readFileSync(join(seed, "src", "alpha.ts"), "utf-8")).toContain(
       "moved",
     );
+  }, 120000);
 
+  test("released attempts cannot pin", () => {
     const released = makeSeed();
     prepareCandidate(released.remote, "alpha", "release-team");
     const releaseMain = clone(released.remote, "release-main");

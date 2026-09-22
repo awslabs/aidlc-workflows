@@ -39,6 +39,7 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
       CLAUDE_CODE_USE_BEDROCK: "1", CLAUDE_CODE_SKIP_BEDROCK_AUTH: "1", ANTHROPIC_BEDROCK_BASE_URL: url.origin,
     });
   } else if (family === "opencode") {
+    env.AWS_PROFILE = "broker";
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ provider: { "amazon-bedrock": { options: {
       region: "us-east-1", endpoint: url.origin, profile: "broker", accessKeyId: "broker", secretAccessKey: "broker",
     } } } });

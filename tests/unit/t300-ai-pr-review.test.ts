@@ -1219,12 +1219,20 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     run("config", "user.email", "ai-review@example.invalid");
     run("commit", "--quiet", "--allow-empty", "-m", "base");
     const base = run("rev-parse", "HEAD");
-    for (let index = 0; index < 501; index++) {
-      writeFileSync(join(repo, `file-${index}.txt`), `${index}\n`);
-    }
-    run("add", ".");
-    run("commit", "--quiet", "-m", "head");
-    const head = run("rev-parse", "HEAD");
+    // The limit counts paths, not unique blobs. Build a real commit without
+    // creating, scanning, and hashing 501 working-tree files on Windows.
+    const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: repo, encoding: "utf8", input: "shared fixture content\n",
+    }).trim();
+    const entries = Array.from({ length: 501 }, (_, index) =>
+      `100644 ${blob}\tfile-${index}.txt\0`
+    ).join("");
+    execFileSync("git", ["update-index", "-z", "--index-info"], {
+      cwd: repo, encoding: "utf8", input: entries,
+    });
+    const head = run("commit-tree", run("write-tree"), "-p", base, "-m", "head");
+    run("update-ref", "HEAD", head, base);
+    expect(run("diff", "--name-only", `${base}...${head}`).split("\n")).toHaveLength(501);
 
     expect(() => buildContext(base, head, join(repo, "context"), repo)).toThrow(
       "PR changes 501 files; limit is 500",

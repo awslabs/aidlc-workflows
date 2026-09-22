@@ -31,6 +31,7 @@ import {
 } from "../../scripts/preview-release.ts";
 import { publishRelease } from "../../scripts/publish-release.ts";
 import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, fullSuiteResult } from "../../scripts/ci-full-suite-result.ts";
+import { VERIFICATION_FAMILIES } from "../../scripts/ci-live-filter.ts";
 
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
 const STABLE_RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
@@ -370,7 +371,7 @@ async function runWorkflowStep(
 }
 
 describe("t332 preview publication pipeline", () => {
-  for (const [name, event, flag, sha, head, ancestor, purpose] of [
+  for (const [name, event, flag, sha, head, ancestor, purpose, selectedFamily = "all"] of [
     ["release call can test an older main commit", "workflow_call", "false", SOURCE_A, TARGET, true, "release"],
     ["release schedule stays main-bound", "schedule", "false", SOURCE_A, SOURCE_A, true, "release"],
     ["normal dispatch rejects branch source", "workflow_dispatch", "false", SOURCE_A, SOURCE_A, false, null],
@@ -381,6 +382,16 @@ describe("t332 preview publication pipeline", () => {
     ["schedule cannot enable live verification", "schedule", "true", SOURCE_A, SOURCE_A, true, null],
     ["PR cannot enable live verification", "pull_request", "true", SOURCE_A, SOURCE_A, true, null],
     ["unknown mode fails closed", "workflow_dispatch", "1", SOURCE_A, SOURCE_A, true, null],
+    ["manual family verification", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, "live-verification", "codex"],
+    ["family verification on main remains ineligible", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, "live-verification", "codex"],
+    ["release cannot select a family", "workflow_dispatch", "false", SOURCE_A, SOURCE_A, true, null, "codex"],
+    ["ordinary call cannot select a family", "workflow_call", "false", SOURCE_A, SOURCE_A, true, null, "codex"],
+    ["verification call cannot select a family", "workflow_call", "true", SOURCE_A, SOURCE_A, true, null, "codex"],
+    ["scheduled verification cannot select a family", "schedule", "true", SOURCE_A, SOURCE_A, true, null, "codex"],
+    ["family verification rejects another head", "workflow_dispatch", "true", SOURCE_A, TARGET, true, null, "codex"],
+    ["unknown verification family fails closed", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, null, "unknown"],
+    ["empty verification family fails closed", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, null, ""],
+    ["release-contract is not a verification family", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, null, "release-contract"],
   ] as const) {
     test(`Full Suite source authorization: ${name}`, async () => {
       const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
@@ -407,12 +418,13 @@ describe("t332 preview publication pipeline", () => {
       const result = await runWorkflowStep(script, root, {
         PATH: `${bin}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
         FIXTURE_SHA: sha, FIXTURE_ANCESTOR: ancestor ? "0" : "1", FIXTURE_GIT_CALLS: calls,
-        LIVE_VERIFICATION: flag, GITHUB_EVENT_NAME: event, GITHUB_SHA: head, GITHUB_OUTPUT: output,
+        LIVE_VERIFICATION: flag, VERIFICATION_FAMILY: selectedFamily,
+        GITHUB_EVENT_NAME: event, GITHUB_SHA: head, GITHUB_OUTPUT: output,
       });
       expect(result.status, result.stdout + result.stderr).toBe(purpose === null ? 1 : 0);
-      expect(readFileSync(output, "utf8")).toBe(purpose === null ? "" : `sha=${sha}\npurpose=${purpose}\n`);
+      expect(readFileSync(output, "utf8")).toBe(purpose === null ? "" : `sha=${sha}\npurpose=${purpose}\nverification_family=${selectedFamily}\n`);
       const commands = readFileSync(calls, "utf8");
-      if (flag === "false") {
+      if (flag === "false" && selectedFamily === "all") {
         expect(commands).toContain("fetch --no-tags origin main");
         expect(commands).toContain(`merge-base --is-ancestor ${sha} origin/main`);
       } else {
@@ -425,6 +437,8 @@ describe("t332 preview publication pipeline", () => {
     "preview", "renewal", "wrong-sha", "incomplete", "non-dispatch", "old-policy", "wrong-policy",
     "disabled-live", "missing-disabled-legs", "wrong-run", "missing-exclusions", "no-jobs", "unexpected-skipped",
     "missing-purpose", "verification-main", "verification-branch", "omitted-release", "missing-omissions",
+    "missing-verification-family",
+    ...VERIFICATION_FAMILIES.filter((family) => family !== "all").map((family) => `release-family-${family}`),
     ...FULL_SUITE_JOBS.flatMap((job) => ["missing", "skipped", "failure", "cancelled"].map((status) => `${job}/${status}`)),
   ]) {
     test(`stable release evidence: ${scenario}`, async () => {
@@ -483,6 +497,8 @@ describe("t332 preview publication pipeline", () => {
       if (scenario.startsWith("verification-")) evidence.purpose = "live-verification";
       if (scenario === "omitted-release") evidence.omittedLegs = ["deterministic"];
       if (scenario === "missing-omissions") delete evidence.omittedLegs;
+      if (scenario === "missing-verification-family") delete evidence.verificationFamily;
+      if (scenario.startsWith("release-family-")) evidence.verificationFamily = scenario.slice("release-family-".length);
       if (scenario.includes("/")) {
         const [job, status] = scenario.split("/");
         if (status === "missing") delete legs[job];
@@ -1264,6 +1280,7 @@ describe("t332 preview publication pipeline", () => {
     expect(evidence?.run).toContain("full-suite-result");
     expect(evidence?.run).toContain(".sha == $sha and .passed == true");
     expect(evidence?.run).toContain('.purpose == "release"');
+    expect(evidence?.run).toContain('.verificationFamily == "all"');
     expect(evidence?.run).toContain(".omittedLegs == []");
     expect(evidence?.run).toContain(`.coveragePolicy == "${FULL_SUITE_COVERAGE_POLICY}"`);
     expect(evidence?.run).toContain(".disabledLegs == []");

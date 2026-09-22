@@ -378,6 +378,14 @@ function envFor(machine: string): NodeJS.ProcessEnv {
 }
 
 describe("t244 machine configuration and update discovery", () => {
+  let updateRelease: string;
+  beforeAll(() => {
+    // These discovery cases only read the same release bytes. Build its copied
+    // projections and archives once, outside the refresh case's 5s deadline.
+    // Servers, request counters, faults, and machine/cache roots remain separate.
+    updateRelease = fixture(NEXT_VERSION, { binary: "bytes" });
+  }, process.platform === "win32" ? 120_000 : 30_000);
+
   test("global config works outside projects and precedence is flag, env, config, default", () => {
     const machine = temp("aidlc-t241-config-");
     const cwd = temp("aidlc-t241-config-cwd-");
@@ -457,7 +465,7 @@ describe("t244 machine configuration and update discovery", () => {
   });
 
   test("doctor explicit refresh honors its mirror and quiet modes stay network-free", async () => {
-    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const release = updateRelease;
     const server = await serveReleaseFixtureForChildren(release);
     const machine = temp("aidlc-t240-doctor-update-");
     const keys = [
@@ -523,17 +531,17 @@ describe("t244 machine configuration and update discovery", () => {
       }, true);
       expect(server.requests).toHaveLength(0);
     } finally {
-      await server.stop();
       for (const key of keys) {
         const value = saved[key];
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+      await server.stop();
     }
   }, process.platform === "win32" ? 120_000 : 10_000);
 
   test("interactive doctor bounds a missing-cache refresh to 750 milliseconds", async () => {
-    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const release = updateRelease;
     const server = await serveReleaseFixtureForChildren(release, {
       kind: "delay",
       asset: "version.json",
@@ -563,17 +571,19 @@ describe("t244 machine configuration and update discovery", () => {
       expect(elapsed).toBeGreaterThanOrEqual(500);
       expect(elapsed).toBeLessThan(1_500);
     } finally {
-      await server.stop();
+      // Do not leave a timed-out case's machine settings installed across an
+      // async teardown boundary, where the next refresh case may already run.
       for (const key of keys) {
         const value = saved[key];
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+      await server.stop();
     }
   }, process.platform === "win32" ? 120_000 : 5_000);
 
   test("authenticated refresh replaces the cache and every failed refresh preserves it", async () => {
-    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const release = updateRelease;
     const server = await serveReleaseFixtureForChildren(release);
     const machine = temp("aidlc-t241-update-");
     const saved = Object.fromEntries(
@@ -610,16 +620,16 @@ describe("t244 machine configuration and update discovery", () => {
       expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
       await captive.stop();
     } finally {
-      await server.stop();
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+      await server.stop();
     }
   }, process.platform === "win32" ? 120_000 : 45_000);
 
   test("older authenticated metadata cannot replace a newer valid update cache", async () => {
-    const newerRelease = fixture(NEXT_VERSION, { binary: "bytes" });
+    const newerRelease = updateRelease;
     const olderRelease = fixture("0.0.1", { binary: "bytes" });
     const newerServer = await serveReleaseFixtureForChildren(newerRelease);
     const olderServer = await serveReleaseFixtureForChildren(olderRelease);
@@ -644,17 +654,17 @@ describe("t244 machine configuration and update discovery", () => {
       expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
       expect(readUpdateCache()?.latestVersion).toBe(NEXT_VERSION);
     } finally {
-      await newerServer.stop();
-      await olderServer.stop();
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+      await newerServer.stop();
+      await olderServer.stop();
     }
   }, process.platform === "win32" ? 120_000 : 45_000);
 
   test("disabled and offline update checks open no socket", async () => {
-    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const release = updateRelease;
     const server = serveReleaseFixture(release);
     const machine = temp("aidlc-t241-no-socket-");
     const env = {

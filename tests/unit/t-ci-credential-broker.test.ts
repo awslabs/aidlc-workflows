@@ -2,6 +2,7 @@
 // Loopback fixtures only. The independent signature verifier uses WebCrypto and
 // explicit canonical path/query expectations, not broker signing helpers.
 import { afterEach, describe, expect, test } from "bun:test";
+import { createServer } from "node:http";
 import { CI_BEDROCK_MODELS, startCredentialBroker } from "../../scripts/ci-credential-broker.ts";
 
 const credentials = {
@@ -46,11 +47,11 @@ function collector(reply: (request: CapturedRequest) => Response = () => new Res
   return { requests, origin: `http://127.0.0.1:${server.port}` };
 }
 
-async function fixture(reply?: (request: CapturedRequest) => Response, mantleReply?: (request: CapturedRequest) => Response) {
+async function fixture(reply?: (request: CapturedRequest) => Response, mantleReply?: (request: CapturedRequest) => Response, signingCredentials = credentials) {
   const upstream = collector(reply);
   const mantle = collector(mantleReply);
   const sts = collector(() => new Response(identityXml, { headers: { "content-type": "text/xml" } }));
-  const broker = await startCredentialBroker(credentials, {
+  const broker = await startCredentialBroker(signingCredentials, {
     upstream: upstream.origin, stsUpstream: sts.origin, mantleUpstream: mantle.origin,
   });
   stop.push(broker.stop);
@@ -62,21 +63,22 @@ async function verifySignature(
   service: "sts" | "bedrock" | "bedrock-mantle",
   canonicalPath: string,
   canonicalQuery: string,
+  signingCredentials = credentials,
 ): Promise<void> {
   const { headers, method, body, url } = captured;
   const timestamp = headers.get("x-amz-date")!;
   expect(timestamp).toMatch(/^\d{8}T\d{6}Z$/);
   expect(headers.get("host")).toBe(url.host);
-  expect(headers.get("x-amz-security-token")).toBe(credentials.sessionToken);
+  expect(headers.get("x-amz-security-token")).toBe(signingCredentials.sessionToken);
   const digest = Buffer.from(await crypto.subtle.digest("SHA-256", body)).toString("hex");
   expect(headers.get("x-amz-content-sha256")).toBe(digest);
   const names = ["content-type", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-security-token"];
   const canonicalHeaders = names.map(name => `${name}:${headers.get(name)!.trim().replace(/\s+/g, " ")}\n`).join("");
   const canonical = `${method}\n${canonicalPath}\n${canonicalQuery}\n${canonicalHeaders}\n${names.join(";")}\n${digest}`;
   const hash = Buffer.from(await crypto.subtle.digest("SHA-256", encoder.encode(canonical))).toString("hex");
-  const scope = `${timestamp.slice(0, 8)}/${credentials.region}/${service}/aws4_request`;
-  let signingKey: Uint8Array<ArrayBuffer> = encoder.encode(`AWS4${credentials.secretAccessKey}`);
-  for (const data of [timestamp.slice(0, 8), credentials.region, service, "aws4_request"]) {
+  const scope = `${timestamp.slice(0, 8)}/${signingCredentials.region}/${service}/aws4_request`;
+  let signingKey: Uint8Array<ArrayBuffer> = encoder.encode(`AWS4${signingCredentials.secretAccessKey}`);
+  for (const data of [timestamp.slice(0, 8), signingCredentials.region, service, "aws4_request"]) {
     const key = await crypto.subtle.importKey("raw", signingKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     signingKey = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(data)));
   }
@@ -84,7 +86,7 @@ async function verifySignature(
   const signature = Buffer.from(await crypto.subtle.sign("HMAC", key,
     encoder.encode(`AWS4-HMAC-SHA256\n${timestamp}\n${scope}\n${hash}`))).toString("hex");
   expect(headers.get("authorization")).toBe(
-    `AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/${scope}, SignedHeaders=${names.join(";")}, Signature=${signature}`,
+    `AWS4-HMAC-SHA256 Credential=${signingCredentials.accessKeyId}/${scope}, SignedHeaders=${names.join(";")}, Signature=${signature}`,
   );
 }
 
@@ -227,9 +229,10 @@ describe("CI request-signing broker", () => {
     }
   });
 
-  test("signs Codex Responses requests to Mantle without rewriting their JSON payload", async () => {
+  test.each(["us-east-1", "us-east-2"])("signs Codex Responses requests in %s without rewriting their JSON payload", async (region) => {
+    const signingCredentials = { ...credentials, region };
     const { origin, mantle, upstream } = await fixture(undefined,
-      () => Response.json({ id: "response-fixture", output: [] }));
+      () => Response.json({ id: "response-fixture", output: [] }), signingCredentials);
     const body = encoder.encode(`{ "input": "snow 雪", "model": "${CI_BEDROCK_MODELS.codex}", "store": false }\n`);
     const response = await fetch(`${origin}/openai/v1/responses`, {
       method: "POST", body,
@@ -246,7 +249,7 @@ describe("CI request-signing broker", () => {
     const [captured] = mantle.requests;
     expect(captured.url.pathname).toBe("/openai/v1/responses");
     expect(captured.body).toEqual(body);
-    await verifySignature(captured, "bedrock-mantle", "/openai/v1/responses", "");
+    await verifySignature(captured, "bedrock-mantle", "/openai/v1/responses", "", signingCredentials);
   });
 
   test("refuses non-Codex models and non-Responses Mantle operations", async () => {
@@ -348,6 +351,207 @@ describe("CI request-signing broker", () => {
       expect(body).not.toContain(secret);
     }
     expect(error.headers.has("x-amz-security-token")).toBe(false);
+  });
+
+  test("distinguishes local rejection from AWS 403 while preserving error-body suppression", async () => {
+    const secretText = Object.values(credentials).join(" ");
+    const { origin, mantle } = await fixture(undefined, () => new Response(secretText, {
+      status: 403,
+      headers: {
+        "x-amzn-errortype": "InvalidSignatureException",
+        "x-amzn-requestid": "private-request-id",
+        "x-amz-security-token": credentials.sessionToken,
+      },
+    }));
+    const local = await fetch(`${origin}/openai/v1/responses`, {
+      method: "POST", body: JSON.stringify({ model: "unapproved-model" }),
+    });
+    expect(await local.json()).toEqual({ message: "Forbidden", source: "broker" });
+    expect(local.status).toBe(403);
+    expect(mantle.requests).toHaveLength(0);
+    const upstream = await fetch(`${origin}/openai/v1/responses`, {
+      method: "POST", body: JSON.stringify({ model: CI_BEDROCK_MODELS.codex }),
+    });
+    expect(upstream.status).toBe(403);
+    expect(await upstream.json()).toEqual({
+      message: "Forbidden", source: "upstream", errorType: "InvalidSignatureException",
+    });
+    expect(upstream.headers.get("cache-control")).toBe("no-store");
+    for (const header of ["x-amzn-requestid", "x-amz-security-token", "x-amzn-errortype"]) {
+      expect(upstream.headers.has(header)).toBe(false);
+    }
+    expect(mantle.requests).toHaveLength(1);
+  });
+
+  test.each(["bedrock-mantle:CreateInference", "bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"])(
+    "reports only the exact denied action %s from bounded AWS JSON", async (action) => {
+      const message = `User: ${arn} is not authorized to perform: ${action} on resource: private-resource`;
+      const { origin } = await fixture(() => Response.json({
+        __type: "com.amazonaws.bedrock#AccessDeniedException", message,
+        CanonicalRequest: Object.values(credentials).join("\n"),
+      }, { status: 403 }));
+      const response = await fetch(`${origin}/model/${CI_BEDROCK_MODELS.codex}/invoke`, { method: "POST", body: "{}" });
+      expect(await response.json()).toEqual({
+        message: "Forbidden", source: "upstream", errorType: "AccessDeniedException", deniedAction: action,
+      });
+    },
+  );
+
+  test("recognizes the nested Responses error shape without copying messages or unknown fields", async () => {
+    const { origin } = await fixture(undefined, () => Response.json({
+      error: {
+        code: "AccessDeniedException",
+        type: "permission_error",
+        message: `User: ${arn} is not authorized to perform: bedrock-mantle:CreateInference on resource: *`,
+        token: credentials.sessionToken,
+      },
+    }, { status: 403 }));
+    const response = await fetch(`${origin}/openai/v1/responses`, {
+      method: "POST", body: JSON.stringify({ model: CI_BEDROCK_MODELS.codex }),
+    });
+    expect(await response.json()).toEqual({
+      message: "Forbidden", source: "upstream", errorType: "AccessDeniedException", deniedAction: "bedrock-mantle:CreateInference",
+    });
+  });
+
+  test("identifies an exact 403 denial even when the Responses envelope omits an AWS class", async () => {
+    let status = 403;
+    const { origin } = await fixture(undefined, () => Response.json({
+      error: { type: "permission_error", code: null, message: "not authorized to perform: bedrock-mantle:CreateInference on resource: *" },
+    }, { status }));
+    for (status of [403, 400]) {
+      const response = await fetch(`${origin}/openai/v1/responses`, {
+        method: "POST", body: JSON.stringify({ model: CI_BEDROCK_MODELS.codex }),
+      });
+      expect(await response.json()).toEqual(status === 403
+        ? { message: "Forbidden", source: "upstream", deniedAction: "bedrock-mantle:CreateInference" }
+        : { message: "Upstream request failed", source: "upstream" });
+    }
+  });
+
+  test("rejects malformed, composite, oversized and unknown header/type values", async () => {
+    let value: unknown;
+    let mode: "header" | "body" = "header";
+    const { origin } = await fixture(() => Response.json(mode === "body" ? { __type: value } : {}, {
+      status: 403,
+      headers: mode === "header" ? { "x-amzn-errortype": String(value) } : {},
+    }));
+    for (mode of ["header", "body"] as const) {
+      for (value of [
+        "AccessDeniedException,InvalidSignatureException",
+        "AccessDeniedException, AccessDeniedException",
+        "AccessDeniedException:private-suffix",
+        "AccessDeniedException/private-suffix",
+        "namespace/path#AccessDeniedException",
+        `${"x".repeat(129)}#AccessDeniedException`,
+        "UnknownException", "constructor", {}, [], null, 403,
+      ]) {
+        const response = await fetch(`${origin}/model/${CI_BEDROCK_MODELS.codex}/invoke`, { method: "POST", body: "{}" });
+        expect(await response.json()).toEqual({ message: "Forbidden", source: "upstream" });
+      }
+    }
+  });
+
+  test("refuses duplicate classification headers even when node:http would retain only the first", async () => {
+    let duplicateType = true;
+    const server = createServer((request, response) => {
+      request.resume();
+      response.writeHead(403, [
+        "Content-Type", "application/json",
+        "X-Amzn-ErrorType", "AccessDeniedException",
+        ...(duplicateType
+          ? ["X-Amzn-ErrorType", "InvalidSignatureException"]
+          : ["Content-Type", "text/plain"]),
+      ]);
+      response.end(JSON.stringify(duplicateType ? {} : {
+        message: "not authorized to perform: bedrock:InvokeModel",
+      }));
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    stop.push(() => { server.closeAllConnections(); server.close(); });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing loopback fixture address");
+    const sts = collector(() => new Response(identityXml));
+    const broker = await startCredentialBroker(credentials, {
+      upstream: `http://127.0.0.1:${address.port}`, stsUpstream: sts.origin,
+    });
+    stop.push(broker.stop);
+    for (duplicateType of [true, false]) {
+      const response = await fetch(`http://127.0.0.1:${broker.port}/model/${CI_BEDROCK_MODELS.codex}/invoke`, {
+        method: "POST", body: "{}",
+      });
+      expect(await response.json()).toEqual({
+        message: "Forbidden", source: "upstream", ...(!duplicateType ? { errorType: "AccessDeniedException" } : {}),
+      });
+    }
+  });
+
+  test("does not infer denied actions from arbitrary, partial, or contradictory messages", async () => {
+    let payload: Record<string, unknown>;
+    const { origin } = await fixture(() => Response.json(payload, { status: 403 }));
+    for (const message of [
+      "Allowed action: bedrock-mantle:CreateInference",
+      'The canonical request contains "not authorized to perform: bedrock:InvokeModel"',
+      "not authorized to perform: iam:PassRole on resource: *",
+      "not authorized to perform: bedrock-mantle:CreateInferenceExtra on resource: *",
+      "not authorized to perform: bedrock-mantle:CreateInference*",
+      "not authorized to perform: bedrock-mantle:CreateInference/private",
+      "not authorized to perform: bedrock:InvokeModel and not authorized to perform: bedrock-mantle:CreateInference",
+      { action: "bedrock-mantle:CreateInference" },
+    ]) {
+      payload = { __type: "AccessDeniedException", message };
+      const response = await fetch(`${origin}/model/${CI_BEDROCK_MODELS.codex}/invoke`, { method: "POST", body: "{}" });
+      expect(await response.json()).toEqual({ message: "Forbidden", source: "upstream", errorType: "AccessDeniedException" });
+    }
+    payload = {
+      __type: "AccessDeniedException", code: "InvalidSignatureException",
+      message: "not authorized to perform: bedrock-mantle:CreateInference",
+    };
+    const ambiguous = await fetch(`${origin}/model/${CI_BEDROCK_MODELS.codex}/invoke`, { method: "POST", body: "{}" });
+    expect(await ambiguous.json()).toEqual({ message: "Forbidden", source: "upstream" });
+  });
+
+  test("ignores non-JSON, encoded, oversized, invalid UTF-8 and malformed error bodies", async () => {
+    const body = JSON.stringify({ __type: "AccessDeniedException", message: "not authorized to perform: bedrock-mantle:CreateInference" });
+    let reply: Response;
+    const { origin } = await fixture(() => reply);
+    for (const [contentType, encoding, bytes] of [
+      ["text/plain", undefined, body],
+      ["application/jsonp", undefined, body],
+      ["application/json; other=parameter", undefined, body],
+      ["application/json, application/json", undefined, body],
+      ["application/json", "gzip", body],
+      ["application/json", "identity, identity", body],
+      ["application/json", undefined, `${body}${" ".repeat(8193)}`],
+      ["application/json", undefined, new Uint8Array([0xff, ...encoder.encode(body)])],
+      ["application/json", undefined, `${body}invalid-json`],
+    ] as const) {
+      reply = new Response(bytes, {
+        status: 403, headers: { "content-type": contentType, ...(encoding ? { "content-encoding": encoding } : {}) },
+      });
+      const response = await fetch(`${origin}/model/${CI_BEDROCK_MODELS.codex}/invoke`, {
+        method: "POST", body: "{}", signal: AbortSignal.timeout(3_000),
+      });
+      expect(await response.json()).toEqual({ message: "Forbidden", source: "upstream" });
+    }
+  });
+
+  test.each(["stalled", "oversized", "typed-signature"])("bounds %s error streams and retains only a trusted header class", async (kind) => {
+    const errorType = kind === "typed-signature" ? "InvalidSignatureException" : "AccessDeniedException";
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // No EOF: classification must use its deadline/size limit, or skip a
+        // body entirely when the header already identifies a signature error.
+        controller.enqueue(encoder.encode(kind === "oversized" ? "x".repeat(8193) : '{"message":"partial'));
+      },
+    });
+    const { origin } = await fixture(() => new Response(stream, {
+      status: 403, headers: { "content-type": "application/json", "x-amzn-errortype": errorType },
+    }));
+    const response = await fetch(`${origin}/model/${CI_BEDROCK_MODELS.codex}/invoke`, {
+      method: "POST", body: "{}", signal: AbortSignal.timeout(3_000),
+    });
+    expect(await response.json()).toEqual({ message: "Forbidden", source: "upstream", errorType });
   });
 
   test("fails closed on failed or malformed STS identity without exposing its response", async () => {

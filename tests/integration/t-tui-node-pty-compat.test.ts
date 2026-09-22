@@ -349,6 +349,34 @@ describe("Windows cleanup identity snapshots", () => {
   });
 });
 
+test("the stable Windows wrapper stays alive until its owner terminates it", async () => {
+  const child = spawn(process.env.AIDLC_NODE_BIN || "node", [
+    "--experimental-strip-types", "--input-type=module", "-e",
+    `import { waitForWindowsWrapperRetirement } from ${JSON.stringify(new URL("../harness/tui-drive.ts", import.meta.url).href)};
+process.stdout.write("WRAPPER_WAITING\\n");
+await waitForWindowsWrapperRetirement();`,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  let errors = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { errors += chunk; });
+  const exited = new Promise<number | null>((accept) => {
+    child.once("exit", accept);
+    child.once("error", (error) => { errors += String(error); accept(-1); });
+  });
+  try {
+    expect(await waitUntil(() => output.includes("WRAPPER_WAITING") || child.exitCode !== null, 5000), errors).toBe(true);
+    expect(output, errors).toContain("WRAPPER_WAITING");
+    // Let Node reach an otherwise empty event loop. An unresolved top-level
+    // await exits with code 13 here; the referenced wrapper must remain alive.
+    const outcome = await Promise.race([exited.then((code) => `exited:${code}`), Bun.sleep(300).then(() => "waiting")]);
+    expect(outcome, errors).toBe("waiting");
+  } finally {
+    child.kill("SIGKILL");
+    await exited;
+  }
+}, 10_000);
+
 describe("t-tui-preflight (terminal substrate capability gate)", () => {
   test.skipIf(!IS_WIN || LEGACY_ABSENT_REASON !== null)(
     `Windows until-file paths detect early, preserve post-write work, and reap on teardown${
@@ -376,13 +404,9 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
       writeFileSync(
         childScript,
         [
-          "param([Parameter(Mandatory=$true)][string]$CaseDir)",
+          "param([Parameter(Mandatory=$true)][string]$CaseDir, [switch]$WaitForRelease)",
+          'if ($WaitForRelease) { while (-not (Test-Path (Join-Path $CaseDir "grandchild.release"))) { Start-Sleep -Milliseconds 25 } }',
           '$PID | Set-Content -Encoding ascii (Join-Path $CaseDir "grandchild-self.pid")',
-          "$identity = [pscustomobject]@{",
-          "  pid = [int]$PID",
-          '  creationDate = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").CreationDate.ToUniversalTime().ToString("o")',
-          "}",
-          '$identity | ConvertTo-Json -Compress | Set-Content -Encoding utf8 (Join-Path $CaseDir "grandchild.identity.json")',
           "Start-Sleep -Seconds 600",
           "",
         ].join("\r\n"),
@@ -407,10 +431,16 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           '  creationDate = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").CreationDate.ToUniversalTime().ToString("o")',
           "}",
           '$identity | ConvertTo-Json -Compress | Set-Content -Encoding utf8 (Join-Path $CaseDir "target.identity.json")',
-          "$child = Start-Process powershell.exe -ArgumentList @(",
+          "$childArgs = @(",
           '  "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",',
           `  "${childScript}", "-CaseDir", $CaseDir`,
-          ") -PassThru",
+          ")",
+          'if ($FastExit) { $childArgs += "-WaitForRelease" }',
+          "$child = Start-Process powershell.exe -ArgumentList $childArgs -PassThru",
+          // Record the held Process object's identity before the parent exits.
+          // Cleanup may correctly reap this child before its own script runs.
+          '$childIdentity = [pscustomobject]@{ pid = [int]$child.Id; creationDate = $child.StartTime.ToUniversalTime().ToString("o") }',
+          '$childIdentity | ConvertTo-Json -Compress | Set-Content -Encoding utf8 (Join-Path $CaseDir "grandchild.identity.json")',
           '$child.Id | Set-Content -Encoding ascii (Join-Path $CaseDir "grandchild.pid")',
           "if ($ExitAfterSpawn) {",
           "  if (-not $FastExit) { Start-Sleep -Milliseconds 1000 }",
@@ -480,6 +510,8 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           '  "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",',
           `  "${childScript}", "-CaseDir", $CaseDir`,
           ") -PassThru",
+          '$childIdentity = [pscustomobject]@{ pid = [int]$child.Id; creationDate = $child.StartTime.ToUniversalTime().ToString("o") }',
+          '$childIdentity | ConvertTo-Json -Compress | Set-Content -Encoding utf8 (Join-Path $CaseDir "grandchild.identity.json")',
           '$child.Id | Set-Content -Encoding ascii (Join-Path $CaseDir "grandchild.pid")',
           "exit 0",
           "",
@@ -818,7 +850,6 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 existsSync(targetExitPath) &&
                 existsSync(join(caseDir, "target.pid")) &&
                 existsSync(join(caseDir, "grandchild.pid")) &&
-                existsSync(join(caseDir, "grandchild-self.pid")) &&
                 identityFiles.every(existsSync),
               20_000,
             ),
@@ -1370,6 +1401,9 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             ),
           ).toBe(true);
 
+          // FastExit deliberately leaves the child gated: evidence and cleanup
+          // must work even when the child cannot publish any readiness files.
+          expect(existsSync(join(caseDir, "grandchild-self.pid"))).toBe(false);
           const killed = legacyDrive(["kill", "--session", session]);
           expect(killed.rc, killed.stderr).toBe(0);
           expect(

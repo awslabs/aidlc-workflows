@@ -2567,13 +2567,14 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
   }, 30000);
 
-  test("(h) a native Windows Bash diagnostic does not turn a completed config refusal into workflow continuation", () => {
-    // Native T27 carried a literal quoted Windows cd, successful next -> terminal
-    // print, then a real config refusal. Bind its prelude to the owned fixture;
-    // preserve native Windows spelling only on the platform that executes it.
-    for (const diagnostic of ["", `${bashStartupDiagnostic}\n`, `${bashStartupDiagnostic}\r\n`]) {
-      for (const format of ["claude", "codex"] as const) {
-        for (const textArray of [false, true]) {
+  // Native T27 carried a literal quoted Windows cd, successful next -> terminal
+  // print, then a real config refusal. Each transcript/prelude variant owns its
+  // fixture and deadline; twelve independent CLI sequences need not share 30s.
+  for (const diagnostic of ["", `${bashStartupDiagnostic}\n`, `${bashStartupDiagnostic}\r\n`]) {
+    for (const format of ["claude", "codex"] as const) {
+      for (const textArray of [false, true]) {
+        const prelude = diagnostic === "" ? "none" : diagnostic.includes("\r") ? "CRLF" : "LF";
+        test(`(h) a native Windows Bash diagnostic preserves a completed config refusal (${format}, ${prelude}, text-array=${textArray})`, () => {
           const proj = makeProject();
           const nativePrefix = process.platform === "win32"
             ? `cd '${proj}' && `
@@ -2608,10 +2609,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
           expect(result.out, `${format}: ${JSON.stringify(diagnostic)}`).toBe("");
           expect(readFileSync(seededStateFile(proj), "utf8")).toBe(before);
           expect(readFileSync(artifact, "utf8")).toBe("preserve the existing feasibility work\n");
-        }
+        }, 30000);
       }
     }
-  }, 30000);
+  }
 
   const configProofCases: Array<{
     label: string;
@@ -3209,5 +3210,5 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(stopped.out).toBe("");
     expect(readFileSync(markerPath, "utf-8")).toBe(before);
     expect(statSync(lockDir).isDirectory()).toBe(true);
-  }, 10000);
+  }, 25_000); // Outer fixture budget covers runHook's unchanged 20s child limit; CI took 13.16s.
 });

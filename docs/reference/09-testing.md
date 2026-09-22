@@ -1082,7 +1082,8 @@ tests before reporting an intentional publication skip. Stable releases download
 `full-suite-result` from successful preview runs or main-branch `workflow_dispatch`
 runs of `full-suite.yml`, requiring the artifact's `sha` to equal the tag SHA,
 `runId` to match the downloaded run, `coveragePolicy: "required-hosted-live-v1"`,
-`purpose: "release"`, `passed: true`, `disabledLegs: []`, `omittedLegs: []`, and every declared job in `legs` to be
+`purpose: "release"`, `verificationFamily: "all"`, `passed: true`,
+`disabledLegs: []`, `omittedLegs: []`, and every declared job in `legs` to be
 `success`. Missing, expired, obsolete-policy, wrong-source/run or failed evidence
 blocks publication. To renew evidence for an unchanged SHA, dispatch
 `full-suite.yml` on `main` with `ref=<sha>`. The tested source must contain the
@@ -1103,6 +1104,15 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
   -f 'ref=<exact-workflow-head-sha>' -f live_verification=true
 ```
 
+To repeat only one family while other coverage is already running, add
+`-f verification_family=codex`. The manual choices are `all` (default),
+`claude-sdk`, `claude-tui`, `codex`, and `opencode`. A family other than `all`
+requires live-verification mode and the same manual event/exact-head checks.
+It selects only that family's rows on Linux/macOS/Windows, retaining the
+original per-platform N/M shard numbers. The separate Windows release-contract
+job is omitted for scoped verification. No family selector is exposed to
+reusable callers, and ordinary release-purpose runs must use `all`.
+
 This option exists only on `workflow_dispatch`, never `workflow_call`.
 Authorization requires that event and that the checked-out SHA equals
 `github.sha`; selecting the workflow on `main` cannot authorize a different
@@ -1114,7 +1124,8 @@ CI. Existing provider opt-ins, strict live coverage and credential isolation
 remain in effect.
 
 The separate `full-suite-live-verification-result` artifact contains
-`full-suite-result.json` with `purpose: "live-verification"`, the omitted jobs in
+`full-suite-result.json` with `purpose: "live-verification"`, `verificationFamily`,
+the omitted jobs in
 `omittedLegs`, and `complete: false`. Its `passed` requires every live job to
 succeed and every intentionally omitted job to be `skipped`; missing, failed,
 cancelled or unexpectedly executed jobs fail. Even a successful verification
@@ -1216,7 +1227,7 @@ stamp directories and JUnit), `full-suite-native-result`,
 `unit-8`, or `deep`), `full-suite-live-<family>-<slice-number>-<OS>`,
 `full-suite-live-release-contract-Windows`, and
 `full-suite-result` (90-day retention). The final JSON records `sha`, `runId`,
-`runAttempt`, `purpose`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
+`runAttempt`, `purpose`, `verificationFamily`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
 `disabledLegs: []`, `omittedLegs`, and live families declared with `hosting: "excluded"` in the
 sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-v1`, `passed` means every
 declared job succeeded and `sha` is a 40-hex commit ID. A missing, failed,
@@ -1297,8 +1308,11 @@ Claude uses documented `ANTHROPIC_BEDROCK_BASE_URL` and
 identity, followed by a real SDK turn. Codex 0.151.0 uses a provider `base_url`
 ending `/openai/v1`, verified against a loopback endpoint; the service-specific
 Bedrock Runtime override alone does **not** redirect Codex's Mantle traffic.
-Codex and opencode profiles contain only dummy `broker` keys. Opencode's documented
-provider `endpoint` override routes its AI SDK requests through the proxy.
+Every scratch Codex home uses the shared broker endpoint renderer, including
+compose, workspace and memory journeys. Codex and opencode profiles contain only
+dummy `broker` keys. Opencode selects `AWS_PROFILE=broker` so its prerequisite
+check recognizes that profile; its documented provider `endpoint` override
+routes AI SDK requests through the proxy.
 Codex shell policy excludes provider/broker/API/GitHub/Actions variables, and the
 runner strips CI control-plane credentials before launching any live test.
 

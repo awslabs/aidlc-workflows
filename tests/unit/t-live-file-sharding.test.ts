@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
   classifyLiveFiles, FAMILIES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
-  PLATFORM_ONLY, selectedLiveFiles, type LiveFamily,
+  PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type VerificationFamily,
 } from "../../scripts/ci-live-filter.ts";
 import { sandboxCommand } from "../../scripts/ci-live-sandbox.ts";
 import { parseRunnerArgs } from "../harness/runner-profile.ts";
@@ -59,6 +59,30 @@ describe("bounded live file sharding", () => {
       expect(planned.sort()).toEqual(expected.sort());
       expect(liveMatrix(kind)).toEqual(matrix);
     }, 180_000);
+    for (const family of VERIFICATION_FAMILIES.filter((value) => value !== "all")) {
+      test(`${kind}/${family} scope preserves every full-family shard and selects no other family`, () => {
+        const all = liveMatrix(kind);
+        const scoped = liveMatrix(kind, family);
+        expect(liveMatrix(kind, "all")).toEqual(all);
+        expect(scoped.include.length).toBeGreaterThan(0);
+        expect(scoped.include).toEqual(all.include.filter((row) => row.family === family));
+        const planned: string[] = [];
+        const expected = platforms.filter((platform) => (kind === "windows") === (platform === "win32"))
+          .flatMap((platform) => selectedLiveFiles(family, platform).map((file) => `${platform}:${file}`));
+        for (const row of scoped.include) {
+          const [index, total] = row.shard.split("/").map(Number);
+          const files = selectedLiveFiles(family, row.platform);
+          expect(total).toBe(files.length);
+          expect(selectedLiveFiles(family, row.platform, row.shard)).toEqual([files[index - 1]]);
+          planned.push(`${row.platform}:${files[index - 1]}`);
+        }
+        expect(new Set(planned).size).toBe(planned.length);
+        expect(planned.sort()).toEqual(expected.sort());
+        const result = cli(["--matrix", kind, "--family", family]);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toBe(`${JSON.stringify(scoped)}\n`);
+      }, 30_000);
+    }
   }
 
   test("platform eligibility precedes shard numbering, including the separate Windows release contract", () => {
@@ -114,6 +138,11 @@ describe("bounded live file sharding", () => {
     }
     expect(() => selectedLiveFiles("codex", "aix")).toThrow("does not support");
     expect(() => liveMatrix("other" as "hosted")).toThrow("unknown live matrix");
+    for (const family of ["", "unknown", "release-contract", "copilot", "kiro-tui", "codex\n"]) {
+      for (const kind of ["hosted", "windows"] as const) {
+        expect(() => liveMatrix(kind, family as VerificationFamily)).toThrow("unknown verification family");
+      }
+    }
     // In-memory platform restrictions exercise the empty-plan guard without runtime fixtures.
     const files = partition.get("opencode")!;
     const prior = files.map((file) => PLATFORM_ONLY[file]);
@@ -123,6 +152,8 @@ describe("bounded live file sharding", () => {
       expect(() => selectedLiveFiles("opencode", "linux", "1/1")).toThrow("no selected files");
       expect(() => liveMatrix("hosted")).toThrow("no selected files");
       expect(() => liveMatrix("windows")).toThrow("no selected files");
+      expect(() => liveMatrix("hosted", "opencode")).toThrow("no selected files");
+      expect(() => liveMatrix("windows", "opencode")).toThrow("no selected files");
     } finally {
       files.forEach((file, index) => {
         if (prior[index] === undefined) delete PLATFORM_ONLY[file];
@@ -226,6 +257,10 @@ describe("bounded live file sharding", () => {
   test("CLI rejects invalid shards in every mode and refuses passthrough selectors", () => {
     for (const args of [
       ["--matrix"], ["--matrix", "other"], ["--matrix", "hosted", "--args"],
+      ["--matrix", "hosted", "--family"], ["--matrix", "hosted", "--family", ""],
+      ["--matrix", "hosted", "--family", "unknown"], ["--matrix", "windows", "--family", "release-contract"],
+      ["--matrix", "hosted", "--family", "codex", "--family", "opencode"],
+      ["codex", "--family", "codex"],
       ["codex", "--shard"], ["codex", "--shard", "1/999"],
       ["codex", "--shard", "1/999", "--args"],
       ["codex", "--shard", "1/999", "--run", "--", "--e2e-plan"],
