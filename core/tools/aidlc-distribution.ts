@@ -37,8 +37,10 @@ export type ProjectionDescriptor = {
 };
 
 const QUOTED_OR_BARE_PATH = String.raw`(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s"';&|]+)`;
+const CLAUDE_AIDLC_TS_PATH =
+  String.raw`(?:\$CLAUDE_PROJECT_DIR[\\/])?\.claude[\\/]tools[\\/]aidlc\.ts`;
 const AIDLC_TS_PATH =
-  String.raw`(?:"[^"\r\n]*[\\/]aidlc\.ts"|'[^'\r\n]*[\\/]aidlc\.ts'|[^\s"';&|]*[\\/]aidlc\.ts)`;
+  `(?:"${CLAUDE_AIDLC_TS_PATH}"|'${CLAUDE_AIDLC_TS_PATH}'|${CLAUDE_AIDLC_TS_PATH})`;
 const AIDLC_DISPATCHER = String.raw`(?:aidlc(?:\.exe|\.cmd)?|bun\s+${AIDLC_TS_PATH})`;
 const AIDLC_HOOK_COMMAND = new RegExp(
   String.raw`^\s*${AIDLC_DISPATCHER}\s+engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))\s*$`,
@@ -49,7 +51,7 @@ const AIDLC_HOOK_COMMAND_PREFIX = new RegExp(
 const LEGACY_AIDLC_HOOK_COMMAND = new RegExp(
   String.raw`^\s*bun\s+(${QUOTED_OR_BARE_PATH})\s*$`,
 );
-const LEGACY_AIDLC_HOOK_TARGETS = new Set([
+export const LEGACY_AIDLC_HOOK_TARGETS: ReadonlySet<string> = new Set([
   "audit-logger",
   "continue-workflow",
   "deliver-stage-rules",
@@ -96,6 +98,15 @@ export function aidlcHookTarget(command: string): string | null {
     /^\$CLAUDE_PROJECT_DIR\/\.claude\/hooks\/aidlc-([A-Za-z0-9_-]+)\.ts$/.exec(path);
   const target = hook?.[1];
   return target !== undefined && LEGACY_AIDLC_HOOK_TARGETS.has(target) ? target : null;
+}
+
+export function isCustomClaudeStatusLine(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const statusLine = value as Record<string, unknown>;
+  return statusLine.type === "command" &&
+    typeof statusLine.command === "string" &&
+    statusLine.command.trim() !== "" &&
+    aidlcHookTarget(statusLine.command) !== "statusline";
 }
 
 /** Keep event, matcher, and item metadata while excluding project hook entries. */

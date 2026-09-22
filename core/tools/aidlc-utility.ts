@@ -43,7 +43,7 @@ import {
   AIDLC_HOOK_ENTRY_PREFIX,
   aidlcDispatcherTarget,
   aidlcHookRegistrationHashes,
-  aidlcHookTarget,
+  isCustomClaudeStatusLine,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
 import {
@@ -3183,11 +3183,7 @@ export async function collectDoctorReport(
       const parsed = JSON.parse(raw) as unknown;
       const parsedSettings = isPlainObject(parsed) ? parsed : {};
       settingsHooks = parsedSettings.hooks;
-      const statusLine = isPlainObject(parsedSettings.statusLine)
-        ? parsedSettings.statusLine
-        : {};
-      customStatusLine = typeof statusLine.command === "string" &&
-        aidlcHookTarget(statusLine.command) !== "statusline";
+      customStatusLine = isCustomClaudeStatusLine(parsedSettings.statusLine);
       const commands: string[] = [];
       const collectCommands = (value: unknown): void => {
         if (Array.isArray(value)) return void value.forEach(collectCommands);

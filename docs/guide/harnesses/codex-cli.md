@@ -182,8 +182,8 @@ runtime.
 Between workflows, preview and apply the project refresh:
 
 ```bash
-aidlc config --dry-run
-aidlc config
+aidlc config --harness codex --dry-run
+aidlc config --harness codex
 ```
 
 Config preserves user-owned content and restores AI-DLC-owned assignments and
@@ -194,6 +194,13 @@ workflow first. Upgrade and rollback remain safe during a workflow because they
 do not touch project files. A refresh can change Codex hook identities, so
 approve the new trust dialog or replace the matching trust-seed entries after
 config when Codex requests it.
+
+A copy-channel project uses the copied runtime explicitly:
+
+```bash
+bun .codex/tools/aidlc.ts config --harness codex --from <runtime/codex root> --dry-run
+bun .codex/tools/aidlc.ts config --harness codex --from <runtime/codex root>
+```
 
 ## Use
 
