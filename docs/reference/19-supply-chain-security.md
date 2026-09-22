@@ -151,14 +151,14 @@ gate.
    RELEASE_SHA='<preview-verified-commit-sha>'
    RELEASE_VERSION='X.Y.Z'
    git fetch --no-tags origin \
-     '+refs/heads/main:refs/remotes/origin/main'
-   git cat-file -e "${RELEASE_SHA}^{commit}"
-   git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+     '+refs/heads/main:refs/remotes/origin/main' &&
+   git cat-file -e "${RELEASE_SHA}^{commit}" &&
+   git merge-base --is-ancestor "$RELEASE_SHA" origin/main &&
    test "$(
      git show "${RELEASE_SHA}:core/tools/aidlc-version.ts" |
        awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }'
-   )" = "$RELEASE_VERSION"
-   git tag "v$RELEASE_VERSION" "$RELEASE_SHA"
+   )" = "$RELEASE_VERSION" &&
+   git tag "v$RELEASE_VERSION" "$RELEASE_SHA" &&
    git push origin "v$RELEASE_VERSION"
    ```
 
