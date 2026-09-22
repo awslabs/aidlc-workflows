@@ -14,7 +14,7 @@
 // owner or an old genuinely-missing stamp. Live/malformed/unreadable owners
 // fail closed.
 //
-// SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-lib.ts):
+// SOURCE UNDER TEST (core/tools/aidlc-lib.ts):
 //   auditLockDir(pd, intent?, space?) / auditLockIdentity — per-intent + sentinel.
 //   acquireAuditLock(pd, retries, ms, intent?, space?) — stamps owner.json, reaps.
 //   releaseAuditLock / withAuditLock — composite-keyed depth + exit handlers.
@@ -655,6 +655,81 @@ describe("t161 stale-lock reaper", () => {
     // 0 retries: the reaper must reclaim on the FIRST EEXIST and re-mkdir.
     expect(acquireAuditLock(PD, 0, 1, INTENT, "default")).toBe(true);
     releaseAuditLock(PD, INTENT, "default");
+  });
+
+  test("a transient coordination claim after reaping can defeat zero retries but the production acquisition retries progress", () => {
+    const lockDir = auditLockDir(PD, INTENT, "default");
+    const claimDir = `${lockDir}.reap`;
+    for (const productionRetries of [false, true]) {
+      stampOwner(2_000_000_000, 0, randomUUID());
+      const contender = {
+        pid: process.pid,
+        startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+        reapLiveOwnerAfterStale: false,
+        token: randomUUID(),
+      };
+      const contenderBytes = JSON.stringify(contender);
+      let reaped = false;
+      let gateAttemptsAfterReap = 0;
+      let fixtureError: string | null = null;
+      const observations: Array<{ lockPresent: boolean; claimPresent: boolean }> = [];
+      _setAuditLockFaultHooksForTests({
+        afterSuccessfulReap: (currentLockDir) => {
+          if (currentLockDir === lockDir) reaped = true;
+        },
+        beforeGateOwnerStamp: (_candidate, canonicalGate) => {
+          if (!reaped || canonicalGate !== claimDir) return;
+          gateAttemptsAfterReap++;
+          observations.push({
+            lockPresent: existsSync(lockDir), claimPresent: existsSync(claimDir),
+          });
+          if (gateAttemptsAfterReap === 1) {
+            // Model another live contender already holding the released gate
+            // while the canonical lock is absent. The existing publication seam
+            // lets us place that state deterministically, without scheduler sleeps.
+            if (existsSync(claimDir)) {
+              fixtureError = "the reaper had not released its coordination claim";
+              return;
+            }
+            mkdirSync(join(claimDir, contender.token), { recursive: true });
+            writeFileSync(join(claimDir, "owner.json"), contenderBytes);
+          } else if (gateAttemptsAfterReap === 2) {
+            // The transient contender leaves before the next acquisition-loop
+            // attempt. Never remove a different owner merely to make progress.
+            if (readFileSync(join(claimDir, "owner.json"), "utf-8") !== contenderBytes) {
+              fixtureError = "the live contender's claim was changed";
+              return;
+            }
+            rmSync(claimDir, { recursive: true });
+          }
+        },
+      });
+      try {
+        const acquired = acquireAuditLock(
+          PD, productionRetries ? undefined : 0,
+          productionRetries ? undefined : 1, INTENT, "default",
+        );
+        const diagnostic = JSON.stringify({ productionRetries, reaped, gateAttemptsAfterReap, observations, fixtureError });
+        expect(fixtureError, diagnostic).toBeNull();
+        expect(reaped, diagnostic).toBe(true);
+        expect(observations[0], diagnostic).toEqual({ lockPresent: false, claimPresent: false });
+        expect(acquired, diagnostic).toBe(productionRetries);
+        expect(gateAttemptsAfterReap, diagnostic).toBe(productionRetries ? 2 : 1);
+        if (productionRetries) {
+          expect(observations[1], diagnostic).toEqual({ lockPresent: false, claimPresent: true });
+          expect(JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).pid).toBe(process.pid);
+          expect(acquireAuditLock(PD, 0, 1, INTENT, "default")).toBe(false);
+        } else {
+          expect(existsSync(lockDir), diagnostic).toBe(false);
+          expect(readFileSync(join(claimDir, "owner.json"), "utf-8")).toBe(contenderBytes);
+        }
+      } finally {
+        _setAuditLockFaultHooksForTests(null);
+        releaseAuditLock(PD, INTENT, "default");
+        rmSync(claimDir, { recursive: true, force: true });
+        rmSync(lockDir, { recursive: true, force: true });
+      }
+    }
   });
 
   test("a live-but-OVER-AGE lock fails closed instead of being reclaimed", () => {
