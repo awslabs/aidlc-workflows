@@ -200,7 +200,11 @@ describe("t346 AIDA incremental review scope", () => {
       expect(left("docs/new.md", 1)).toBe(false);
 
       expect(buildScope(repo.head, manifest, null, false, repo.root)).toMatchObject({ mode: "full", reason: "first review of this pull request", files: [] });
-      expect(buildScope(repo.head, manifest, repo.since, true, repo.root)).toMatchObject({ mode: "full", reason: "requested by a maintainer with /aida full" });
+      // /aida full widens the review but keeps the change set as evidence for dispositions.
+      const requested = buildScope(repo.head, manifest, repo.since, true, repo.root);
+      expect(requested).toMatchObject({ mode: "full", since: repo.since, reason: "requested by a maintainer with /aida full" });
+      expect(requested.files).toEqual(scope.files);
+      expect(buildScope(repo.head, manifest, null, true, repo.root)).toMatchObject({ mode: "full", reason: "first review of this pull request", files: [] });
       expect(buildScope(repo.head, manifest, repo.head, false, repo.root).reason).toBe("this head was already reviewed");
       expect(buildScope(repo.head, manifest, "d".repeat(40), false, repo.root).reason).toContain("is no longer available");
       // The rewritten branch has the same content but `since` is not its ancestor: full.
@@ -257,6 +261,8 @@ describe("t346 AIDA incremental review scope", () => {
       expect([...securityCitations(lensDir, MANIFEST).lines]).toEqual([`${PATH}:42:RIGHT`]);
       expect(securityCitations(lensDir, MANIFEST).files).toEqual(new Set(["assets/logo.png", PATH]));
       expect(findingInScope(finding("correctness", { source: "DIFF_FILE", path: PATH }), INCREMENTAL, securityCitations(lensDir, MANIFEST))).toBe(true);
+      // File-level provenance also exempts line evidence on that file (the judge may have corrected the line).
+      expect(findingInScope(finding("correctness", diffLine(44)), INCREMENTAL, securityCitations(lensDir, MANIFEST))).toBe(true);
       writeFileSync(join(lensDir, "security.json"), "{not json");
       // File-level citations count exactly as cited; a DIFF citation with an unusable line keeps
       // provenance at file granularity (x.ts) rather than being lost.

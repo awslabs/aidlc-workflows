@@ -147,8 +147,33 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       ],
       HEAD, AT, () => true,
     );
-    // ...and the published order is the judge's, not the matching order.
-    expect(ordered.kept.map(item => `${item.ledgerId}:${item.title}`)).toEqual(["F2:untagged on the same line", "F1:the restatement"]);
+    // ...and since the untagged finding shares F1's fingerprint, it is a duplicate restatement and
+    // folds into F1 rather than getting a second identity.
+    expect(ordered.kept.map(item => `${item.ledgerId}:${item.title}`)).toEqual(["F1:the restatement"]);
+    expect(ordered.ledger.findings.map(item => item.id)).toEqual(["F1"]);
+    // An untagged duplicate of a restatement bound by id (same category, shared anchor) folds into
+    // that entry instead of getting a second identity.
+    const folded = reconcileLedger(
+      ledgerWith(entry("F1", "P1", [A42])),
+      [
+        { priority: "P1", category: "correctness", title: "the restatement", anchors: [A43], ledgerId: "F1" },
+        { priority: "P1", category: "correctness", title: "same defect, untagged", anchors: [A42, lineAnchor(PATH, "RIGHT", "line 9")] },
+      ],
+      HEAD, AT, () => true,
+    );
+    expect(folded.kept.map(item => `${item.ledgerId}:${item.title}`)).toEqual(["F1:the restatement"]);
+    expect(folded.ledger.findings).toHaveLength(1);
+    expect(folded.ledger.findings[0].anchors).toHaveLength(3);
+    // Effective priority orders the publication: a restated P3 raised to its ledger P1 precedes a new P2.
+    const raised = reconcileLedger(
+      ledgerWith(entry("F1", "P1", [A42])),
+      [
+        { priority: "P2", category: "correctness", title: "new advisory", anchors: [A43] },
+        { priority: "P3", category: "correctness", title: "restated softly", anchors: [A42], ledgerId: "F1" },
+      ],
+      HEAD, AT, () => true,
+    );
+    expect(raised.kept.map(item => `${item.priority}:${item.ledgerId}`)).toEqual(["P1:F1", "P2:F2"]);
   });
 
   test("end to end: a restatement under new wording keeps its id, a declared fix resolves, and the review says what happened", () => {
@@ -190,6 +215,8 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       const dropped = applyLedgerToReview(parseStructuredReview(review([{ priority: "P1", line: 43, ledgerId: "F1" }], []), BASE, HEAD, MANIFEST, METADATA), decided, root, root, AT);
       expect(dropped.review.findings.map(item => item.ledgerId)).toEqual(["F2"]);
       expect(dropped.ledger.findings[0].status).toBe("accepted");
+      // An id that is not a ledger entry at all is a validation error, not a new finding.
+      expect(() => applyLedgerToReview(parseStructuredReview(review([{ priority: "P1", line: 43, ledgerId: "F7" }], []), BASE, HEAD, MANIFEST, METADATA), decided, root, root, AT)).toThrow("carries ledgerId F7, which is not a ledger entry");
 
       // An advisory entry marked still-open without a restatement is retained and rendered, and
       // does not touch the decision.

@@ -894,6 +894,17 @@ export function reconcileLedger<T extends ReviewFindingInput>(
       ? ledger.findings.find(entry => entry.id === requestedOpenId && entry.status === "open" && !matchedIds.has(entry.id))
       : undefined;
     const match = explicit ?? (compatibleOpen.length === 1 ? compatibleOpen[0] : undefined);
+    if (!match && !finding.ledgerId) {
+      // An untagged finding whose fingerprint agrees with an entry another
+      // finding already restated by id is a duplicate restatement: fold its
+      // anchors into that entry instead of allocating a second identity.
+      const bound = ledger.findings.find(entry => entry.status === "open" && matchedIds.has(entry.id) && compatible(entry));
+      if (bound) {
+        const known = anchorSet(bound.anchors);
+        for (const anchor of finding.anchors) if (!known.has(anchor.sha256)) bound.anchors.push(anchor);
+        continue;
+      }
+    }
     if (!match) {
       const fingerprint = findingFingerprint(finding);
       const duplicate = pendingByFingerprint.get(fingerprint);
@@ -1018,10 +1029,11 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     result.kept.push({ ...finding, ledgerId: id });
     keptOrder.push(pendingOrder.get(fingerprint) ?? Number.MAX_SAFE_INTEGER);
   }
-  // Publish in the judge's order (P0 through P3), not in matching order.
+  // Publish P0 through P3 by EFFECTIVE priority (a restatement may have been
+  // raised to the ledger's), with the judge's order as the tie-breaker.
   result.kept = result.kept
     .map((entry, index) => ({ entry, position: keptOrder[index] }))
-    .sort((left, right) => left.position - right.position)
+    .sort((left, right) => rank(left.entry.priority) - rank(right.entry.priority) || left.position - right.position)
     .map(item => item.entry);
   return result;
 }

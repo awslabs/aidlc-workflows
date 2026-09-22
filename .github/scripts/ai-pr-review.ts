@@ -993,8 +993,11 @@ export function buildScope(
   repoDir = process.cwd(),
 ): ReviewScope {
   assertSha(head, "head");
-  const full = (reason: string): ReviewScope => ({ mode: "full", since, reason, files: [] });
-  if (forceFull) return full("requested by a maintainer with /aida full");
+  // Breadth (mode) and change evidence (files) are separate: a maintainer's
+  // /aida full widens what the lenses review but keeps the deterministic
+  // since-to-head change set when the previous head is known and ancestral, so
+  // dispositions still have evidence to act on.
+  const full = (reason: string, files: ReviewScopeFile[] = []): ReviewScope => ({ mode: "full", since, reason, files });
   if (since === null) return full("first review of this pull request");
   assertSha(since, "since");
   if (since === head) return full("this head was already reviewed");
@@ -1070,6 +1073,7 @@ export function buildScope(
       deletedFile,
     });
   });
+  if (forceFull) return full("requested by a maintainer with /aida full", files);
   return { mode: "incremental", since, reason: `lines of the PR diff changed since the review at ${since.slice(0, 8)}`, files };
 }
 
@@ -1139,7 +1143,7 @@ export function findingInScope(
       case "DIFF_FILE":
         return securityCited.files.has(item.path) || scope.files.some(entry => entry.path === item.path);
       case "DIFF": {
-        if (securityCited.lines.has(`${item.path}:${item.line}:${item.side}`)) return true;
+        if (securityCited.lines.has(`${item.path}:${item.line}:${item.side}`) || securityCited.files.has(item.path)) return true;
         if (item.side === "LEFT") {
           const file = scope.files.find(entry => (entry.previousPath ?? entry.path) === item.path);
           return file !== undefined && (file.deletedFile || within(item.line, file.deleted));
@@ -1629,10 +1633,14 @@ export function applyLedgerToReview(
   for (const entry of review.dispositions ?? []) {
     if (!openIds.has(entry.id)) throw new Error(`ledger disposition names ${entry.id}, which is not an open ledger entry`);
   }
-  // A direct ledgerId naming a decided or unknown entry is dropped: the finding
-  // is recorded as new, and a decision is never reachable from model output.
+  // A direct ledgerId must name a ledger entry. Naming a decided one drops the
+  // id (the finding is recorded as new; a decision is never reachable from
+  // model output); naming an unknown one is a validation error.
+  const knownIds = new Set([...loaded.ledger.findings, ...(loaded.ledger.archivedDecisions ?? [])].map(entry => entry.id));
   for (const input of inputs) {
-    if (input.ledgerId && !openIds.has(input.ledgerId)) delete input.ledgerId;
+    if (!input.ledgerId || openIds.has(input.ledgerId)) continue;
+    if (!knownIds.has(input.ledgerId)) throw new Error(`finding "${input.title}" carries ledgerId ${input.ledgerId}, which is not a ledger entry`);
+    delete input.ledgerId;
   }
   const restatedIds = new Set(inputs.flatMap(input => (input.ledgerId ? [input.ledgerId] : [])));
   const dispositions = new Map<string, "resolved" | "still-open">();
@@ -1640,8 +1648,10 @@ export function applyLedgerToReview(
     if (restatedIds.has(entry.id)) continue;
     dispositions.set(entry.id, entry.disposition);
   }
+  // Change evidence exists whenever a previous reviewed head is known; only a
+  // first review has none (null = unknown, never evidence).
   const changedFiles =
-    review.scope?.mode === "incremental"
+    review.scope && review.scope.since !== null
       ? new Set(review.scope.files.flatMap(file => [file.path, ...(file.previousPath ? [file.previousPath] : [])]))
       : null;
   const result = reconcileLedger(loaded, inputs, review.head, at, presence, dispositions, changedFiles);
