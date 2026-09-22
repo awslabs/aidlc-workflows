@@ -188,6 +188,16 @@ jobs:
             --repo "$REPO" \
             --pr "$REQUESTED_PR" \
             --output .ai-review-context/ledger.json
+          # Review scope: incremental (lines changed since the head AIDA last
+          # reviewed, from the ledger) or full (first review, rewritten history,
+          # or /aida full). Derived from state, so also outside the context digest.
+          # The security lenses always review the full head regardless.
+          scope="$(bun .ai-review-controls/scripts/ai-pr-review.ts build-scope \
+            --head "$head" \
+            --manifest .ai-review-context/changed-files.json \
+            --ledger .ai-review-context/ledger.json \
+            --output .ai-review-context/review-scope.json)"
+          echo "::notice::Review scope — $scope"
 
           context_id="$(cat .ai-review-context/context-id.txt)"
           existing_record="$(gh api "repos/$REPO/pulls/$REQUESTED_PR/reviews" --paginate \
@@ -520,6 +530,7 @@ jobs:
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
               .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-scope.md \
               .ai-review-controls/prompts/ai-pr-review-aidlc.md
             printf '\nRead the review context and trusted base tree. End with exactly:\n'
             printf '[LENS-REVIEWED] aidlc %s\n' "$HEAD_SHA"
@@ -539,6 +550,7 @@ jobs:
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
               .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-scope.md \
               .ai-review-controls/prompts/ai-pr-review-user-experience.md
             printf '\nRead the review context and trusted base tree. End with exactly:\n'
             printf '[LENS-REVIEWED] user-experience %s\n' "$HEAD_SHA"
@@ -558,6 +570,7 @@ jobs:
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
               .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-scope.md \
               .ai-review-controls/prompts/ai-pr-review-direction.md
             printf '\nRead the review context and trusted base tree. End with exactly:\n'
             printf '[LENS-REVIEWED] direction %s\n' "$HEAD_SHA"
@@ -602,6 +615,7 @@ jobs:
             --decision-output .ai-pr-review-final/decision.json \
             --ledger .ai-review-context/ledger.json \
             --ledger-output .ai-pr-review-final/ledger.json \
+            --scope .ai-review-context/review-scope.json \
             --context-dir .ai-review-context \
             --repo-dir .)"
           echo "event=$event" >> "$GITHUB_OUTPUT"
@@ -671,6 +685,7 @@ jobs:
               --decision-output .ai-pr-review-final/decision.json \
               --ledger .ai-pr-review-final/ledger.live.json \
               --ledger-output .ai-pr-review-final/ledger.json \
+              --scope .ai-review-context/review-scope.json \
               --context-dir .ai-review-context \
               --repo-dir .)"
             publish_status=0

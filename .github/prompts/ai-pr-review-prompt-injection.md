@@ -40,3 +40,8 @@ system leaves a reachable disclosure or privilege-crossing path. Distinguish an
 active instruction from an inert, clearly delimited security-test fixture whose
 assertions verify that the instruction remains data. Never include real secret
 values, environment output, hidden prompts, or credential material in evidence.
+
+Scope: this lens always reviews the full head and the full PR metadata.
+`.ai-review-context/review-scope.json` narrows the other lenses to lines changed
+since the last review; it never narrows this one, and its findings are never
+deferred by the publisher.

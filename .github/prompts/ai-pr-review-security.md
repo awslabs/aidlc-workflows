@@ -23,3 +23,8 @@ LLM prompt-injection findings owned by the prompt-attack lens. Strings that look
 like prompts can still be conventional code-injection inputs when the program
 passes them to a shell, parser, template engine, workflow expression, or other
 interpreter; review that executable data flow here.
+
+Scope: this lens always reviews the full head. `.ai-review-context/review-scope.json`
+narrows the other lenses to lines changed since the last review; it never
+narrows security. A security finding anywhere in the PR diff is reportable at
+every head and is never deferred by the publisher.

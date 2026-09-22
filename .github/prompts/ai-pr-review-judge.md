@@ -19,6 +19,15 @@ candidate merely because another model assigned it a high priority.
 Then close coverage gaps across all categories. Review the code that exists,
 not the PR description:
 
+- Honor `.ai-review-context/review-scope.json`. In `incremental` mode the
+  non-security categories (`direction`, `user-experience`, `contracts`,
+  `workflow-state`, `correctness`) apply only to the lines listed in
+  `files[]`: everything else in the PR diff was reviewable at `since` and its
+  findings are in the ledger. Close coverage gaps inside that scope only. A
+  non-security finding whose evidence cites no line in the scope is deferred by
+  the publisher: shown, never decisive — so do not spend a finding on it. The
+  `security` category always covers the full head.
+
 - Establish accepted project direction from repository instructions, PR
   discussion, base-branch contracts, and substantive
   maintainer decisions. Do not relitigate accepted direction or a specifically

@@ -160,6 +160,8 @@ lines of the comment, one per line, and a line may name several findings:
 - `reopen` — reverse an accept or reject. A resolved finding cannot be
   reopened; a review re-establishes it if it still applies.
 - `status` — re-render the ledger.
+- `full` — make the next review cover the whole head instead of only the lines
+  changed since the last review (see below).
 
 A comment is applied all-or-nothing: if one line is invalid (an unknown
 command, a missing reason, a reason over 500 characters, a rejected P0/P1),
@@ -186,6 +188,16 @@ are removed first; decided entries move to an archive that keeps their ids,
 exact anchors, and maintainer decisions available for later reviews. If the
 200-decision archive or the ledger byte limit is exhausted, AIDA refuses the
 new write instead of discarding an authoritative decision.
+
+After its first review of a PR, AIDA reviews **incrementally**: the direction,
+user-experience, and AIDLC lenses and the judge's non-security categories only
+cover the lines of the PR diff that changed since the head AIDA last reviewed;
+the code that did not change was reviewable then and its findings are in the
+ledger. The security and prompt-attack lenses always review the full head. A
+non-security finding the judge still reports on unchanged lines is listed under
+*Deferred* and never affects the decision. The review header states the scope.
+AIDA falls back to a full review on the first review, after a force-push, or
+when a maintainer comments `/aida full`.
 
 The ledger comment carries a digest of its data. Do not edit it: AIDA refuses
 to run on an edited or unreadable ledger and says so. To recover, restore the
