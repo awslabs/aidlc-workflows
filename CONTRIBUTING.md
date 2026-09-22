@@ -172,8 +172,9 @@ nothing is applied and AIDA replies naming the line. The workflow verifies the c
 permission through GitHub's collaborators API before applying anything and
 reacts 👍 (applied), 👎 (no write access), or 😕 (usage error, with a reply).
 After a command changes the ledger, AIDA re-derives the decision for the
-reviewed head from persisted state under the same rules the review uses (every
-open finding, readiness, risk) and refreshes the managed labels. When that
+reviewed head from persisted state under the same rule the review uses (only
+open P0/P1 findings decide; readiness and risk stay informational) and
+refreshes the managed labels. When that
 decision is `maintainer/merge`, it dismisses its own `CHANGES_REQUESTED`
 review so the head can proceed without an artificial commit; when a `reopen`
 turns it back into `author/change`, it posts a blocking review for the head.

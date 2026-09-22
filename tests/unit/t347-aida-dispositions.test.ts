@@ -200,6 +200,18 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       expect(body).toContain("**P1 [F3]: Finding F3** — first reported at");
       expect(body).not.toContain("[F4]");
 
+      // An open P1 restated as P2 keeps the ledger's P1 and the action follows the EFFECTIVE priority:
+      // the judge's merge becomes author/change instead of aborting validation.
+      const softened = applyLedgerToReview(
+        parseStructuredReview(review([{ priority: "P2", line: 44 }], [{ id: "F2", disposition: "still-open", findingIndex: 0 }, { id: "F1", disposition: "still-open", findingIndex: null }, { id: "F3", disposition: "still-open", findingIndex: null }], { actor: "maintainer", action: "merge", rationale: "Only advisory work remains." }), BASE, HEAD, MANIFEST, METADATA),
+        loaded, root, root, AT,
+      );
+      expect(softened.review.findings.map(item => `${item.priority}:${item.ledgerId}`)).toEqual(["P1:F2"]);
+      expect(softened.review.decision.action).toBe("change");
+      expect(softened.review.decision.rationale).toContain("F2 keeps the ledger's blocking priority, so the author still needs to act.");
+      expect(softened.review.ledger?.decisionAdjusted).toBe(true);
+      expect(renderReview(softened.review, CONTEXT_ID).event).toBe("REQUEST_CHANGES");
+
       // In an incremental review whose change set includes F1's file, the same disposition resolves it.
       const incremental = parseStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA, { mode: "incremental", since: OLD_HEAD, reason: "r", files: [{ path: PATH, added: [{ start: 44, end: 44 }], deleted: [], deletedFile: false }] });
       const resolvedNow = applyLedgerToReview(incremental, loaded, root, root, AT);

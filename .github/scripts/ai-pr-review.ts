@@ -1458,7 +1458,14 @@ export function parseStructuredReview(
   const derivedAction = deriveDecision(findings.filter(finding => finding.priority === "P0" || finding.priority === "P1").length);
   const decision: PullRequestDecision =
     derivedAction === "change"
-      ? { actor: "author", action: "change", rationale }
+      ? {
+          actor: "author",
+          action: "change",
+          rationale:
+            decisionCandidate.action === "merge"
+              ? `${rationale} A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above.`
+              : rationale,
+        }
       : {
           actor: "maintainer",
           action: "merge",
@@ -1657,30 +1664,39 @@ export function applyLedgerToReview(
   const removed = result.restatedAccepted.length + result.suppressed.length;
   let decision = review.decision;
   let decisionAdjusted = false;
-  if (retainedBlocking.length > 0 || removed > 0) {
-    // Same rule a later /aida command applies from persisted state (deriveDecision).
-    const openBlocking = retainedBlocking.length + kept.filter(finding => isBlocking(finding.priority)).length;
-    const derived = deriveDecision(openBlocking);
-    if (derived !== review.decision.action) {
-      decisionAdjusted = true;
-      decision =
-        derived === "change"
-          ? {
-              actor: "author",
-              action: "change",
-              rationale: `${review.decision.rationale} Re-derived from the ledger: ${retainedBlocking.length} open blocking finding${
-                retainedBlocking.length === 1 ? "" : "s"
-              } (${retainedBlocking.map(entry => entry.id).join(", ")}) ${
-                retainedBlocking.length === 1 ? "was" : "were"
-              } not restated this run and the cited code is unchanged, so the author still needs to act.`,
-            }
-          : {
-              actor: "maintainer",
-              action: "merge",
-              rationale: `${review.decision.rationale} Re-derived after applying ${removed} maintainer ledger decision${
-                removed === 1 ? "" : "s"
-              }: no blocking finding remains.`,
-            };
+  // The action is always re-derived from EFFECTIVE state after reconciliation:
+  // kept findings at the ledger's priority (a P1 restated as P2 is still a P1)
+  // plus retained blockers. Same one-line rule a later /aida command applies.
+  const keptBlocking = kept.filter(finding => isBlocking(finding.priority));
+  const derived = deriveDecision(retainedBlocking.length + keptBlocking.length);
+  if (derived !== review.decision.action) {
+    decisionAdjusted = true;
+    if (derived === "change") {
+      const causes: string[] = [];
+      if (retainedBlocking.length > 0) {
+        causes.push(
+          `${retainedBlocking.length} open blocking finding${retainedBlocking.length === 1 ? "" : "s"} (${retainedBlocking.map(entry => entry.id).join(", ")}) ${
+            retainedBlocking.length === 1 ? "was" : "were"
+          } not restated this run and the cited code is unchanged`,
+        );
+      }
+      const raised = keptBlocking.filter(finding => finding.ledgerId && review.findings.every(original => original.title !== finding.title || !isBlocking(original.priority)));
+      if (raised.length > 0) {
+        causes.push(`${raised.map(finding => finding.ledgerId).join(", ")} ${raised.length === 1 ? "keeps" : "keep"} the ledger's blocking priority`);
+      }
+      decision = {
+        actor: "author",
+        action: "change",
+        rationale: `${review.decision.rationale} Re-derived from the ledger: ${causes.length > 0 ? causes.join("; ") : "an open blocking finding remains"}, so the author still needs to act.`,
+      };
+    } else {
+      decision = {
+        actor: "maintainer",
+        action: "merge",
+        rationale: `${review.decision.rationale} Re-derived after applying ${removed} maintainer ledger decision${
+          removed === 1 ? "" : "s"
+        }: no blocking finding remains.`,
+      };
     }
   }
   // A full review requested with /aida full is consumed by the review that used it.

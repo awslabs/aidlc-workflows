@@ -330,7 +330,7 @@ process.stdout.write(JSON.stringify(value));
     expect(validate(JSON.stringify(blockingMerge)).decision).toEqual({
       actor: "author",
       action: "change",
-      rationale: "Merge despite the blocker.",
+      rationale: "Merge despite the blocker. A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above.",
     });
 
     // Low readiness or high risk never turns a clean or P2/P3-only review into author/change.
