@@ -1322,7 +1322,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/",
     );
     const scriptSnapshot = WORKFLOW.indexOf(
-      "cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh",
+      "cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts",
     );
     expect(controlsSha).toBeGreaterThan(-1);
     expect(selfReviewCheckout).toBeGreaterThan(controlsSha);

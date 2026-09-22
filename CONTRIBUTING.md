@@ -127,6 +127,28 @@ found no blocking issue and considers the PR ready for a maintainer's merge
 decision; AIDA does not approve or merge the PR. The merge decision requires no
 P0 or P1 finding, readiness of at least 4/5, and risk of at most 2/5.
 
+AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
+id (`F1`, `F2`, …) anchored to the content of the lines it cites, so a follow-up
+review recognizes the same finding across commits instead of rediscovering it.
+Maintainers with repository write access act on findings by commenting on the
+PR:
+
+- `/aida accept F3 <reason>` — the named maintainer owns this risk; the finding
+  stays visible under *Accepted risks* and no longer affects the next action.
+- `/aida reject F3 <reason>` — not a defect; AIDA stops reporting it while the
+  cited code is unchanged. P0 and P1 findings can be accepted but not rejected.
+- `/aida reopen F3` — reverse an accept or reject.
+- `/aida status` — re-render the ledger.
+- `/aida full` — make the next review inspect the complete PR again.
+
+The workflow verifies the commenter's permission through GitHub's collaborators
+API before applying a command and reacts 👍 (applied), 👎 (no write access), or
+😕 (usage error, with a reply). The ledger comment carries a digest of its data;
+a hand-edited ledger is detected and its decisions are ignored until a verified
+command restates them. Decisions written anywhere other than through these
+commands are not decisions to AIDA. A finding whose cited lines change is open
+again for review.
+
 Every PR review includes a User Experience section before its UX assessment.
 For user-visible changes, it explains the affected user, the previous and
 proposed experience, and a concise before/after example when useful.

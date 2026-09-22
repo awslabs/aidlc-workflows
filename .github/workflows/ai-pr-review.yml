@@ -136,6 +136,7 @@ jobs:
             case "$path" in
               .github/workflows/ai-pr-review.yml|\
               .github/scripts/ai-pr-review.ts|\
+              .github/scripts/ai-pr-ledger.ts|\
               .github/scripts/prepare-ai-review-runtime.sh|\
               .github/prompts/ai-pr-review-*.md|\
               .github/prompts/ai-pr-review-*.json)
@@ -160,7 +161,8 @@ jobs:
           fi
           mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts
           cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/
-          cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh \
+          cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts \
+            .github/scripts/prepare-ai-review-runtime.sh \
             .ai-review-controls/scripts/
           echo "::notice::AI review controls from $controls_sha"
 
@@ -179,6 +181,13 @@ jobs:
             --base "$base" \
             --head "$head" \
             --output .ai-review-context
+          # The findings ledger is live maintainer state, not review input identity:
+          # it is read after the context digest so a /aida decision never forces a
+          # new full review of an unchanged head.
+          bun .ai-review-controls/scripts/ai-pr-ledger.ts fetch \
+            --repo "$REPO" \
+            --pr "$REQUESTED_PR" \
+            --output .ai-review-context/ledger.json
 
           context_id="$(cat .ai-review-context/context-id.txt)"
           existing_record="$(gh api "repos/$REPO/pulls/$REQUESTED_PR/reviews" --paginate \
@@ -570,7 +579,11 @@ jobs:
             --manifest .ai-review-context/changed-files.json \
             --metadata .ai-review-context/pr.json \
             --output .ai-pr-review-final/review.json \
-            --decision-output .ai-pr-review-final/decision.json)"
+            --decision-output .ai-pr-review-final/decision.json \
+            --ledger .ai-review-context/ledger.json \
+            --ledger-output .ai-pr-review-final/ledger.json \
+            --context-dir .ai-review-context \
+            --repo-dir .)"
           echo "event=$event" >> "$GITHUB_OUTPUT"
           decision="$(jq -r '"\(.actor)/\(.action)"' \
             .ai-pr-review-final/decision.json)"
@@ -671,6 +684,10 @@ jobs:
           done
           echo "published=true" >> "$GITHUB_OUTPUT"
           : > .ai-pr-review-final/published
+          bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
+            --repo "$REPO" \
+            --pr "$PR_NUMBER" \
+            --input .ai-pr-review-final/ledger.json
 
           if [ "$EVENT" = "REQUEST_CHANGES" ]; then
             echo "::error::AI review found a P0 or P1 issue"
