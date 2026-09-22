@@ -22,7 +22,7 @@ jobs:
       && github.actor != 'github-actions[bot]'
       && startsWith(github.event.comment.body, '/aida')
     concurrency:
-      group: aida-ledger-${{ github.event.issue.number }}
+      group: aida-pr-${{ github.event.issue.number }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5

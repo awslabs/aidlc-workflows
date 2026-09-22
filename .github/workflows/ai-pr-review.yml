@@ -52,8 +52,8 @@ jobs:
           && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
-      group: ai-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
-      cancel-in-progress: true
+      group: aida-pr-${{ github.event.pull_request.number || inputs.pr_number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ai-pr-review
     timeout-minutes: 110
@@ -271,8 +271,8 @@ jobs:
           elif [ "$EXISTING_DECISION" = "maintainer/merge" ]; then
             label_outcome="reviewed-merge"
           fi
-          # Maintainer decisions made since that review live in the ledger: its
-          # verdict for this head is the effective one for every surface.
+          # The serialized ledger verdict is authoritative for every review
+          # surface associated with this head.
           ledger_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
             --repo "$REPO" --pr "$PR_NUMBER")"
           if [ "$(jq -r '.head // empty' <<<"$ledger_verdict")" = "$HEAD_SHA" ]; then

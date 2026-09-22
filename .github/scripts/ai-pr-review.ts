@@ -529,30 +529,20 @@ export function convergeLedgerVerdict(
   ghExecutable = "gh",
 ): RefreshOutcome {
   assertSha(head, "head");
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const before = loadLedgerComment(repository, pullRequest, ghExecutable);
-    const verdict = ledgerVerdict(before.ledger);
-    if (!verdict || verdict.head !== head) return "moved";
-    const outcome = refreshVerdict(
-      repository,
-      pullRequest,
-      head,
-      verdict.decision,
-      reason,
-      ghExecutable,
-    );
-    if (outcome !== "applied") return outcome;
-    const after = loadLedgerComment(repository, pullRequest, ghExecutable);
-    const afterVerdict = ledgerVerdict(after.ledger);
-    if (
-      after.digest === before.digest &&
-      afterVerdict?.head === head &&
-      afterVerdict.decision === verdict.decision
-    ) {
-      return "applied";
-    }
-  }
-  throw new Error("findings ledger verdict did not stabilize after 3 attempts");
+  // The review and command workflows share one non-cancelling per-PR
+  // concurrency group. No ledger command can overtake this mutation, so one
+  // live read is the authority for the gate and label convergence below.
+  const loaded = loadLedgerComment(repository, pullRequest, ghExecutable);
+  const verdict = ledgerVerdict(loaded.ledger);
+  if (!verdict || verdict.head !== head) return "moved";
+  return refreshVerdict(
+    repository,
+    pullRequest,
+    head,
+    verdict.decision,
+    reason,
+    ghExecutable,
+  );
 }
 
 export function currentReviewLabelOutcome(

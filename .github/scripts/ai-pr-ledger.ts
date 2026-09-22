@@ -208,9 +208,9 @@ export function quoteAnchor(quote: string): LedgerAnchor {
 // Anchors written before their evaluation existed (a migrated v1 anchor, a
 // position without its line, a quote without its length). They identify a
 // finding but can never be evaluated at a head.
-export function isLegacyAnchor(anchor: LedgerAnchor): boolean {
-  return (anchor.kind === "position" && anchor.line === undefined) || (anchor.kind === "quote" && anchor.length === undefined);
-}
+export const isLegacyAnchor = (anchor: LedgerAnchor): boolean =>
+  (anchor.kind === "position" && anchor.line === undefined) ||
+  (anchor.kind === "quote" && anchor.length === undefined);
 
 // The fallback when a cited line has no readable text. Its presence at a head is
 // unknowable, so it identifies a finding but never retains one.
@@ -438,9 +438,9 @@ export function openBlockingCount(ledger: Ledger): number {
 }
 
 // Keeps the serialized ledger under the reader's budget. History goes first,
-// then resolved findings, then the oldest archived decisions. Active open and
-// decided findings are never dropped. Earlier review bodies keep any archive
-// entries eventually removed by the byte bound.
+// then resolved findings. Maintainer decisions are authoritative for the
+// lifetime of the ledger and are never discarded; if they alone exceed the
+// hard limit, publication fails closed.
 export function compactLedger(input: Ledger, budget = TARGET_LEDGER_BYTES): Ledger {
   const ledger = structuredClone(input);
   const size = (): number => Buffer.byteLength(canonicalJson(ledger), "utf8");
@@ -448,14 +448,12 @@ export function compactLedger(input: Ledger, budget = TARGET_LEDGER_BYTES): Ledg
     ledger.events.splice(0, Math.max(1, Math.floor(ledger.events.length / 10)));
   }
   while (size() > budget || ledger.findings.length > MAX_FINDINGS) {
-    const index = ledger.findings.findIndex(entry => entry.status === "resolved");
-    if (index === -1) break;
-    ledger.findings.splice(index, 1);
+    const resolvedIndex = ledger.findings.findIndex(
+      entry => entry.status === "resolved",
+    );
+    if (resolvedIndex === -1) break;
+    ledger.findings.splice(resolvedIndex, 1);
   }
-  while (size() > budget && (ledger.archivedDecisions?.length ?? 0) > 0) {
-    ledger.archivedDecisions?.shift();
-  }
-  if (ledger.archivedDecisions?.length === 0) delete ledger.archivedDecisions;
   if (size() > MAX_LEDGER_BYTES) throw new Error("ledger cannot be compacted under the size budget");
   return ledger;
 }
@@ -738,14 +736,15 @@ export function applyCommands(
 // --- reconciliation ---------------------------------------------------------
 
 // Frees one active slot. Resolved entries are already historical and go first.
-// If every active entry is decided, the oldest decision moves to a bounded
-// archive so its id, evidence, and maintainer decision still participate in
-// later reconciliation.
-function makeRoom(ledger: Ledger): void {
+// If every active entry is decided, the oldest decision moves to the archive
+// so its id, evidence, and maintainer decision remain authoritative.
+const makeRoom = (ledger: Ledger): void => {
   while (ledger.findings.length >= MAX_FINDINGS) {
-    const index = ledger.findings.findIndex(entry => entry.status === "resolved");
-    if (index >= 0) {
-      ledger.findings.splice(index, 1);
+    const resolvedIndex = ledger.findings.findIndex(
+      entry => entry.status === "resolved",
+    );
+    if (resolvedIndex >= 0) {
+      ledger.findings.splice(resolvedIndex, 1);
       continue;
     }
     const decidedIndex = ledger.findings.findIndex(
@@ -754,32 +753,23 @@ function makeRoom(ledger: Ledger): void {
     if (decidedIndex === -1) {
       throw new Error(`the ledger holds ${MAX_FINDINGS} open findings; accept, reject, or fix some before new ones can be recorded`);
     }
+    if ((ledger.archivedDecisions?.length ?? 0) >= MAX_ARCHIVED_DECISIONS) {
+      throw new Error(`the ledger archive holds ${MAX_ARCHIVED_DECISIONS} decisions; no authoritative decision can be discarded`);
+    }
     const [archived] = ledger.findings.splice(decidedIndex, 1);
     const archive = ledger.archivedDecisions ??= [];
     archive.push(archived);
-    if (archive.length > MAX_ARCHIVED_DECISIONS) archive.shift();
   }
-}
+};
 
 function anchorSet(anchors: LedgerAnchor[]): Set<string> {
   return new Set(anchors.map(anchor => anchor.sha256));
 }
 
-function coveredBy(anchors: LedgerAnchor[], known: Set<string>): boolean {
-  return anchors.every(anchor => known.has(anchor.sha256));
-}
-
-function sameAnchorSet(left: LedgerAnchor[], right: LedgerAnchor[]): boolean {
-  const leftSet = anchorSet(left);
-  const rightSet = anchorSet(right);
-  return leftSet.size === rightSet.size && coveredBy(left, rightSet) && coveredBy(right, leftSet);
-}
-
-function compatibleFindings(
-  left: Pick<ReviewFindingInput, "category" | "anchors">,
-  right: Pick<ReviewFindingInput, "category" | "anchors">,
-): boolean {
-  return left.category === right.category && sameAnchorSet(left.anchors, right.anchors);
+function findingFingerprint(
+  finding: Pick<ReviewFindingInput, "category" | "anchors">,
+): string {
+  return `${finding.category}\0${[...anchorSet(finding.anchors)].sort().join("\0")}`;
 }
 
 function upgradeAnchors(existing: LedgerAnchor[], current: LedgerAnchor[]): void {
@@ -813,51 +803,34 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   // Pass 1: match restated findings. New findings are collected and inserted
   // after the omitted pass, so a head that fixes old findings frees their slots
   // before capacity is enforced.
-  const pending: T[] = [];
+  const pendingByFingerprint = new Map<string, T>();
   for (const finding of findings) {
     const hashes = anchorSet(finding.anchors);
-    // Identity. An explicit `ledgerId` from the judge names the entry this
-    // finding IS, and is the only way to reach an accepted or rejected entry —
-    // but the judge's output derives from untrusted PR content, so the id is
-    // honored only when the deterministic fingerprint is unique. A decided
-    // entry requires the same exact anchor set; a strict anchor superset can
-    // reopen it as expanded evidence, but a partial or ambiguous match cannot
-    // inherit its state. Without a compatible id, fingerprint matching reaches
-    // OPEN entries only.
-    const activeAndArchived = [...ledger.findings, ...(ledger.archivedDecisions ?? [])];
+    // Model output is influenced by PR content, so it can identify OPEN entries
+    // only. Accepted and rejected state is never inherited from a judge-selected
+    // id; those decisions persist through omission and rendering, while any
+    // reported defect on the same evidence is recorded independently.
     const compatible = (entry: LedgerFinding): boolean =>
       entry.category === finding.category && entry.anchors.some(anchor => hashes.has(anchor.sha256));
     const compatibleOpen = ledger.findings.filter(
       entry => entry.status === "open" && !matchedIds.has(entry.id) && compatible(entry),
     );
-    const compatibleDecided = activeAndArchived.filter(
-      entry =>
-        (entry.status === "accepted" || entry.status === "rejected") &&
-        !matchedIds.has(entry.id) &&
-        compatible(entry) &&
-        (sameAnchorSet(entry.anchors, finding.anchors) || coveredBy(entry.anchors, hashes)),
-    );
-    const explicit = finding.ledgerId
-      ? activeAndArchived.find(
+    const requestedOpenId = finding.ledgerId;
+    const explicit = requestedOpenId
+      ? ledger.findings.find(
           entry =>
-            entry.id === finding.ledgerId &&
-            entry.status !== "resolved" &&
+            entry.id === requestedOpenId &&
+            entry.status === "open" &&
             !matchedIds.has(entry.id) &&
-            compatible(entry) &&
-            (
-              (entry.status !== "accepted" && entry.status !== "rejected") ||
-              (
-                compatibleDecided.length === 1 &&
-                (sameAnchorSet(entry.anchors, finding.anchors) || coveredBy(entry.anchors, hashes))
-              )
-            ),
+            compatible(entry),
         )
       : undefined;
     const match = explicit ?? (compatibleOpen.length === 1 ? compatibleOpen[0] : undefined);
     if (!match) {
-      const duplicate = pending.find(entry => compatibleFindings(entry, finding));
+      const fingerprint = findingFingerprint(finding);
+      const duplicate = pendingByFingerprint.get(fingerprint);
       if (!duplicate) {
-        pending.push(structuredClone(finding));
+        pendingByFingerprint.set(fingerprint, structuredClone(finding));
       } else {
         upgradeAnchors(duplicate.anchors, finding.anchors);
         if (rank(finding.priority) < rank(duplicate.priority)) {
@@ -869,39 +842,8 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     }
     matchedIds.add(match.id);
     match.lastSeen = { head, at };
-    const known = anchorSet(match.anchors);
     upgradeAnchors(match.anchors, finding.anchors);
-    // A decision covers exactly the evidence and severity it was made on. New
-    // cited lines or a higher priority are new evidence: the decision is
-    // reopened rather than stretched over it.
-    const decided = match.status === "accepted" || match.status === "rejected";
-    const expanded = !coveredBy(finding.anchors, known);
-    const escalated = rank(finding.priority) < rank(match.priority);
-    if (decided && match.decision && !expanded && !escalated) {
-      if (match.status === "rejected") {
-        push("suppressed", match.id);
-        result.suppressed.push({ ...finding, ledgerId: match.id, decision: match.decision });
-      } else {
-        push("seen", match.id);
-        result.restatedAccepted.push({ ...finding, ledgerId: match.id });
-      }
-      continue;
-    }
-    if (decided) {
-      const archivedIndex = ledger.archivedDecisions?.findIndex(entry => entry.id === match.id) ?? -1;
-      if (archivedIndex >= 0) {
-        ledger.archivedDecisions?.splice(archivedIndex, 1);
-        if (ledger.archivedDecisions?.length === 0) delete ledger.archivedDecisions;
-        makeRoom(ledger);
-        ledger.findings.push(match);
-      }
-      match.status = "open";
-      delete match.decision;
-      push("reopened", match.id, { reason: expanded ? "new evidence: cited lines expanded" : "new evidence: priority escalated" });
-      result.reopenedIds.push(match.id);
-    } else {
-      push("seen", match.id);
-    }
+    push("seen", match.id);
     // A restatement never lowers an open finding's priority: the ledger keeps the
     // higher one (and its title). Only changed code or a maintainer decision
     // retires a blocker.
@@ -951,7 +893,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   }
 
   // Pass 3: new findings, once the reconciled ledger knows what it can free.
-  for (const finding of pending) {
+  for (const finding of pendingByFingerprint.values()) {
     makeRoom(ledger);
     const id = `F${ledger.nextId}`;
     ledger.nextId += 1;
@@ -997,8 +939,10 @@ export function mergeLedgers(base: Ledger, live: Ledger): Ledger {
     const sourceArchived = source.archivedDecisions?.some(candidate => candidate.id === entry.id) ?? false;
     if (sourceArchived) {
       const archive = ledger.archivedDecisions ??= [];
+      if (archive.length >= MAX_ARCHIVED_DECISIONS) {
+        throw new Error(`the ledger archive holds ${MAX_ARCHIVED_DECISIONS} decisions; no authoritative decision can be discarded`);
+      }
       archive.push(structuredClone(entry));
-      if (archive.length > MAX_ARCHIVED_DECISIONS) archive.shift();
     } else {
       makeRoom(ledger);
       ledger.findings.push(structuredClone(entry));
@@ -1268,13 +1212,14 @@ export function runCommand(
     react(repository, commentId, "-1", ghExecutable);
     return { status: "denied", message: `${actorLogin} lacks write permission`, openBlocking: null, refresh: null };
   }
-  const reject = (error: unknown): CommandOutcome => {
+  const rejectCommand = (error: unknown): CommandOutcome => {
     react(repository, commentId, "confused", ghExecutable);
     const message = error instanceof Error ? error.message : String(error);
+    const reply = `@${actorLogin} ${message}.\n\n${USAGE}`;
     ghJson(
       ["api", "--method", "POST", `repos/${repository}/issues/${pullRequest}/comments`, "--input", "-"],
       ghExecutable,
-      `${JSON.stringify({ body: `@${actorLogin} ${message}.\n\n${USAGE}` })}\n`,
+      `${JSON.stringify({ body: reply })}\n`,
     );
     return { status: "rejected", message, openBlocking: null, refresh: null };
   };
@@ -1282,7 +1227,7 @@ export function runCommand(
   try {
     commands = parseCommands(text(comment.body));
   } catch (error) {
-    return reject(error);
+    return rejectCommand(error);
   }
   if (commands.length === 0) return { status: "ignored", message: "not a command", openBlocking: null, refresh: null };
   for (let attempt = 1; ; attempt++) {
@@ -1291,7 +1236,7 @@ export function runCommand(
     try {
       applied = applyCommands(structuredClone(loaded.ledger), commands, { login: actorLogin, at: now, commentId });
     } catch (error) {
-      return reject(error);
+      return rejectCommand(error);
     }
     try {
       publishLedgerComment(repository, pullRequest, applied.ledger, loaded.commentId, loaded.migrated, ghExecutable, loaded.digest);

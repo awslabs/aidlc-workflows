@@ -8,9 +8,6 @@ Please read through this document before submitting any issues or pull requests.
 
 This file covers the project-wide conventions (reporting, PR flow, security, licensing). The authoritative, hands-on contributor guide — prerequisites, the edit → regenerate → test loop, and step-by-step recipes for adding a stage, scope, agent, or utility handler — is [`docs/reference/11-contributing.md`](docs/reference/11-contributing.md). Read it before making code changes.
 
-For the path from PR review through nightly previews and stable publication,
-see [Development and Releases](DEVELOPERS.md).
-
 ## How this repository is built
 
 AI-DLC ships to many CLI harnesses (today Claude Code, Kiro CLI, Kiro IDE, Codex CLI, opencode, and GitHub Copilot) from a single hand-authored source. The layout has three zones:
@@ -138,12 +135,12 @@ P0 or P1 finding, readiness of at least 4/5, and risk of at most 2/5.
 AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
 id (`F1`, `F2`, …) anchored to the exact content of the lines it cites, so a
 follow-up review recognizes the same finding across commits instead of
-rediscovering it. A decision covers the evidence and severity it was made on:
-only the same exact cited-anchor set inherits it. Expanded evidence or a higher
-priority reopens the finding; a partial or ambiguous match is recorded as a new
-finding. Maintainers with repository write access act on findings by
-commenting on the PR. Commands go on the first lines of the comment, one per
-line, and a line may name several findings:
+rediscovering it. Model output can match only open findings. Accepted and
+rejected decisions persist when the model omits them, but model-selected ids
+never inherit or reopen those decisions; any newly reported defect, including
+one on the same exact lines, receives a new id. Maintainers with repository
+write access act on findings by commenting on the PR. Commands go on the first
+lines of the comment, one per line, and a line may name several findings:
 
 ```text
 /aida accept F3 F7 we own this launch risk; tracked in #1290
@@ -172,9 +169,9 @@ open finding, readiness, risk) and refreshes the managed labels. When that
 decision is `maintainer/merge`, it dismisses its own `CHANGES_REQUESTED`
 review so the head can proceed without an artificial commit; when a `reopen`
 turns it back into `author/change`, it posts a blocking review for the head.
-The check of the original review run is not rewritten. A review that finishes
-while a command is being applied re-checks the ledger before it ends and
-applies the same refresh. An open P0/P1 that a later review omits
+The check of the original review run is not rewritten. Review and command
+workflows share one non-cancelling per-PR execution group, so opposing verdict
+mutations are serialized. An open P0/P1 that a later review omits
 while at least one of its cited lines is provably unchanged is *retained*: it
 stays in the review and keeps the next action with the author until the code
 changes or a maintainer accepts it. It is also retained when a current,
@@ -182,8 +179,10 @@ evaluable anchor has an unknown result. A finding resolves when all current,
 evaluable anchors are gone; legacy-only identity anchors do not keep it open.
 
 The active ledger holds up to 200 findings. When it is full, resolved entries
-are removed first; decided entries move to a bounded archive that keeps their
-ids, exact anchors, and maintainer decisions available for later reviews.
+are removed first; decided entries move to an archive that keeps their ids,
+exact anchors, and maintainer decisions available for later reviews. If the
+200-decision archive or the ledger byte limit is exhausted, AIDA refuses the
+new write instead of discarding an authoritative decision.
 
 The ledger comment carries a digest of its data. Do not edit it: AIDA refuses
 to run on an edited or unreadable ledger and says so. To recover, restore the

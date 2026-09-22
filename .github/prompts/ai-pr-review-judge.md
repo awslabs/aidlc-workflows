@@ -28,15 +28,15 @@ not the PR description:
 - Honor `.ai-review-context/ledger.json`, the only authoritative record of
   maintainer decisions. Both `findings` and `archivedDecisions` carry active
   identities. Do not restate a `rejected` or `accepted` finding whose exact
-  anchored lines and priority are unchanged; the publisher removes them
-  deterministically and renders accepted risks from the ledger itself. Restate
-  a still-`open` finding when it still holds so it keeps its identity; an open
+  anchored lines and priority are unchanged; keep it omitted, and the publisher
+  renders accepted risks from the ledger itself. Restate a still-`open`
+  finding when it still holds so it keeps its identity; an open
   P0/P1 you omit while its cited lines are provably unchanged is retained by
-  the publisher and still requires author changes. Set `ledgerId` to the id of
-  the ledger entry a finding IS (the same defect, whatever its wording), or
-  `null` for a new one. Identity is category plus cited lines; a finding on
-  lines covered by an `accepted` or `rejected` entry is treated as a NEW defect
-  unless you set that entry's id.
+  the publisher and still requires author changes. Set `ledgerId` only to the
+  id of an `open` ledger entry the finding IS (the same defect, whatever its
+  wording), or `null` for a new one. Never emit the id of an `accepted` or
+  `rejected` entry; omit that decided finding. Any newly reportable defect on
+  the same lines is a NEW finding and must use `null`.
 - Verify concrete correctness, compatibility, security, state, recovery,
   user-experience, workflow-cost, and AIDLC direction consequences.
 - Consolidate candidates with one root cause and choose the category that best

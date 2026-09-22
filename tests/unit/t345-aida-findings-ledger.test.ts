@@ -371,7 +371,7 @@ describe("t345 AIDA findings ledger", () => {
     }
   });
 
-  test("a decision covers exactly its evidence and severity; only the judge's explicit ledgerId reaches it", () => {
+  test("model-selected ids never inherit or reopen accepted and rejected decisions", () => {
     const loaded: LoadedLedger = {
       ledger: ledgerWith(
         entry("F1", "P2", "rejected", [A42]),
@@ -384,22 +384,27 @@ describe("t345 AIDA findings ledger", () => {
     };
     const input = (priority: "P0" | "P1" | "P2" | "P3", anchors: Ledger["findings"][number]["anchors"], title: string, ledgerId?: string) =>
       ({ priority, category: "correctness", title, anchors, ...(ledgerId ? { ledgerId } : {}) });
+    // Even the exact same category and exact same anchor cannot inherit a
+    // rejected decision through a model-selected id.
     const same = reconcileLedger(loaded, [input("P2", [A42], "same evidence", "F1")], HEAD, AT, () => true);
-    expect(same.suppressed.map(item => item.ledgerId)).toEqual(["F1"]);
-    expect(same.kept).toEqual([]);
+    expect(same.suppressed).toEqual([]);
+    expect(same.reopenedIds).toEqual([]);
+    expect(same.kept.map(item => item.ledgerId)).toEqual(["F4"]);
+    expect(same.ledger.findings[0]).toMatchObject({ status: "rejected", decision: { by: "maintainer" } });
+    expect(same.ledger.findings.at(-1)).toMatchObject({ id: "F4", status: "open", priority: "P2" });
 
     const escalated = reconcileLedger(loaded, [input("P1", [A42], "now blocking", "F1")], HEAD, AT, () => true);
     expect(escalated.suppressed).toEqual([]);
-    expect(escalated.reopenedIds).toEqual(["F1"]);
-    expect(escalated.kept.map(item => item.ledgerId)).toEqual(["F1"]);
-    expect(escalated.ledger.findings[0]).toMatchObject({ status: "open", priority: "P1", title: "now blocking" });
-    expect(escalated.ledger.findings[0].decision).toBeUndefined();
-    expect(escalated.ledger.events.find(event => event.kind === "reopened")?.reason).toBe("new evidence: priority escalated");
+    expect(escalated.reopenedIds).toEqual([]);
+    expect(escalated.kept.map(item => item.ledgerId)).toEqual(["F4"]);
+    expect(escalated.ledger.findings[0].status).toBe("rejected");
+    expect(escalated.ledger.findings.at(-1)).toMatchObject({ id: "F4", status: "open", priority: "P1", title: "now blocking" });
 
     const expanded = reconcileLedger(loaded, [input("P2", [A43, lineAnchor(PATH, "RIGHT", "line 44")], "wider", "F2")], HEAD, AT, () => true);
-    expect(expanded.reopenedIds).toEqual(["F2"]);
-    expect(expanded.ledger.findings[1].anchors).toHaveLength(2);
-    expect(expanded.ledger.events.find(event => event.kind === "reopened")?.reason).toBe("new evidence: cited lines expanded");
+    expect(expanded.reopenedIds).toEqual([]);
+    expect(expanded.kept.map(item => item.ledgerId)).toEqual(["F4"]);
+    expect(expanded.ledger.findings[1]).toMatchObject({ id: "F2", status: "rejected" });
+    expect(expanded.ledger.findings.at(-1)?.anchors).toHaveLength(2);
 
     // Without an explicit id, a finding on decided lines is a NEW defect: it never rides the
     // rejection of F1 or the acceptance of F3, and it never reopens them either.
@@ -621,7 +626,14 @@ describe("t345 AIDA findings ledger", () => {
       LATER,
       () => true,
     );
-    expect(restatedArchived.suppressed.map(item => item.ledgerId)).toEqual(["F1"]);
+    expect(restatedArchived.suppressed).toEqual([]);
+    expect(restatedArchived.kept.map(item => item.ledgerId)).toEqual(["F202"]);
+    expect(restatedArchived.ledger.archivedDecisions?.map(item => item.id)).toEqual(["F1", "F2"]);
+    expect(restatedArchived.ledger.archivedDecisions?.[0]).toMatchObject({
+      id: "F1",
+      status: "rejected",
+      decision: { by: "maintainer" },
+    });
     const reopenedArchived = applyCommands(
       archived.ledger,
       parseCommands("/aida reopen F1"),
@@ -629,6 +641,21 @@ describe("t345 AIDA findings ledger", () => {
     ).ledger;
     expect(reopenedArchived.findings.find(item => item.id === "F1")?.status).toBe("open");
     expect(reopenedArchived.archivedDecisions?.map(item => item.id)).toEqual(["F2"]);
+
+    const archiveFull = ledgerWith(
+      ...Array.from({ length: 200 }, (_, index) =>
+        entry(`F${index + 201}`, "P2", "rejected", [lineAnchor(PATH, "RIGHT", `active decision ${index + 1}`)])),
+    );
+    archiveFull.archivedDecisions = Array.from({ length: 200 }, (_, index) =>
+      entry(`F${index + 1}`, "P2", "accepted", [lineAnchor(PATH, "RIGHT", `archived decision ${index + 1}`)], "owned"));
+    expect(() => reconcileLedger(
+      { ledger: archiveFull, commentId: 900, digest: null, migrated: false },
+      [next],
+      HEAD,
+      AT,
+      () => true,
+    )).toThrow("no authoritative decision can be discarded");
+    expect(archiveFull.archivedDecisions[0].id).toBe("F1");
   });
 
   test("the verdict is re-derived from persisted state under the review's own rules", () => {
@@ -690,6 +717,19 @@ describe("t345 AIDA findings ledger", () => {
     expect(compact.findings.map(item => item.id)).toEqual(["F1", "F3"]);
     expect(compact.nextId).toBe(4);
     expect(() => compactLedger(ledger, 10)).not.toThrow();
+
+    const archiveHeavy = ledgerWith(entry("F201", "P2", "resolved", [A43]));
+    archiveHeavy.archivedDecisions = Array.from({ length: 200 }, (_, index) =>
+      entry(
+        `F${index + 1}`,
+        "P2",
+        "accepted",
+        [lineAnchor(PATH, "RIGHT", `archived bytes ${index + 1}`)],
+        `owned ${"x".repeat(1_200)}`,
+      ));
+    expect(() => compactLedger(archiveHeavy, 1_000)).toThrow("cannot be compacted");
+    expect(archiveHeavy.archivedDecisions).toHaveLength(200);
+    expect(archiveHeavy.archivedDecisions[0].id).toBe("F1");
   });
 
   test("accepted risks come from persisted state and omit risks whose code is gone", () => {
@@ -730,7 +770,7 @@ describe("t345 AIDA findings ledger", () => {
     expect(mergeLedgers(base, staleLive).findings[0].status).toBe("accepted");
   });
 
-  test("an accepted P1 restated by the judge no longer blocks; accepted risks render from the ledger", () => {
+  test("accepted risks persist by omission while a restatement becomes a new blocker", () => {
     const root = contextDir();
     try {
       const loaded: LoadedLedger = { ledger: ledgerWith(entry("F1", "P1", "accepted", [A42], "launch risk owned by platform")), commentId: 900, digest: null, migrated: false };
@@ -738,17 +778,16 @@ describe("t345 AIDA findings ledger", () => {
       expect(() => validateStructuredReview(JSON.stringify(raw), BASE, HEAD, MANIFEST, METADATA)).not.toThrow();
       expect(() => parseStructuredReview(JSON.stringify(review([{ priority: "P1", lines: [42], ledgerId: "F0" }], { readiness: 4, risk: 2 }, CHANGE)), BASE, HEAD, MANIFEST, METADATA)).toThrow("ledgerId must be a ledger id");
       const applied = apply(raw, loaded, root);
-      expect(applied.review.findings).toEqual([]);
-      expect(applied.review.decision.action).toBe("merge");
-      expect(applied.review.decision.rationale).toContain("Re-derived after applying 1 maintainer ledger decision:");
-      expect(applied.review.ledger).toMatchObject({ suppressed: 0, open: 0, retained: [], migrated: false, decisionAdjusted: true });
+      expect(applied.review.findings.map(item => item.ledgerId)).toEqual(["F2"]);
+      expect(applied.review.decision.action).toBe("change");
+      expect(applied.review.ledger).toMatchObject({ suppressed: 0, open: 1, retained: [], migrated: false });
       expect(applied.review.ledger?.accepted.map(item => item.id)).toEqual(["F1"]);
       // The final verdict is persisted so a later /aida command re-derives it without models.
-      expect(applied.ledger.review).toEqual({ head: HEAD, readiness: 4, risk: 2, decision: "merge" });
+      expect(applied.ledger.review).toEqual({ head: HEAD, readiness: 4, risk: 2, decision: "change" });
       const rendered = renderReview(applied.review, CONTEXT_ID);
-      expect(rendered.event).toBe("COMMENT");
-      expect(rendered.body).toContain("<!-- ai-pr-review decision=maintainer/merge -->");
-      expect(rendered.body).toContain("Ledger: 0 open, 0 retained blocking, 1 accepted, 0 suppressed");
+      expect(rendered.event).toBe("REQUEST_CHANGES");
+      expect(rendered.body).toContain("<!-- ai-pr-review decision=author/change -->");
+      expect(rendered.body).toContain("Ledger: 1 open, 0 retained blocking, 1 accepted, 0 suppressed");
       expect(rendered.body).toContain("## Accepted risks");
       expect(rendered.body).toContain("**P1 [F1]: Finding F1** — accepted by @maintainer on 2026-09-22: launch risk owned by platform");
 
@@ -758,10 +797,10 @@ describe("t345 AIDA findings ledger", () => {
       expect(omitted.review.ledger?.accepted.map(item => item.id)).toEqual(["F1"]);
       expect(renderReview(omitted.review, CONTEXT_ID).body).toContain("## Accepted risks");
 
-      // Restating an accepted P1 while saying merge fails plain validation but is fine with the ledger applied first.
+      // Restating an accepted P1 while saying merge stays invalid after the
+      // ledger creates an independent open finding.
       const mergeRaw = review([{ priority: "P1", lines: [42], ledgerId: "F1" }], { readiness: 4, risk: 2 }, MERGE);
       expect(() => validateStructuredReview(JSON.stringify(mergeRaw), BASE, HEAD, MANIFEST, METADATA)).toThrow("invalid while P0 or P1 findings remain");
-      expect(apply(mergeRaw, loaded, root).review.decision).toEqual(MERGE);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -804,27 +843,26 @@ describe("t345 AIDA findings ledger", () => {
     }
   });
 
-  test("a rejected finding is suppressed; escalation reopens it; low scores keep author/change", () => {
+  test("a restated rejected finding is independent; low scores keep author/change", () => {
     const root = contextDir();
     try {
       const loaded: LoadedLedger = { ledger: ledgerWith(entry("F1", "P2", "rejected", [A42], "documented behavior")), commentId: 900, digest: null, migrated: false };
-      const suppressed = apply(review([{ priority: "P2", lines: [42], ledgerId: "F1" }], { readiness: 2, risk: 4 }, CHANGE), loaded, root);
-      expect(suppressed.review.findings).toEqual([]);
-      expect(suppressed.review.ledger?.suppressed).toBe(1);
-      expect(suppressed.review.decision).toEqual(CHANGE);
-      const body = renderReview(suppressed.review, CONTEXT_ID).body;
-      expect(body).toContain("1 suppressed as rejected by a maintainer");
-      expect(body).not.toContain("Total ignores the discount");
+      const restated = apply(review([{ priority: "P2", lines: [42], ledgerId: "F1" }], { readiness: 2, risk: 4 }, CHANGE), loaded, root);
+      expect(restated.review.findings.map(item => item.ledgerId)).toEqual(["F2"]);
+      expect(restated.review.ledger?.suppressed).toBe(0);
+      expect(restated.review.decision).toEqual(CHANGE);
+      expect(restated.ledger.findings[0].status).toBe("rejected");
 
       const escalated = apply(review([{ priority: "P1", lines: [42], ledgerId: "F1" }], { readiness: 2, risk: 4 }, CHANGE), loaded, root);
-      expect(escalated.review.findings.map(item => item.ledgerId)).toEqual(["F1"]);
-      expect(escalated.review.ledger?.reopened).toBe(1);
-      expect(escalated.ledger.findings[0]).toMatchObject({ status: "open", priority: "P1" });
-      expect(renderReview(escalated.review, CONTEXT_ID).body).toContain("**P1 [F1]: Total ignores the discount**");
+      expect(escalated.review.findings.map(item => item.ledgerId)).toEqual(["F2"]);
+      expect(escalated.review.ledger?.reopened).toBe(0);
+      expect(escalated.ledger.findings[0].status).toBe("rejected");
+      expect(escalated.ledger.findings[1]).toMatchObject({ status: "open", priority: "P1" });
+      expect(renderReview(escalated.review, CONTEXT_ID).body).toContain("**P1 [F2]: Total ignores the discount**");
 
       const expanded = apply(review([{ priority: "P2", lines: [42, 43], ledgerId: "F1" }], { readiness: 2, risk: 4 }, CHANGE), loaded, root);
-      expect(expanded.review.findings.map(item => item.ledgerId)).toEqual(["F1"]);
-      expect(expanded.review.ledger?.reopened).toBe(1);
+      expect(expanded.review.findings.map(item => item.ledgerId)).toEqual(["F2"]);
+      expect(expanded.review.ledger?.reopened).toBe(0);
 
       // Untagged, the same lines are a new finding: the rejection stands and the review shows F2.
       const untagged = apply(review([{ priority: "P2", lines: [42] }], { readiness: 2, risk: 4 }, CHANGE), loaded, root);
@@ -1115,10 +1153,21 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
       const started = gh(HEAD, [], [{ id: 9, state: "CHANGES_REQUESTED", body: `${marker}\n<!-- ai-pr-review decision=author/change -->` }]);
       expect(refreshVerdict("acme/repo", 42, HEAD, "merge", "accepted during publication", started.path)).toBe("applied");
       expect(calls(started.log).some(call => call.args.includes("repos/acme/repo/pulls/42/reviews/9/dismissals"))).toBe(true);
+
+      // Recovery after interruption immediately after the gate mutation: the
+      // next serialized invocation repairs the stale opposing labels without
+      // posting another blocking review.
+      const afterGateOnly = gh(HEAD, mergeLabels, [{ id: 10, state: "CHANGES_REQUESTED", body: `${marker}\n<!-- ai-pr-review decision=author/change -->` }]);
+      expect(refreshVerdict("acme/repo", 42, HEAD, "change", "resume after gate mutation", afterGateOnly.path)).toBe("applied");
+      const repairCalls = calls(afterGateOnly.log);
+      expect(repairCalls.some(call => call.args.includes("POST") && call.args.includes("repos/acme/repo/pulls/42/reviews"))).toBe(false);
+      expect(JSON.parse(repairCalls.find(call => call.args.includes("POST") && call.args.includes("repos/acme/repo/issues/42/labels"))?.input ?? "{}")).toEqual({
+        labels: ["next:author", "action:change"],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("the command workflow is isolated and refreshes the verdict; the review workflow merges before publishing", () => {
     expect(LEDGER_WORKFLOW).toContain("  issue_comment:");
@@ -1136,7 +1185,10 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(LEDGER_WORKFLOW).toContain("github.event.comment.user.type != 'Bot'");
     expect(LEDGER_WORKFLOW).toContain("github.actor != 'github-actions[bot]'");
     expect(LEDGER_WORKFLOW).toContain("startsWith(github.event.comment.body, '/aida')");
+    expect(LEDGER_WORKFLOW).toContain(`group: aida-pr-\${{ github.event.issue.number }}`);
     expect(LEDGER_WORKFLOW).toContain("cancel-in-progress: false");
+    expect(REVIEW_WORKFLOW).toContain(`group: aida-pr-\${{ github.event.pull_request.number || inputs.pr_number }}`);
+    expect(REVIEW_WORKFLOW).toContain("cancel-in-progress: false");
     expect(LEDGER_WORKFLOW).toContain("--state-output /tmp/aida-command.json");
     expect(LEDGER_WORKFLOW).toContain("Refresh the published verdict without rerunning models");
     expect(LEDGER_WORKFLOW).toContain("steps.command.outputs.status == 'applied' && steps.command.outputs.refresh_head != ''");
@@ -1189,7 +1241,8 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(COMMON_PROMPT).not.toContain("A substantive maintainer decision is project authority");
     expect(JUDGE_PROMPT).toContain("the only authoritative record of\n  maintainer decisions");
     expect(JUDGE_PROMPT).toContain("retained by\n  the publisher");
-    expect(JUDGE_PROMPT).toContain("Set `ledgerId` to the id of\n  the ledger entry a finding IS");
+    expect(JUDGE_PROMPT).toContain("Set `ledgerId` only to the\n  id of an `open` ledger entry");
+    expect(JUDGE_PROMPT).toContain("Never emit the id of an `accepted` or\n  `rejected` entry");
     expect(JUDGE_PROMPT).toContain('"ledgerId": null,');
     const schema = JSON.parse(readFileSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-judge-schema.json"), "utf8"));
     expect(schema.$defs.finding.properties.ledgerId).toMatchObject({ type: ["string", "null"], pattern: "^F[1-9][0-9]*$" });
@@ -1201,7 +1254,8 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(CONTRIBUTING).toContain("it posts a blocking review for the head");
     expect(CONTRIBUTING).toContain("A resolved finding cannot be\n  reopened");
     expect(CONTRIBUTING).toContain("legacy-only identity anchors do not keep it open");
-    expect(CONTRIBUTING).toContain("decided entries move to a bounded archive");
+    expect(CONTRIBUTING).toContain("model-selected ids\nnever inherit or reopen those decisions");
+    expect(CONTRIBUTING).toContain("refuses the\nnew write instead of discarding an authoritative decision");
     expect(CONTRIBUTING).toContain("/aida accept F3 F7 we own this launch risk");
     expect(CONTRIBUTING).toContain("all-or-nothing");
     expect(CONTRIBUTING).toContain("P0 and P1 findings can be accepted but not rejected");
