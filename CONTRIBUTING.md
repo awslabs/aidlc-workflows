@@ -128,26 +128,44 @@ decision; AIDA does not approve or merge the PR. The merge decision requires no
 P0 or P1 finding, readiness of at least 4/5, and risk of at most 2/5.
 
 AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
-id (`F1`, `F2`, …) anchored to the content of the lines it cites, so a follow-up
-review recognizes the same finding across commits instead of rediscovering it.
-Maintainers with repository write access act on findings by commenting on the
-PR:
+id (`F1`, `F2`, …) anchored to the exact content of the lines it cites, so a
+follow-up review recognizes the same finding across commits instead of
+rediscovering it. A decision covers the evidence and severity it was made on:
+when a finding's cited lines grow or its priority rises, it is reopened as new
+evidence. Maintainers with repository write access act on findings by
+commenting on the PR. Commands go on the first lines of the comment, one per
+line, and a line may name several findings:
 
-- `/aida accept F3 <reason>` — the named maintainer owns this risk; the finding
-  stays visible under *Accepted risks* and no longer affects the next action.
-- `/aida reject F3 <reason>` — not a defect; AIDA stops reporting it while the
-  cited code is unchanged. P0 and P1 findings can be accepted but not rejected.
-- `/aida reopen F3` — reverse an accept or reject.
-- `/aida status` — re-render the ledger.
-- `/aida full` — make the next review inspect the complete PR again.
+```text
+/aida accept F3 F7 we own this launch risk; tracked in #1290
+/aida reject F5 documented behavior, not a defect
+/aida reopen F2
+/aida status
+```
 
-The workflow verifies the commenter's permission through GitHub's collaborators
-API before applying a command and reacts 👍 (applied), 👎 (no write access), or
-😕 (usage error, with a reply). The ledger comment carries a digest of its data;
-a hand-edited ledger is detected and its decisions are ignored until a verified
-command restates them. Decisions written anywhere other than through these
-commands are not decisions to AIDA. A finding whose cited lines change is open
-again for review.
+- `accept` — the named maintainer owns this risk; the finding stays visible
+  under *Accepted risks* in every later review and no longer affects the next
+  action. P0 and P1 findings can be accepted but not rejected.
+- `reject` — not a defect; AIDA stops reporting it while the cited code is
+  unchanged.
+- `reopen` — reverse an accept or reject.
+- `status` — re-render the ledger.
+
+A comment is applied all-or-nothing: if one line is invalid, nothing is applied
+and AIDA replies naming the line. The workflow verifies the commenter's
+permission through GitHub's collaborators API before applying anything and
+reacts 👍 (applied), 👎 (no write access), or 😕 (usage error, with a reply).
+After a command changes the effective verdict of the current head, AIDA
+refreshes the managed labels and, when no open blocking finding remains,
+dismisses its own `CHANGES_REQUESTED` review so the head can proceed without
+an artificial commit. An open P0/P1 that a later review omits while its code
+is unchanged is *retained*: it stays in the review and keeps the next action
+with the author until the code changes or a maintainer accepts it.
+
+The ledger comment carries a digest of its data; a hand-edited ledger is
+detected, its decisions are reset, and only `/aida` commands can restate them.
+Decisions written anywhere other than through these commands are not decisions
+to AIDA.
 
 Every PR review includes a User Experience section before its UX assessment.
 For user-visible changes, it explains the affected user, the previous and

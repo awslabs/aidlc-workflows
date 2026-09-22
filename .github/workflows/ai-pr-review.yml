@@ -593,6 +593,7 @@ jobs:
         id: publish
         if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
         env:
+          BASE_SHA: ${{ steps.context.outputs.base }}
           CONTEXT_ID: ${{ steps.context.outputs.context_id }}
           EVENT: ${{ steps.model.outputs.event }}
           GH_TOKEN: ${{ github.token }}
@@ -623,6 +624,32 @@ jobs:
             /tmp/current-discussion-identity.json; then
             echo "::error::Authoritative PR conversation changed during review"
             exit 1
+          fi
+
+          # Compare-and-swap on the findings ledger: a maintainer may have applied
+          # /aida decisions while the models ran. Merge the live ledger into the
+          # pre-review snapshot and, if anything changed, re-derive the verdict
+          # deterministically (no model rerun) before publishing.
+          ledger_state="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts merge \
+            --repo "$REPO" \
+            --pr "$PR_NUMBER" \
+            --input .ai-review-context/ledger.json \
+            --output .ai-pr-review-final/ledger.live.json)"
+          if [ "$ledger_state" = "changed" ]; then
+            echo "::notice::Maintainer ledger decisions changed during the review; re-deriving the verdict"
+            EVENT="$(bun .ai-review-controls/scripts/ai-pr-review.ts validate \
+              --base "$BASE_SHA" \
+              --head "$HEAD_SHA" \
+              --context-id "$CONTEXT_ID" \
+              --input .ai-pr-review-final/review.md \
+              --manifest .ai-review-context/changed-files.json \
+              --metadata .ai-review-context/pr.json \
+              --output .ai-pr-review-final/review.json \
+              --decision-output .ai-pr-review-final/decision.json \
+              --ledger .ai-pr-review-final/ledger.live.json \
+              --ledger-output .ai-pr-review-final/ledger.json \
+              --context-dir .ai-review-context \
+              --repo-dir .)"
           fi
 
           marker="<!-- ai-pr-review context=$CONTEXT_ID -->"

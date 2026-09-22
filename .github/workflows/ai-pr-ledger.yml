@@ -1,6 +1,6 @@
 name: AIDA findings ledger
 
-# Maintainer commands for the AIDA findings ledger: `/aida accept|reject|reopen|status|full`.
+# Maintainer commands for the AIDA findings ledger: `/aida accept|reject|reopen|status`.
 # This workflow deliberately lives apart from the review workflow. It holds no model
 # credentials, assumes no cloud role, and only ever checks out the default branch, so
 # the `issue_comment` trigger never exposes a PR head or a secret. Authority is the
@@ -39,7 +39,8 @@ jobs:
         with:
           bun-version: '1.3.14'
 
-      - name: Verify permission, apply the command, update the ledger comment
+      - name: Verify permission, apply the commands, update the ledger comment
+        id: command
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -54,4 +55,45 @@ jobs:
             --repo "$REPO" \
             --pr "$PR_NUMBER" \
             --comment-id "$COMMENT_ID" \
-            --actor "$ACTOR"
+            --actor "$ACTOR" \
+            --state-output /tmp/aida-command.json
+          {
+            echo "status=$(jq -r .status /tmp/aida-command.json)"
+            echo "open_blocking=$(jq -r '.openBlocking // empty' /tmp/aida-command.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Refresh the published verdict without rerunning models
+        if: steps.command.outputs.status == 'applied'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          OPEN_BLOCKING: ${{ steps.command.outputs.open_blocking }}
+        run: |
+          set -euo pipefail
+          # A decision changes the effective verdict of the current head. Reflect it
+          # in the managed labels and, when no open blocker remains, dismiss the
+          # bot's stale CHANGES_REQUESTED review so the head can proceed without an
+          # artificial commit. Only acts when a review already exists for the head.
+          head="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+          current="$(bun .github/scripts/ai-pr-review.ts label-state \
+            --repo "$REPO" --pr "$PR_NUMBER" --expected-head "$head")"
+          if [ "$current" != "reviewed-change" ] && [ "$current" != "reviewed-merge" ]; then
+            echo "::notice::No published AIDA review for the current head; labels left unchanged"
+            exit 0
+          fi
+          if [ "${OPEN_BLOCKING:-0}" -gt 0 ]; then
+            outcome="reviewed-change"
+          else
+            outcome="reviewed-merge"
+          fi
+          bun .github/scripts/ai-pr-review.ts labels \
+            --repo "$REPO" --pr "$PR_NUMBER" --expected-head "$head" --outcome "$outcome"
+          if [ "$outcome" = "reviewed-merge" ]; then
+            mapfile -t blocking_reviews < <(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
+              --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state == \"CHANGES_REQUESTED\" and .commit_id == \"$head\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=\"))) | .id")
+            for review_id in "${blocking_reviews[@]}"; do
+              gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$review_id/dismissals" \
+                -f message="Every blocking finding on this head was accepted or rejected by a maintainer through /aida; see the findings ledger." >/dev/null
+            done
+          fi

@@ -25,13 +25,14 @@ not the PR description:
   accepted finding, including an accepted P0 or P1. Report only when the current
   head expands beyond the accepted trigger or impact, or contradicts a later
   authoritative decision.
-- Honor `.ai-review-context/ledger.json`. Do not restate a `rejected` or
-  `accepted` finding whose anchored lines are unchanged; the publisher also
-  removes them deterministically, and a restated one only costs the review its
-  credibility. Restate a still-`open` finding when it still holds so it keeps its
-  identity. Report a finding as new only when no ledger entry covers its cited
-  lines. When `mode` is `"full"`, a maintainer asked for a complete re-read:
-  inspect the whole PR rather than only what changed since the last review.
+- Honor `.ai-review-context/ledger.json`, the only authoritative record of
+  maintainer decisions. Do not restate a `rejected` or `accepted` finding whose
+  anchored lines and priority are unchanged; the publisher removes them
+  deterministically and renders accepted risks from the ledger itself. Restate
+  a still-`open` finding when it still holds so it keeps its identity; an open
+  P0/P1 you omit while its code is unchanged is retained by the publisher and
+  still requires author changes. Report a finding as new only when no ledger
+  entry covers its cited lines.
 - Verify concrete correctness, compatibility, security, state, recovery,
   user-experience, workflow-cost, and AIDLC direction consequences.
 - Consolidate candidates with one root cause and choose the category that best

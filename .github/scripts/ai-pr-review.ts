@@ -9,10 +9,13 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import {
+  acceptedRisks,
   fileAnchor,
   headContainsAnchor,
+  headFileSha256,
+  isBlocking,
   type LedgerAnchor,
-  type LedgerDecision,
+  type LedgerFinding,
   type LoadedLedger,
   lineAnchor,
   positionAnchor,
@@ -214,14 +217,11 @@ export interface StructuredReview {
   ledger?: ReviewLedgerSummary;
 }
 
-export interface AcceptedFinding {
-  finding: Finding;
-  decision: LedgerDecision;
-}
-
 export interface ReviewLedgerSummary {
-  accepted: AcceptedFinding[];
+  accepted: LedgerFinding[];
+  retained: LedgerFinding[];
   suppressed: number;
+  reopened: number;
   resolvedIds: string[];
   open: number;
   tampered: boolean;
@@ -777,6 +777,7 @@ export function decisionInvariantError(
   findings: Finding[],
   assessment: StructuredReview["assessment"],
   decision: PullRequestDecision,
+  retainedBlocking = 0,
 ): string | null {
   const blocking = findings.some(
     finding => finding.priority === "P0" || finding.priority === "P1",
@@ -784,6 +785,10 @@ export function decisionInvariantError(
   if (decision.action === "merge" && blocking) {
     return "decision maintainer/merge is invalid while P0 or P1 findings remain";
   }
+  if (decision.action === "merge" && retainedBlocking > 0) {
+    return "decision maintainer/merge is invalid while retained open blocking findings remain";
+  }
+  if (decision.action === "change" && retainedBlocking > 0) return null;
   if (
     decision.action === "merge" &&
     (assessment.readiness.score < 4 || assessment.risk.score > 2)
@@ -802,7 +807,12 @@ export function decisionInvariantError(
 }
 
 export function enforceDecision(review: StructuredReview): StructuredReview {
-  const error = decisionInvariantError(review.findings, review.assessment, review.decision);
+  const error = decisionInvariantError(
+    review.findings,
+    review.assessment,
+    review.decision,
+    review.ledger?.retained.length ?? 0,
+  );
   if (error) throw new Error(error);
   return review;
 }
@@ -1067,10 +1077,10 @@ export function findingAnchors(
       anchors.push(
         lineText === null
           ? positionAnchor(item.path, item.line, item.side)
-          : lineAnchor(item.path, lineText),
+          : lineAnchor(item.path, item.side, lineText),
       );
     } else if (item.source === "DIFF_FILE") {
-      anchors.push(fileAnchor(item.path));
+      anchors.push(fileAnchor(item.path, headFileSha256(contextDir, item.path) ?? "deleted"));
     } else {
       anchors.push(quoteAnchor(item.quote));
     }
@@ -1078,12 +1088,15 @@ export function findingAnchors(
   return anchors;
 }
 
-// Applies maintainer decisions recorded in the ledger to a parsed review, then
-// re-derives the decision from the SAME invariants the validator already
-// enforces. Suppressing a rejected finding or setting aside an accepted one can
-// leave the judge's `author/change` without a valid reason under those
-// invariants; the only consistent outcome is then `maintainer/merge`, and the
-// rationale says so. No new decision rule is introduced here.
+// Applies maintainer decisions recorded in the ledger to a parsed review.
+//
+// Decision rules are the SAME invariants the validator already enforces; only
+// their inputs change: rejected findings with unchanged evidence are removed,
+// accepted ones are set aside, and open blockers the judge omitted but whose
+// cited code is unchanged are RETAINED and keep the next action with the author.
+// A removed finding that was the sole reason for `author/change` leaves that
+// decision without a valid reason under the invariants, so the consistent
+// outcome is `maintainer/merge`, and the rationale says so.
 export function applyLedgerToReview(
   review: StructuredReview,
   loaded: LoadedLedger,
@@ -1091,6 +1104,7 @@ export function applyLedgerToReview(
   repoDir: string,
   at = new Date().toISOString(),
 ): { review: StructuredReview; ledger: LoadedLedger["ledger"] } {
+  const presence = (anchor: LedgerAnchor): boolean | null => headContainsAnchor(contextDir, anchor);
   const inputs = review.findings.map(finding => ({
     priority: finding.priority,
     category: finding.category,
@@ -1098,22 +1112,25 @@ export function applyLedgerToReview(
     anchors: findingAnchors(finding, contextDir, repoDir),
     finding,
   }));
-  const result = reconcileLedger(
-    loaded,
-    inputs,
-    review.head,
-    at,
-    anchor => headContainsAnchor(contextDir, anchor),
-  );
+  const result = reconcileLedger(loaded, inputs, review.head, at, presence);
   const kept = result.kept.map(entry => ({ ...entry.finding, ledgerId: entry.ledgerId }));
-  const accepted: AcceptedFinding[] = result.accepted.map(entry => ({
-    finding: { ...entry.finding, ledgerId: entry.ledgerId },
-    decision: entry.decision,
-  }));
+  const retained = result.retained.filter(entry => isBlocking(entry.priority));
+  const accepted = acceptedRisks(result.ledger, presence);
+  const removed = result.restatedAccepted.length + result.suppressed.length;
   let decision = review.decision;
   let decisionAdjusted = false;
-  const removed = result.accepted.length + result.suppressed.length;
-  if (removed > 0 && decision.action === "change") {
+  if (retained.length > 0 && decision.action !== "change") {
+    decision = {
+      actor: "author",
+      action: "change",
+      rationale: `${review.decision.rationale} Re-derived from the ledger: ${retained.length} open blocking finding${
+        retained.length === 1 ? "" : "s"
+      } (${retained.map(entry => entry.id).join(", ")}) ${
+        retained.length === 1 ? "was" : "were"
+      } not restated this run and the cited code is unchanged, so the author still needs to act.`,
+    };
+    decisionAdjusted = true;
+  } else if (retained.length === 0 && removed > 0 && decision.action === "change") {
     const error = decisionInvariantError(kept, review.assessment, decision);
     if (error !== null) {
       decision = {
@@ -1132,7 +1149,9 @@ export function applyLedgerToReview(
     decision,
     ledger: {
       accepted,
+      retained,
       suppressed: result.suppressed.length,
+      reopened: result.reopenedIds.length,
       resolvedIds: result.resolvedIds,
       open: result.ledger.findings.filter(entry => entry.status === "open").length,
       tampered: loaded.tampered,
@@ -1279,9 +1298,11 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     const summary = review.ledger;
     lines.push(
       "",
-      `Ledger: ${summary.open} open, ${summary.accepted.length} accepted, ${summary.suppressed} suppressed as rejected by a maintainer${
-        summary.resolvedIds.length > 0 ? `, resolved ${summary.resolvedIds.join(", ")}` : ""
-      }.${summary.decisionAdjusted ? " The next decision was re-derived after applying ledger decisions." : ""}${
+      `Ledger: ${summary.open} open, ${summary.retained.length} retained blocking, ${summary.accepted.length} accepted, ${summary.suppressed} suppressed as rejected by a maintainer${
+        summary.reopened > 0 ? `, ${summary.reopened} reopened on new evidence` : ""
+      }${summary.resolvedIds.length > 0 ? `, resolved ${summary.resolvedIds.join(", ")}` : ""}.${
+        summary.decisionAdjusted ? " The next decision was re-derived from the ledger." : ""
+      }${
         summary.tampered ? " The ledger comment was edited outside AIDA; its unverified decisions were reset." : ""
       } Maintainers act on findings with \`/aida\` commands in the ledger comment.`,
     );
@@ -1327,14 +1348,32 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       appendFinding(finding);
     }
   }
+  if (review.ledger && review.ledger.retained.length > 0) {
+    lines.push(
+      "",
+      "## Retained blocking findings",
+      "",
+      "Open P0/P1 findings from the ledger that this review did not restate and whose cited code is unchanged. They keep the next action with the author until the code changes or a maintainer accepts them.",
+    );
+    for (const entry of review.ledger.retained) {
+      const paths = [...new Set(entry.anchors.map(anchor => anchor.path).filter((path): path is string => Boolean(path)))];
+      lines.push(
+        "",
+        `**${entry.priority} [${entry.id}]: ${markdownText(entry.title)}** — first reported at \`${entry.firstSeen.head.slice(0, 8)}\`${
+          paths.length > 0 ? `; cited: ${paths.map(path => `<code>${codeText(path)}</code>`).join(", ")}` : ""
+        }.`,
+      );
+    }
+  }
   if (review.ledger && review.ledger.accepted.length > 0) {
     lines.push("", "## Accepted risks");
     for (const entry of review.ledger.accepted) {
+      const decision = entry.decision;
       lines.push(
         "",
-        `**${entry.finding.priority} [${entry.finding.ledgerId ?? "?"}]: ${markdownText(entry.finding.title)}** — accepted by @${
-          markdownText(entry.decision.by)
-        } on ${markdownText(entry.decision.at.slice(0, 10))}: ${markdownText(entry.decision.reason)}`,
+        `**${entry.priority} [${entry.id}]: ${markdownText(entry.title)}** — accepted by @${
+          markdownText(decision?.by ?? "unknown")
+        } on ${markdownText((decision?.at ?? "").slice(0, 10))}: ${markdownText(decision?.reason ?? "")}`,
       );
     }
   }
@@ -1346,7 +1385,9 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     `[AI-PR-REVIEWED] ${review.head}`,
   );
-  const event = review.findings.some(item => item.priority === "P0" || item.priority === "P1")
+  const retainedBlocking = (review.ledger?.retained.length ?? 0) > 0;
+  const event = retainedBlocking ||
+      review.findings.some(item => item.priority === "P0" || item.priority === "P1")
     ? "REQUEST_CHANGES"
     : "COMMENT";
   return { commit_id: review.head, body: lines.join("\n"), event };
