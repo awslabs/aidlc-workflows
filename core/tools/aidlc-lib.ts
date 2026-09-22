@@ -26858,16 +26858,16 @@ export function latestMainWorkflowStageRunFloorForProject(
     slug,
     unitMajor,
     unit,
-    auditRows !== undefined,
   );
 }
 
+// Callers hand in rows straight from readAuditShardEvents, which are
+// shard-major, so the boundary order is settled here and not trusted from input.
 function latestMainWorkflowStageRunFloorFromRows(
   rowsInput: readonly AuditShardEvent[],
   slug: string,
   unitMajor = false,
   unit?: string,
-  preSorted = false,
 ): string {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -26891,15 +26891,13 @@ function latestMainWorkflowStageRunFloorFromRows(
         !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
       );
     });
-  if (!preSorted) {
-    rows.sort((a, b) => {
-      if (a.timestamp !== b.timestamp) {
-        return a.timestamp < b.timestamp ? -1 : 1;
-      }
-      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-      return a.pos - b.pos;
-    });
-  }
+  rows.sort((a, b) => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp < b.timestamp ? -1 : 1;
+    }
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
   if (rows.length === 0) return "unstarted#0";
 
   const latestTimestamp = rows[rows.length - 1].timestamp;
