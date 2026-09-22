@@ -1512,6 +1512,10 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(common).toContain("explicitly says that a named P0, P1, P2, or");
     expect(common).toContain("do not report the same");
     expect(common).toContain("supersedes, duplicates, or invalidates");
+    expect(common).toContain("review must converge instead of restarting from zero");
+    expect(common).toContain("introduced that problem. Do not report a newly noticed problem");
+    expect(common).toContain("Do not report a newly noticed problem in older");
+    expect(common).toContain("When the head has not changed");
     expect(candidates).toContain("inspection or the command sandbox fails");
     expect(aidlc).toContain("Reconstruct every affected caller, writer, reader");
     expect(aidlc).toContain("Treat tests as claims");
@@ -1540,6 +1544,11 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(judge).toContain(".ai-review-lenses/user-experience.md");
     expect(judge).toContain(".ai-review-lenses/direction.md");
     expect(judge).toContain("First try to kill every candidate");
+    expect(judge).toContain("Apply the convergence contract");
+    expect(judge).toContain("regression introduced after the earlier review");
+    expect(judge).toContain("Additional specialist lenses do not expand");
+    expect(judge).toContain("publish an empty findings list");
+    expect(judge).toContain("no code delta exists");
     expect(judge).toContain("Review the code that exists");
     expect(judge).toContain("The runner verifies");
     expect(judge).toContain("publisher records the immutable");

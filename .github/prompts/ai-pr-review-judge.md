@@ -16,6 +16,25 @@ source, or mistaken line interpretation that makes it invalid. Re-derive every
 surviving finding from the base tree plus SHA-anchored diff. Do not preserve a
 candidate merely because another model assigned it a high priority.
 
+Apply the convergence contract before accepting any candidate. On a follow-up
+review, first identify the latest earlier AIDA review on an ancestor commit.
+Its findings and the commits after its `commitId` define the allowed review
+scope:
+
+- Recheck each earlier finding against the current head.
+- Use the repository history to inspect the delta from that reviewed commit to
+  the immutable head and report concrete regressions caused by that delta.
+- Reject every candidate that is neither an unresolved earlier finding nor a
+  regression introduced after the earlier review.
+- Never convert a newly noticed concern in previously reviewed code into a new
+  finding. Additional specialist lenses do not expand the follow-up scope.
+- If the earlier findings are fixed and the delta introduced no regression,
+  publish an empty findings list and use `maintainer/merge`.
+
+When an AIDA review already exists for the exact head, no code delta exists.
+Only reconsider its findings in light of the review conversation; never add a
+finding for that rerun.
+
 Then close coverage gaps across all categories. Review the code that exists,
 not the PR description:
 

@@ -43,6 +43,26 @@ already published for this exact head are in
 actor includes a deterministic `maintainer` field derived from GitHub's OWNER,
 MEMBER, or COLLABORATOR association.
 
+The review must converge instead of restarting from zero on every commit:
+
+- If no earlier AIDA review exists, perform the complete initial review.
+- Otherwise, use the most recent earlier AIDA review whose `commitId` is an
+  ancestor of the immutable head as the follow-up baseline. Re-evaluate its
+  findings against the current head, then inspect the commits after that
+  baseline for regressions introduced by the new changes.
+- A follow-up may repeat a previous finding when it remains unresolved, revise
+  it when the correction changes its trigger or impact, or remove it when it is
+  fixed.
+- A follow-up may add a finding only when the commits after the baseline
+  introduced that problem. Do not report a newly noticed problem in older,
+  already reviewed code.
+- When the head has not changed, reconsider existing findings and maintainer
+  decisions only. Do not add findings.
+- If the previous findings are resolved and the new commits introduce no
+  regression, return no blocking finding. The purpose of follow-up review is to
+  help the PR reach a decision, not to discover a different review lens on each
+  run.
+
 A substantive maintainer decision is project authority for the exact behavior
 and risk it accepts. If a maintainer explicitly says that a named P0, P1, P2, or
 P3 finding, trigger, impact, or tradeoff is acceptable, do not report the same

@@ -128,10 +128,14 @@ decision; AIDA does not approve or merge the PR. The merge decision requires no
 P0 or P1 finding. P2 and P3 remain advisory. Readiness and risk provide context
 for the human decision and do not change the requested action.
 
-Each review evaluates the complete PR and its current conversation. A
-substantive maintainer comment can accept a specific finding or project
-direction, and AIDA must not report the accepted point again unless the PR
-expands beyond what the maintainer accepted.
+The first AIDA review evaluates the complete PR. Each later review rechecks the
+previous findings and reviews only the commits added since that assessment for
+new regressions. It does not introduce a newly noticed finding in code that was
+already reviewed. When the previous findings are fixed and the new commits add
+no regression, the review converges on `maintainer/merge`. A substantive
+maintainer comment can accept a specific finding or project direction, and AIDA
+must not report the accepted point again unless the PR expands beyond what the
+maintainer accepted.
 
 PRs that change AIDA's reviewer workflow, prompts, schema, or implementation are
 judged by the reviewer controls from the default branch.
