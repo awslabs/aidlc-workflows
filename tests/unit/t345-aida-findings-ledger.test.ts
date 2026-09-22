@@ -1073,7 +1073,6 @@ describe("t345 AIDA findings ledger", () => {
     try {
       const marker = `<!-- ai-pr-review context=${CONTEXT_ID} -->`;
       const gh = (headSha: string, labels: string[], reviews: Array<{ id: number; state: string; body: string }>) => {
-        const path = join(root, "gh");
         const log = join(root, "calls.jsonl");
         const state = join(root, "state.json");
         rmSync(log, { force: true });
@@ -1087,7 +1086,7 @@ describe("t345 AIDA findings ledger", () => {
             user: { login: "github-actions[bot]" },
           })),
         }));
-        writeFileSync(path, `#!/usr/bin/env bun
+        const path = writeGhFixture(join(root, "gh"), `#!/usr/bin/env bun
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
@@ -1130,7 +1129,6 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
   process.stdout.write("{}");
 }
 `);
-        chmodSync(path, 0o755);
         return { path, log, state };
       };
       const mergeLabels = ["aida:reviewed", "next:maintainer", "action:merge"];
