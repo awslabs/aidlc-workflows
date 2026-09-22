@@ -538,7 +538,7 @@ function claimBlocks(
 				(container.kind !== "listItem" || other.kind === "listItem" && container.id === other.id);
 		});
 	const flush = (): void => {
-		const text = pending.join("\n").trim();
+		const text = pending.join("\n").trimEnd();
 		if (text && pendingLine) {
 			blocks.push({
 				section,
@@ -555,17 +555,14 @@ function claimBlocks(
 	for (let index = confirmationRange?.start ?? 0; index < (confirmationRange?.end ?? lines.length); index++) {
 		const line = structure.lines[index];
 		let text = lines[index];
-		// Inline tokens are erased only where the parser recognizes them. A fence,
-		// backtick or comment-looking run inside raw HTML is not Markdown syntax.
+		// Keep raw claim spelling for exact declarations and assumptions. Only
+		// parsed comments disappear here; sourceTags masks inline code separately.
 		for (let span = line.invisible.length - 1; span >= 0; span--) {
 			const invisible = line.invisible[span];
-			if (invisible.kind !== "htmlText") {
-				text = text.slice(0, invisible.start) +
-					(invisible.kind === "codeText" ? " ".repeat(invisible.end - invisible.start) : "") +
-					text.slice(invisible.end);
+			if (invisible.kind === "htmlComment") {
+				text = text.slice(0, invisible.start) + text.slice(invisible.end);
 			}
 		}
-		text = text.slice(line.contentStart);
 		if (line.kind === "heading") {
 			flush();
 			const heading = h2Heading(text);
@@ -806,7 +803,9 @@ function visibleMarkdownLinkText(text: string, labels: Set<string>): string {
 }
 
 function sourceTags(text: string, labels: Set<string>, rawHtml = false): string[] {
-	const htmlText = visibleHtmlText(text, rawHtml);
+	// Spaces keep code removal from manufacturing a tag across its boundaries.
+	const withoutInlineCode = rawHtml ? text : text.replace(/(`+)([\s\S]*?)\1/g, (span) => " ".repeat(span.length));
+	const htmlText = visibleHtmlText(withoutInlineCode, rawHtml);
 	const visibleText = rawHtml ? htmlText : visibleMarkdownLinkText(htmlText, labels);
 	return [...visibleText.matchAll(SOURCE_TAG_RE)].map((match) => match[1]);
 }
