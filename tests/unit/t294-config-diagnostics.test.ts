@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -11,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
@@ -1026,6 +1027,69 @@ describe("t294 trust diagnostics", () => {
       check.label.includes("Harness CLI: codex")
     )).toBe(true);
   });
+
+  test("an optional harness CLI's version is advisory, so an IDE-only project stays healthy", () => {
+    // Kiro marks `kiro-cli` optional because the IDE is the other surface of the same
+    // row. An optional MISSING CLI already passed, but an optional TOO-OLD one failed
+    // hard and had no warn severity, so `doctor` exited nonzero and told an IDE-only
+    // user to repair software their workflow does not require. Absent was fine and
+    // present-but-old was fatal, which is backwards.
+    //
+    // Nothing here can tell which surface the operator is on - both set
+    // `KIRO_PROJECT_DIR`, and an old `kiro-cli` left on PATH is not evidence anything
+    // uses it - so the version is reported and not enforced. The three cases the
+    // finding names are asserted together because the contrast IS the contract.
+    const runDoctor = (version: string | null): { status: number; output: string } => {
+      const root = temp("aidlc-t294-optional-cli-");
+      const project = join(root, "project");
+      mkdirSync(join(project, ".git"), { recursive: true });
+      cpSync(join(DIST, "kiro", ".kiro"), join(project, ".kiro"), { recursive: true });
+      cpSync(join(DIST, "kiro", "aidlc"), join(project, "aidlc"), { recursive: true });
+      const binDir = join(root, "bin");
+      mkdirSync(binDir, { recursive: true });
+      if (version !== null) {
+        if (process.platform === "win32") {
+          writeFileSync(join(binDir, "kiro-cli.cmd"), `@echo off\r\necho kiro-cli ${version}\r\n`);
+        } else {
+          const fake = join(binDir, "kiro-cli");
+          writeFileSync(fake, `#!/bin/sh\necho "kiro-cli ${version}"\n`);
+          chmodSync(fake, 0o755);
+        }
+      }
+      const result = spawnSync(
+        process.execPath,
+        [join(project, ".kiro", "tools", "aidlc-utility.ts"), "doctor", "--verbose",
+          "--project-dir", project],
+        {
+          cwd: project,
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            ...runtimeEnv(),
+            // An empty PATH would break the probe's own shell, so the stub is
+            // PREPENDED and the too-old case relies on it shadowing any host install.
+            PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+          },
+        },
+      );
+      return {
+        status: result.status ?? -1,
+        output: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+      };
+    };
+
+    const tooOld = runDoctor("2.20.1");
+    expect(tooOld.status, tooOld.output).toBe(0);
+    // `kiro-cli --version` prints its own name, so the version string carries it too.
+    expect(tooOld.output).toContain("optional kiro-cli");
+    expect(tooOld.output).toContain("is below 2.21.1");
+    expect(tooOld.output).not.toContain("fail  Harness CLI");
+
+    const current = runDoctor("2.21.1");
+    expect(current.status, current.output).toBe(0);
+    expect(current.output).toContain("Harness CLI: kiro-cli kiro-cli 2.21.1");
+    expect(current.output).not.toContain("is below 2.21.1");
+  }, 180_000);
 
   test("doctor flags unwired shipped Claude hooks through refresh until the hooks key is restored", () => {
     const env = runtimeEnv();

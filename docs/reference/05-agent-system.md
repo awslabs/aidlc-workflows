@@ -33,14 +33,22 @@ tier: judgment                      # judgment | balanced | templated (see Agent
 | `disallowedTools` | Yes in authored core | Must include `Task` -- only the conductor delegates. The packager removes or translates this Claude-dialect key when a harness uses a different native tool-policy surface |
 | `tier` | Yes | `judgment`, `balanced`, or `templated`. The AUTHORED dial: the packager projects it into each harness's native model/effort keys (see Agent Tiers below). Raw `model:`/`effort:` never appear in authored frontmatter -- they are projection OUTPUTS in the ignored local `dist/<harness>/` tree and versioned release runtime. |
 
-Kiro projects this core contract by removal alone: it drops `disallowedTools`,
-which only Claude understands and which Kiro would fail closed on, and adds
-nothing. A Kiro agent needs neither a `tools:` grant nor a `permissions` block to
-be dispatchable - both are optional, and the 14 shipped personas carry neither.
-The capability frontmatter lives on the CONDUCTOR (`agents/aidlc.md`), which is
-where the match-scoped shell grant, the delegation trust list and the `resources`
-a custom agent does not auto-load all belong. A persona has no `subagent` grant to
-omit, so it cannot nest a delegation.
+Kiro drops `disallowedTools`, which only Claude understands and which Kiro would
+fail closed on, and projects the same boundary through the vocabulary it does
+have: `harness/kiro/manifest.ts` adds a `tools:` allowlist to every one of the 14
+shipped personas at build time, and that allowlist omits `subagent`. An allowlist
+denies what it does not name, so a persona cannot nest a delegation - the
+conductor (`agents/aidlc.md`) is the only agent granted that tool, alongside the
+match-scoped shell grant, the delegation trust list and the `resources` a custom
+agent does not auto-load.
+
+The authored files under `core/agents/` carry neither a `tools:` grant nor a
+`permissions` block, and Kiro needs neither to DISPATCH an agent - both are
+optional there. That is why the boundary has to be projected rather than assumed:
+an agent shipped with no allowlist inherits, so the allowlist is what makes the
+claim above true. A plugin persona takes the same guarantee from the composer,
+which supplies one when the plugin authored none (`KIRO_WORKER_TOOLS` in
+`scripts/plugin-hooks-template/compose.ts`).
 
 ### Markdown Body Sections
 

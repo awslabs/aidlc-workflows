@@ -2816,10 +2816,25 @@ export function runtimeDoctorChecks(
     fix: binary.remediation,
   }));
   const cli = diagnostics.cli;
+  // An OPTIONAL CLI's VERSION is advisory, not a failure. `required: false` means the
+  // row has another surface that needs no CLI at all - Kiro IDE, a VS Code-only Copilot
+  // install, Cursor's IDE - and nothing here can tell which surface the operator is on:
+  // both Kiro surfaces set `KIRO_PROJECT_DIR`, and an old `kiro-cli` left on PATH is not
+  // evidence that anything is using it. Failing the check told an IDE-only user to
+  // repair software their workflow does not require and made the whole health report
+  // exit nonzero for it, while an optional MISSING CLI passed - so the absent CLI was
+  // fine and the present-but-old one was fatal, which is backwards.
+  //
+  // It is still REPORTED, with warn severity and the version in the label, because if
+  // that CLI is the surface in use the operator needs to see it. A REQUIRED CLI is
+  // unchanged: for codex and opencode there is no other surface, so too-old still fails.
+  const optionalSurfaceAbsent = !cli.required &&
+    (cli.status === "missing" || cli.status === "too-old");
   checks.push({
     pass: cli.status === "found" || cli.status === "not-applicable" ||
-      (!cli.required && cli.status === "missing"),
-    ...(cli.required && (cli.status === "missing" || cli.status === "too-old")
+      optionalSurfaceAbsent,
+    ...((cli.required && (cli.status === "missing" || cli.status === "too-old")) ||
+        (!cli.required && cli.status === "too-old")
       ? { severity: "warn" as const }
       : {}),
     label: cli.status === "found"
@@ -2827,7 +2842,7 @@ export function runtimeDoctorChecks(
       : cli.status === "not-applicable"
       ? `Harness CLI: none required for ${cli.harness}`
       : cli.status === "too-old"
-      ? `Harness CLI: ${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
+      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
       : cli.required
       ? `Harness CLI: ${cli.command} is missing`
       : `Harness CLI: optional ${cli.command} is not installed`,
