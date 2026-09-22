@@ -1,7 +1,7 @@
 # Porting AI-DLC to a New Harness
 
 AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro CLI, Kiro IDE,
-Codex CLI, Cursor, opencode, and GitHub Copilot, and the set is open. The hand-authored source is a
+Codex CLI, Cursor, opencode, GitHub Copilot, and Devin CLI, and the set is open. The hand-authored source is a
 harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
 packager (`scripts/package.ts`) materializes each ignored local Bun copy tree
 under `dist/<harness>/` and its native counterpart under
@@ -162,10 +162,16 @@ the adapter relays that exit code). If the new harness cannot hard-block a
 tool call from its pre-tool seam, leave the reviewer-scope and review-freeze
 registrations out and document the gap rather than wiring dead hooks - the
 prose bounds in stage-protocol-reviewer.md §12a still govern there. When the harness's
-payloads carry no subagent identity, scope reviewer-scope registration to the
-reviewer agents themselves where the harness supports per-agent hooks (the
-Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of
-matching `agent_type`).
+payloads carry no subagent identity, two patterns exist. Where the harness
+supports per-agent hooks, scope reviewer-scope registration to the reviewer
+agents themselves (the Kiro CLI pattern: the adapter then asserts
+`scoped_registration` instead of matching `agent_type`). Where child events
+are delivered through the session's shared hook stream with no identity at
+all, the adapter can attribute from the host's dispatch instead (the Devin
+pattern: a foreground-only reviewer window opened by the parent `run_subagent`
+PreToolUse's `profile` field — the only host-carried identity — and closed at
+the dispatch's PostToolUse plus prompt and session boundaries, forwarding
+`agent_type` to the core hook while it is open).
 
 > **The one sanctioned `core/` edit: the doctor arm.** `/aidlc --doctor`
 > (`core/tools/aidlc-utility.ts`) health-checks an installed tree, and a new
@@ -226,6 +232,29 @@ and native-projection tests guard the boundary.
 - Live journeys ship as e2e gated on a `skipReason()` (a `AIDLC_<NAME>_*_LIVE=1`
   env + the binary present + authenticated) so they skip cleanly in the
   deterministic tier and run green locally before a port merges.
+- Host contracts you rely on (config precedence, import behavior, env
+  interpolation, hook payload shapes) are verified against the **installed
+  binary**, not only its documentation or a reviewer's reading of it — the
+  Devin port found both wrong on separate items. Start with the host's
+  non-inference commands (list skills, list MCP servers) in a scratch project
+  with the user-level config redirected, escalate to one trivial prompt only
+  when the wire is the evidence, and record docs-versus-binary discrepancies
+  per build in the harness's research findings (`docs/reference/research/<name>/`).
+  Pin documented or AI-DLC-owned contracts in tests; record observed-but-
+  undocumented behavior and re-check it on host upgrades instead of asserting it.
+- Any doctor row or diagnostic that runs the host CLI must be tested through a
+  `PATH` shim printing a controlled version (t150 `codex`, t331 `devin`), never
+  through the contributor's install — a deterministic-tier result may not depend
+  on whether the host is installed on the machine running the suite.
+- Keep committed evidence minimal: deterministic fixtures hold only the fields
+  tests consume (sanitized to placeholders, version-scoped by filename); live
+  acceptance is summarized in the research findings with provenance,
+  limitations, and a rerun recipe. Raw conversation exports, session
+  databases, and generated runtime trees stay outside Git — a skipped live
+  gate is not a PASS, and deleting a path does not purge it from history.
+  A pre-policy exception must be explicitly inventoried with provenance and
+  limits (e.g. Devin's retained `evidence/devin-e2e-run/` attended-run
+  directories); it never grants permission to add another raw run.
 
 Run `bun scripts/package.ts <name>` to materialize both local channels,
 `--check` to prove deterministic generation, and

@@ -331,23 +331,24 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("the reviewer-scope enforcement roster names all six enforcing harnesses, Copilot included", () => {
+  test("the reviewer-scope enforcement roster names all seven enforcing harnesses, Devin included", () => {
     // Copilot's adapter forwards PreToolUse calls to core's
     // aidlc-reviewer-scope.ts (harness/copilot/hooks/aidlc-copilot-adapter.ts),
     // so the protocol's dispatch-record roster must include it - it was
-    // written before the Copilot harness landed and went stale.
+    // written before the Copilot harness landed and went stale. Devin's
+    // adapter forwards the same calls, so Devin CLI must be named too.
     for (const path of [
       join(REPO_ROOT, "core", REVIEWER_MODULE),
       join(AIDLC_SRC, REVIEWER_MODULE),
     ]) {
       const body = readFileSync(path, "utf-8");
       expect(body).toContain(
-        "(Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, and GitHub Copilot today)",
+        "(Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, GitHub Copilot, and Devin CLI today)",
       );
     }
   });
 
-  test("all seven harness SKILL.md files load the reviewer module, and every shipped module copy carries the delete rule, the canonical-verdict validation, and the retry contract", () => {
+  test("all eight harness SKILL.md files load the reviewer module, and every shipped module copy carries the delete rule, the canonical-verdict validation, and the retry contract", () => {
     for (const harness of HARNESS_MATRIX) {
       // The SKILL reviewer bullet is now a module pointer: it must name the
       // module and keep the reviewer-field fallback trigger.

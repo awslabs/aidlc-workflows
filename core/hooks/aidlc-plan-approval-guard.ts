@@ -129,6 +129,7 @@ const READ_ONLY_SHELL_COMMANDS = new Set([
   "[",
   "basename",
   "cat",
+  "cd",
   "cmp",
   "cut",
   "diff",
@@ -138,6 +139,7 @@ const READ_ONLY_SHELL_COMMANDS = new Set([
   "grep",
   "head",
   "ls",
+  "mkdir",
   "more",
   "printf",
   "pwd",
@@ -366,14 +368,25 @@ export function appendixBlockReason(mentioned: string[]): string {
 // missing evidence and the exact stage steps that produce it, so the
 // conductor self-corrects instead of retrying the same call.
 export function blockReason(mentioned: string[], detail: string | null = null): string {
+  // A brief with no target marker carries no approval question at all: the
+  // defect is the handoff, not the approval, so the refusal says so instead of
+  // claiming the plan is unapproved and pointing the conductor back at Steps
+  // 2-3 it may already have finished.
+  if (mentioned.length === 0) {
+    return (
+      "Code generation cannot start because the developer handoff carries no target marker. " +
+      `The brief's first lines must name exactly one target with "AIDLC-UNIT: <unit>" or ` +
+      `"AIDLC-STAGE: code-generation", followed by "AIDLC-TESTING-CONTRACT: <contract hash>" ` +
+      "(run `aidlc-testing-posture.ts brief` for the target and pass its output verbatim). " +
+      "If Plan Approval has already been recorded, do not re-present it; fix the handoff and retry."
+    );
+  }
   const scope =
     mentioned.length === 1
       ? mentioned[0] === `stage:${GUARDED_STAGE}`
         ? "the zero-Unit stage-level implementation"
         : `unit ${mentioned[0]}`
-      : mentioned.length > 1
-        ? `one target, but the brief names several (${mentioned.join(", ")})`
-        : "one target, but the brief does not name it";
+      : `one target, but the brief names several (${mentioned.join(", ")})`;
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
     `not currently approved.${detail ? ` Reason: ${detail}.` : ""} Finish Steps 2-3 in code-generation: update ` +
@@ -723,6 +736,10 @@ function isFrameworkToolInvocation(
   ) {
     return false;
   }
+  // `bun -e '<code>'` and `bun --eval '<code>'` run inline JavaScript that
+  // can write files (e.g. Bun.write), so they are NOT recognized as trusted
+  // framework-tool invocations. The orchestrator should use `bun <script>`
+  // (a framework tool file) for read-only checks instead of `bun -e`.
   let scriptIndex = 0;
   if (args[0] === "run") scriptIndex = 1;
   const script = args[scriptIndex];
@@ -785,6 +802,11 @@ function shellInvocationNeedsApproval(
   rawCommand: string,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
+  // `2>&1` and similar file-descriptor redirects are parsed by
+  // shellCommandInvocations as a bare numeric invocation (e.g. `1`).
+  // These are parsing artifacts, not real commands — treat them as
+  // read-only so they don't make the shell opaque.
+  if (/^\d+$/.test(name) && invocation.executable === undefined) return false;
   if (name === "cd") {
     // The shared lexer is intentionally not a full Bash parser. Do not grant
     // this exception where its whitespace/continuation decoding differs.
@@ -812,6 +834,13 @@ function shellInvocationNeedsApproval(
   if (name === "uniq") {
     const operands = invocation.args.filter((arg) => !arg.startsWith("-"));
     return operands.length >= 2;
+  }
+  // `sed` without `-i`/`--in-place` is read-only (just prints to stdout).
+  // `sed` with `-i` modifies files in-place, so it needs approval.
+  if (name === "sed") {
+    return invocation.args.some(
+      (arg) => arg === "-i" || arg === "--in-place" || arg.startsWith("--in-place="),
+    );
   }
   if (READ_ONLY_SHELL_COMMANDS.has(name)) return false;
   if (name === "git") {
@@ -988,6 +1017,19 @@ function swarmCommandUnits(
   return units;
 }
 
+/**
+ * Compute the workspace mutation intent for a tool call: the concrete write
+ * targets, whether the shell command is opaque (dynamic evaluation or a
+ * mutation-capable invocation), and the raw shell command.
+ *
+ * `git add` and `git commit` are carved out as non-mutations: they checkpoint
+ * already-completed inception work (scope, codekb, intents, memory), not
+ * code-generation writes. The guard's purpose is to prevent code-generation
+ * before Plan Approval, not to prevent git checkpointing of inception
+ * artifacts. `git add`/`git commit` return an empty-target, non-opaque intent
+ * and take the early-exit path. This carve-out is scoped to the
+ * plan-approval-guard only — review-freeze is unaffected.
+ */
 async function mutationIntent(
   projectDir: string,
   toolName: string,
@@ -1012,6 +1054,7 @@ async function mutationIntent(
     const {
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
+      shellCommandInvocations,
       shellWriteTargets,
     } = await import("./aidlc-review-freeze.ts");
     targets = shellWriteTargets(command, cwd);
@@ -1019,6 +1062,26 @@ async function mutationIntent(
     const dynamic =
       shellUsesDynamicEvaluation(command) ||
       shellCommandAltersExecutableResolution(command);
+    // `git add` and `git commit` of inception-phase artifacts (scope, codekb,
+    // intents, memory) are not code-generation writes. The guard's purpose is
+    // to prevent code-generation before Plan Approval, not to prevent git
+    // checkpointing of already-completed inception work. Treat `git add` and
+    // `git commit` as non-opaque (allow the early-exit) — the mutation-target
+    // detection already determines whether the command touches concrete files,
+    // and `git add`/`git commit` do not produce write targets via
+    // `shellWriteTargets`. The block happens in `shellInvocationNeedsApproval`,
+    // which returns true for `git add`/`git commit` because they are not in
+    // `READ_ONLY_GIT_SUBCOMMANDS`. This carve-out overrides that for the
+    // plan-approval-guard only — review-freeze is unaffected.
+    const gitInvocations = shellCommandInvocations(command);
+    const isGitAddOrCommit = gitInvocations.length > 0 && gitInvocations.every(
+      (inv) =>
+        normalizedCommandName(inv.name) === "git" &&
+        ["add", "commit"].includes(gitSubcommand(inv.args) ?? ""),
+    );
+    if (isGitAddOrCommit && targets.length === 0 && !dynamic) {
+      return { targets: [], opaqueShell: false, shellCommand };
+    }
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
@@ -1178,7 +1241,49 @@ export async function run(input: string): Promise<number> {
             opaqueShell: true,
             shellCommand: `unknown mutation-capable tool: ${toolName}`,
           };
-    if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
+    // Shell redirects to pseudo-devices (2>/dev/null, 2>&1, 1>/dev/null) produce
+    // write targets that defeat the framework-tool exemption: the guard sees
+    // targets.length > 0, skips the early-exit, and falls through to the
+    // directive check, which blocks bare framework-tool `next` commands
+    // run with any redirect. Pseudo-device redirects are semantically
+    // no-ops (they discard or pass through output), so exclude them from the
+    // mutation-target count for the early-exit path. Real file redirects are
+    // still tracked.
+    const PSEUDO_DEVICES = new Set(["/dev/null", "/dev/stdout", "/dev/stderr"]);
+    const realTargets = mutation.targets.filter(
+      (t) => !PSEUDO_DEVICES.has(resolve(t)),
+    );
+    // `2>&1` and similar redirects take the opaque-shell path (the parser
+    // reports an extra command). For framework-tool invocations, the exemption
+    // already trusts the command; an opaque shell wrapper around a trusted
+    // command should not trap it. Re-resolve the invocation to check. The
+    // dynamic import is lazy: only needed when an opaque shell is detected,
+    // so a stubbed review-freeze (tests) does not crash the guard at module
+    // load time.
+    let isFrameworkBash = false;
+    if (mutation.opaqueShell && toolName === "Bash" && typeof toolInput.command === "string") {
+      try {
+        const {
+          shellCommandAltersExecutableResolution,
+          shellCommandInvocationDetails,
+        } = await import("./aidlc-review-freeze.ts");
+        const invocations = shellCommandInvocationDetails(toolInput.command);
+        isFrameworkBash =
+          !shellUsesDynamicEvaluation(toolInput.command) &&
+          !shellCommandAltersExecutableResolution(toolInput.command) &&
+          invocations.length > 0 &&
+          invocations.every((invocation) =>
+            !shellInvocationNeedsApproval(projectDir, cwd, invocation, mutation.targets.length > 0, toolInput.command as string)
+          );
+      } catch {
+        isFrameworkBash = false;
+      }
+    }
+    if (
+      !guardedDispatch &&
+      realTargets.length === 0 &&
+      (!mutation.opaqueShell || isFrameworkBash)
+    ) {
       return 0;
     }
 
@@ -1225,7 +1330,14 @@ export async function run(input: string): Promise<number> {
           (candidate) =>
             !isTrustedRecordTarget(projectDir, candidate, approvalDir),
         );
-        if (!outsideRecord && !mutation.opaqueShell) return 0;
+        // Same isFrameworkBash exemption as the first early-exit above: an
+        // opaque shell wrapper (2>&1, "; echo", etc.) around a trusted
+        // framework-tool invocation should not trap a command whose write
+        // targets are all inside the record dir. Without this, the
+        // orchestrator cannot run `aidlc-testing-posture.ts render > file`
+        // (with shell artifacts) to create the plan — the guard blocks the
+        // very commands Steps 2-3 require.
+        if (!outsideRecord && (!mutation.opaqueShell || isFrameworkBash)) return 0;
         const approval = evaluateCodeGenerationApproval(projectDir, target);
         const evidence: UnitEvidence = {
           unit,

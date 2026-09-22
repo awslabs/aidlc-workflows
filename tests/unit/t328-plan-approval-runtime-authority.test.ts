@@ -19,11 +19,17 @@ import {
   clearActiveDirectiveMarker,
   hooksHealthDir,
   readAuditShardEvents,
+  readCurrentSessionId,
+  readPlanApprovalChallenge,
   readPlanApprovalOverrideRequest,
+  readPlanApprovalReceipt,
+  readPlanApprovalResponse,
   readPlanApprovalViolation,
   refreshActiveDirectiveMarker,
   sessionsDir,
   writeActiveDirectiveMarker,
+  writeCurrentSessionId,
+  writePlanApprovalResponse,
   stateDigest,
   stripRecommendedDecorator,
   workspaceSourceFingerprint,
@@ -31,8 +37,12 @@ import {
 import {
   approvalFingerprint,
   beginCodeGeneration,
+  codeGenerationPlanApprovalQuestionEvidence,
   codeGenerationRecordDir,
   evaluateCodeGenerationApproval,
+  recordPlanApprovalChallenge,
+  recordPlanApprovalHumanResponse,
+  recordPlanApprovalReceipt,
   renderTestingContract,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -1535,4 +1545,334 @@ describe("t328 decision refuses while hooks are provably not firing", () => {
     const minted = runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]);
     expect(minted.exitCode, minted.stderr?.toString()).toBe(0);
   }, 30000);
+});
+
+describe("Item 1 session isolation", () => {
+  const PAIRING_REFUSAL =
+    "Plan Approval requires the actual offered choice from this prompt and session";
+
+  function sessionFixture() {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const evidence = codeGenerationPlanApprovalQuestionEvidence(
+      project,
+      { unit: null },
+      questions,
+      "",
+    );
+    return { project, evidence };
+  }
+
+  function receiptCount(project: string): number {
+    const runtimeDir = join(sessionsDir(project), "plan-approval");
+    return existsSync(runtimeDir)
+      ? readdirSync(runtimeDir).filter((name) => name.startsWith("receipt-"))
+          .length
+      : 0;
+  }
+
+  test("a reply for a session with no pending challenge is not recorded against the current session", () => {
+    const { project, evidence } = sessionFixture();
+    const challengeB = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-b",
+    );
+    writeCurrentSessionId(project, "session-b");
+    expect(
+      recordPlanApprovalHumanResponse(project, "session-a", "Approve Plan"),
+    ).toEqual({ recorded: false });
+    expect(readPlanApprovalResponse(project, "session-a")).toBeNull();
+    expect(readPlanApprovalResponse(project, "session-b")).toBeNull();
+    expect(readPlanApprovalChallenge(project, "session-b")).toEqual(challengeB);
+  });
+
+  test("certification for a session with no records does not borrow another session's pair", () => {
+    const { project, evidence } = sessionFixture();
+    const challengeB = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-b",
+    );
+    expect(
+      recordPlanApprovalHumanResponse(project, "session-b", "Approve Plan"),
+    ).toEqual({ recorded: true });
+    const responseB = readPlanApprovalResponse(project, "session-b");
+    writeCurrentSessionId(project, "session-b");
+    expect(() =>
+      recordPlanApprovalReceipt(project, evidence, "session-a", "Approve Plan"),
+    ).toThrow(PAIRING_REFUSAL);
+    expect(readPlanApprovalReceipt(project, challengeB)).toBeNull();
+    expect(readPlanApprovalChallenge(project, "session-b")).toEqual(challengeB);
+    expect(readPlanApprovalResponse(project, "session-b")).toEqual(responseB);
+  });
+
+  test("a session holding only a challenge cannot certify through another session's complete pair", () => {
+    const { project, evidence } = sessionFixture();
+    const challengeA = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-a",
+    );
+    const challengeB = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-b",
+    );
+    recordPlanApprovalHumanResponse(project, "session-b", "Approve Plan");
+    const responseB = readPlanApprovalResponse(project, "session-b");
+    writeCurrentSessionId(project, "session-b");
+    expect(() =>
+      recordPlanApprovalReceipt(project, evidence, "session-a", "Approve Plan"),
+    ).toThrow(PAIRING_REFUSAL);
+    expect(readPlanApprovalReceipt(project, challengeA)).toBeNull();
+    expect(readPlanApprovalChallenge(project, "session-a")).toEqual(challengeA);
+    expect(readPlanApprovalChallenge(project, "session-b")).toEqual(challengeB);
+    expect(readPlanApprovalResponse(project, "session-b")).toEqual(responseB);
+  });
+
+  test("a reply pairs with the supplied session's own challenge while the pointer names another session", () => {
+    const { project, evidence } = sessionFixture();
+    const challengeA = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-a",
+    );
+    const challengeB = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-b",
+    );
+    writeCurrentSessionId(project, "session-b");
+    expect(
+      recordPlanApprovalHumanResponse(project, "session-a", "Approve Plan"),
+    ).toEqual({ recorded: true });
+    expect(readPlanApprovalResponse(project, "session-a")).toMatchObject({
+      session: "session-a",
+      challengeId: challengeA.challengeId,
+      choice: "Approve Plan",
+    });
+    expect(readPlanApprovalChallenge(project, "session-b")).toEqual(challengeB);
+    expect(readPlanApprovalResponse(project, "session-b")).toBeNull();
+  });
+
+  for (const [self, other] of [
+    ["session-a", "session-b"],
+    ["session-b", "session-a"],
+  ] as const) {
+    test(`certification uses only the supplied session's pair (${self} certifies while the pointer names ${other})`, () => {
+      const { project, evidence } = sessionFixture();
+      const challengeSelf = recordPlanApprovalChallenge(
+        project,
+        evidence,
+        self,
+      );
+      const challengeOther = recordPlanApprovalChallenge(
+        project,
+        evidence,
+        other,
+      );
+      recordPlanApprovalHumanResponse(project, self, "Approve Plan");
+      recordPlanApprovalHumanResponse(project, other, "Approve Plan");
+      const responseOther = readPlanApprovalResponse(project, other);
+      writeCurrentSessionId(project, other);
+      const result = recordPlanApprovalReceipt(
+        project,
+        evidence,
+        self,
+        "Approve Plan",
+      );
+      expect(result.receipt).toMatchObject({
+        session: self,
+        challengeId: challengeSelf.challengeId,
+        choice: "Approve Plan",
+        status: "approved",
+      });
+      expect(readPlanApprovalReceipt(project, challengeSelf)).toEqual(
+        result.receipt,
+      );
+      expect(readPlanApprovalChallenge(project, self)).toBeNull();
+      expect(readPlanApprovalResponse(project, self)).toBeNull();
+      expect(readPlanApprovalChallenge(project, other)).toEqual(challengeOther);
+      expect(readPlanApprovalResponse(project, other)).toEqual(responseOther);
+    });
+  }
+
+  test("a mismatched intent refuses same-session and cross-session certification", () => {
+    const { project, evidence } = sessionFixture();
+    const mismatched = {
+      ...evidence,
+      authority: { ...evidence.authority, intentId: "different-intent" },
+    };
+    recordPlanApprovalChallenge(project, evidence, "session-a");
+    recordPlanApprovalHumanResponse(project, "session-a", "Approve Plan");
+    expect(() =>
+      recordPlanApprovalReceipt(project, mismatched, "session-a", "Approve Plan"),
+    ).toThrow(PAIRING_REFUSAL);
+    const challengeB = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-b",
+    );
+    recordPlanApprovalHumanResponse(project, "session-b", "Approve Plan");
+    const responseB = readPlanApprovalResponse(project, "session-b");
+    writeCurrentSessionId(project, "session-b");
+    expect(() =>
+      recordPlanApprovalReceipt(project, mismatched, "session-c", "Approve Plan"),
+    ).toThrow(PAIRING_REFUSAL);
+    expect(receiptCount(project)).toBe(0);
+    expect(readPlanApprovalChallenge(project, "session-b")).toEqual(challengeB);
+    expect(readPlanApprovalResponse(project, "session-b")).toEqual(responseB);
+  });
+
+  test("a response paired with the wrong challenge id or choice never certifies", () => {
+    const { project, evidence } = sessionFixture();
+    const challengeA = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-a",
+    );
+    writePlanApprovalResponse(project, {
+      version: 1,
+      session: "session-a",
+      challengeId: `sha256:${"0".repeat(64)}`,
+      choice: "Approve Plan",
+      responseSha256: "f".repeat(64),
+    });
+    expect(() =>
+      recordPlanApprovalReceipt(project, evidence, "session-a", "Approve Plan"),
+    ).toThrow(PAIRING_REFUSAL);
+    writePlanApprovalResponse(project, {
+      version: 1,
+      session: "session-a",
+      challengeId: challengeA.challengeId,
+      choice: "Request Changes",
+      responseSha256: "f".repeat(64),
+    });
+    expect(() =>
+      recordPlanApprovalReceipt(project, evidence, "session-a", "Approve Plan"),
+    ).toThrow(PAIRING_REFUSAL);
+    writePlanApprovalResponse(project, {
+      version: 1,
+      session: "session-a",
+      challengeId: challengeA.challengeId,
+      choice: "Approve Plan",
+      responseSha256: "f".repeat(64),
+    });
+    expect(() =>
+      recordPlanApprovalReceipt(
+        project,
+        evidence,
+        "session-a",
+        "Request Changes",
+      ),
+    ).toThrow(PAIRING_REFUSAL);
+    expect(readPlanApprovalReceipt(project, challengeA)).toBeNull();
+    expect(readPlanApprovalChallenge(project, "session-a")).toEqual(challengeA);
+  });
+
+  test("Request Changes under a session without a pair cannot withdraw the durable receipt or consume another session", () => {
+    const { project, evidence } = sessionFixture();
+    recordPlanApprovalChallenge(project, evidence, "session-a");
+    recordPlanApprovalHumanResponse(project, "session-a", "Approve Plan");
+    const approved = recordPlanApprovalReceipt(
+      project,
+      evidence,
+      "session-a",
+      "Approve Plan",
+    ).receipt;
+    expect(approved).not.toBeNull();
+    const challengeB = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-b",
+    );
+    recordPlanApprovalHumanResponse(project, "session-b", "Request Changes");
+    const responseB = readPlanApprovalResponse(project, "session-b");
+    writeCurrentSessionId(project, "session-b");
+    expect(() =>
+      recordPlanApprovalReceipt(
+        project,
+        evidence,
+        "session-a",
+        "Request Changes",
+      ),
+    ).toThrow(PAIRING_REFUSAL);
+    expect(readPlanApprovalReceipt(project, approved!)).toEqual(approved);
+    expect(readPlanApprovalChallenge(project, "session-b")).toEqual(challengeB);
+    expect(readPlanApprovalResponse(project, "session-b")).toEqual(responseB);
+  });
+
+  test("a same-session Request Changes withdraws the decision and the durable receipt", () => {
+    const { project, evidence } = sessionFixture();
+    recordPlanApprovalChallenge(project, evidence, "session-a");
+    recordPlanApprovalHumanResponse(project, "session-a", "Approve Plan");
+    const approved = recordPlanApprovalReceipt(
+      project,
+      evidence,
+      "session-a",
+      "Approve Plan",
+    ).receipt;
+    expect(readPlanApprovalReceipt(project, approved!)).toEqual(approved);
+    recordPlanApprovalChallenge(project, evidence, "session-a");
+    recordPlanApprovalHumanResponse(project, "session-a", "Request Changes");
+    const withdrawn = recordPlanApprovalReceipt(
+      project,
+      evidence,
+      "session-a",
+      "Request Changes",
+    );
+    expect(withdrawn.receipt).toBeNull();
+    expect(readPlanApprovalReceipt(project, approved!)).toBeNull();
+    expect(readPlanApprovalChallenge(project, "session-a")).toBeNull();
+    expect(readPlanApprovalResponse(project, "session-a")).toBeNull();
+  });
+
+  test("a blank or unknown supplied session never falls back to another session's authority", () => {
+    const { project, evidence } = sessionFixture();
+    const challengeB = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-b",
+    );
+    recordPlanApprovalHumanResponse(project, "session-b", "Approve Plan");
+    const responseB = readPlanApprovalResponse(project, "session-b");
+    writeCurrentSessionId(project, "session-b");
+    for (const supplied of ["", "session-unknown"]) {
+      expect(
+        recordPlanApprovalHumanResponse(project, supplied, "Approve Plan"),
+      ).toEqual({ recorded: false });
+      expect(() =>
+        recordPlanApprovalReceipt(project, evidence, supplied, "Approve Plan"),
+      ).toThrow(PAIRING_REFUSAL);
+    }
+    expect(receiptCount(project)).toBe(0);
+    expect(readPlanApprovalChallenge(project, "session-b")).toEqual(challengeB);
+    expect(readPlanApprovalResponse(project, "session-b")).toEqual(responseB);
+  });
+
+  test("the .current-session pointer is never consulted between decision, response, and certification", () => {
+    const { project, evidence } = sessionFixture();
+    expect(readCurrentSessionId(project)).toBeNull();
+    const challengeA = recordPlanApprovalChallenge(
+      project,
+      evidence,
+      "session-a",
+    );
+    writeCurrentSessionId(project, "session-b");
+    recordPlanApprovalHumanResponse(project, "session-a", "Approve Plan");
+    writeCurrentSessionId(project, "session-c");
+    const result = recordPlanApprovalReceipt(
+      project,
+      evidence,
+      "session-a",
+      "Approve Plan",
+    );
+    expect(result.receipt).toMatchObject({
+      session: "session-a",
+      challengeId: challengeA.challengeId,
+    });
+    expect(readPlanApprovalChallenge(project, "session-a")).toBeNull();
+    expect(readPlanApprovalResponse(project, "session-a")).toBeNull();
+  });
 });

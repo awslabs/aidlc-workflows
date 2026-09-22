@@ -1,0 +1,4 @@
+total 12
+drwxr-xr-x 2 wiley wiley 4096 2026-09-17 17:08:32.819327396 -0300 .
+drwxr-xr-x 4 wiley wiley 4096 2026-09-17 17:24:19.279106962 -0300 ..
+-rw-r--r-- 1 wiley wiley 1022 2026-09-17 17:08:32.819327396 -0300 challenge-purple-wool.json

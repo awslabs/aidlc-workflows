@@ -1,0 +1,179 @@
+# 07-false-positives — F1 heredoc-token blocks (3) + the 4th that passed, and the F4 cd block + retry
+# Tokens listed per command match /[^\s`"()]*construction[^\s`"()]*/.
+
+## F1 — three BLOCKED heredoc writes of the functional-design review file
+
+### 2026-09-20T13:28:48.785968771Z — BLOCKED
+command:
+mkdir -p <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313 && cat > <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313/1.review.md <<'EOF'
+## Review
+
+**Verdict:** READY
+**Reviewer:** aidlc-architecture-reviewer-agent
+**Date:** 2026-09-20T13:28:03Z
+**Iteration:** 1
+
+### Findings
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Major | aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md > C1 shared-schema vs construction/scoring-engine/functional-design/entities.md + functional-spec.md | The design deliberately diverges from the published C1 schema on three points: Rubric fields renamed to `correctness_weight`/`style_weight`/`performance_weight` (C1 shows `correctness`/`style`/`performance`); `score_submission`/`build_scoreboard` gained a `time_budget_seconds` parameter absent from C1's signatures; `failure_kind` was added to `SubmissionInput`/`SubmissionScore`/`ScoreboardRow`. The divergence is intentional (Q&A Q1/Q2/Q5 resolve carried-over findings R-01/R-02/R-06, and C1 itself defers pinning to Functional Design), but the shared contract document is now stale — the consuming unit `packaging-config` must build against the renamed fields and new signatures, not the C1 text. | Confirm at the approval gate that packaging-config's functional design consumes the pinned signatures (`*_weight` fields, `time_budget_seconds` parameter, `failure_kind` propagation); optionally update contract-summary.md to match the pinned design. | New |
+| R-02 | Minor | aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md > SubmissionInput.failed | `failed` is marked `required: true` while also carrying `default: false` — contradictory at the schema level (a required field does not need a default; the default implies it is optional on construction). Harmless but mildly ambiguous for the implementer. | Pick one: either drop `default: false` (caller must always supply it) or mark `required: false` and keep the default. | New |
+| R-03 | Minor | aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md > entity list | The `DimensionScores` entity listed under ScoringEngine in inception/domain-design/components.md is silently absent from entities.md — its three attributes are folded into `SubmissionScore`. This is a reasonable simplification, but it is an undocumented deviation from the upstream entity inventory. | No rework needed; note at the gate that DimensionScores was intentionally absorbed into SubmissionScore (or add a one-line note in entities.md). | New |
+
+### Validation Tool Results
+
+| Tool | Result | Interpretation |
+|---|---|---|
+| Manual YAML/JSON well-formedness check | PASS | entities.md and rules.md fenced YAML parse cleanly; traceability.json is valid JSON. |
+| Formula vs. pinned stories check | PASS | BR1.2 (passed/total×100, failed→0, error on tests_total==0), BR1.3 (max(0,100−10×violations), runs when failed), BR1.4 (min(1,budget/runtime)×100, runtime 0→100, failed→0), BR1.5 clamp, BR2.1 (total DESC, submission_id ASC), BR2.3 (failed ⇒ 0.0 correctness/performance, style kept) all match components.md/unit-of-work.md. |
+| Traceability coverage check | PASS | All 15 owned ACs (AC1.1.1–AC2.1.3) map to existing BR IDs; reverse array legitimately explains BR2.3 (cross-unit, AC3.2.x owned by packaging-config) and BR9.1 (architectural constraint) as intentional orphans. |
+| Purity check | PASS | No I/O, argv, sys.exit, third-party deps, or `challenge_scorer.config` imports anywhere in the design; BR9.1 encodes the boundary. |
+
+### Summary
+
+The functional design is internally consistent, implements the pinned formulas exactly, resolves the four carried-over contract findings concretely, and preserves the purity boundary — a developer could build the engine from it. The one finding worth the human's attention is R-01: the design intentionally supersedes the C1 contract text, so the consumer unit must be built against the pinned (renamed/extended) signatures rather than the stale contract-summary.
+EOF
+echo done
+
+construction-token(s) in the command text (3): "construction/scoring-engine/functional-design/entities.md", "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md", "construction"
+
+Tool result (verbatim):
+Tool rejected: This review cannot open "construction" because it belongs to another unit; the current review covers scoring-engine. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write scoring-engine literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+### 2026-09-20T13:29:18.877417007Z — BLOCKED
+command:
+mkdir -p <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313 && cat > <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313/1.review.md <<'EOF'
+## Review
+
+**Verdict:** READY
+**Reviewer:** aidlc-architecture-reviewer-agent
+**Date:** 2026-09-20T13:28:03Z
+**Iteration:** 1
+
+### Findings
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Major | aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md > C1 shared-schema, vs aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md and functional-spec.md | The design deliberately diverges from the published C1 schema on three points: Rubric fields renamed to `correctness_weight`/`style_weight`/`performance_weight` (C1 shows `correctness`/`style`/`performance`); `score_submission`/`build_scoreboard` gained a `time_budget_seconds` parameter absent from C1's signatures; `failure_kind` was added to `SubmissionInput`/`SubmissionScore`/`ScoreboardRow`. The divergence is intentional (Q&A Q1/Q2/Q5 resolve carried-over findings R-01/R-02/R-06, and C1 itself defers signature pinning to Functional Design), but the shared contract document is now stale — the consuming unit U2 must build against the renamed fields and new signatures, not the C1 text. | Confirm at the approval gate that the consumer unit's functional design consumes the pinned signatures (`*_weight` fields, `time_budget_seconds` parameter, `failure_kind` propagation); optionally update contract-summary.md to match the pinned design. | New |
+| R-02 | Minor | aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md > SubmissionInput.failed | `failed` is marked `required: true` while also carrying `default: false` — contradictory at the schema level (a required field does not need a default; the default implies it is optional on construction). Harmless but mildly ambiguous for the implementer. | Pick one: either drop `default: false` (caller must always supply it) or mark `required: false` and keep the default. | New |
+| R-03 | Minor | aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md > entity list | The `DimensionScores` entity listed under ScoringEngine in inception/domain-design/components.md is silently absent from entities.md — its three attributes are folded into `SubmissionScore`. This is a reasonable simplification, but it is an undocumented deviation from the upstream entity inventory. | No rework needed; note at the gate that DimensionScores was intentionally absorbed into SubmissionScore (or add a one-line note in entities.md). | New |
+
+### Validation Tool Results
+
+| Tool | Result | Interpretation |
+|---|---|---|
+| Manual YAML/JSON well-formedness check | PASS | entities.md and rules.md fenced YAML parse cleanly; traceability.json is valid JSON. |
+| Formula vs. pinned stories check | PASS | BR1.2 (passed/total x100, failed to 0, error on tests_total==0), BR1.3 (max(0,100-10x violations), runs when failed), BR1.4 (min(1,budget/runtime) x100, runtime 0 to 100, failed to 0), BR1.5 clamp, BR2.1 (total DESC, submission_id ASC), BR2.3 (failed implies 0.0 correctness/performance, style kept) all match components.md/unit-of-work.md. |
+| Traceability coverage check | PASS | All 15 owned ACs (AC1.1.1 to AC2.1.3) map to existing BR IDs; reverse array legitimately explains BR2.3 (cross-unit, AC3.2.x owned by the sibling unit) and BR9.1 (architectural constraint) as intentional orphans. |
+| Purity check | PASS | No I/O, argv, sys.exit, third-party deps, or config-layer imports anywhere in the design; BR9.1 encodes the boundary. |
+
+### Summary
+
+The functional design is internally consistent, implements the pinned formulas exactly, resolves the four carried-over contract findings concretely, and preserves the purity boundary — a developer could build the engine from it. The one finding worth the human's attention is R-01: the design intentionally supersedes the C1 contract text, so the consumer unit must be built against the pinned (renamed/extended) signatures rather than the stale contract-summary.
+EOF
+echo done
+
+construction-token(s) in the command text (2): "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md", "construction"
+
+Tool result (verbatim):
+Tool rejected: This review cannot open "construction" because it belongs to another unit; the current review covers scoring-engine. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write scoring-engine literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+### 2026-09-20T13:30:04.095717291Z — BLOCKED
+command:
+cat > <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313/1.review.md <<'EOF'
+## Review
+
+**Verdict:** READY
+**Reviewer:** aidlc-architecture-reviewer-agent
+**Date:** 2026-09-20T13:28:03Z
+**Iteration:** 1
+
+### Findings
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Major | contract-summary.md > C1 shared-schema, vs scoring-engine entities.md and functional-spec.md | The design deliberately diverges from the published C1 schema on three points: Rubric fields renamed to `correctness_weight`/`style_weight`/`performance_weight` (C1 shows `correctness`/`style`/`performance`); `score_submission`/`build_scoreboard` gained a `time_budget_seconds` parameter absent from C1's signatures; `failure_kind` was added to `SubmissionInput`/`SubmissionScore`/`ScoreboardRow`. The divergence is intentional (Q&A Q1/Q2/Q5 resolve carried-over findings R-01/R-02/R-06, and C1 itself defers signature pinning to Functional Design), but the shared contract document is now stale — the consuming unit U2 must build against the renamed fields and new signatures, not the C1 text. | Confirm at the approval gate that the consumer unit's functional design consumes the pinned signatures (`*_weight` fields, `time_budget_seconds` parameter, `failure_kind` propagation); optionally update contract-summary.md to match the pinned design. | New |
+| R-02 | Minor | entities.md > SubmissionInput.failed | `failed` is marked `required: true` while also carrying `default: false` — contradictory at the schema level (a required field does not need a default; the default implies it is optional on construction). Harmless but mildly ambiguous for the implementer. | Pick one: either drop `default: false` (caller must always supply it) or mark `required: false` and keep the default. | New |
+| R-03 | Minor | entities.md > entity list | The `DimensionScores` entity listed under ScoringEngine in inception/domain-design/components.md is silently absent from entities.md — its three attributes are folded into `SubmissionScore`. This is a reasonable simplification, but it is an undocumented deviation from the upstream entity inventory. | No rework needed; note at the gate that DimensionScores was intentionally absorbed into SubmissionScore (or add a one-line note in entities.md). | New |
+
+### Validation Tool Results
+
+| Tool | Result | Interpretation |
+|---|---|---|
+| Manual YAML/JSON well-formedness check | PASS | entities.md and rules.md fenced YAML parse cleanly; traceability.json is valid JSON. |
+| Formula vs. pinned stories check | PASS | BR1.2 (passed/total x100, failed to 0, error on tests_total==0), BR1.3 (max(0,100-10x violations), runs when failed), BR1.4 (min(1,budget/runtime) x100, runtime 0 to 100, failed to 0), BR1.5 clamp, BR2.1 (total DESC, submission_id ASC), BR2.3 (failed implies 0.0 correctness/performance, style kept) all match components.md/unit-of-work.md. |
+| Traceability coverage check | PASS | All 15 owned ACs (AC1.1.1 to AC2.1.3) map to existing BR IDs; reverse array legitimately explains BR2.3 (cross-unit, AC3.2.x owned by the sibling unit) and BR9.1 (architectural constraint) as intentional orphans. |
+| Purity check | PASS | No I/O, argv, sys.exit, third-party deps, or config-layer imports anywhere in the design; BR9.1 encodes the boundary. |
+
+### Summary
+
+The functional design is internally consistent, implements the pinned formulas exactly, resolves the four carried-over contract findings concretely, and preserves the purity boundary — a developer could build the engine from it. The one finding worth the human's attention is R-01: the design intentionally supersedes the C1 contract text, so the consumer unit must be built against the pinned (renamed/extended) signatures rather than the stale contract-summary.
+EOF
+echo done
+
+construction-token(s) in the command text (1): "construction"
+
+Tool result (verbatim):
+Tool rejected: This review cannot open "construction" because it belongs to another unit; the current review covers scoring-engine. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write scoring-engine literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+### 2026-09-20T13:30:17.332212761Z — the 4th equivalent heredoc — PASSED
+command:
+cat > <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313/1.review.md <<'EOF'
+## Review
+
+**Verdict:** READY
+**Reviewer:** aidlc-architecture-reviewer-agent
+**Date:** 2026-09-20T13:28:03Z
+**Iteration:** 1
+
+### Findings
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Major | contract-summary.md > C1 shared-schema, vs scoring-engine entities.md and functional-spec.md | The design deliberately diverges from the published C1 schema on three points: Rubric fields renamed to `correctness_weight`/`style_weight`/`performance_weight` (C1 shows `correctness`/`style`/`performance`); `score_submission`/`build_scoreboard` gained a `time_budget_seconds` parameter absent from C1's signatures; `failure_kind` was added to `SubmissionInput`/`SubmissionScore`/`ScoreboardRow`. The divergence is intentional (Q&A Q1/Q2/Q5 resolve carried-over findings R-01/R-02/R-06, and C1 itself defers signature pinning to Functional Design), but the shared contract document is now stale — the consuming unit U2 must build against the renamed fields and new signatures, not the C1 text. | Confirm at the approval gate that the consumer unit's functional design consumes the pinned signatures (`*_weight` fields, `time_budget_seconds` parameter, `failure_kind` propagation); optionally update contract-summary.md to match the pinned design. | New |
+| R-02 | Minor | entities.md > SubmissionInput.failed | `failed` is marked `required: true` while also carrying `default: false` — contradictory at the schema level (a required field does not need a default; the default implies it is optional when building the object). Harmless but mildly ambiguous for the implementer. | Pick one: either drop `default: false` (caller must always supply it) or mark `required: false` and keep the default. | New |
+| R-03 | Minor | entities.md > entity list | The `DimensionScores` entity listed under ScoringEngine in inception/domain-design/components.md is silently absent from entities.md — its three attributes are folded into `SubmissionScore`. This is a reasonable simplification, but it is an undocumented deviation from the upstream entity inventory. | No rework needed; note at the gate that DimensionScores was intentionally absorbed into SubmissionScore (or add a one-line note in entities.md). | New |
+
+### Validation Tool Results
+
+| Tool | Result | Interpretation |
+|---|---|---|
+| Manual YAML/JSON well-formedness check | PASS | entities.md and rules.md fenced YAML parse cleanly; traceability.json is valid JSON. |
+| Formula vs. pinned stories check | PASS | BR1.2 (passed/total x100, failed to 0, error on tests_total==0), BR1.3 (max(0,100-10x violations), runs when failed), BR1.4 (min(1,budget/runtime) x100, runtime 0 to 100, failed to 0), BR1.5 clamp, BR2.1 (total DESC, submission_id ASC), BR2.3 (failed implies 0.0 correctness/performance, style kept) all match components.md/unit-of-work.md. |
+| Traceability coverage check | PASS | All 15 owned ACs (AC1.1.1 to AC2.1.3) map to existing BR IDs; reverse array legitimately explains BR2.3 (cross-unit, AC3.2.x owned by the sibling unit) and BR9.1 (architectural constraint) as intentional orphans. |
+| Purity check | PASS | No I/O, argv, sys.exit, third-party deps, or config-layer imports anywhere in the design; BR9.1 encodes the boundary. |
+
+### Summary
+
+The functional design is internally consistent, implements the pinned formulas exactly, resolves the four carried-over contract findings concretely, and preserves the purity boundary — a developer could build the engine from it. The one finding worth the human's attention is R-01: the design intentionally supersedes the C1 contract text, so the consumer unit must be built against the pinned (renamed/extended) signatures rather than the stale contract-summary.
+EOF
+echo done
+
+construction-token(s) (0): (none)
+
+Result head: Output from command in shell 99f878:
+bash: line 1: <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/revie
+
+## F4 — the cd <project> block and the retry without cd
+
+### 2026-09-20T15:17:53.804780145Z — BLOCKED
+command:
+cd <home>/devin-e2e-reviewer-scope && python3 -c "import json; json.load(open('aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/traceability.json'))" ; date -u +"%Y-%m-%dT%H:%M:%SZ"
+
+construction-token(s) (1): "'aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/traceability.json'"
+
+Tool result (verbatim):
+Tool rejected: This review cannot open "<home>/devin-e2e-reviewer-scope" because it belongs to another unit; the current review covers packaging-config. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write packaging-config literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+### 2026-09-20T15:17:56.774908693Z — retry without cd — PASSED
+command:
+python3 -c "import json; json.load(open('<home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/traceability.json'))"; date -u +"%Y-%m-%dT%H:%M:%SZ"
+
+construction-token(s) (1): "'<home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/traceability.json'"
+
+Result head: Output from command in shell 631894:
+2026-09-20T15:17:57Z
+
+
+Exit code: 0

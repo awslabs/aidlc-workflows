@@ -418,6 +418,15 @@ function authority(p: Project, target: { unit: string | null }): {
   ) as unknown as { directiveEpoch: string; runFloor: string };
 }
 
+function receiptBody(p: Project): string {
+  const names = p.receipts();
+  expect(names).toHaveLength(1);
+  return readFileSync(
+    join(sessionsDir(p.dir), "plan-approval", names[0]),
+    "utf-8",
+  );
+}
+
 async function approvedProject(scope: "express" | "feature" = "express"): Promise<{
   p: Project;
   target: { unit: string | null };
@@ -457,6 +466,7 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     const moved = bytesMoved(before, snapshot(p.dir));
     expect(probe.code).toBe(0);
     expect(moved).toEqual({ created: [], modified: [], deleted: [] });
+    expect(snapshot(p.dir)).toEqual(before);
     expect(p.runtimeFiles().some((name) => name.startsWith("challenge-"))).toBe(true);
 
     // And the hook itself, which does that spawn plus its own bookkeeping.
@@ -472,6 +482,41 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     const recorded = answer(p, presentation, "Approve Plan");
     expect(recorded.code, recorded.stderr).toBe(0);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
+  }, 120000);
+
+  test("a Stop probe preparing fresh steering preserves the live challenge and every project byte", async () => {
+    const p = await project("express");
+    const { directive } = deliver(p);
+    expect(directive.kind).toBe("run-stage");
+    expect(directive.stage).toBe("code-generation");
+    presentPlan(p, { unit: null });
+    const challenge = p.lib.readPlanApprovalChallenge(p.dir as never, SESSION as never);
+    expect(challenge).not.toBeNull();
+    const markerBefore = readFileSync(p.markerPath, "utf-8");
+    expect(p.marker()?.kind).toBe("run-stage");
+    appendFileSync(
+      join(p.dir, "aidlc", "spaces", "default", "memory", "project.md"),
+      "\n\n## Probe regression\n\nKeep the project verification commands unchanged.\n",
+      "utf-8",
+    );
+    const before = snapshot(p.dir);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const probe = p.next(p.probeEnv);
+      expect(probe.code, probe.stderr).toBe(0);
+      const prepared = JSON.parse(probe.stdout.trim()) as Record<string, unknown>;
+      expect(prepared.kind).toBe("load-steering");
+      expect(prepared.stage).toBe("code-generation");
+      expect(prepared.part).toBe(1);
+      expect(typeof prepared.continue_token).toBe("string");
+      expect(p.lib.readPlanApprovalChallenge(p.dir as never, SESSION as never)).toEqual(challenge);
+      expect(readFileSync(p.markerPath, "utf-8")).toBe(markerBefore);
+      expect(snapshot(p.dir)).toEqual(before);
+    }
+    const advancing = p.next();
+    expect(advancing.code, advancing.stderr).toBe(0);
+    expect(JSON.parse(advancing.stdout.trim()).kind).toBe("load-steering");
+    expect(p.marker()?.kind).toBe("load-steering");
+    expect(readFileSync(p.markerPath, "utf-8")).not.toBe(markerBefore);
   }, 120000);
 
   test("the consultation returns the directive already issued, not a restart", async () => {
@@ -594,11 +639,16 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
       const beforeRevision = p.marker()?.revision;
       const beforeEpoch = authority(p, target).directiveEpoch;
       expect(p.receipts().length).toBe(1);
+      const receiptBefore = receiptBody(p);
+      expect((JSON.parse(receiptBefore) as { session: string }).session).toBe(
+        SESSION,
+      );
 
       act(p);
 
       expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
       expect(p.receipts().length).toBe(1);
+      expect(receiptBody(p)).toBe(receiptBefore);
       expect(authority(p, target).directiveEpoch).toBe(beforeEpoch);
       expect(p.marker()?.revision).toBe(beforeRevision);
     }, 180000);
@@ -1062,6 +1112,7 @@ describe("t328 (5) the per-Unit walk", () => {
       modified: [],
       deleted: [],
     });
+    expect(snapshot(p.dir)).toEqual(beforeProbe);
 
     const beforeRouteCheck = snapshot(p.dir);
     const beforeAll = snapshot(p.dir);

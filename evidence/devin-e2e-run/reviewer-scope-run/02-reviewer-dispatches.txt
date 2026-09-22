@@ -1,0 +1,245 @@
+# 02-reviewer-dispatches — every run_subagent whose profile matches ^aidlc-(architecture-reviewer|product-lead)-agent$
+# Source: sessions.db (final snapshot), message_nodes for session stylish-jester (deduped by tool_call id).
+# "is_background" absent = the key was not sent (foreground by default).
+# Flags: "Cross-unit check" / "very first tool call" = whether the literal strings appear in the task text.
+
+## 2026-09-19T21:14:38.958094180Z
+Title: Review: requirements-analysis
+Profile: aidlc-product-lead-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": false
+Result: Subagent agent_id=b6eeea98 completed
+
+## 2026-09-19T21:34:11.326420684Z
+Title: Review: user-stories
+Profile: aidlc-product-lead-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": false
+Result: REFUSED — Tool rejected: Read every pending background subagent with read_subagent before dispatching a reviewer; their tool calls share this session and could not be told apart from the reviewer's.
+
+## 2026-09-19T21:34:27.955148135Z
+Title: Review: user-stories
+Profile: aidlc-product-lead-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": false
+Result: Subagent agent_id=321963ac completed
+
+## 2026-09-19T21:38:15.313553944Z
+Title: Review: refined-mockups
+Profile: aidlc-product-lead-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": false
+Result: Subagent agent_id=bf426558 completed
+
+## 2026-09-20T03:49:54.427199112Z
+Title: Domain Design review
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": false
+Result: Subagent agent_id=645de3d4 completed
+
+## 2026-09-20T13:01:14.093701982Z
+Title: Units Generation review
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": false
+Result: Subagent agent_id=766b3118 completed
+
+## 2026-09-20T13:11:15.268377229Z
+Title: Contract Design review
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": false
+Result: Subagent agent_id=cc0b063b completed
+
+## 2026-09-20T13:26:40.720243493Z
+Title: FD review scoring-engine
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": false
+Result: Subagent agent_id=c386cfd5 completed
+
+## 2026-09-20T13:41:31.149355571Z
+Title: NFR req review scoring-engine
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": false
+Result: Subagent agent_id=dada22c2 completed
+
+## 2026-09-20T14:28:39.995816565Z
+Title: NFR req review packaging-config
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": true
+Task contains "very first tool call": false
+Result: Subagent agent_id=8a6a8782 completed
+
+## 2026-09-20T14:39:45.120191994Z
+Title: Review scoring-engine NFR (re-review)
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": true
+Task contains "very first tool call": false
+Result: Subagent agent_id=385497ef completed
+
+## 2026-09-20T15:03:51.049980661Z
+Title: Review scoring-engine NFR design
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": true
+Task contains "very first tool call": false
+Result: Subagent agent_id=29602287 completed
+
+## 2026-09-20T15:17:30.866976819Z
+Title: Review packaging-config NFR design
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": true
+Task contains "very first tool call": false
+Result: Subagent agent_id=1cae3c6e completed
+
+## 2026-09-20T15:37:04.171568107Z
+Title: Re-review scoring-engine NFR design
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": true
+Result: Subagent agent_id=fa7bb18d completed
+
+## 2026-09-20T15:38:46.366467335Z
+Title: Re-review packaging-config NFR design
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": true
+Result: Subagent agent_id=8d933c9e completed
+
+## 2026-09-20T16:01:05.765422219Z
+Title: Review scoring-engine infra design
+Profile: aidlc-architecture-reviewer-agent
+is_background: absent (foreground)
+Task contains "Cross-unit check": false
+Task contains "very first tool call": true
+Result: Canceled due to user interrupt
+
+# Conductor-created .aidlc-engine/reviewer-dispatch.json records
+# (Calls merely mentioning the filename in other commands — e.g. the 2026-09-20T15:35:19Z
+# orchestrate report --user-input that quotes it in fix instructions — are excluded.)
+
+## 2026-09-20T13:26:22.720352018Z — write — WELL-FORMED (has reviewer/stage/unit/exempt[]: true)
+file_path: <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json
+content:
+{"reviewer": "aidlc-architecture-reviewer-agent", "stage": "functional-design", "unit": "scoring-engine",
+ "exempt": ["aidlc/spaces/default/intents/260919-challenge-scorer/inception/units-generation/unit-of-work.md", "aidlc/spaces/default/intents/260919-challenge-scorer/inception/units-generation/unit-of-work-story-map.md", "aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md", "aidlc/spaces/default/intents/260919-challenge-scorer/inception/domain-design/components.md", "aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md", ".devin/aidlc-common/stages/construction/functional-design.md", "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/functional-design-questions.md"]}
+
+
+## 2026-09-20T13:41:09.386621070Z — write — WELL-FORMED (has reviewer/stage/unit/exempt[]: true)
+file_path: <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json
+content:
+{"reviewer": "aidlc-architecture-reviewer-agent", "stage": "nfr-requirements", "unit": "scoring-engine",
+ "exempt": ["aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/functional-spec.md", "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/rules.md", "aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md", "aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md", ".devin/aidlc-common/stages/construction/nfr-requirements.md", "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-requirements/nfr-requirements-questions.md"]}
+
+
+## 2026-09-20T14:28:19.892796112Z — write — WELL-FORMED (has reviewer/stage/unit/exempt[]: true)
+file_path: <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json
+content:
+{"reviewer": "aidlc-architecture-reviewer-agent", "stage": "nfr-requirements", "unit": "packaging-config",
+ "exempt": ["aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md", "aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md", "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/functional-spec.md", "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/rules.md", "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md", ".devin/aidlc-common/stages/construction/nfr-requirements.md", "aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/nfr-requirements-questions.md"]}
+
+
+## 2026-09-20T14:39:33.789499672Z — write — MALFORMED (has reviewer/stage/unit/exempt[]: false)
+file_path: <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json
+content:
+{
+  "stage": "nfr-requirements",
+  "unit": "scoring-engine",
+  "iteration": 1,
+  "reviewer": "aidlc-architecture-reviewer-agent",
+  "requestId": "review:7f61ff27043bf8a6f2c523745aa897e8",
+  "reviewFile": "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-requirements/units/scoring-engine/63fa1caa21019aa9/1.review.md"
+}
+
+
+## 2026-09-20T15:03:41.287297664Z — write — MALFORMED (has reviewer/stage/unit/exempt[]: false)
+file_path: <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json
+content:
+{
+  "stage": "nfr-design",
+  "unit": "scoring-engine",
+  "iteration": 1,
+  "reviewer": "aidlc-architecture-reviewer-agent",
+  "requestId": "review:4d5ad21d8cc34d240c54fa7a37b4dded",
+  "reviewFile": "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-design/units/scoring-engine/31df841cae1b1c72/1.review.md"
+}
+
+
+## 2026-09-20T15:17:06.904896157Z — exec — WELL-FORMED (has reviewer/stage/unit/exempt[]: true)
+command:
+cat > "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json" <<'EOF'
+{"reviewer":"aidlc-architecture-reviewer-agent","stage":"nfr-design","unit":"packaging-config","exempt":[".devin/aidlc-common/stages/construction/nfr-design.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/nfr-design-questions.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/functional-spec.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/rules.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md"]}
+EOF
+cat "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json" | python3 -c "import json,sys; d=json.load(sys.stdin); assert set(d)=={'reviewer','stage','unit','exempt'}; print('shape OK')"
+
+## 2026-09-20T15:36:50.039459792Z — exec — WELL-FORMED (has reviewer/stage/unit/exempt[]: true)
+command:
+cat > "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json" <<'EOF'
+{"reviewer":"aidlc-architecture-reviewer-agent","stage":"nfr-design","unit":"scoring-engine","exempt":[".devin/aidlc-common/stages/construction/nfr-design.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-design/nfr-design-questions.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/functional-spec.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/rules.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/entities.md"]}
+EOF
+python3 -c "import json; d=json.load(open('aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json')); assert set(d)=={'reviewer','stage','unit','exempt'}; print('shape OK')"
+
+## 2026-09-20T15:38:33.873336164Z — exec — WELL-FORMED (has reviewer/stage/unit/exempt[]: true)
+command:
+cat > "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json" <<'EOF'
+{"reviewer":"aidlc-architecture-reviewer-agent","stage":"nfr-design","unit":"packaging-config","exempt":[".devin/aidlc-common/stages/construction/nfr-design.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/nfr-design-questions.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/functional-spec.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/rules.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md"]}
+EOF
+python3 -c "import json; d=json.load(open('aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json')); assert set(d)=={'reviewer','stage','unit','exempt'}; print('shape OK')"
+
+## 2026-09-20T16:00:51.530732337Z — exec — WELL-FORMED (has reviewer/stage/unit/exempt[]: true)
+command:
+cat > "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json" <<'EOF'
+{"reviewer":"aidlc-architecture-reviewer-agent","stage":"infrastructure-design","unit":"scoring-engine","exempt":[".devin/aidlc-common/stages/construction/infrastructure-design.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/infrastructure-design/infrastructure-design-questions.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/functional-spec.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/rules.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/entities.md"]}
+EOF
+python3 -c "import json; d=json.load(open('aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json')); assert set(d)=={'reviewer','stage','unit','exempt'}; print('shape OK')"
+
+# Exec calls that remove the record
+
+## 2026-09-20T13:30:52.736881043Z
+rm aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json && bun .devin/tools/aidlc.ts engine log review --stage functional-design --unit scoring-engine --reviewer aidlc-architecture-reviewer-agent --iteration 1 --verdict READY
+
+## 2026-09-20T13:43:39.586696260Z
+rm aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json && bun .devin/tools/aidlc.ts engine log review --stage nfr-requirements --unit scoring-engine --reviewer aidlc-architecture-reviewer-agent --iteration 1 --verdict READY && cat aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-requirements/reviews/review-01.md | sed -n '/Findings/,/Summary/p' | head -15
+
+## 2026-09-20T14:31:49.168409286Z
+rm aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json && bun .devin/tools/aidlc.ts engine log review --stage nfr-requirements --unit packaging-config --reviewer aidlc-architecture-reviewer-agent --iteration 1 --verdict READY && sed -n '/Findings/,/Summary/p' aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/reviews/review-01.md | head -14
+
+## 2026-09-20T14:41:31.447610654Z
+rm "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json" && bun .devin/tools/aidlc.ts engine log verdict --stage nfr-requirements --unit scoring-engine --verdict READY --file "construction/scoring-engine/nfr-requirements/reviews/review-02.md" 2>&1; bun .devin/tools/aidlc.ts engine orchestrate report --stage nfr-requirements --result revised 2>&1 | head -20
+
+## 2026-09-20T15:06:11.646294612Z
+rm "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json"
+mkdir -p "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-design/units/scoring-engine/31df841cae1b1c72"
+cp "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-design/reviews/review-01.md" "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-design/units/scoring-engine/31df841cae1b1c72/1.review.md"
+head -8 "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-design/units/scoring-engine/31df841cae1b1c72/1.review.md"
+
+## 2026-09-20T15:19:56.421990125Z
+rm "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json"
+mkdir -p "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-design/units/packaging-config/31df841cae1b1c72"
+cp "aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/reviews/review-01.md" "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-design/units/packaging-config/31df841cae1b1c72/1.review.md"
+bun .devin/tools/aidlc.ts engine log review --stage nfr-design --unit packaging-config --reviewer aidlc-architecture-reviewer-agent --iteration 1 --verdict READY
+
+## 2026-09-20T15:40:44.320771122Z
+rm "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json"
+mkdir -p "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-design/units/packaging-config/9ed08b339c0f7adf"
+cp "aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/reviews/review-03.md" "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-design/units/packaging-config/9ed08b339c0f7adf/1.review.md"
+bun .devin/tools/aidlc.ts engine log review --stage nfr-design --unit packaging-config --reviewer aidlc-architecture-reviewer-agent --iteration 1 --verdict READY
+bun .devin/tools/aidlc-state.ts unit complete --wave --stage nfr-design --unit scoring-engine
+bun .devin/tools/aidlc-state.ts unit complete --wave --stage nfr-design --unit packaging-config

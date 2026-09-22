@@ -113,6 +113,8 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 
+No test in the deterministic tiers may depend on a harness CLI being installed on the machine that runs it — a host binary is shimmed on `PATH` in the test (the t150 `codex` and t331 `devin` shims) or reached only behind an `AIDLC_*_LIVE` gate that skips cleanly without it.
+
 **Run:** `bun tests/run-tests.ts` (default, no flags needed). `bash tests/run-tests.sh` is a compatibility wrapper for existing POSIX commands.
 
 ## Layer 2: Stage (CI push, LLM, minutes)
@@ -543,6 +545,16 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 - **Size bounds** — Use `statSync(path).size` with `toBeGreaterThan()` for minimum content
 - **Graceful degradation** — Use `skip` when an assertion depends on non-deterministic LLM output
 - **Structure over content** — Check for markdown headings (`^#`), file existence, directory creation before checking content
+
+## Live-run evidence hygiene
+
+Evidence committed to the repository is minimal by policy:
+
+- **Commit:** deterministic fixtures containing only the fields tests consume; compact provenance (build, date, capture method, sanitization, case mapping, limits); result/limits summaries; rerun recipes.
+- **Do not commit:** raw conversation exports (e.g. ATIF `--export` files), session databases or WAL/SHM excerpts, generated audit or state trees, host logs, hook-health directories, filesystem snapshots, complete vendor/system prompts, unredacted identifiers or local paths, or exploratory transcripts. If an owner needs forensic retention, the raw artifact goes only to an approved private store with an access/retention policy and a recorded checksum — never a PR comment or repository branch.
+- **A skip is not a live PASS** — a gated test that did not run records a gap, not a result.
+- **Deleting a path does not purge history** — "removed from the tracked tree" and "purged from Git history" are different claims; full-history sanitation is a separate, explicitly approved operation.
+- **Pre-policy exceptions** — a raw run tree that predates or is explicitly exempted from this policy must be inventoried in the findings with provenance and limits (e.g. the retained Devin attended-run directories under `evidence/devin-e2e-run/`); an existing exception grants no permission to add another raw run.
 
 ## Environment Variables
 

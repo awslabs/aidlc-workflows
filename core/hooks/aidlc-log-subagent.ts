@@ -46,7 +46,7 @@ export async function run(input: string): Promise<number> {
 
   let completionError = "";
   try {
-    completeSubagentInflight(projectDir, rawSessionId);
+    completeSubagentInflight(projectDir, rawSessionId, parsed.agent_id || undefined);
   } catch (error) {
     completionError = errorMessage(error);
   }

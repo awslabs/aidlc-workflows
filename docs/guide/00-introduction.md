@@ -4,7 +4,7 @@
 
 ## What is AI-DLC?
 
-AI-DLC (AI-Driven Development Life Cycle) is a methodology for structuring AI-assisted software development into repeatable, traceable phases. It originated from the [AWS AI-DLC methodology](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/). This repository implements it natively from one harness-neutral core, so it runs inside the CLI harness you already use — today Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot. This guide is harness-neutral; where a detail differs by harness, it says so and points you to your harness's chapter (see [Running on other harnesses](harnesses/README.md)). Examples are shown in Claude Code unless noted.
+AI-DLC (AI-Driven Development Life Cycle) is a methodology for structuring AI-assisted software development into repeatable, traceable phases. It originated from the [AWS AI-DLC methodology](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/). This repository implements it natively from one harness-neutral core, so it runs inside the CLI harness you already use — today Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, GitHub Copilot, or Devin CLI. This guide is harness-neutral; where a detail differs by harness, it says so and points you to your harness's chapter (see [Running on other harnesses](harnesses/README.md)). Examples are shown in Claude Code unless noted.
 
 You invoke it with a single command:
 

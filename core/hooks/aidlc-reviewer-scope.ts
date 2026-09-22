@@ -853,7 +853,7 @@ function emitReviewerScopeBlocked(
 // record and touches construction/ paths, the conductor likely forgot the stage-protocol-reviewer.md §12a
 // step-1 write); the dispatch record's reviewer field is the authoritative
 // identity during enforcement.
-const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
+export const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
 
 // Was a §12a step-1 record owed here at all? The advisory asserts the conductor
 // skipped that write, and stage-protocol-reviewer.md says a single-stage review

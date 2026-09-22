@@ -192,7 +192,7 @@ the active space's shared `codekb/<repo>/` tree.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `SUBAGENT_COMPLETED` | Subagent task finishes | Timestamp, Agent Type, optional Agent ID, optional Message | `hooks/aidlc-log-subagent.ts` (SubagentStop) |
+| `SUBAGENT_COMPLETED` | Subagent task finishes | Timestamp, Agent Type, optional Agent ID, optional Message | `hooks/aidlc-log-subagent.ts` (SubagentStop; on Devin, the adapter's synthesized equivalent) |
 
 ### Reviewer Enforcement Events (2 events - hook-emitted)
 
