@@ -169,10 +169,17 @@ not use strict coverage; live provider families require executed coverage.
 
 Nightly `preview-release.yml` calls the reusable `full-suite.yml`: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
-and hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
+and enabled hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
 because its CLI exposes vendor API keys to agent environments; Copilot is
 excluded by account policy. Only source already on `main` passes the plan's
 ancestry gate.
+
+The OIDC-bearing live lanes stay off unless repository variable `AIDLC_NIGHTLY_LIVE=1`
+is deliberately set: dependency and CLI installers still share the OIDC job
+boundary ([#1306](https://github.com/awslabs/aidlc-workflows/issues/1306)). The credential-free
+Windows release-contract job remains enabled. Preview publication proceeds with
+`complete: false` when the disabled lanes are skipped and other jobs pass;
+stable promotion still requires `passed: true`.
 
 Kiro ACP/TUI/IDE live families are declared exclusions in the nightly full suite,
 printed as warnings and leaving `complete: false`. They need a dedicated isolated
@@ -182,12 +189,14 @@ Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
 hosted lane.
 
 No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Declared
-live-family exclusions are reported in the sorted `excluded` list and never block
-publication. `passed` requires every declared job to succeed and a 40-hex commit
-SHA; `complete` also requires no exclusions. Missing, failed, cancelled or skipped
-jobs fail. `full-suite-result` retains
+live-family exclusions are reported in the sorted `excluded` list; variable-disabled
+jobs are separate in `disabledLegs`. Neither blocks publication. `passed` requires
+every enabled job to succeed, disabled live legs to be skipped, and a 40-hex commit
+SHA; `complete` also requires no exclusions or disabled legs. Missing, failed,
+cancelled or unexpectedly skipped jobs fail, as do live jobs that ran without
+`AIDLC_NIGHTLY_LIVE=1`. `full-suite-result` retains
 the exact SHA and run/leg outcomes for 90 days; preview and stable publication
-require `passed: true` and warn about exclusions. Tag a passing nightly SHA, or
+require `passed: true` and warn about exclusions and disabled legs. Tag a passing nightly SHA, or
 dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired
 evidence even when an unchanged preview already exists.
 

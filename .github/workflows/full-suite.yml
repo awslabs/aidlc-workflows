@@ -206,7 +206,11 @@ jobs:
           name: "full-suite-deterministic-${{ matrix.tier }}-${{ runner.os }}"
           path: tests/logs/
           include-hidden-files: true
+  # Keep the live lanes off until installers leave the OIDC boundary; see #1306.
+  # Package and CLI installers currently run inside id-token-bearing jobs.
+  # Setting AIDLC_NIGHTLY_LIVE=1 is the deliberate act enabling these OIDC jobs.
   live_hosted:
+    if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
     needs: plan
     environment: nightly-live
     permissions:
@@ -353,6 +357,7 @@ jobs:
           path: tests/logs/
           include-hidden-files: true
   live_windows:
+    if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
     needs: plan
     runs-on: windows-latest
     environment: nightly-live
@@ -498,6 +503,7 @@ jobs:
         env:
           FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
           FULL_SUITE_REF: "${{ inputs.ref }}"
+          AIDLC_NIGHTLY_LIVE: "${{ vars.AIDLC_NIGHTLY_LIVE }}"
         run: |
           bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
       - if: "${{ always() }}"

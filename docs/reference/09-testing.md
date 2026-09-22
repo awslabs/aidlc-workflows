@@ -447,13 +447,13 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request | Deterministic gate | `ci.yml`: contract checks + smoke + unit shards + native-terminal units + credential-free live OS-isolation proofs on Linux/macOS/Windows + production guards | GitHub Actions |
-| Nightly preview / manual preview dispatch | Declared deep-tier matrix | `preview-release.yml` calls `full-suite.yml` for deterministic integration/e2e on Linux/macOS/Windows and hosted live families; excluded families are reported | GitHub Actions |
-| Stable tag | Exact-source evidence | `release.yml` requires a successful preview or main-branch full-suite dispatch artifact with the tag SHA and `passed: true`; exclusions are warned | GitHub Actions |
+| Nightly preview / manual preview dispatch | Declared deep-tier matrix | `preview-release.yml` calls `full-suite.yml` for deterministic integration/e2e on Linux/macOS/Windows and enabled hosted live families; disabled legs and excluded families are reported | GitHub Actions |
+| Stable tag | Exact-source evidence | `release.yml` requires a successful preview or main-branch full-suite dispatch artifact with the tag SHA and `passed: true`; excluded families and disabled legs are warned | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
 By maintainer decision on 2026-09-21, `main` is not production: PR CI remains the
-fast gate listed above, while deterministic and live deep tiers gate the preview
+fast gate listed above, while deterministic and enabled live deep tiers gate the preview
 stage in `full-suite.yml`, called by `preview-release.yml`.
 
 Tag the SHA of a green nightly for a stable release, or dispatch `full-suite.yml`
@@ -1018,8 +1018,8 @@ profile obligations appear as `NOT_REQUESTED`, never as fulfilled coverage.
 
 This profile verifies the terminal driver and retained compatibility controls.
 The scheduled preview now calls `full-suite.yml`, which reconciles native
-receipts and requires every declared job before publishing; excluded live
-families are not represented as tested coverage.
+receipts and requires every enabled job before publishing; disabled live legs and
+excluded live families are not represented as tested coverage.
 
 ### Nightly full-suite matrix and provisioning
 
@@ -1028,14 +1028,21 @@ families are not represented as tested coverage.
 already be an ancestor of `origin/main` before installing dependencies or
 dispatching source-executing jobs. All matrix legs check out the authorized
 immutable SHA. `preview-release.yml` calls it after the normal CI gate and cannot
-publish unless every declared job passes. Stable releases download
+publish unless the result has `passed: true`. Stable releases download
 `full-suite-result` from successful preview runs or main-branch `workflow_dispatch`
 runs of `full-suite.yml`, requiring the artifact's `sha` to equal the tag SHA and
-`passed: true`; declared exclusions warn but do not block publication. Missing,
+`passed: true`; declared exclusions and disabled live lanes warn but do not block publication. Missing,
 expired, wrong-source or failed evidence blocks publication. To renew evidence
 for an unchanged SHA, dispatch `full-suite.yml` on `main` with `ref=<sha>`; unlike
 the preview publisher, this always runs the suite even when a preview already
 exists. Release validation searches the newest 100 successful runs of each source.
+
+The OIDC-bearing live lanes stay off unless repository variable `AIDLC_NIGHTLY_LIVE=1`
+is deliberately set: dependency and CLI installers still share the OIDC job
+boundary ([#1306](https://github.com/awslabs/aidlc-workflows/issues/1306)). The credential-free
+Windows release-contract job remains enabled. Preview publication proceeds with
+`complete: false` when the disabled lanes are skipped and other jobs pass;
+stable promotion still requires `passed: true`.
 
 The declared coverage is:
 
@@ -1083,12 +1090,14 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-deterministic-<tier>-<OS>`, `full-suite-live-<family>-<OS>`, and
 `full-suite-result` (90-day retention). The final JSON records `sha`, `runId`,
-`runAttempt`, `passed`, `complete`, every job's result in `legs`, and live families
-declared with `hosting: "excluded"` in the sorted `excluded` list. `passed` means
-every declared job succeeded and `sha` is a 40-hex commit ID; `complete` additionally
-requires no exclusions. Exclusions warn without blocking preview/stable
-publication. A missing, failed, cancelled or skipped job still fails.
-Exclusions are not coverage.
+`runAttempt`, `passed`, `complete`, every job's result in `legs`, variable-disabled
+jobs in `disabledLegs`, and live families declared with `hosting: "excluded"` in the
+sorted `excluded` list. `passed` means every enabled job succeeded, disabled live
+legs were skipped, and `sha` is a 40-hex commit ID; `complete` additionally requires
+no exclusions or disabled legs. Exclusions and disabled legs warn without blocking
+preview/stable publication. A missing, failed, cancelled or unexpectedly skipped
+job still fails, as does a live job that ran without `AIDLC_NIGHTLY_LIVE=1`.
+Exclusions and disabled legs are not coverage.
 
 Kiro ACP/TUI/IDE live families are declared exclusions in the nightly full suite,
 printed as warnings and leaving `complete: false`. They need a dedicated isolated
@@ -1097,7 +1106,7 @@ Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
 `AIDLC_KIRO_IDE_LIVE=1` remain the coverage path. A follow-up issue tracks the
 hosted lane.
 
-Provision these repository/environment settings before expecting a green run:
+Provision these repository/environment settings before enabling the live lanes:
 
 - Environment `nightly-live` holds secret `AWS_NIGHTLY_TEST_ROLE_ARN` (required).
   No Kiro/Cursor API-key workflow secret or hosted vendor-key leg is supported.

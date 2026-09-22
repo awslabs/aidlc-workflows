@@ -30,6 +30,7 @@ interface Job {
   "runs-on": string | string[];
   env?: Record<string, string>;
   environment?: string;
+  permissions?: Record<string, string>;
   strategy?: { matrix: { include?: Array<Record<string, string>>; family?: LiveFamily[] } };
   steps: Step[];
 }
@@ -101,6 +102,14 @@ describe("t345 complete nightly coverage", () => {
         }
       }
     }
+  });
+
+  test("exactly the OIDC-bearing jobs require explicit nightly live opt-in", () => {
+    const jobs = Object.entries(workflow.jobs);
+    const oidcJobs = jobs.filter(([, job]) => job.permissions?.["id-token"] === "write").map(([name]) => name).sort();
+    expect(oidcJobs).toEqual(["live_hosted", "live_windows"]);
+    const gatedJobs = jobs.filter(([, job]) => job.if === "vars.AIDLC_NIGHTLY_LIVE == '1'").map(([name]) => name).sort();
+    expect(gatedJobs).toEqual(oidcJobs);
   });
 
   test("credentialed startup is isolated from broker and agent environments", () => {
@@ -219,12 +228,12 @@ describe("t345 complete nightly coverage", () => {
           expect(proof).toBeGreaterThanOrEqual(0);
           expect(proof).toBeLessThan(job.steps.indexOf(run!));
         } else if (jobName === "live_windows") {
-          expect(job.if).toBeUndefined();
           expect(command).toBe(`.github/scripts/prepare-live-runtime.ps1 -Mode run -Family ${row.family}`);
           const proof = job.steps.findIndex((step) => step.name === "Prove isolation");
           expect(proof).toBeGreaterThanOrEqual(0);
           expect(proof).toBeLessThan(job.steps.indexOf(run!));
         } else {
+          expect(job.if).toBeUndefined();
           expect(command).toBe(`bun scripts/ci-live-filter.ts ${row.family} --platform ${row.platform} --run -- --debug -P 4`);
         }
       }
@@ -434,32 +443,57 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("passed requires every declared job to succeed and complete additionally requires no excluded families", () => {
-    expect(fullSuiteResult(allSuccess(), identity)).toMatchObject({ passed: true, complete: false, excluded: excludedFamilies });
-    for (const status of ["failure", "cancelled", "skipped"] as const) {
-      expect(fullSuiteResult({ ...allSuccess(), live_hosted: { result: status } }, identity))
-        .toMatchObject({ passed: false, complete: false });
+  test("disabled live lanes must be skipped and are not tested coverage", () => {
+    const needs = { ...allSuccess(), live_hosted: { result: "skipped" as const }, live_windows: { result: "skipped" as const } };
+    for (const live of [undefined, "", "0"]) {
+      expect(fullSuiteResult(needs, identity, { live })).toMatchObject({
+        passed: true, complete: false, disabledLegs: ["live_hosted", "live_windows"], excluded: excludedFamilies,
+      });
     }
-    const missing = allSuccess();
-    delete missing.native_reconcile;
-    expect(fullSuiteResult(missing, identity)).toMatchObject({ passed: false, complete: false, legs: { native_reconcile: "missing" } });
-    expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" })).toMatchObject({ passed: false, complete: false });
+    for (const job of ["live_hosted", "live_windows"]) {
+      for (const status of ["success", "failure", "cancelled"] as const) {
+        expect(fullSuiteResult({ ...needs, [job]: { result: status } }, identity, {})).toMatchObject({ passed: false, complete: false });
+      }
+      const missing: SuiteNeeds = { ...needs };
+      delete missing[job];
+      expect(fullSuiteResult(missing, identity, {})).toMatchObject({ passed: false, complete: false });
+    }
   });
 
-  test("result CLI warns about excluded families without failing publication but rejects missing jobs", () => {
+  test("enabled live lanes and every other declared job must succeed", () => {
+    expect(fullSuiteResult(allSuccess(), identity, { live: "1" })).toMatchObject({
+      passed: true, complete: false, disabledLegs: [], excluded: excludedFamilies,
+    });
+    for (const job of ["live_hosted", "live_windows", "release_contract_windows"]) {
+      for (const status of ["failure", "cancelled", "skipped"] as const) {
+        expect(fullSuiteResult({ ...allSuccess(), [job]: { result: status } }, identity, { live: "1" }))
+          .toMatchObject({ passed: false, complete: false });
+      }
+      const missing = allSuccess();
+      delete missing[job];
+      expect(fullSuiteResult(missing, identity, { live: "1" })).toMatchObject({ passed: false, complete: false, legs: { [job]: "missing" } });
+    }
+    expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" }, { live: "1" })).toMatchObject({ passed: false, complete: false });
+  });
+
+  test("result CLI warns about disabled lanes and excluded families but rejects missing jobs and configuration errors", () => {
     const root = mkdtempSync(join(tmpdir(), "full-suite-result-"));
     try {
-      const needs = allSuccess();
+      const needs: SuiteNeeds = { ...allSuccess(), live_hosted: { result: "skipped" }, live_windows: { result: "skipped" } };
       const env = {
-        ...process.env, FULL_SUITE_NEEDS: JSON.stringify(needs), FULL_SUITE_SHA: identity.sha,
+        ...process.env, AIDLC_NIGHTLY_LIVE: "", FULL_SUITE_NEEDS: JSON.stringify(needs), FULL_SUITE_SHA: identity.sha,
       };
       const output = join(root, "result.json");
       const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
       const result = spawnSync(process.execPath, [script, output], { encoding: "utf8", env });
       expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("::warning::Full suite ran with the live lanes disabled (AIDLC_NIGHTLY_LIVE unset): live_hosted, live_windows");
       expect(result.stderr).toContain(`::warning::Full suite excluded families: ${excludedFamilies.join(", ")}`);
       const report = JSON.parse(readFileSync(output, "utf8"));
-      expect(report).toMatchObject({ passed: true, complete: false, excluded: excludedFamilies });
+      expect(report).toMatchObject({ passed: true, complete: false, disabledLegs: ["live_hosted", "live_windows"], excluded: excludedFamilies });
+      const unexpectedRun = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(allSuccess()) } });
+      expect(unexpectedRun.status).toBe(1);
+      expect(unexpectedRun.stderr).toContain("::error::Live-lane configuration error: AIDLC_NIGHTLY_LIVE is not '1' but these jobs ran: live_hosted=success, live_windows=success");
       delete needs.native_reconcile;
       const missing = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(needs) } });
       expect(missing.status).toBe(1);
