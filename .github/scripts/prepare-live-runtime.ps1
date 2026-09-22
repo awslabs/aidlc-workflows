@@ -951,6 +951,222 @@ try {
         "`r`n" + (Get-CodexGuiBootstrap)
 }
 
+function Get-CodexDesktopProcessSource {
+    return @'
+public static class AidlcCodexDesktopProcess {
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct Startup {
+        public uint Size;
+        public string Reserved, Desktop, Title;
+        public uint X, Y, Width, Height, XChars, YChars, Fill, Flags;
+        public ushort Show, ReservedSize;
+        public IntPtr ReservedData, Input, Output, Error;
+    }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct StartupEx { public Startup Info; public IntPtr Attributes; }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct ProcessInfo { public IntPtr Process, Thread; public uint Pid, Tid; }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct Security { public int Size; public IntPtr Descriptor; public int Inherit; }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+    private static extern bool CreateProcessW(string application, System.Text.StringBuilder command, IntPtr processSecurity,
+        IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string cwd, ref StartupEx startup, out ProcessInfo process);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref Security security, uint size);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, uint flags, ref UIntPtr size);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, UIntPtr attribute, IntPtr value, UIntPtr size, IntPtr previous, IntPtr returned);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern void DeleteProcThreadAttributeList(IntPtr list);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern IntPtr GetCurrentThread();
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern IntPtr GetStdHandle(int kind);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target, uint access, bool inherit, uint options);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool ReadFile(IntPtr handle, byte[] bytes, uint size, out uint read, IntPtr overlapped);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool WriteFile(IntPtr handle, byte[] bytes, uint size, out uint written, IntPtr overlapped);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool CancelSynchronousIo(IntPtr thread);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool TerminateProcess(IntPtr process, uint code);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+    private static Exception Error(string operation) {
+        return new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error(), operation);
+    }
+    private static IntPtr Take(ref IntPtr handle) { IntPtr result = handle; handle = IntPtr.Zero; return result; }
+    private static void Close(ref IntPtr handle) {
+        if (handle != IntPtr.Zero && handle != new IntPtr(-1)) CloseHandle(Take(ref handle));
+    }
+    private static IntPtr Duplicate(IntPtr handle) {
+        IntPtr result;
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1) ||
+            !DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), out result, 0, false, 2))
+            throw Error("Duplicate owned I/O handle");
+        return result;
+    }
+    // Each synchronous pump owns its handles. Cancellation targets its retained
+    // thread HANDLE and retries across the check/read race; no PID lookup occurs.
+    private sealed class Pump {
+        private IntPtr source, destination, nativeThread;
+        private readonly System.Threading.Thread thread;
+        private readonly bool input;
+        private volatile bool cancel;
+        private bool started;
+        public volatile Exception Failure;
+        public Pump(IntPtr read, IntPtr write, bool stdin) {
+            source = read; destination = write; input = stdin;
+            thread = new System.Threading.Thread(Copy) { IsBackground = true };
+        }
+        public void Start() { thread.Start(); started = true; }
+        public bool Done { get { return !started || thread.Join(0); } }
+        public void Cancel() {
+            cancel = true;
+            IntPtr handle = System.Threading.Interlocked.CompareExchange(ref nativeThread, IntPtr.Zero, IntPtr.Zero);
+            if (handle != IntPtr.Zero) CancelSynchronousIo(handle);
+        }
+        public bool Finish(DateTime deadline) {
+            while (!Done && DateTime.UtcNow < deadline) { Cancel(); thread.Join(10); }
+            if (!Done) return false; // pump retains its handles until Copy ends
+            if (!started) { Close(ref source); Close(ref destination); }
+            Close(ref nativeThread);
+            return true;
+        }
+        private void Copy() {
+            try {
+                System.Threading.Interlocked.Exchange(ref nativeThread, Duplicate(GetCurrentThread()));
+                byte[] buffer = new byte[32768];
+                while (!cancel) {
+                    uint read;
+                    if (!ReadFile(source, buffer, (uint)buffer.Length, out read, IntPtr.Zero)) {
+                        int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                        if (cancel || error == 109 || error == 38 || error == 995) break;
+                        throw new System.ComponentModel.Win32Exception(error, "Read child stream");
+                    }
+                    if (read == 0) break;
+                    uint offset = 0;
+                    while (offset < read && !cancel) {
+                        byte[] chunk = buffer;
+                        if (offset != 0) {
+                            chunk = new byte[read - offset];
+                            Buffer.BlockCopy(buffer, (int)offset, chunk, 0, chunk.Length);
+                        }
+                        uint written;
+                        if (!WriteFile(destination, chunk, read - offset, out written, IntPtr.Zero)) {
+                            int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                            if (cancel || error == 995 || (input && error == 109)) return;
+                            throw new System.ComponentModel.Win32Exception(error, "Write child stream");
+                        }
+                        if (written == 0) throw new System.IO.IOException("Child stream made no progress.");
+                        offset += written;
+                    }
+                }
+            } catch (Exception error) { if (!cancel) Failure = error; }
+            finally { Close(ref source); Close(ref destination); }
+        }
+    }
+    public static int Run(System.Diagnostics.ProcessStartInfo info, string desktop, int timeout, bool relayInput) {
+        if (String.IsNullOrEmpty(desktop) || desktop.IndexOf('\\') <= 0 || desktop.IndexOf('\0') >= 0 ||
+            info.FileName.IndexOf('\0') >= 0 || info.Arguments.IndexOf('\0') >= 0 || timeout < -1)
+            throw new ArgumentException("Invalid explicit desktop launch.");
+        IntPtr childIn = IntPtr.Zero, parentIn = IntPtr.Zero, parentOut = IntPtr.Zero, childOut = IntPtr.Zero;
+        IntPtr parentError = IntPtr.Zero, childError = IntPtr.Zero, attributes = IntPtr.Zero, handles = IntPtr.Zero, environment = IntPtr.Zero;
+        bool attributesReady = false, created = false, exited = false;
+        var process = new ProcessInfo();
+        var pumps = new System.Collections.Generic.List<Pump>();
+        Exception failure = null;
+        int exitCode = 1;
+        try {
+            var security = new Security { Size = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Security)), Inherit = 1 };
+            if (!CreatePipe(out childIn, out parentIn, ref security, 0) ||
+                !CreatePipe(out parentOut, out childOut, ref security, 0) ||
+                !CreatePipe(out parentError, out childError, ref security, 0)) throw Error("Create child stdio pipes");
+            foreach (IntPtr handle in new IntPtr[] { parentIn, parentOut, parentError })
+                if (!SetHandleInformation(handle, 1, 0)) throw Error("Protect parent pipe inheritance");
+            if (!relayInput) Close(ref parentIn); // the inert probe must never consume Codex's prompt
+            UIntPtr size = UIntPtr.Zero;
+            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+            if (size == UIntPtr.Zero) throw Error("Measure stdio handle list");
+            attributes = System.Runtime.InteropServices.Marshal.AllocHGlobal(checked((int)size.ToUInt64()));
+            if (!InitializeProcThreadAttributeList(attributes, 1, 0, ref size)) throw Error("Initialize stdio handle list");
+            attributesReady = true;
+            handles = System.Runtime.InteropServices.Marshal.AllocHGlobal(IntPtr.Size * 3);
+            System.Runtime.InteropServices.Marshal.Copy(new IntPtr[] { childIn, childOut, childError }, 0, handles, 3);
+            if (!UpdateProcThreadAttribute(attributes, 0, new UIntPtr(0x20002), handles, new UIntPtr((uint)(IntPtr.Size * 3)), IntPtr.Zero, IntPtr.Zero))
+                throw Error("Set three-handle inheritance list");
+            var entries = new System.Collections.Generic.List<string>();
+            foreach (string key in info.EnvironmentVariables.Keys) entries.Add(key + "=" + info.EnvironmentVariables[key]);
+            entries.Sort(StringComparer.OrdinalIgnoreCase);
+            environment = System.Runtime.InteropServices.Marshal.StringToHGlobalUni(String.Join("\0", entries) + "\0\0");
+            var startup = new StartupEx {
+                Info = new Startup { Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(StartupEx)),
+                    Desktop = desktop, Flags = 0x100, Input = childIn, Output = childOut, Error = childError },
+                Attributes = attributes
+            };
+            // Filename is the sealed native path; Windows filenames cannot
+            // contain quotes. Arguments were quoted by the existing bridge.
+            var command = new System.Text.StringBuilder("\"" + info.FileName + "\" " + info.Arguments);
+            string cwd = String.IsNullOrEmpty(info.WorkingDirectory) ? Environment.CurrentDirectory : info.WorkingDirectory;
+            if (!CreateProcessW(info.FileName, command, IntPtr.Zero, IntPtr.Zero, true,
+                0x08000000 | 0x400 | 0x80000, environment, cwd, ref startup, out process)) throw Error("CreateProcessW on private desktop");
+            created = true;
+            Close(ref process.Thread);
+            Close(ref childIn); Close(ref childOut); Close(ref childError);
+            IntPtr outputTarget = Duplicate(GetStdHandle(-11));
+            pumps.Add(new Pump(Take(ref parentOut), outputTarget, false));
+            IntPtr errorTarget = Duplicate(GetStdHandle(-12));
+            pumps.Add(new Pump(Take(ref parentError), errorTarget, false));
+            if (relayInput) pumps.Add(new Pump(Duplicate(GetStdHandle(-10)), Take(ref parentIn), true));
+            foreach (Pump pump in pumps) pump.Start();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            while (true) {
+                uint wait = WaitForSingleObject(process.Process, 50);
+                if (wait == 0) { exited = true; break; }
+                if (wait != 258) throw Error("Wait for owned native process");
+                foreach (Pump pump in pumps) if (pump.Failure != null) throw pump.Failure;
+                if (timeout >= 0 && watch.ElapsedMilliseconds >= timeout) throw new TimeoutException("Native desktop child exceeded its deadline.");
+            }
+            uint code;
+            if (!GetExitCodeProcess(process.Process, out code)) throw Error("Read owned native exit status");
+            exitCode = unchecked((int)code);
+            if (relayInput) pumps[2].Cancel();
+            DateTime drainDeadline = DateTime.UtcNow.AddSeconds(5);
+            while ((!pumps[0].Done || !pumps[1].Done) && DateTime.UtcNow < drainDeadline) System.Threading.Thread.Sleep(10);
+            if (!pumps[0].Done || !pumps[1].Done) throw new System.IO.IOException("Native output did not finish after process exit.");
+            foreach (Pump pump in pumps) if (pump.Failure != null) throw pump.Failure;
+        } catch (Exception error) { failure = error; }
+        finally {
+            if (created && !exited) {
+                if (WaitForSingleObject(process.Process, 0) != 0) TerminateProcess(process.Process, 1);
+                if (WaitForSingleObject(process.Process, 5000) != 0)
+                    failure = new AggregateException(failure ?? new Exception("Native child failed"), new Exception("Owned native retirement was not confirmed."));
+            }
+            foreach (Pump pump in pumps) pump.Cancel();
+            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+            foreach (Pump pump in pumps) if (!pump.Finish(deadline))
+                failure = new AggregateException(failure ?? new Exception("Native I/O failed"), new Exception("Native pipe pump retirement was not confirmed."));
+            Close(ref process.Thread); Close(ref process.Process);
+            Close(ref childIn); Close(ref parentIn); Close(ref parentOut); Close(ref childOut); Close(ref parentError); Close(ref childError);
+            if (attributesReady) DeleteProcThreadAttributeList(attributes);
+            if (attributes != IntPtr.Zero) System.Runtime.InteropServices.Marshal.FreeHGlobal(attributes);
+            if (handles != IntPtr.Zero) System.Runtime.InteropServices.Marshal.FreeHGlobal(handles);
+            if (environment != IntPtr.Zero) System.Runtime.InteropServices.Marshal.FreeHGlobal(environment);
+        }
+        if (failure != null) throw failure;
+        return exitCode;
+    }
+}
+'@
+}
+
 function Get-CodexHostedGuiSource {
     return @'
 public static class AidlcCodexHostedGui {
@@ -1595,6 +1811,7 @@ using System;
 using System.Diagnostics;
 using System.Text;
 using System.Threading.Tasks;
+__DESKTOP_PROCESS_SOURCE__
 __HOSTED_GUI_SOURCE__
 public static class AidlcCodexLauncher {
     private const string Native = __NATIVE__;
@@ -1619,7 +1836,7 @@ public static class AidlcCodexLauncher {
         }
         return result.Append('\\', slashes * 2).Append('"').ToString();
     }
-    private static int Run(string executable, string[] args, int timeout) {
+    private static ProcessStartInfo StartInfo(string executable, string[] args) {
         ProcessStartInfo info = new ProcessStartInfo(executable);
         info.UseShellExecute = false;
         info.CreateNoWindow = true;
@@ -1630,6 +1847,13 @@ public static class AidlcCodexLauncher {
         info.EnvironmentVariables["CODEX_MANAGED_BY_NPM"] = "1";
         info.EnvironmentVariables.Remove("CODEX_MANAGED_BY_BUN");
         info.EnvironmentVariables.Remove("CODEX_MANAGED_BY_PNPM");
+        return info;
+    }
+    private static int RunExplicit(string executable, string[] args, int timeout, string desktop, bool relayInput) {
+        return AidlcCodexDesktopProcess.Run(StartInfo(executable, args), desktop, timeout, relayInput);
+    }
+    private static int Run(string executable, string[] args, int timeout) {
+        ProcessStartInfo info = StartInfo(executable, args);
         using (Process child = Process.Start(info)) {
             // A console-less intermediate launcher must relay both pipes.
             // Native descendants otherwise have no usable console output.
@@ -1660,12 +1884,11 @@ public static class AidlcCodexLauncher {
                 // the test runner stays on its original service desktop.
                 if (HostedGui) return AidlcCodexHostedGui.RunOnPrivateDesktop(
                     StationOwner, ControllerSid, SandboxSids, (desktopName) => {
-                        // Same .NET Process.Start settings and calling thread
-                        // as Codex. Prove lpDesktop=NULL inheritance explicitly.
-                        int probed = Run(GuiProbe, new string[] { desktopName }, 15000);
+                        string desktop = "WinSta0\\" + desktopName;
+                        int probed = RunExplicit(GuiProbe, new string[] { desktopName }, 15000, desktop, false);
                         if (probed != 0) throw new InvalidOperationException(
                             "Codex GUI inheritance probe failed before native CLI start (exit " + probed + ").");
-                        return Run(Native, args, -1);
+                        return RunExplicit(Native, args, -1, desktop, true);
                     });
             }
             return Run(Native, args, -1);
@@ -1676,7 +1899,8 @@ public static class AidlcCodexLauncher {
     }
 }
 '@
-    $launcher = $launcher.Replace('__HOSTED_GUI_SOURCE__', (Get-CodexHostedGuiSource)).
+    $launcher = $launcher.Replace('__DESKTOP_PROCESS_SOURCE__', (Get-CodexDesktopProcessSource)).
+        Replace('__HOSTED_GUI_SOURCE__', (Get-CodexHostedGuiSource)).
         Replace('__HOSTED_GUI__', 'true').
         Replace('__STATION_OWNER__', (ConvertTo-Json -InputObject $hostedStationOwner -Compress)).
         Replace('__CONTROLLER_SID__', (ConvertTo-Json -InputObject $sandboxSid.Value -Compress)).

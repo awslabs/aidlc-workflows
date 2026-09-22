@@ -1,6 +1,6 @@
 // Deterministic Windows account/ACL tests; no CLI download or model calls.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,6 +30,77 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 ${guiSource}
 public static class NativeOutputFixture {
+  [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+  private struct Attributes { public int Size; public IntPtr Security; public int Inherit; }
+  [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+  private struct FileInfo {
+    public uint Attributes;
+    public System.Runtime.InteropServices.ComTypes.FILETIME Created, Accessed, Written;
+    public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+  }
+  [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+  private static extern IntPtr CreateDesktopW(string name, IntPtr device, IntPtr mode, uint flags, uint access, ref Attributes attributes);
+  [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool CloseDesktop(IntPtr desktop);
+  [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetProcessWindowStation();
+  [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetThreadDesktop(uint thread);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+  [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+  private static extern bool GetUserObjectInformationW(IntPtr handle, int index, IntPtr data, uint length, out uint needed);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool GetFileInformationByHandle(IntPtr handle, out FileInfo info);
+  private static string Name(IntPtr handle) {
+    uint size;
+    GetUserObjectInformationW(handle, 2, IntPtr.Zero, 0, out size);
+    IntPtr data = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)size);
+    try {
+      Check(GetUserObjectInformationW(handle, 2, data, size, out size), "Read GUI name failed.");
+      return System.Runtime.InteropServices.Marshal.PtrToStringUni(data);
+    } finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(data); }
+  }
+  private static int ExplicitDesktop(string[] args) {
+    string station = Name(GetProcessWindowStation());
+    string desktopName = "AidlcExplicitTest-" + Guid.NewGuid().ToString("N");
+    var security = new RawSecurityDescriptor("D:P(A;;0x20087;;;" + WindowsIdentity.GetCurrent().User.Value + ")");
+    byte[] bytes = new byte[security.BinaryLength]; security.GetBinaryForm(bytes, 0);
+    var pin = System.Runtime.InteropServices.GCHandle.Alloc(bytes, System.Runtime.InteropServices.GCHandleType.Pinned);
+    IntPtr desktop = IntPtr.Zero;
+    string extraPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(args[1]), Guid.NewGuid().ToString("N") + ".handle");
+    try {
+      var attributes = new Attributes { Size = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Attributes)), Security = pin.AddrOfPinnedObject() };
+      // Own new desktop only: no station ACL write, thread switch or Default access.
+      desktop = CreateDesktopW(desktopName, IntPtr.Zero, IntPtr.Zero, 0, 0x20087, ref attributes);
+      Check(desktop != IntPtr.Zero, "Create owned test desktop failed.");
+      using (var extra = new System.IO.FileStream(extraPath, System.IO.FileMode.CreateNew, System.IO.FileAccess.ReadWrite)) {
+        IntPtr handle = extra.SafeFileHandle.DangerousGetHandle();
+        Check(SetHandleInformation(handle, 1, 1), "Set unrelated inheritable handle failed.");
+        FileInfo identity;
+        Check(GetFileInformationByHandle(handle, out identity), "Read unrelated handle identity failed.");
+        bool timeout = args[0] == "--explicit-timeout";
+        var childArgs = new System.Collections.Generic.List<string> {
+          timeout ? "--desktop-timeout-child" : "--desktop-child", station, desktopName, handle.ToInt64().ToString(),
+          identity.Volume.ToString(), identity.IndexHigh.ToString(), identity.IndexLow.ToString()
+        };
+        childArgs.AddRange(new ArraySegment<string>(args, 2, args.Length - 2));
+        var assembly = System.Reflection.Assembly.LoadFile(args[1]);
+        var method = assembly.GetType("AidlcCodexLauncher").GetMethod("RunExplicit",
+          System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        try {
+          return (int)method.Invoke(null, new object[] {
+            System.Reflection.Assembly.GetExecutingAssembly().Location, childArgs.ToArray(), timeout ? 1000 : 10000, station + "\\\\" + desktopName, true
+          });
+        } catch (System.Reflection.TargetInvocationException error) {
+          if (!timeout || !(error.InnerException is TimeoutException)) throw;
+          Console.Out.WriteLine("timeout-retired"); return 0;
+        }
+      }
+    } finally {
+      if (desktop != IntPtr.Zero) Check(CloseDesktop(desktop), "Owned test desktop remained in use.");
+      pin.Free();
+      if (System.IO.File.Exists(extraPath)) System.IO.File.Delete(extraPath);
+    }
+  }
   private const string Controller = "S-1-5-21-111-222-333-1001";
   private static readonly string[] Children = { "S-1-5-21-111-222-333-1002", "S-1-5-21-111-222-333-1003" };
   private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
@@ -74,6 +145,33 @@ public static class NativeOutputFixture {
     Console.Out.WriteLine("owned-station-acls-verified");
   }
   public static int Main(string[] args) {
+    Console.OutputEncoding = new UTF8Encoding(false);
+    if (args.Length >= 2 && (args[0] == "--explicit-desktop" || args[0] == "--explicit-timeout")) return ExplicitDesktop(args);
+    if (args.Length >= 7 && (args[0] == "--desktop-child" || args[0] == "--desktop-timeout-child")) {
+      Check(Name(GetProcessWindowStation()) == args[1] &&
+        Name(GetThreadDesktop(GetCurrentThreadId())) == args[2], "Explicit desktop was not used.");
+      FileInfo extra;
+      bool inherited = GetFileInformationByHandle(new IntPtr(long.Parse(args[3])), out extra) &&
+        extra.Volume == uint.Parse(args[4]) && extra.IndexHigh == uint.Parse(args[5]) && extra.IndexLow == uint.Parse(args[6]);
+      Check(!inherited, "An unrelated handle crossed the three-handle list.");
+      if (args[0] == "--desktop-timeout-child") {
+        Console.Out.WriteLine("child-started"); Console.Out.Flush();
+        System.Threading.Thread.Sleep(30000);
+        throw new Exception("Timed-out child survived.");
+      }
+      byte[] stdin;
+      using (var buffer = new System.IO.MemoryStream()) {
+        Console.OpenStandardInput().CopyTo(buffer); stdin = buffer.ToArray();
+      }
+      Console.Out.Write(new string('O', 131072));
+      Console.Error.Write(new string('E', 131072));
+      Console.Out.WriteLine("\\nargv:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(string.Join("\\0", new ArraySegment<string>(args, 7, args.Length - 7)))));
+      Console.Out.WriteLine("stdin:" + Convert.ToBase64String(stdin));
+      Console.Out.WriteLine("cwd:" + Environment.CurrentDirectory);
+      Console.Out.WriteLine("env:" + Environment.GetEnvironmentVariable("AIDLC_EXPLICIT_DESKTOP_LITERAL"));
+      Console.Out.WriteLine("station:" + args[1]);
+      return 7;
+    }
     if (args.Length == 1 && args[0] == "--verify-owned-station-acls") {
       VerifyAcls(); return 0;
     }
@@ -106,7 +204,10 @@ public static class NativeOutputFixture {
       const match = script.match(/\$launcher = @'\r?\n([\s\S]*?)\r?\n'@/);
       expect(match).not.toBeNull();
       let launcher = match![1];
-      launcher = launcher.replaceAll("__HOSTED_GUI_SOURCE__", guiSource)
+      const processMatch = script.match(/function Get-CodexDesktopProcessSource \{\r?\n\s*return @'\r?\n([\s\S]*?)\r?\n'@/);
+      expect(processMatch).not.toBeNull();
+      launcher = launcher.replaceAll("__DESKTOP_PROCESS_SOURCE__", processMatch![1])
+        .replaceAll("__HOSTED_GUI_SOURCE__", guiSource)
         .replaceAll("__HOSTED_GUI__", "false")
         .replaceAll("__STATION_OWNER__", JSON.stringify("S-1-5-18"))
         .replaceAll("__CONTROLLER_SID__", JSON.stringify("S-1-5-21-111-222-333-1001"))
@@ -144,6 +245,47 @@ public static class NativeOutputFixture {
       const result = spawnSync(native, ["--reject-foreign-controller"], { encoding: "utf8", timeout: 15_000 });
       expect(result.status, `${result.error ?? ""}\n${result.stderr}`).toBe(0);
       expect(result.stdout.trim()).toBe("foreign-controller-refused");
+    }, 20_000);
+    test("explicit private desktop preserves stdio argv cwd environment and handle boundaries", () => {
+      const args = ["two words", 'a"quote', "", "\\tail\\", "& () %PATH%", "日本"];
+      const input = "stdin Ω\n";
+      const result = spawnSync(native, ["--explicit-desktop", executable, ...args], {
+        encoding: "utf8", input, cwd: root, timeout: 15_000,
+        env: { ...process.env, AIDLC_EXPLICIT_DESKTOP_LITERAL: "snowman ☃ 日本" },
+      });
+      expect(result.status, `${result.error ?? ""}\n${result.stderr.slice(-2000)}`).toBe(7);
+      expect(result.stdout.startsWith("O".repeat(131072))).toBe(true);
+      expect(result.stderr).toBe("E".repeat(131072));
+      expect(result.stdout).toContain(`argv:${Buffer.from(args.join("\0")).toString("base64")}`);
+      expect(result.stdout).toContain(`stdin:${Buffer.from(input).toString("base64")}`);
+      expect(result.stdout).toContain(`cwd:${root}`);
+      expect(result.stdout).toContain("env:snowman ☃ 日本");
+      console.log(result.stdout.slice(result.stdout.lastIndexOf("station:")).trim());
+    }, 20_000);
+    test("explicit desktop timeout retires the child and a blocked stdin pump", async () => {
+      const child = spawn(native, ["--explicit-timeout", executable], {
+        cwd: root, stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+      child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+      const timer = setTimeout(() => child.kill(), 15_000);
+      try {
+        // Intentionally keep stdin open with no bytes. Native cancellation must
+        // unblock its own input reader after terminating the original HANDLE.
+        const code = await new Promise<number | null>((resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", resolve);
+        });
+        expect(code, stderr).toBe(0);
+        expect(stdout).toContain("child-started");
+        expect(stdout).toContain("timeout-retired");
+      } finally {
+        clearTimeout(timer);
+        child.stdin.destroy();
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+      }
     }, 20_000);
   });
 
