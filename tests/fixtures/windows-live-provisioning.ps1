@@ -1,28 +1,37 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
-param([string]$SourceRoot, [string]$FixtureRoot, [string]$BunPath, [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny')][string]$Case)
+param([string]$SourceRoot, [string]$FixtureRoot, [string]$BunPath,
+    [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny')][string]$Case,
+    [ValidateSet('run', 'cleanup')][string]$Mode = 'run', [Parameter(Mandatory)][Guid]$FixtureId)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Check([bool]$Value, [string]$Message) { if (-not $Value) { throw $Message } }
 
 function Remove-FixtureProfile([Security.Principal.SecurityIdentifier]$Sid) {
-    # Task completion and process exit precede User Profile Service releasing
-    # NTUSER.DAT on hosted runners. Retry only that teardown race, for this
-    # fixture's exact SID; unrelated CIM/permission failures remain fatal.
+    Check ($Sid.Value -eq $createdUserSid.Value -and $Sid.Value -ne $runnerSid.Value) 'Refusing profile cleanup outside the fixture SID.'
+    # Run only after the provisioning PowerShell client exits. Loaded is
+    # diagnostic status; let Windows reject a profile that is actually in use.
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
-    $lastFailure = 'profile is still loaded'
+    $lastFailure = 'profile deletion has not completed'
+    $attempts = 0
+    $firstLoaded = $null
     do {
         $profile = Get-CimInstance Win32_UserProfile -Filter ("SID='" + $Sid.Value + "'")
-        if ($null -eq $profile) { return }
-        if (-not $profile.Loaded) {
-            try {
-                $profile | Remove-CimInstance -ErrorAction Stop
-                return
-            } catch {
-                if ($_.FullyQualifiedErrorId -notmatch '\b0x800700(?:20|21)\b') { throw }
-                $lastFailure = $_.Exception.Message
+        if ($null -eq $profile) {
+            return @{ removed = $true; deleteAttempts = $attempts; firstLoaded = $firstLoaded }
+        }
+        Check (-not $profile.Special) 'Refusing to remove a special system profile.'
+        if ($null -eq $firstLoaded) { $firstLoaded = [bool]$profile.Loaded }
+        $attempts++
+        try {
+            $profile | Remove-CimInstance -ErrorAction Stop
+            if ($null -eq (Get-CimInstance Win32_UserProfile -Filter ("SID='" + $Sid.Value + "'"))) {
+                return @{ removed = $true; deleteAttempts = $attempts; firstLoaded = $firstLoaded }
             }
+        } catch {
+            if ($_.FullyQualifiedErrorId -notmatch '\b0x800700(?:20|21)\b') { throw }
+            $lastFailure = $_.Exception.Message
         }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
@@ -80,6 +89,45 @@ public static class AidlcFixtureAccountCleanup {
 }
 '@
 
+$runnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$adminSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+$receiptRoot = Join-Path $FixtureRoot 'trusted-teardown'
+$receiptPath = Join-Path $receiptRoot 'identity.json'
+
+function Save-FixtureIdentity {
+    $identityReceipt | ConvertTo-Json | Set-Content -LiteralPath $receiptPath -Encoding UTF8
+}
+
+if ($Mode -eq 'cleanup') {
+    # No account provisioning in this mode. Only an administrator-owned receipt
+    # from the just-exited fixture can authorize deletion of its exact SID.
+    foreach ($path in @($receiptRoot, $receiptPath)) {
+        Assert-PlainPath $path
+        $acl = Get-Acl -LiteralPath $path
+        $trusted = @($runnerSid.Value, $systemSid.Value, $adminSid.Value)
+        Check ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -in $trusted) 'Untrusted fixture receipt owner.'
+        foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+            if ($rule.AccessControlType -eq 'Allow') {
+                Check ($rule.IdentityReference.Value -in $trusted) 'Fixture receipt is not administrator-only.'
+            }
+        }
+    }
+    [AidlcFileBoundary]::RequireSingleLink($receiptPath)
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    Check ($receipt.fixtureId -ceq $FixtureId.ToString() -and
+        $receipt.fixtureRoot -ceq [IO.Path]::GetFullPath($FixtureRoot) -and
+        $receipt.case -ceq $Case -and $receipt.runnerSid -ceq $runnerSid.Value) 'Fixture receipt binding mismatch.'
+    Check ($receipt.userName -cmatch '^aidlc-pv-[0-9a-f]{8}$' -and
+        $receipt.processesDrained -eq $true -and $receipt.accountRemoved -eq $true) 'Fixture account teardown did not complete.'
+    $createdUserSid = [Security.Principal.SecurityIdentifier]::new($receipt.createdUserSid)
+    Check ($null -eq (Get-RecordedLocalUser $createdUserSid)) 'Fixture account still exists.'
+    $cleanup = Remove-FixtureProfile $createdUserSid
+    $cleanup['fixtureId'] = $FixtureId.ToString()
+    $cleanup | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $receiptRoot 'cleanup.json') -Encoding UTF8
+    exit 0
+}
+
 $root = Join-Path $FixtureRoot 'runtime'
 $work = Join-Path $root 'work'
 $sandboxHome = Join-Path $root 'home'
@@ -89,9 +137,6 @@ $runnerTemp = Join-Path $FixtureRoot 'runner-temp'
 $runnerHome = Join-Path $FixtureRoot 'runner-home'
 $stateRoot = Join-Path $runnerTemp 'aidlc-live-runtime'
 $userName = 'aidlc-pv-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
-$runnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
-$systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
-$adminSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
 $usersSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
 $sandboxSid = $null
 $createdUserSid = $null
@@ -110,9 +155,11 @@ $junction = Join-Path $tools 'npm\linked-directory'
 $poisonedLog = Join-Path $tools 'logs\linked.log'
 $result = [ordered]@{ case = $Case }
 $fixtureFailure = $null
+$identityReceipt = $null
 
 try {
     Set-RuntimeAcl $FixtureRoot $null 'ReadAndExecute'
+    New-PrivateDirectory $receiptRoot
     foreach ($path in @($root, $work, $sandboxHome, $tools, $workspace, $runnerTemp, $runnerHome, $stateRoot,
         (Join-Path $tools 'jobs'), (Join-Path $tools 'logs'), (Join-Path $tools 'npm'),
         (Join-Path $tools 'npm-cli'), (Join-Path $tools 'npm-cli\bin'), (Join-Path $sandboxHome 'tmp'))) {
@@ -129,6 +176,12 @@ try {
     $user = New-LocalUser -Name $userName -Password $password -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword
     $sandboxSid = $user.SID
     $createdUserSid = $sandboxSid
+    $identityReceipt = [ordered]@{
+        fixtureId = $FixtureId.ToString(); fixtureRoot = [IO.Path]::GetFullPath($FixtureRoot)
+        case = $Case; runnerSid = $runnerSid.Value; createdUserSid = $createdUserSid.Value
+        userName = $userName; processesDrained = $false; accountRemoved = $false
+    }
+    Save-FixtureIdentity
     Add-LocalGroupMember -SID $usersSid -Member $user
     Grant-BatchLogonRight
     $credential = [Management.Automation.PSCredential]::new(($env:COMPUTERNAME + '\' + $userName), $password)
@@ -222,6 +275,7 @@ exit 0
         catch { $failure = $_ }
         Check ($null -ne $failure) 'Expected an installer failure.'
         Stop-SandboxProcesses -Disable
+        $identityReceipt.processesDrained = $true
         [AidlcFixtureAccountCleanup]::RemoveRights($sandboxSid.Value)
         Remove-LocalUser -SID $sandboxSid
         if ($Case -eq 'poisoned-collect') {
@@ -257,13 +311,15 @@ exit 0
 } finally {
     try {
         if ($null -ne $createdUserSid) {
-            $existing = Get-LocalUser -SID $createdUserSid -ErrorAction SilentlyContinue
+            $existing = Get-RecordedLocalUser $createdUserSid
             if ($null -ne $existing) {
                 Stop-SandboxProcesses -Disable
+                $identityReceipt.processesDrained = $true
                 [AidlcFixtureAccountCleanup]::RemoveRights($createdUserSid.Value)
                 Remove-LocalUser -SID $createdUserSid
             }
-            Remove-FixtureProfile $createdUserSid
+            $identityReceipt.accountRemoved = $null -eq (Get-RecordedLocalUser $createdUserSid)
+            Save-FixtureIdentity
         }
         if ([IO.File]::Exists($deniedLink)) { [IO.File]::Delete($deniedLink) }
         if ([IO.File]::Exists($poisonedLog)) { [IO.File]::Delete($poisonedLog) }

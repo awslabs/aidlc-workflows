@@ -35,6 +35,8 @@ $credential = $null
 $createdRoot = $false
 $createdState = $false
 $createdUserSid = $null
+$codexSandboxSids = @()
+$codexSeed = Join-Path $root 'codex-sandbox-seed'
 $exitCode = 1
 $stage = $Mode
 $stateRoot = $null
@@ -125,6 +127,14 @@ public static class AidlcBatchLogon {
     }
 
     public static void Grant(string sidString) {
+        GrantRight(sidString, "SeBatchLogonRight");
+    }
+
+    public static void GrantSandboxInteractive(string sidString) {
+        GrantRight(sidString, "SeInteractiveLogonRight");
+    }
+
+    private static void GrantRight(string sidString, string name) {
         SecurityIdentifier identity = new SecurityIdentifier(sidString);
         byte[] sid = new byte[identity.BinaryLength];
         identity.GetBinaryForm(sid, 0);
@@ -136,7 +146,6 @@ public static class AidlcBatchLogon {
         try {
             // POLICY_CREATE_ACCOUNT | POLICY_LOOKUP_NAMES; no service-logon grant.
             Check(LsaOpenPolicy(IntPtr.Zero, ref attributes, 0x10 | 0x800, out policy), "LsaOpenPolicy");
-            const string name = "SeBatchLogonRight";
             rightBuffer = Marshal.StringToHGlobalUni(name);
             LsaUnicodeString right = new LsaUnicodeString();
             right.Length = (ushort)(name.Length * 2);
@@ -280,7 +289,7 @@ function ConvertTo-PSLiteral([string]$Value) {
 }
 
 function Get-SafeEnvironment {
-    return [ordered]@{
+    $environment = [ordered]@{
         SystemRoot = $env:SystemRoot
         WINDIR = $env:SystemRoot
         SystemDrive = [IO.Path]::GetPathRoot($env:SystemRoot).TrimEnd('\')
@@ -320,6 +329,10 @@ function Get-SafeEnvironment {
         npm_config_cache = (Join-Path $sandboxHome 'npm-cache')
         npm_config_registry = 'https://registry.npmjs.org/'
     }
+    if ($Family -eq 'codex') {
+        $environment.AIDLC_CODEX_BIN = Join-Path $tools 'codex-managed.exe'
+    }
+    return $environment
 }
 
 function Add-BrokerEnvironment($Environment) {
@@ -569,9 +582,30 @@ try {
     }
 }
 
-function Stop-SandboxProcesses([switch]$Disable) {
+function Get-RecordedLocalUser([Security.Principal.SecurityIdentifier]$Sid) {
+    try { return Get-LocalUser -SID $Sid -ErrorAction Stop }
+    catch {
+        if ($_.CategoryInfo.Category -eq [Management.Automation.ErrorCategory]::ObjectNotFound) { return $null }
+        throw
+    }
+}
+
+function Stop-SandboxProcesses([switch]$Disable, [string[]]$AdditionalSids = @()) {
+    $ownedSids = @($sandboxSid.Value) + $AdditionalSids
     # Collection disables new logons; preparation only drains finished installers.
-    if ($Disable) { Disable-LocalUser -SID $sandboxSid }
+    if ($Disable) {
+        foreach ($sid in $ownedSids) {
+            $identity = [Security.Principal.SecurityIdentifier]::new($sid)
+            if (Get-RecordedLocalUser $identity) {
+                try { Disable-LocalUser -SID $identity -ErrorAction Stop }
+                catch {
+                    # Account deletion can race collection. Its old token SID
+                    # still participates in the process drain below.
+                    if (Get-RecordedLocalUser $identity) { throw }
+                }
+            }
+        }
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     do {
         $found = $false
@@ -581,7 +615,7 @@ function Stop-SandboxProcesses([switch]$Disable) {
                 if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) { throw }
                 continue
             }
-            if ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $sandboxSid.Value) {
+            if ($owner.ReturnValue -eq 0 -and $owner.Sid -in $ownedSids) {
                 $found = $true
                 $result = Invoke-CimMethod -InputObject $process -MethodName Terminate -Arguments @{ Reason = [uint32]1 }
                 if ($result.ReturnValue -ne 0 -and $result.ReturnValue -ne 9) { throw 'Could not stop an isolated process.' }
@@ -605,6 +639,459 @@ function Get-NpmInstallBody([string]$Package) {
         "& $node $normalize $prefix`nexit `$LASTEXITCODE"
 }
 
+function Get-VerifiedCodexDirectory {
+    # rust-v0.151.0 -> 78c290807ce710180111df227df3b7a4fe845452.
+    # Main/setup/runner hashes match the official GitHub release archives. The
+    # complete npm payload, including manifest/code-mode host/rg, was independently
+    # verified against its published SHA512 integrity. Sealing alone would not
+    # authenticate an installer's output.
+    if ($env:CODEX_VERSION -cne '0.151.0') { throw 'Codex provisioning requires the audited 0.151.0 native release.' }
+    $expected = [ordered]@{
+        'bin\codex.exe' = 'cf68265897197ac5f3bff6a10c168eec159842b353129726da5e3ed6b91ef0f4'
+        'codex-resources\codex-windows-sandbox-setup.exe' = '46b9f3adb62ea6030ea026647b6a29f10566bff7307ca76d10f3a1c1189bd6e9'
+        'codex-resources\codex-command-runner.exe' = '5a84820fc507e5e3c8689047434259d96197730e92d88e6a915b0da97c758da6'
+        'bin\codex-code-mode-host.exe' = '4ea17cf938023f2d0c292b6dbcd4d51e7fbdf72f3885cf341017a380a87e77dc'
+        'codex-path\rg.exe' = '14231169855ec5205cf5a1b6f1db358ff4aed4247c86b69ce8aae647c77f6680'
+        'codex-package.json' = '8689b9e6cb755d4b35e335fd08a847ce5d19f6f4ef6d893d1a16d044feefdf34'
+    }
+    $candidates = @(
+        (Join-Path $tools 'npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc'),
+        (Join-Path $tools 'npm\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc'),
+        (Join-Path $tools 'npm\node_modules\@openai\codex\vendor\x86_64-pc-windows-msvc')
+    )
+    $found = @($candidates | Where-Object { [IO.File]::Exists((Join-Path $_ 'bin\codex.exe')) })
+    if ($found.Count -ne 1) { throw 'Expected one installed native Codex directory.' }
+    $directory = $found[0]
+    Assert-PlainPath $directory
+    # Prevent a correctly hashed executable loading an installer-planted DLL.
+    $entries = @([IO.Directory]::GetFiles($directory, '*', [IO.SearchOption]::AllDirectories))
+    if ($entries.Count -ne $expected.Count) { throw 'Unexpected companion files beside native Codex.' }
+    foreach ($name in $expected.Keys) {
+        $file = Join-Path $directory $name
+        Assert-PlainPath $file
+        [AidlcFileBoundary]::RequireSingleLink($file)
+        $acl = Get-Acl -LiteralPath $file
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $runnerSid.Value) {
+            throw 'Native Codex was not sealed by this runner.'
+        }
+        if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected[$name]) {
+            throw 'Native Codex release digest mismatch.'
+        }
+    }
+    return $directory
+}
+
+function Invoke-CodexProvisioning([string]$NativeDirectory, [string]$CodexHomePath) {
+    # The public pinned CLI implements ProvisionOnly: no project execution,
+    # provider request, or UAC prompt when invoked from this elevated process.
+    # Use an empty, administrator-owned home and a cleared environment, never
+    # a model-writable config as input to an administrator process.
+    New-PrivateDirectory $CodexHomePath
+    $adminHome = Join-Path $stateRoot 'codex-admin-home'
+    New-PrivateDirectory $adminHome
+    [IO.File]::WriteAllText((Join-Path $CodexHomePath 'config.toml'), '')
+    $info = [Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = Join-Path $NativeDirectory 'bin\codex.exe'
+    $info.Arguments = 'sandbox setup --elevated --user "' + $env:COMPUTERNAME + '\' + $userName + '" --codex-home "' + $CodexHomePath + '"'
+    $info.WorkingDirectory = $CodexHomePath
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.EnvironmentVariables.Clear()
+    $clean = @{
+        SystemRoot = $env:SystemRoot; WINDIR = $env:SystemRoot
+        SystemDrive = [IO.Path]::GetPathRoot($env:SystemRoot).TrimEnd('\')
+        ComSpec = (Join-Path $env:SystemRoot 'System32\cmd.exe')
+        PATH = "$NativeDirectory;$env:SystemRoot\System32;$env:SystemRoot"
+        HOME = $adminHome; USERPROFILE = $adminHome; TEMP = $adminHome; TMP = $adminHome
+        CODEX_HOME = $CodexHomePath; CODEX_MANAGED_PACKAGE_ROOT = $NativeDirectory; CI = 'true'; USERNAME = $env:USERNAME; USERDOMAIN = $env:COMPUTERNAME
+    }
+    foreach ($key in $clean.Keys) { $info.EnvironmentVariables[$key] = $clean[$key] }
+    $process = [Diagnostics.Process]::Start($info)
+    try {
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(180000)) {
+            # Stop only our exact process object. Preparation fails closed; a
+            # timed-out administrator setup makes this ephemeral runner unusable.
+            $process.Kill()
+            throw 'Codex provisioning timed out; discard this ephemeral runner.'
+        }
+        [IO.File]::WriteAllText((Join-Path $stateRoot 'codex-setup.stdout.log'), $stdout.GetAwaiter().GetResult())
+        [IO.File]::WriteAllText((Join-Path $stateRoot 'codex-setup.stderr.log'), $stderr.GetAwaiter().GetResult())
+        if ($process.ExitCode -ne 0) { throw 'Trusted Codex provisioning failed; retain sandbox.log, never sandbox-secrets.' }
+    } finally { $process.Dispose() }
+}
+
+function Get-CodexHomeInitializer {
+    # Executed only as the original low-user SID. Copy machine-scope DPAPI
+    # artifacts, not passwords, preserving the pinned setup's access boundaries.
+    # No subsequent administrator request or credential-bearing elevation exists.
+    $body = @'
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne __SID__) { throw 'Wrong Codex initializer identity.' }
+Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class AidlcCodexDirectoryPin {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Info {
+        public uint Attributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME Created, Accessed, Written;
+        public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    private static extern SafeFileHandle CreateFileW(string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out Info info);
+    public static SafeFileHandle Open(string path) {
+        SafeFileHandle handle = CreateFileW(path, 0x80, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        if (handle.IsInvalid) { handle.Dispose(); throw new Win32Exception(Marshal.GetLastWin32Error()); }
+        Info info;
+        if (!GetFileInformationByHandle(handle, out info) || (info.Attributes & 0x400) != 0 || (info.Attributes & 0x10) == 0) {
+            handle.Dispose(); throw new InvalidOperationException("Codex home has a replaced or linked directory.");
+        }
+        return handle;
+    }
+}
+"@
+$pins = [Collections.Generic.List[IDisposable]]::new()
+function Pin-Path([string]$Path) {
+    $cursor = [IO.Path]::GetPathRoot($Path)
+    foreach ($part in $Path.Substring($cursor.Length).Split('\')) {
+        if (-not $part) { continue }
+        $cursor = Join-Path $cursor $part
+        $pins.Add([AidlcCodexDirectoryPin]::Open($cursor))
+    }
+}
+function Access-Acl($Entry) {
+    if ($Entry.directory) { $acl = [Security.AccessControl.DirectorySecurity]::new() }
+    else { $acl = [Security.AccessControl.FileSecurity]::new() }
+    $acl.SetSecurityDescriptorSddlForm($Entry.sddl, [Security.AccessControl.AccessControlSections]::Access)
+    # Directories have explicit native grants; discard inherited seed-root
+    # grants so runtime refresh produces the same ACL. Secret files inherit
+    # their native deny/grant rules, which must become explicit on the copy.
+    $acl.SetAccessRuleProtection($true, (-not $Entry.directory))
+    return $acl
+}
+function Access-Signature($Acl) {
+    $rules = @($Acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object {
+        '{0}/{1}/{2}/{3}/{4}' -f $_.IdentityReference.Value, [int]$_.AccessControlType,
+            [long]$_.FileSystemRights, [int]$_.InheritanceFlags, [int]$_.PropagationFlags
+    } | Sort-Object)
+    return ([string]$Acl.AreAccessRulesProtected + ':' + ($rules -join '|'))
+}
+try {
+    if (-not $env:CODEX_HOME -or -not $env:TEMP) { throw 'Fresh Codex home and runner temporary root are required.' }
+    if ($env:CODEX_HOME -notmatch '^[A-Za-z]:[\\/]') { throw 'Codex home must be an absolute local path.' }
+    $homePath = [IO.Path]::GetFullPath($env:CODEX_HOME).TrimEnd('\')
+    $tempPath = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')
+    if ($homePath -notmatch '^[A-Za-z]:\\' -or
+        -not $homePath.StartsWith($tempPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Codex home is outside this test temporary root.'
+    }
+    Pin-Path $homePath
+    if ((Get-Acl -LiteralPath $homePath).GetOwner([Security.Principal.SecurityIdentifier]).Value -cne __SID__) {
+        throw 'Codex home is not owned by its calling user.'
+    }
+    $seed = __SEED__
+    Pin-Path $seed
+    $manifest = Get-Content -LiteralPath (Join-Path $seed 'template.json') -Raw | ConvertFrom-Json
+    $existing = [IO.Directory]::Exists((Join-Path $homePath '.sandbox'))
+    foreach ($entry in $manifest.entries) {
+        $path = Join-Path $homePath $entry.path
+        $acl = Access-Acl $entry
+        if ($entry.directory) {
+            if (-not $existing) {
+                if (Test-Path -LiteralPath $path) { throw 'Refusing a partial or occupied Codex sandbox home.' }
+                [void][IO.Directory]::CreateDirectory($path, $acl)
+            }
+            $pins.Add([AidlcCodexDirectoryPin]::Open($path))
+        } else {
+            if (-not $existing) {
+                $input = [IO.File]::Open((Join-Path $seed $entry.path), 'Open', 'Read', 'Read')
+                try {
+                    $output = [IO.FileStream]::new($path, [IO.FileMode]::CreateNew,
+                        [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None, 4096,
+                        [IO.FileOptions]::None, $acl)
+                    try { $input.CopyTo($output) } finally { $output.Dispose() }
+                } finally { $input.Dispose() }
+            }
+            $attributes = [IO.File]::GetAttributes($path)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Linked Codex sandbox artifact.' }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $entry.sha256) {
+                throw 'Codex sandbox artifact differs from this provisioning generation.'
+            }
+        }
+        $actualAcl = Get-Acl -LiteralPath $path
+        if ($actualAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne __SID__) {
+            throw 'Codex sandbox artifact owner changed.'
+        }
+        $actual = Access-Signature $actualAcl
+        $expected = Access-Signature $acl
+        if ($actual -cne $expected) { throw 'Codex sandbox artifact access boundary changed.' }
+    }
+} finally {
+    for ($index = $pins.Count - 1; $index -ge 0; $index--) { $pins[$index].Dispose() }
+}
+'@
+    return $body.Replace('__SID__', (ConvertTo-PSLiteral $sandboxSid.Value)).Replace('__SEED__', (ConvertTo-PSLiteral $codexSeed))
+}
+
+function Initialize-CodexRuntime {
+    $nativeDirectory = Get-VerifiedCodexDirectory
+    # Setup rotates fixed machine-wide accounts. A fresh CI host is mandatory;
+    # never reset an operator's existing Codex users or provision homes serially.
+    foreach ($name in @('CodexSandboxOffline', 'CodexSandboxOnline')) {
+        if (Get-LocalUser -Name $name -ErrorAction SilentlyContinue) { throw 'Refusing pre-existing Codex sandbox accounts.' }
+    }
+    if (Get-LocalGroup -Name 'CodexSandboxUsers' -ErrorAction SilentlyContinue) { throw 'Refusing a pre-existing Codex sandbox group.' }
+    try { Invoke-CodexProvisioning $nativeDirectory $codexSeed }
+    finally {
+        $script:codexSandboxSids = @(
+            foreach ($name in @('CodexSandboxOffline', 'CodexSandboxOnline')) {
+                $created = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+                if ($created) { $created.SID.Value }
+            }
+        )
+        $state | Add-Member -NotePropertyName CodexSandboxSids -NotePropertyValue $codexSandboxSids -Force
+        $state | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding UTF8
+    }
+    if ($codexSandboxSids.Count -ne 2) { throw 'Codex sandbox accounts were not provisioned.' }
+    # 0.151.0 elevated/runner_client.rs uses CreateProcessWithLogonW(flags=0).
+    # Explicitly grant the corresponding logon right to only our new accounts;
+    # server policy need not grant it to the broad BUILTIN\Users group.
+    foreach ($sid in $codexSandboxSids) { [AidlcBatchLogon]::GrantSandboxInteractive($sid) }
+    $groupSid = (Get-LocalGroup -Name 'CodexSandboxUsers').SID
+    $entries = @(
+        foreach ($relative in @('.sandbox', '.sandbox-secrets', '.sandbox-bin', '.sandbox\setup_marker.json', '.sandbox-secrets\sandbox_users.json')) {
+            $path = Join-Path $codexSeed $relative
+            Assert-PlainPath $path
+            $isDirectory = [IO.Directory]::Exists($path)
+            if (-not $isDirectory) { [AidlcFileBoundary]::RequireSingleLink($path) }
+            $acl = Get-Acl -LiteralPath $path
+            if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @($runnerSid.Value, $adminSid.Value, $systemSid.Value)) {
+                throw 'Sandbox template ownership changed before sealing.'
+            }
+            $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+            $allowed = @($runnerSid.Value, $adminSid.Value, $systemSid.Value, $sandboxSid.Value, $groupSid.Value)
+            if (@($rules | Where-Object { $_.IdentityReference.Value -notin $allowed }).Count) {
+                throw 'Sandbox template contains an unexpected principal.'
+            }
+            if ($relative -like '.sandbox-secrets*' -or $relative -eq '.sandbox\setup_marker.json') {
+                if (@($rules | Where-Object {
+                    $_.IdentityReference.Value -eq $groupSid.Value -and $_.AccessControlType -eq 'Allow'
+                }).Count) { throw 'Sandbox template exposes a private setup artifact.' }
+            }
+            if ($relative -like '.sandbox-secrets*' -and -not @($rules | Where-Object {
+                $_.IdentityReference.Value -eq $groupSid.Value -and $_.AccessControlType -eq 'Deny' -and
+                ([long]$_.FileSystemRights -band 1)
+            }).Count) { throw 'Sandbox template lacks its credential read denial.' }
+            [pscustomobject]@{
+                path = $relative; directory = $isDirectory
+                sddl = $acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
+                sha256 = $(if ($isDirectory) { $null } else { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash })
+            }
+        }
+    )
+    [IO.File]::WriteAllText((Join-Path $codexSeed 'template.json'), (@{ entries = $entries } | ConvertTo-Json -Depth 5))
+    # Keep the authoritative generation outside test TEMP and immutable to the
+    # low user. The sandbox accounts receive no read access to this seed.
+    Set-RuntimeAcl $codexSeed $sandboxSid 'ReadAndExecute' -Tree -RejectLinks
+    $initializer = Join-Path $tools 'codex-initialize-home.ps1'
+    [IO.File]::WriteAllText($initializer, (Get-CodexHomeInitializer), [Text.UTF8Encoding]::new($true))
+    $launcher = @'
+using System;
+using System.Diagnostics;
+using System.Text;
+public static class AidlcCodexLauncher {
+    private const string Native = __NATIVE__;
+    private const string PackageRoot = __PACKAGE_ROOT__;
+    private const string PowerShell = __POWERSHELL__;
+    private const string Initializer = __INITIALIZER__;
+    // Quote each argv element with the CommandLineToArgvW backslash rules.
+    // No command shell, expansion, or user-controlled command-line fragment.
+    private static string Quote(string value) {
+        StringBuilder result = new StringBuilder("\"");
+        int slashes = 0;
+        foreach (char c in value) {
+            if (c == '\\') { slashes++; continue; }
+            if (c == '"') { result.Append('\\', slashes * 2 + 1).Append(c); }
+            else { result.Append('\\', slashes).Append(c); }
+            slashes = 0;
+        }
+        return result.Append('\\', slashes * 2).Append('"').ToString();
+    }
+    private static int Run(string executable, string[] args, int timeout) {
+        ProcessStartInfo info = new ProcessStartInfo(executable);
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        info.Arguments = String.Join(" ", Array.ConvertAll(args, Quote));
+        info.EnvironmentVariables["CODEX_MANAGED_PACKAGE_ROOT"] = PackageRoot;
+        info.EnvironmentVariables["CODEX_MANAGED_BY_NPM"] = "1";
+        info.EnvironmentVariables.Remove("CODEX_MANAGED_BY_BUN");
+        info.EnvironmentVariables.Remove("CODEX_MANAGED_BY_PNPM");
+        using (Process child = Process.Start(info)) {
+            if (!child.WaitForExit(timeout)) {
+                child.Kill();
+                Console.Error.WriteLine("Codex home initialization timed out.");
+                return 1;
+            }
+            return child.ExitCode;
+        }
+    }
+    public static int Main(string[] args) {
+        try {
+            bool version = args.Length == 1 && (args[0] == "--version" || args[0] == "-V");
+            if (!version) {
+                int initialized = Run(PowerShell, new string[] {
+                    "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", Initializer
+                }, 30000);
+                if (initialized != 0) return initialized;
+            }
+            return Run(Native, args, -1);
+        } catch (Exception error) {
+            Console.Error.WriteLine("Codex native launcher failed: " + error.Message);
+            return 1;
+        }
+    }
+}
+'@
+    $launcher = $launcher.Replace('__NATIVE__', (ConvertTo-Json -InputObject (Join-Path $nativeDirectory 'bin\codex.exe') -Compress))
+    $launcher = $launcher.Replace('__PACKAGE_ROOT__', (ConvertTo-Json -InputObject $nativeDirectory -Compress))
+    $launcher = $launcher.Replace('__POWERSHELL__', (ConvertTo-Json -InputObject $powershell -Compress))
+    $launcher = $launcher.Replace('__INITIALIZER__', (ConvertTo-Json -InputObject $initializer -Compress))
+    $compilerTemp = Join-Path $stateRoot 'codex-compiler-temp'
+    New-PrivateDirectory $compilerTemp
+    $compiler = [CodeDom.Compiler.CompilerParameters]::new()
+    $compiler.GenerateExecutable = $true
+    $compiler.GenerateInMemory = $false
+    $compiler.OutputAssembly = Join-Path $tools 'codex-managed.exe'
+    $compiler.CompilerOptions = '/platform:x64 /optimize+'
+    $compiler.TempFiles = [CodeDom.Compiler.TempFileCollection]::new($compilerTemp, $false)
+    [void]$compiler.ReferencedAssemblies.Add('System.dll')
+    $provider = [Microsoft.CSharp.CSharpCodeProvider]::new()
+    try {
+        $compiled = $provider.CompileAssemblyFromSource($compiler, $launcher)
+        if ($compiled.Errors.HasErrors) { throw 'Could not compile the trusted native Codex launcher.' }
+    } finally { $provider.Dispose(); $compiler.TempFiles.Delete() }
+    foreach ($name in @('codex-initialize-home.ps1', 'codex-managed.exe')) {
+        Set-RuntimeAcl (Join-Path $tools $name) $sandboxSid 'ReadAndExecute' -RejectLinks
+    }
+    # Only executable inputs, never tools/jobs or tools/logs (which can contain
+    # the original low user's credential-bearing launch environment).
+    $readable = @($tools, (Join-Path $tools 'bun.exe'), (Join-Path $tools 'node.exe'), $nativeDirectory) +
+        @([IO.Directory]::GetDirectories($nativeDirectory, '*', [IO.SearchOption]::AllDirectories)) +
+        @([IO.Directory]::GetFiles($nativeDirectory, '*', [IO.SearchOption]::AllDirectories))
+    foreach ($path in $readable) {
+        $acl = Get-Acl -LiteralPath $path
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($groupSid, 'ReadAndExecute', 'None', 'None', 'Allow'))
+        if ([IO.Directory]::Exists($path)) { [IO.Directory]::SetAccessControl($path, $acl) }
+        else { [IO.File]::SetAccessControl($path, $acl) }
+    }
+}
+
+function Get-CodexReadinessBody {
+    # Actual native sandbox commands, not a model or provider probe. Exercise
+    # both machine accounts through distinct fresh CODEX_HOMEs, then retain
+    # the encrypted metadata only until the administrator drains those SIDs.
+    $body = @'
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$native = __NATIVE__
+$bun = __BUN__
+$env:CODEX_MANAGED_PACKAGE_ROOT = __PACKAGE_ROOT__
+$expectedSids = __SIDS__
+$initializer = __INITIALIZER__
+$powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$index = 0
+foreach ($network in @('false', 'true')) {
+    $base = Join-Path $env:TEMP ('home-' + $index)
+    $env:CODEX_HOME = Join-Path $base 'codex home'
+    $project = Join-Path $base 'project with spaces'
+    [void][IO.Directory]::CreateDirectory($env:CODEX_HOME)
+    [void][IO.Directory]::CreateDirectory($project)
+    [IO.File]::WriteAllText((Join-Path $env:CODEX_HOME 'config.toml'), "[windows]`nsandbox = `"elevated`"`n")
+    & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $initializer
+    if ($LASTEXITCODE -ne 0) { throw 'Fresh Codex home initialization failed.' }
+    # No secret data is printed. The caller confirms existence; the sandboxed
+    # command must prove access denial, not mistake a missing file for a deny.
+    $secretPath = Join-Path $env:CODEX_HOME '.sandbox-secrets\sandbox_users.json'
+    if (-not [IO.File]::Exists($secretPath)) { throw 'Fresh Codex sandbox credential file is absent.' }
+    $probe = Join-Path $project 'probe.ps1'
+    [IO.File]::WriteAllText($probe, @"
+param([string]`$ExpectedSid, [string]`$SecretPath, [string]`$ForbiddenPath, [string]`$Literal)
+`$ErrorActionPreference = 'Stop'
+if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne `$ExpectedSid) { throw 'Wrong native sandbox identity.' }
+`$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+if (`$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Native sandbox identity is an administrator.' }
+if (`$Literal -cne 'space "quoted" & symbols \tail\') { throw 'Native launcher changed an argument.' }
+[IO.File]::WriteAllText((Join-Path (Get-Location) 'workspace-write.txt'), 'workspace-write verified')
+`$denied = `$false
+try { `$s = [IO.File]::OpenRead(`$SecretPath); `$s.Dispose() } catch [UnauthorizedAccessException] { `$denied = `$true }
+if (-not `$denied) { throw 'Native sandbox can read its credential store.' }
+`$denied = `$false
+try { [IO.File]::WriteAllText(`$ForbiddenPath, 'must not be written') } catch [UnauthorizedAccessException] { `$denied = `$true }
+if (-not `$denied) { throw 'Native sandbox can write outside its workspace.' }
+Write-Output 'Codex native identity, workspace write, secret denial and protected-tool denial verified.'
+"@)
+    $invoke = Join-Path $project 'invoke.cjs'
+    [IO.File]::WriteAllText($invoke, @"
+const {spawnSync} = require("node:child_process");
+const [launcher, shell, script, sid, secret, forbidden, network] = process.argv.slice(2);
+const args = ["-c", "sandbox_mode=workspace-write", "-c", "windows.sandbox=elevated",
+  "-c", "sandbox_workspace_write.network_access=" + network, "sandbox", "--",
+  shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+  "-File", script, "-ExpectedSid", sid, "-SecretPath", secret, "-ForbiddenPath", forbidden,
+  "-Literal", 'space "quoted" & symbols \\tail\\'];
+const result = spawnSync(launcher, args, {encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:90000});
+process.stdout.write(result.stdout || "");
+process.stderr.write(result.stderr || "");
+if (result.error) console.error(result.error.message);
+process.exit(result.status === null ? 1 : result.status);
+"@)
+    Set-Location -LiteralPath $project
+    & $bun $invoke $native $powershell $probe $expectedSids[$index] $secretPath __FORBIDDEN__ $network
+    if ($LASTEXITCODE -ne 0) { throw 'Fresh-home elevated sandbox readiness command failed.' }
+    if (-not [IO.File]::Exists((Join-Path $project 'workspace-write.txt'))) { throw 'Native workspace write was not observed.' }
+    # Resume-style reentry must validate the same generation without resetting
+    # global account passwords or overwriting the test's own config.
+    & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $initializer
+    if ($LASTEXITCODE -ne 0) { throw 'Codex home could not be reused after native sandbox execution.' }
+    $index++
+}
+[Console]::WriteLine('Codex elevated provisioning verified in two fresh low-user homes.')
+'@
+    $nativeDirectory = Get-VerifiedCodexDirectory
+    $native = Join-Path $tools 'codex-managed.exe'
+    $body = $body.Replace('__NATIVE__', (ConvertTo-PSLiteral $native))
+    $body = $body.Replace('__BUN__', (ConvertTo-PSLiteral (Join-Path $tools 'bun.exe')))
+    $body = $body.Replace('__PACKAGE_ROOT__', (ConvertTo-PSLiteral $nativeDirectory))
+    $body = $body.Replace('__INITIALIZER__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-initialize-home.ps1')))
+    $body = $body.Replace('__SIDS__', ('@(' + (($codexSandboxSids | ForEach-Object { ConvertTo-PSLiteral $_ }) -join ',') + ')'))
+    return $body.Replace('__FORBIDDEN__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-outside-write-must-not-exist')))
+}
+
+function Get-CodexRuntimeSids($Record) {
+    if (-not $Record.PSObject.Properties['CodexSandboxSids']) { return }
+    if ($null -eq $Record.CodexSandboxSids) { return }
+    $recorded = @($Record.CodexSandboxSids)
+    if ($recorded.Count -eq 0) { return }
+    foreach ($sid in $recorded) {
+        $account = Get-RecordedLocalUser ([Security.Principal.SecurityIdentifier]::new([string]$sid))
+        if ($null -ne $account -and $account.Name -notin @('CodexSandboxOffline', 'CodexSandboxOnline')) {
+            throw 'Recorded Codex sandbox account no longer matches this runtime.'
+        }
+        # Never resolve a removed account by name: a new account with that
+        # name is unrelated. Retain the recorded SID for residual processes.
+        [string]$sid
+    }
+}
+
 function Assert-RuntimeOwner($Record) {
     if ($Record.Version -ne 1 -or $Record.RunnerSid -ne $runnerSid.Value -or
         $Record.Workspace -ne $workspace -or $Record.RunnerHome -ne $runnerHome -or $Record.RunnerTemp -ne $runnerTemp) {
@@ -617,6 +1104,21 @@ function Save-PreparationFailure($Failure, [bool]$IncludeLaunchLogs) {
     New-PrivateDirectory $evidence
     $summary = 'Windows live runtime failed closed during {0} ({1}, line {2}).' -f $stage, $Failure.Exception.GetType().Name, $Failure.InvocationInfo.ScriptLineNumber
     [IO.File]::WriteAllText((Join-Path $evidence 'preparation.log'), $summary + "`r`n", [Text.UTF8Encoding]::new($true))
+    if ($Family -eq 'codex') {
+        # Explicit diagnostic allowlist. Never traverse or copy sandbox-secrets.
+        $diagnostics = @((Join-Path $stateRoot 'codex-setup.stdout.log'), (Join-Path $stateRoot 'codex-setup.stderr.log'))
+        $sandboxLogs = Join-Path $codexSeed '.sandbox'
+        if ([IO.Directory]::Exists($sandboxLogs)) {
+            $diagnostics += @([IO.Directory]::GetFiles($sandboxLogs, 'sandbox*.log', [IO.SearchOption]::TopDirectoryOnly))
+            $diagnostics += Join-Path $sandboxLogs 'setup_error.json'
+        }
+        foreach ($path in $diagnostics) {
+            if (-not [IO.File]::Exists($path)) { continue }
+            Assert-PlainPath $path
+            [AidlcFileBoundary]::RequireSingleLink($path)
+            [IO.File]::Copy($path, (Join-Path $evidence ([IO.Path]::GetFileName($path))), $false)
+        }
+    }
     if ($IncludeLaunchLogs -and [IO.Directory]::Exists((Join-Path $tools 'logs'))) {
         try { Copy-PlainTree (Join-Path $tools 'logs') (Join-Path $evidence 'launch') -RejectLinks }
         catch {
@@ -630,6 +1132,7 @@ function Save-PreparationFailure($Failure, [bool]$IncludeLaunchLogs) {
     [pscustomobject]@{
         Version = 1; RunnerSid = $runnerSid.Value
         SandboxSid = $(if ($null -ne $createdUserSid) { $createdUserSid.Value } else { $null })
+        CodexSandboxSids = $(if ($Family -eq 'codex') { @($codexSandboxSids) } else { @() })
         Family = $Family; Workspace = $workspace; RunnerHome = $runnerHome; RunnerTemp = $runnerTemp
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stateRoot 'preparation-failed.json') -Encoding UTF8
 }
@@ -639,14 +1142,14 @@ function Collect-PreparationFailure([bool]$FamilyProvided) {
     Assert-PlainPath $marker
     $record = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
     Assert-RuntimeOwner $record
+    $codexSandboxSids = @(Get-CodexRuntimeSids $record)
     if ($FamilyProvided -and $Family -ne $record.Family) { throw 'Runtime was prepared for another family.' }
     if ($null -ne $record.SandboxSid) {
         $script:sandboxSid = [Security.Principal.SecurityIdentifier]::new($record.SandboxSid)
         # Preparation normally already removed this identity. Its recorded SID
         # still identifies any remaining token/process; never disable a new user
         # that happens to have reused the same account name.
-        $user = Get-LocalUser -SID $sandboxSid -ErrorAction SilentlyContinue
-        Stop-SandboxProcesses -Disable:($null -ne $user)
+        Stop-SandboxProcesses -Disable -AdditionalSids $codexSandboxSids
     }
     $destination = Join-Path $workspace 'tests\logs'
     Assert-PlainPath $destination
@@ -888,12 +1391,33 @@ exit $LASTEXITCODE
             $installBody = Get-NpmInstallBody $package
             $exitCode = Invoke-Isolated 'npm-install' $safe $installBody
             if ($exitCode -ne 0) { throw 'Pinned isolated CLI installation failed.' }
-            Stop-SandboxProcesses
+            Stop-SandboxProcesses -AdditionalSids $codexSandboxSids
             Set-RuntimeAcl $tools $sandboxSid 'ReadAndExecute' -Tree -RejectLinks
         }
+        if ($Family -eq 'codex') {
+            $stage = 'provisioning the verified Codex sandbox'
+            Initialize-CodexRuntime
+        }
         $exitCode = Invoke-Isolated 'prepare-proof' $safe (Get-ProofBody)
-        Stop-SandboxProcesses
+        Stop-SandboxProcesses -AdditionalSids $codexSandboxSids
         if ($exitCode -ne 0) { throw 'Windows isolation proof failed.' }
+        if ($Family -eq 'codex') {
+            $stage = 'proving fresh Codex sandbox homes'
+            $proofRoot = Join-Path $root ('codex-readiness-' + [Guid]::NewGuid().ToString('N'))
+            New-PrivateDirectory $proofRoot
+            Set-RuntimeAcl $proofRoot $sandboxSid 'Modify'
+            $proofAcl = Get-Acl -LiteralPath $proofRoot
+            $proofAcl.SetOwner($sandboxSid)
+            [IO.Directory]::SetAccessControl($proofRoot, $proofAcl)
+            $proofEnvironment = Get-SafeEnvironment
+            $proofEnvironment.TEMP = $proofRoot
+            $proofEnvironment.TMP = $proofRoot
+            $proofEnvironment.TMPDIR = $proofRoot
+            $exitCode = Invoke-Isolated 'codex-sandbox-proof' $proofEnvironment (Get-CodexReadinessBody) -TimeoutMinutes 3
+            Stop-SandboxProcesses -AdditionalSids $codexSandboxSids
+            if ($exitCode -ne 0) { throw 'Fresh-home Codex sandbox proof failed.' }
+            Remove-OwnedTree $proofRoot
+        }
         [Console]::WriteLine('Prepared the separate-user Windows live runtime.')
         exit 0
     }
@@ -906,13 +1430,14 @@ exit $LASTEXITCODE
     Assert-PlainPath $credentialFile
     $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
     Assert-RuntimeOwner $state
+    $codexSandboxSids = @(Get-CodexRuntimeSids $state)
     $user = Get-LocalUser -Name $userName
     if ($user.SID.Value -ne $state.SandboxSid) { throw 'Runtime identity no longer matches its owner record.' }
     $sandboxSid = $user.SID
     if ($PSBoundParameters.ContainsKey('Family') -and $Family -ne $state.Family) { throw 'Runtime was prepared for another family.' }
     $Family = $state.Family
     if ($Mode -eq 'collect') {
-        Stop-SandboxProcesses -Disable
+        Stop-SandboxProcesses -Disable -AdditionalSids $codexSandboxSids
         $source = Join-Path $work 'tests\logs'
         Assert-PlainPath (Join-Path $work 'tests')
         Assert-PlainPath $source
@@ -969,7 +1494,7 @@ exit $LASTEXITCODE
             try {
                 $ownedUser = Get-LocalUser -Name $userName
                 if ($ownedUser.SID.Value -eq $createdUserSid.Value) {
-                    Stop-SandboxProcesses -Disable
+                    Stop-SandboxProcesses -Disable -AdditionalSids $codexSandboxSids
                     $mayRemoveRoot = $true
                     Remove-LocalUser -SID $createdUserSid
                 }

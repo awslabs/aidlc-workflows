@@ -316,7 +316,7 @@ function auditLockDir(projectDir: string): string {
 // Phase A — primitive smoke
 // ===========================================================================
 describe("t07 Phase A — primitive smoke (migrated from t07-audit-fork-merge.sh, plan 31)", () => {
-  test("base source budget failure names its cause before creating a worktree or audit row", () => {
+  test("base source budget failure names its cause without a worktree or creation event", () => {
     const p = makeFixture();
     const auditBefore = readFileSync(auditPath(p), "utf8");
     const base = spawnSync("git", ["-C", p, "rev-parse", "main"], { encoding: "utf8" });
@@ -332,7 +332,10 @@ describe("t07 Phase A — primitive smoke (migrated from t07-audit-fork-merge.sh
     expect(message).toContain(base.stdout.trim());
     expect(message).toContain("budget-entries");
     expect(existsSync(wtDir(p, "source-budget"))).toBe(false);
-    expect(readFileSync(auditPath(p), "utf8")).toBe(auditBefore);
+    expect(readFileSync(auditPath(p), "utf8").startsWith(auditBefore)).toBe(true);
+    expect(countEvent(auditPath(p), "ERROR_LOGGED")).toBe(1);
+    expect(countEvent(auditPath(p), "WORKTREE_CREATED")).toBe(0);
+    expect(countEvent(auditPath(p), "AUDIT_FORKED")).toBe(0);
   }, 30_000);
 
   test("A1-A7: fork happy path — exit 0, AUDIT_FORKED in both audits, byte-identical, matching Fork Boundary", () => {

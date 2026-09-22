@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { CI_BEDROCK_MODELS } from "./ci-credential-broker.ts";
 import { FAMILIES, selectedLiveFiles, type LiveFamily } from "./ci-live-filter.ts";
 
@@ -21,6 +21,13 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
       SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe",
       PATHEXT: ".COM;.EXE;.BAT;.CMD",
     });
+    if (family === "codex" && source.AIDLC_CODEX_BIN !== undefined) {
+      const managed = win32.join(win32.dirname(home), "tools", "codex-managed.exe");
+      if (source.AIDLC_CODEX_BIN.toLowerCase() !== managed.toLowerCase()) {
+        throw new Error("Expected the sealed native Codex launcher");
+      }
+      env.AIDLC_CODEX_BIN = managed;
+    }
   } else {
     Object.assign(env, { TMPDIR: join(home, "tmp"), BUN_INSTALL: join(home, ".bun"), XDG_CACHE_HOME: join(home, ".cache") });
   }

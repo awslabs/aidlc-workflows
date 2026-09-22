@@ -710,6 +710,14 @@ describe("t345 complete nightly coverage", () => {
       expect(Object.keys(windows).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key)))
         .toEqual(family === "opencode" ? ["AWS_PROFILE"] : []);
     }
+    const managed = "C:\\aidlc-live\\tools\\codex-managed.exe";
+    const native = sandboxEnvironment("codex", "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
+      ...inherited, AIDLC_CODEX_BIN: managed,
+    });
+    expect(native.AIDLC_CODEX_BIN).toBe(managed);
+    expect(() => sandboxEnvironment("codex", "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
+      ...inherited, AIDLC_CODEX_BIN: "C:\\runner\\untrusted.cmd",
+    })).toThrow("sealed native Codex launcher");
   });
 
   test("Kiro and Cursor are excluded without exposing vendor API keys", () => {
