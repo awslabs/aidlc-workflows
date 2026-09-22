@@ -3560,10 +3560,18 @@ function buildForward(): Forward {
             // The next protected call still fails closed on missing authority.
           }
         }
+        // The SIZE, never a slice of the content. This ledger is persistent, so a
+        // snippet here outlives the session and the drop is recorded for exactly the
+        // payloads nothing parsed - the ones most likely to be a tool's raw output
+        // rather than a path. The byte count is what the diagnosis actually needs
+        // (empty vs. present-but-unparsed), and it is the same redaction the three
+        // hookDebug sites use. Do not restore the slice.
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          `audit-and-sensors: ${ide.toolName ?? "?"} yielded no extractable path from toolResult: ${(ide.toolResult ?? "").slice(0, 120)}`,
+          `audit-and-sensors: ${ide.toolName ?? "?"} yielded no extractable path from a toolResult of ${
+            Buffer.byteLength(ide.toolResult ?? "")
+          } bytes`,
         );
         return null;
       }

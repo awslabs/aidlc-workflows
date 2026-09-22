@@ -4793,10 +4793,23 @@ function selectSource(
   existingDistribution: string | undefined,
   requiredVersion?: string,
 ): ConfigSource {
+  // A request names a CURRENT capability, so it resolves through the successor map:
+  // the documented `aidlc config --harness kiro-ide` must select the row that now
+  // serves that surface. `--harness` reaches here raw from argv - the `modelHarness`
+  // gate that normalizes covers the models path only - and every installed candidate
+  // is stamped with the current id, so without this a documented flag matches no
+  // candidate and a NEW project is told the harness is not installed.
+  //
+  // The `existingDistribution` comparisons below stay RAW on purpose. They judge a
+  // historical projection's own consistency, which is what `distributionUpgradesTo`
+  // answers; normalizing them would make an unrefreshed project unfindable.
+  const requestedName = requested === undefined
+    ? undefined
+    : currentDistribution(requested);
   if (from) {
     const source = materializeSource(from);
     const { stamp, descriptor } = projectionFiles(source.root);
-    if (requested && stamp.distribution !== requested) {
+    if (requestedName && stamp.distribution !== requestedName) {
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
       throw new Error(`source is ${stamp.distribution}, not requested harness ${requested}`);
     }
@@ -4812,7 +4825,7 @@ function selectSource(
   const candidates = installedSourceCandidates(requiredVersion);
   const selectedName = existingDistribution
     ? currentDistribution(existingDistribution)
-    : requested;
+    : requestedName;
   const versionFiltered = candidates;
   if (selectedName) {
     const selected = versionFiltered.filter((candidate) =>

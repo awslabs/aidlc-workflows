@@ -5,8 +5,9 @@
 //
 // WHAT. `repointHarnessIncludes(projectDir, space)` surgically re-points each
 // harness's native rule include at `aidlc/spaces/<space>/memory/` — Claude's
-// @-import stub, Kiro's agents/*.json `resources` glob, Codex's config.toml
-// AIDLC_RULES_DIR. The includes stay COMMITTED (each carries load-bearing engine
+// @-import stub, Kiro's agents/*.md frontmatter `resources` glob (the row ships
+// Markdown personas; the `.json` branch survives only for a legacy tree), Codex's
+// config.toml AIDLC_RULES_DIR. The includes stay COMMITTED (each carries load-bearing engine
 // wiring beyond the include); only the pointer SEGMENT is rewritten in place, so
 // every other byte — hooks, prompt, model, sandbox, statusline — is preserved.
 //
@@ -44,6 +45,22 @@ const distSurface = (h: string, ...parts: string[]): string =>
   join(REPO_ROOT, "dist", h, ...parts);
 const portablePaths = (paths: string[]): string[] =>
   paths.map((path) => path.replaceAll("\\", "/"));
+
+/** The conductor's delegation trust list, read from its Markdown frontmatter. That is
+ *  the surface this row ships - `dist/kiro/.kiro/agents/` carries Markdown personas
+ *  and no JSON sibling - so the list cannot be reached by parsing an agent JSON. */
+const trustedAgentsOf = (conductorMarkdown: string): string[] => {
+  const lines = conductorMarkdown.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^\s*trustedAgents:\s*$/.test(line));
+  if (start === -1) return [];
+  const out: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const item = /^\s+-\s+(.*\S)\s*$/.exec(line);
+    if (item === null) break;
+    out.push(item[1].replace(/^(['"])([\s\S]*)\1$/, "$2"));
+  }
+  return out;
+};
 
 const scratch: string[] = [];
 const savedHarness = process.env.AIDLC_HARNESS_DIR;
@@ -192,30 +209,35 @@ describe("t-active-space-includes: Kiro agents/* resources glob", () => {
 
   test("every trusted Kiro worker retains native memory preload when the active space changes", () => {
     const root = setup();
-    const conductor = JSON.parse(readFileSync(distSurface("kiro", ".kiro", "agents", "aidlc.json"), "utf8"));
-    const trusted = conductor.toolsSettings.subagent.trustedAgents as string[];
+    const DEFAULT_GLOB = "file://aidlc/spaces/default/memory/**/*.md";
+    const TEAMB_GLOB = "file://aidlc/spaces/teamB/memory/**/*.md";
+    // Both halves live in frontmatter on this row: the conductor's trust list and
+    // each worker's preload resource. The JSON this test used to read is not shipped.
+    const trusted = trustedAgentsOf(
+      readFileSync(distSurface("kiro", ".kiro", "agents", "aidlc.md"), "utf8"),
+    );
     expect(trusted.length).toBeGreaterThan(0);
-    const originals = new Map<string, { resources: string[]; [key: string]: unknown }>();
+    const originals = new Map<string, string>();
     for (const name of trusted) {
-      const source = distSurface("kiro", ".kiro", "agents", `${name}.json`);
-      const raw = readFileSync(source, "utf8");
-      const config = JSON.parse(raw);
-      expect(config.resources.filter((entry: string) =>
-        entry === "file://aidlc/spaces/default/memory/**/*.md")).toHaveLength(1);
-      originals.set(name, config);
-      writeFileSync(join(root, ".kiro", "agents", `${name}.json`), raw);
+      const raw = readFileSync(distSurface("kiro", ".kiro", "agents", `${name}.md`), "utf8");
+      expect(
+        raw.split(/\r?\n/).filter((line) => line.trim() === `- '${DEFAULT_GLOB}'`),
+        `${name}: declares the default-space memory preload exactly once`,
+      ).toHaveLength(1);
+      originals.set(name, raw);
+      writeFileSync(join(root, ".kiro", "agents", `${name}.md`), raw);
     }
     writeFileSync(join(root, "aidlc", "active-space"), "teamB\n");
     repointHarnessIncludes(root);
     for (const [name, original] of originals) {
-      const after = JSON.parse(readFileSync(join(root, ".kiro", "agents", `${name}.json`), "utf8"));
-      expect(after).toEqual({
-        ...original,
-        resources: original.resources.map(entry => entry === "file://aidlc/spaces/default/memory/**/*.md"
-          ? "file://aidlc/spaces/teamB/memory/**/*.md" : entry),
-      });
-      expect(after.resources).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
-      expect(after.resources).not.toContain("file://aidlc/spaces/default/memory/**/*.md");
+      const after = readFileSync(join(root, ".kiro", "agents", `${name}.md`), "utf8");
+      // BYTE-EXACT, which is the stronger form of the old "only resources changed"
+      // object comparison: the substitution is file-wide by design, so what has to
+      // be proven is that moving the space changed nothing else in the persona -
+      // not its prompt body, not its tools, not its delegated-knowledge preflight.
+      expect(after, name).toBe(original.replaceAll(DEFAULT_GLOB, TEAMB_GLOB));
+      expect(after, name).toContain(TEAMB_GLOB);
+      expect(after, name).not.toContain(DEFAULT_GLOB);
     }
   });
 

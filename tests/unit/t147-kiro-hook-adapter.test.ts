@@ -2693,6 +2693,34 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   }, 15_000);
 
+  test("7b: the drop ledger records an unparsed payload's SIZE, never its content", () => {
+    // This ledger is persistent, so anything interpolated into it outlives the
+    // session - and the drop fires for exactly the payloads nothing could parse,
+    // which are the ones most likely to be a tool's raw output rather than a path.
+    const dir = scratchProject(true);
+    try {
+      const secret = "SENTINEL-do-not-persist-4c1f9b";
+      const r = runAdapter(dir, "audit-and-sensors", {
+        ...(FIXTURES.postToolUse_write as Record<string, unknown>),
+        cwd: dir,
+        tool_name: "fs_write",
+        // No path field anywhere, so nothing is extractable and the drop fires.
+        tool_input: { content: "draft" },
+        tool_response: `wrote something: ${secret}`,
+      });
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      const drops = dropLines(dir);
+      expect(drops.length, drops.join("\n")).toBeGreaterThan(0);
+      const line = drops.find((l) => l.includes("no extractable path")) ?? "";
+      expect(line, drops.join("\n")).toContain("bytes");
+      expect(line).not.toContain(secret);
+      // Belt and braces: not anywhere in the ledger, not just not in that line.
+      expect(drops.join("\n")).not.toContain(secret);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("8: rebuild-stage-graph target accepts the alias shell payload and exits 0", () => {
     const dir = scratchProject(true);
     try {

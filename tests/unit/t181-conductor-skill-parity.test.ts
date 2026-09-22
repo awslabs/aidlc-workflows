@@ -458,7 +458,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       expect(kiro.indexOf(anchor), `Kiro missing ${anchor}`).toBeGreaterThan(-1);
     }
   });
-  test("Kiro CLI conductor surfaces defer rule delivery to the native-preload protocol", () => {
+  test("Kiro conductor surfaces defer rule delivery to the native-preload protocol", () => {
     const citation = '`stage-protocol.md` § "For subagent stages" step 2';
     const residualPaste = /\bpaste\b[^.\n]*(?:rule|steering) bundle[^.\n]*\bverbatim\b|\b(?:complete|accumulated) (?:rule|steering) bundle verbatim\b|briefs with artifacts by path and rules as the accumulated load-steering bundle/i;
     for (const [skillRoot, protocolRoot] of [
@@ -480,11 +480,21 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
 
       const ensemble = read(`${protocolRoot}/stage-protocol-ensemble.md`);
-      const cliStart = ensemble.indexOf("### Kiro CLI\n");
-      const ideStart = ensemble.indexOf("### Kiro IDE\n", cliStart);
-      expect(cliStart).toBeGreaterThan(-1);
-      expect(ideStart).toBeGreaterThan(cliStart);
-      const binding = ensemble.slice(cliStart, ideStart);
+      // ONE `### Kiro` section, not the retired CLI/IDE pair - the two surfaces are
+      // one row now, so there is no second heading to slice against. Bound the
+      // section by its next sibling heading, and assert that bound was found rather
+      // than letting the slice silently run to end-of-file and pass on another
+      // harness's prose.
+      const kiroStart = ensemble.indexOf("### Kiro\n");
+      expect(kiroStart, protocolRoot).toBeGreaterThan(-1);
+      expect(ensemble, `${protocolRoot}: the retired pair must not return`)
+        .not.toContain("### Kiro CLI");
+      expect(ensemble, `${protocolRoot}: the retired pair must not return`)
+        .not.toContain("### Kiro IDE");
+      const kiroEnd = ensemble.indexOf("\n### ", kiroStart + 1);
+      expect(kiroEnd, `${protocolRoot}: the Kiro binding is delimited`)
+        .toBeGreaterThan(kiroStart);
+      const binding = ensemble.slice(kiroStart, kiroEnd);
       expect(binding, protocolRoot).toContain(citation);
       expect(binding, protocolRoot).toContain("native preload");
       expect(binding, protocolRoot).not.toMatch(residualPaste);

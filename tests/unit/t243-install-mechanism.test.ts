@@ -5541,6 +5541,64 @@ describe("t243 projection channel", () => {
     ).toBe("kiro");
   }, 180_000);
 
+  test("an explicitly requested retired harness name resolves to its successor", () => {
+    // `aidlc config --harness kiro-ide` is documented, and `--harness` reaches
+    // selectSource RAW: the `modelHarness` gate that resolves a PERSISTED identity
+    // covers the models path only. Both selection paths compared that raw request
+    // against a stamp or candidate carrying the CURRENT id, so the documented flag
+    // failed on a project that had nothing to migrate - the one case the retired-id
+    // work above does not reach, because it only ever feeds the retired name in as
+    // existing state. The two cases below are the two paths.
+    const fromProject = temp("aidlc-t240-retired-request-from-");
+    mkdirSync(join(fromProject, ".git"), { recursive: true });
+    const viaFrom = run(INIT, [
+      "config",
+      "--project-dir",
+      fromProject,
+      "--from",
+      KIRO_RELEASE,
+      "--harness",
+      "kiro-ide",
+      "--yes",
+    ], fromProject);
+    expect(viaFrom.status, viaFrom.stdout + viaFrom.stderr).toBe(0);
+    expect(viaFrom.stdout + viaFrom.stderr).not.toContain("not requested harness");
+    expect(
+      JSON.parse(
+        readFileSync(join(fromProject, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+      ).distribution,
+    ).toBe("kiro");
+
+    // No `--from`: the request is matched against the installed candidates instead,
+    // and every candidate is stamped with the current id.
+    const installedProject = temp("aidlc-t240-retired-request-installed-");
+    mkdirSync(join(installedProject, ".git"), { recursive: true });
+    const viaInstalled = run(INIT, [
+      "config",
+      "--project-dir",
+      installedProject,
+      "--harness",
+      "kiro-ide",
+      "--yes",
+    ], installedProject, {
+      AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release"),
+      // The host's active-version runtime must not join this fixture's source
+      // discovery, or a second `kiro` candidate makes the selection ambiguous and
+      // the test would report the same message for the opposite reason.
+      AIDLC_INSTALL_ROOT: temp("aidlc-t240-retired-request-machine-"),
+    });
+    expect(viaInstalled.status, viaInstalled.stdout + viaInstalled.stderr).toBe(0);
+    expect(viaInstalled.stdout + viaInstalled.stderr).not.toContain("is not installed");
+    expect(
+      JSON.parse(
+        readFileSync(
+          join(installedProject, ".kiro", "tools", "data", "aidlc-stamp.json"),
+          "utf-8",
+        ),
+      ).distribution,
+    ).toBe("kiro");
+  }, 180_000);
+
   test("release runtime-generated commands remain binary-invoked", () => {
     const project = temp("aidlc-t240-release-invoke-");
     mkdirSync(join(project, ".git"));
