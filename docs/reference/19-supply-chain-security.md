@@ -58,6 +58,13 @@ family's existing shards, and require Windows release-contract coverage to be
 explicitly skipped. The result records `verificationFamily` and its omissions.
 Release-purpose runs refuse scoped selections, and the stable consumer requires
 `verificationFamily: "all"` independently of `passed` and the job statuses.
+For a specific family, `verification_test` can select an exact repository file.
+Discovery rejects unknown or mismatched files and retains their original shard
+identities and declared platforms. Preparation runs only on those platforms.
+The result records `verificationTest`, `verificationPlatforms` and any omitted
+hosted job; the reducer requires those omissions to be skipped and the selected
+jobs to succeed. Both the source gate and result reducer refuse this selection
+for release-purpose runs.
 
 POSIX preparation obtains a pinned official Node distribution and transports
 its complete prefix with the validated dependency archive. Credentialed jobs

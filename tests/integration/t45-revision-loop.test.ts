@@ -278,7 +278,9 @@ beforeAll(() => {
   state(["revise", SLUG]);
   state(["approve", SLUG, "--user-input", "accept as-is"]);
   snap.cbFinal = checkboxMarker(readState());
-});
+  // Four native CLI review/revision cycles share this setup hook; Windows can
+  // exceed 30s under parallel load before reaching the final approval.
+}, process.platform === "win32" ? 60_000 : 30_000);
 
 afterAll(() => {
   cleanupTestProject(proj);

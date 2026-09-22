@@ -1135,7 +1135,23 @@ original per-platform N/M shard numbers. The separate Windows release-contract
 job is omitted for scoped verification. No family selector is exposed to
 reusable callers, and ordinary release-purpose runs must use `all`.
 
-This option exists only on `workflow_dispatch`, never `workflow_call`.
+For one test file, also pass its exact repository path:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f live_verification=true \
+  -f verification_family=claude-sdk \
+  -f verification_test=tests/integration/t238-user-stories-mob.sdk.test.ts
+```
+
+The file must belong to the selected family. Unknown paths and mismatched
+families fail planning. It runs on its declared platforms: portable tests use
+all three OSes, while a Windows-only case uses Windows. Preparation covers only
+those runners. Original shard identities remain intact, and the result records
+`verificationTest`, `verificationPlatforms` and any omitted job explicitly.
+This selection cannot qualify a release.
+
+These verification inputs exist only on `workflow_dispatch`, never `workflow_call`.
 Authorization requires that event and that the checked-out SHA equals
 `github.sha`; selecting the workflow on `main` cannot authorize a different
 branch's source. No push or pull-request trigger starts privileged verification.
@@ -1200,6 +1216,9 @@ selects one file for its family/platform, with at most 12 hosted and 6 Windows
 jobs running concurrently. Windows release-contract coverage remains in its
 separate unsharded job. Every fresh job repeats isolation and authenticated
 readiness checks; required preflights may run in addition to its assigned file.
+Manual planning can use `--family FAMILY --test <repository-path>` to select
+one file on its declared platforms while preserving the full inventory's shard
+assignments.
 
 Each credentialed job requests a 3,600-second session from the existing role.
 Jobs have a 55-minute limit, live test steps have a 45-minute limit, and isolated

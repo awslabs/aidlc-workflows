@@ -390,7 +390,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
 
   test("real checkpoint next and completion next preserve every grouped receipt and keep the review routes reachable", () => {
     // Include two-unit setup, both command forms, native approval, and completion.
-    const pd = fixture();
+    const pd = fixture({ applicationSourceOnly: true });
     for (const unit of UNITS) beginCodeGeneration(pd, { unit });
     converge(pd);
     const checkpoint = next(pd);

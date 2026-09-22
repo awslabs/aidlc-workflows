@@ -600,20 +600,22 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(r.stdout).not.toContain("<PROJECT_DIR>");
   });
 
-  test("13: doctor enforces Codex 0.145.0 as the compact-session reload floor", () => {
-    const unsupported = runDoctorWithCodexVersion("0.144.9");
-    expect(unsupported.status).toBe(0);
-    expect(unsupported.output).toContain(
-      "Harness CLI: codex codex-cli 0.144.9 is below 0.145.0",
-    );
-    expect(unsupported.output).toContain(
-      "Install or upgrade Codex CLI to 0.145.0 or later",
-    );
-
-    const supported = runDoctorWithCodexVersion("0.145.0");
-    expect(supported.status).toBe(0);
-    expect(supported.output).toContain("Harness CLI: codex codex-cli 0.145.0");
-  }, 15_000); // Two complete doctor runs exceeded the default 5s on Windows.
+  test.each(["0.144.9", "0.145.0"])("13: doctor enforces the compact-session reload floor for Codex %s", (version) => {
+    const result = runDoctorWithCodexVersion(version);
+    expect(result.status, result.output).toBe(0);
+    if (version === "0.144.9") {
+      expect(result.output).toContain(
+        "Harness CLI: codex codex-cli 0.144.9 is below 0.145.0",
+      );
+      expect(result.output).toContain(
+        "Install or upgrade Codex CLI to 0.145.0 or later",
+      );
+    } else {
+      expect(result.output).toContain("Harness CLI: codex codex-cli 0.145.0");
+    }
+    // Each version owns one native fixture and doctor run, including cleanup.
+    // Compiler/probe caps remain 5s; neither version spends the other's budget.
+  }, process.platform === "win32" ? 30_000 : 15_000);
 
   test("14: both generated Codex configs select workspace-write at the TOML root", () => {
     for (const output of ["dist", "dist-release"]) {

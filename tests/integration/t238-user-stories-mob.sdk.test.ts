@@ -37,6 +37,8 @@ import {
   type DriveResult,
 } from "../harness/sdk-drive.ts";
 
+import { targetsStateFile } from "../harness/state-file-target.ts";
+
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
 const DRIVE_TIMEOUT_MS = Math.max(180_000, TEST_TIMEOUT_MS - 15_000);
@@ -551,8 +553,15 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         ).toEqual([]);
         for (const toolResult of result.toolResults) {
           if (toolResult.toolName !== "Write" && toolResult.toolName !== "Edit") continue;
+          const stateTarget = targetsStateFile(toolResult, projectDir, seededStateFile(projectDir));
+          if (stateTarget) {
+            console.error(`t238 state-write target: ${JSON.stringify({
+              tool: toolResult.toolName,
+              sdkResultIsError: toolResult.isError,
+            })}`);
+          }
           expect(
-            inputMentions(toolResult, "aidlc-state.md"),
+            stateTarget,
             `${toolResult.toolName} must not mutate aidlc-state.md directly`,
           ).toBe(false);
         }

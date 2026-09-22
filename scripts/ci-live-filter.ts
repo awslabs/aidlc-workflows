@@ -123,10 +123,20 @@ export function selectedLiveFiles(family: LiveFamily, platform: NodeJS.Platform,
 }
 
 /** Workflow matrices share discovery and platform eligibility with execution. */
-export function liveMatrix(kind: "hosted" | "windows", selectedFamily: VerificationFamily = "all"): { include: LiveMatrixRow[] } {
+export function liveMatrix(
+  kind: "hosted" | "windows",
+  selectedFamily: VerificationFamily = "all",
+  selectedTest = "",
+): { include: LiveMatrixRow[] } {
   if (kind !== "hosted" && kind !== "windows") throw new Error(`unknown live matrix: ${kind}`);
   if (!VERIFICATION_FAMILIES.includes(selectedFamily)) throw new Error(`unknown verification family: ${selectedFamily}`);
+  if (selectedTest && selectedFamily === "all") throw new Error("an exact live test requires one verification family");
   const partition = liveInvocationFiles();
+  if (selectedTest && selectedFamily !== "all" &&
+    (!partition.get(selectedFamily)!.includes(selectedTest) ||
+      !FAMILIES[selectedFamily].platforms.some(platform => !PLATFORM_ONLY[selectedTest] || PLATFORM_ONLY[selectedTest].includes(platform)))) {
+    throw new Error(`exact live test ${selectedTest} must belong to ${selectedFamily} and have a supported platform`);
+  }
   const platforms = kind === "hosted" ? ["linux", "darwin"] as const : ["win32"] as const;
   const include: LiveMatrixRow[] = [];
   for (const family of Object.keys(FAMILIES) as LiveFamily[]) {
@@ -145,8 +155,14 @@ export function liveMatrix(kind: "hosted" | "windows", selectedFamily: Verificat
   include.sort((a, b) => Number(a.shard.split("/")[0]) - Number(b.shard.split("/")[0]));
   // Filter only after discovery and shard assignment; N/M and slice identities
   // stay identical to the full run for the selected family.
-  const selected = selectedFamily === "all" ? include : include.filter((row) => row.family === selectedFamily);
-  if (!selected.length) throw new Error(`${kind}/${selectedFamily} has no selected live files`);
+  let selected = selectedFamily === "all" ? include : include.filter((row) => row.family === selectedFamily);
+  if (selectedTest) {
+    selected = selected.filter((row) => {
+      const index = Number(row.shard.split("/")[0]) - 1;
+      return eligibleLiveFiles(partition, row.family, row.platform)[index] === selectedTest;
+    });
+  }
+  if (!selected.length && !selectedTest) throw new Error(`${kind}/${selectedFamily} has no selected live files`);
   return { include: selected };
 }
 
@@ -199,8 +215,9 @@ if (import.meta.main) {
     const [family, ...options] = process.argv.slice(2);
     const matrix = family === "--matrix";
     if (matrix && (!["hosted", "windows"].includes(options[0]) ||
-      (options.length !== 1 && !(options.length === 3 && options[1] === "--family")))) {
-      throw new Error("expected --matrix hosted|windows [--family FAMILY]");
+      (options.length !== 1 && !(options.length === 3 && options[1] === "--family") &&
+        !(options.length === 5 && options[1] === "--family" && options[3] === "--test")))) {
+      throw new Error("expected --matrix hosted|windows [--family FAMILY [--test FILE]]");
     }
     let platform: NodeJS.Platform | undefined;
     let shard: string | undefined;
@@ -220,7 +237,9 @@ if (import.meta.main) {
       } else throw new Error(`invalid option: ${option}`);
     }
     if (matrix) {
-      console.log(JSON.stringify(liveMatrix(options[0] as "hosted" | "windows", (options[2] ?? "all") as VerificationFamily)));
+      console.log(JSON.stringify(liveMatrix(
+        options[0] as "hosted" | "windows", (options[2] ?? "all") as VerificationFamily, options[4] ?? "",
+      )));
     } else if (family === "--list" && mode === "filter" && shard === undefined) {
       console.log(JSON.stringify(Object.fromEntries(classifyLiveFiles(REPO_ROOT)), null, 2));
     } else if (Object.hasOwn(FAMILIES, family ?? "")) {
@@ -239,7 +258,7 @@ if (import.meta.main) {
     } else throw new Error(`unknown family: ${family}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    console.error(`Usage: bun scripts/ci-live-filter.ts --matrix hosted|windows [--family ${VERIFICATION_FAMILIES.join("|")}]\n       bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--shard N/M] [--args | --run -- RUNNER_ARGS...]`);
+    console.error(`Usage: bun scripts/ci-live-filter.ts --matrix hosted|windows [--family ${VERIFICATION_FAMILIES.join("|")} [--test FILE]]\n       bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--shard N/M] [--args | --run -- RUNNER_ARGS...]`);
     process.exitCode = 2;
   }
 }

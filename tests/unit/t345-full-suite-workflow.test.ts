@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, VERIFICATION_FAMILIES, type LiveFamily, type VerificationFamily } from "../../scripts/ci-live-filter.ts";
+import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type VerificationFamily } from "../../scripts/ci-live-filter.ts";
 import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds } from "../../scripts/ci-full-suite-result.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { brokerChildEnvironment } from "../../scripts/ci-start-credential-broker.ts";
@@ -326,9 +326,13 @@ describe("t345 complete nightly coverage", () => {
     const oidcJobs = jobs.filter(([, job]) => job.permissions?.["id-token"] === "write").map(([name]) => name).sort();
     expect(oidcJobs).toEqual(["live_hosted", "live_windows"]);
     for (const name of ["live_prepare", ...oidcJobs]) {
-      expect(workflow.jobs[name].if).toBeUndefined();
       const needs = workflow.jobs[name].needs;
       expect(Array.isArray(needs) ? needs : [needs]).toContain("plan");
+    }
+    expect(workflow.jobs.live_prepare.if).toBeUndefined();
+    for (const kind of ["hosted", "windows"] as const) {
+      expect(workflow.jobs[`live_${kind}`].if).toBe(`needs.plan.outputs.live_${kind}_required == 'true'`);
+      expect(liveMatrix(kind).include.length).toBeGreaterThan(0);
     }
     expect(workflow.jobs.live_prepare.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.live_prepare.environment).toBeUndefined();
@@ -685,6 +689,32 @@ describe("t345 complete nightly coverage", () => {
     expect(discovery.env?.VERIFICATION_FAMILY).toBe(`\${{ steps.source.outputs.verification_family }}`);
   });
 
+  test("exact-file verification preserves full-plan shard identities and declared platforms", () => {
+    const file = "tests/integration/t238-user-stories-mob.sdk.test.ts";
+    for (const kind of ["hosted", "windows"] as const) {
+      const full = liveMatrix(kind, "claude-sdk").include;
+      const selected = liveMatrix(kind, "claude-sdk", file).include;
+      expect(selected).toHaveLength(kind === "hosted" ? 2 : 1);
+      for (const row of selected) {
+        expect(full).toContainEqual(row);
+        expect(selectedLiveFiles(row.family, row.platform, row.shard)).toEqual([file]);
+      }
+      const cli = spawnSync(process.execPath, [
+        join(REPO_ROOT, "scripts/ci-live-filter.ts"), "--matrix", kind, "--family", "claude-sdk", "--test", file,
+      ], { encoding: "utf8" });
+      expect(cli.status, cli.stderr).toBe(0);
+      expect(JSON.parse(cli.stdout)).toEqual({ include: selected });
+      expect(() => liveMatrix(kind, "all", file)).toThrow("requires one verification family");
+      expect(() => liveMatrix(kind, "codex", file)).toThrow("must belong to codex");
+      expect(() => liveMatrix(kind, "claude-sdk", "tests/integration/missing.test.ts")).toThrow();
+    }
+    const windowsFile = "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts";
+    expect(liveMatrix("hosted", "claude-tui", windowsFile).include).toEqual([]);
+    const windows = liveMatrix("windows", "claude-tui", windowsFile).include;
+    expect(windows).toHaveLength(1);
+    expect(selectedLiveFiles(windows[0].family, windows[0].platform, windows[0].shard)).toEqual([windowsFile]);
+  });
+
   test("sandbox env is explicit and excludes runner control-plane and AWS secrets", () => {
     const inherited = {
       ACTIONS_ID_TOKEN_REQUEST_TOKEN: "mint-token", AWS_ACCESS_KEY_ID: "secret-key", GITHUB_TOKEN: "github",
@@ -780,6 +810,8 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.on.workflow_dispatch.inputs.verification_family).toMatchObject({
       type: "choice", required: true, default: "all", options: [...VERIFICATION_FAMILIES],
     });
+    expect(workflow.on.workflow_dispatch.inputs.verification_test).toMatchObject({ type: "string", default: "" });
+    expect(workflow.jobs.plan.outputs?.verification_test).toBe(`\${{ steps.source.outputs.verification_test }}`);
     expect(workflow.jobs.plan.outputs?.verification_family).toBe(`\${{ steps.source.outputs.verification_family }}`);
     expect(workflow.jobs.plan.outputs?.purpose).toBe(`\${{ steps.source.outputs.purpose }}`);
     expect(steps(workflow.jobs.plan).find((step) => step.id === "source")?.env?.LIVE_VERIFICATION)
@@ -787,9 +819,12 @@ describe("t345 complete nightly coverage", () => {
     for (const job of LIVE_VERIFICATION_OMITTED_JOBS) {
       expect(workflow.jobs[job].if, job).toContain("needs.plan.outputs.purpose == 'release'");
     }
-    for (const job of ["live_prepare", "live_hosted", "live_windows"]) {
-      expect(workflow.jobs[job].if, job).toBeUndefined();
+    expect(workflow.jobs.live_prepare.if).toBeUndefined();
+    for (const kind of ["hosted", "windows"] as const) {
+      expect(workflow.jobs[`live_${kind}`].if).toBe(`needs.plan.outputs.live_${kind}_required == 'true'`);
+      expect(workflow.jobs.plan.outputs?.[`live_${kind}_required`]).toBe(`\${{ steps.live_matrix.outputs.${kind}_required }}`);
     }
+    expect(workflow.jobs.live_prepare.strategy?.matrix).toBe(`\${{ fromJSON(needs.plan.outputs.live_prepare_matrix) }}`);
     expect(workflow.jobs.release_contract_windows.if).toBe("needs.plan.outputs.verification_family == 'all'");
     for (const step of steps(workflow.jobs.plan).filter((step) =>
       step.run?.includes("reconcile-tests.ts") || step.with?.name === "full-suite-native-plan")) {
@@ -1036,6 +1071,26 @@ describe("t345 complete nightly coverage", () => {
     for (const family of ["", "release-contract", "unknown"]) {
       expect(fullSuiteResult(allSuccess(), identity, "live-verification", family as VerificationFamily).passed).toBe(false);
     }
+  });
+
+  test("exact-file results identify their selection and cannot qualify as release evidence", () => {
+    const file = "tests/integration/t238-user-stories-mob.sdk.test.ts";
+    expect(fullSuiteResult(verificationNeeds("claude-sdk"), identity, "live-verification", "claude-sdk", file))
+      .toMatchObject({ passed: true, complete: false, verificationTest: file, verificationFamily: "claude-sdk",
+        verificationPlatforms: ["linux", "darwin", "win32"] });
+    expect(fullSuiteResult(allSuccess(), identity, "release", "all", file).passed).toBe(false);
+    expect(fullSuiteResult(verificationNeeds(), identity, "live-verification", "all", file).passed).toBe(false);
+    expect(fullSuiteResult(verificationNeeds("codex"), identity, "live-verification", "codex", file).passed).toBe(false);
+    expect(fullSuiteResult(verificationNeeds("claude-sdk"), identity, "live-verification", "claude-sdk",
+      "tests/integration/missing.test.ts").passed).toBe(false);
+    const windowsFile = "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts";
+    const windowsNeeds = { ...verificationNeeds("claude-tui"), live_hosted: { result: "skipped" as const } };
+    expect(fullSuiteResult(windowsNeeds, identity, "live-verification", "claude-tui", windowsFile))
+      .toMatchObject({ passed: true, complete: false, verificationPlatforms: ["win32"],
+        omittedLegs: [...LIVE_VERIFICATION_OMITTED_JOBS, "release_contract_windows", "live_hosted"] });
+    expect(fullSuiteResult(verificationNeeds("claude-tui"), identity, "live-verification", "claude-tui", windowsFile).passed).toBe(false);
+    expect(fullSuiteResult({ ...windowsNeeds, live_windows: { result: "skipped" } },
+      identity, "live-verification", "claude-tui", windowsFile).passed).toBe(false);
   });
 
   test("result CLI fails skipped lanes, retains diagnostics, and accepts required jobs with explicit exclusions", () => {

@@ -24,6 +24,10 @@ on:
         required: true
         default: all
         options: [all, claude-sdk, claude-tui, codex, opencode]
+      verification_test:
+        description: "Optional exact repository test path for one family; uses its declared platforms"
+        type: string
+        default: ""
 permissions:
   contents: read
 defaults:
@@ -46,8 +50,12 @@ jobs:
       sha: "${{ steps.source.outputs.sha }}"
       purpose: "${{ steps.source.outputs.purpose }}"
       verification_family: "${{ steps.source.outputs.verification_family }}"
+      verification_test: "${{ steps.source.outputs.verification_test }}"
       live_hosted_matrix: "${{ steps.live_matrix.outputs.hosted }}"
       live_windows_matrix: "${{ steps.live_matrix.outputs.windows }}"
+      live_prepare_matrix: "${{ steps.live_matrix.outputs.prepare }}"
+      live_hosted_required: "${{ steps.live_matrix.outputs.hosted_required }}"
+      live_windows_required: "${{ steps.live_matrix.outputs.windows_required }}"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -58,10 +66,12 @@ jobs:
         env:
           LIVE_VERIFICATION: "${{ inputs.live_verification == true }}"
           VERIFICATION_FAMILY: "${{ inputs.verification_family || 'all' }}"
+          VERIFICATION_TEST: "${{ inputs.verification_test || '' }}"
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
           family="${VERIFICATION_FAMILY-all}"
+          selected_test="${VERIFICATION_TEST-}"
           case "$family" in
             all|claude-sdk|claude-tui|codex|opencode) ;;
             *) echo "::error::invalid verification family"; exit 1 ;;
@@ -69,6 +79,13 @@ jobs:
           if [ "$family" != all ] && [ "${LIVE_VERIFICATION:-false}" != true ]; then
             echo "::error::verification_family requires live_verification=true"
             exit 1
+          fi
+          if [ -n "$selected_test" ]; then
+            if [ "${LIVE_VERIFICATION:-false}" != true ] || [ "$family" = all ] ||
+              [[ ! "$selected_test" =~ ^(tests/(unit|integration|e2e)|plugins/[A-Za-z0-9_-]+/tests)/[A-Za-z0-9_.-]+\.test\.ts$ ]]; then
+              echo "::error::verification_test requires live_verification, one family and an exact repository test path"
+              exit 1
+            fi
           fi
           case "${LIVE_VERIFICATION:-false}" in
             true)
@@ -88,7 +105,7 @@ jobs:
               ;;
             *) echo "::error::invalid live verification mode"; exit 1 ;;
           esac
-          printf 'sha=%s\npurpose=%s\nverification_family=%s\n' "$sha" "$purpose" "$family" >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\npurpose=%s\nverification_family=%s\nverification_test=%s\n' "$sha" "$purpose" "$family" "$selected_test" >> "$GITHUB_OUTPUT"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
@@ -97,11 +114,21 @@ jobs:
         id: live_matrix
         env:
           VERIFICATION_FAMILY: "${{ steps.source.outputs.verification_family }}"
+          VERIFICATION_TEST: "${{ steps.source.outputs.verification_test }}"
         run: |
           set -euo pipefail
-          hosted="$(bun scripts/ci-live-filter.ts --matrix hosted --family "$VERIFICATION_FAMILY")"
-          windows="$(bun scripts/ci-live-filter.ts --matrix windows --family "$VERIFICATION_FAMILY")"
+          hosted="$(bun scripts/ci-live-filter.ts --matrix hosted --family "$VERIFICATION_FAMILY" --test "$VERIFICATION_TEST")"
+          windows="$(bun scripts/ci-live-filter.ts --matrix windows --family "$VERIFICATION_FAMILY" --test "$VERIFICATION_TEST")"
           printf 'hosted=%s\nwindows=%s\n' "$hosted" "$windows" >> "$GITHUB_OUTPUT"
+          bun -e '
+            const hosted = JSON.parse(process.argv[1]).include;
+            const windows = JSON.parse(process.argv[2]).include;
+            const runners = [...new Set([...hosted, ...windows].map(row => row.runner))];
+            if (!runners.length) throw new Error("live selection has no supported runners");
+            console.log(`prepare=${JSON.stringify({runner:runners})}`);
+            console.log(`hosted_required=${hosted.length > 0}`);
+            console.log(`windows_required=${windows.length > 0}`);
+          ' "$hosted" "$windows" >> "$GITHUB_OUTPUT"
       - name: "Prepare native obligations"
         if: steps.source.outputs.purpose == 'release'
         run: |
@@ -317,8 +344,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        runner: [ubuntu-latest, macos-15, windows-latest]
+      matrix: "${{ fromJSON(needs.plan.outputs.live_prepare_matrix) }}"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -365,6 +391,7 @@ jobs:
           if-no-files-found: error
   live_hosted:
     needs: [plan, live_prepare]
+    if: needs.plan.outputs.live_hosted_required == 'true'
     environment: ai-pr-review
     permissions:
       contents: read
@@ -483,6 +510,7 @@ jobs:
           include-hidden-files: true
   live_windows:
     needs: [plan, live_prepare]
+    if: needs.plan.outputs.live_windows_required == 'true'
     runs-on: "${{ matrix.runner }}"
     environment: ai-pr-review
     permissions:
@@ -642,6 +670,7 @@ jobs:
           FULL_SUITE_REF: "${{ inputs.ref }}"
           FULL_SUITE_PURPOSE: "${{ needs.plan.outputs.purpose }}"
           FULL_SUITE_VERIFICATION_FAMILY: "${{ needs.plan.outputs.verification_family }}"
+          FULL_SUITE_VERIFICATION_TEST: "${{ needs.plan.outputs.verification_test }}"
         run: |
           bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
       - if: "${{ always() }}"

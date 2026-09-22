@@ -670,7 +670,9 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       "--user-input", "Approve", "--project-dir", pd,
     ]);
     expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);
-  }, 90_000);
+    // Keep the full tracked workflow fixture required by native receipt transfer.
+    // Two landing/review cycles need a larger outer case budget on Windows.
+  }, process.platform === "win32" ? 180_000 : 90_000);
 
   test.each(["initial batch", "prepared checkpoint revision"])("partial native landing continues the preserved worker and grouped receipt for %s", (phase) => {
     const units = ["alpha", "beta"];

@@ -1,4 +1,4 @@
-import { FAMILIES, VERIFICATION_FAMILIES, type VerificationFamily } from "./ci-live-filter.ts";
+import { FAMILIES, liveMatrix, VERIFICATION_FAMILIES, type VerificationFamily } from "./ci-live-filter.ts";
 
 export const FULL_SUITE_JOBS = [
   "plan", "native_terminal", "native_reconcile", "deterministic", "production_guards", "live_prepare", "live_hosted",
@@ -22,6 +22,8 @@ export interface SuiteIdentity {
 export interface FullSuiteResult extends SuiteIdentity {
   purpose: SuitePurpose;
   verificationFamily: VerificationFamily;
+  verificationTest?: string;
+  verificationPlatforms?: NodeJS.Platform[];
   coveragePolicy: typeof FULL_SUITE_COVERAGE_POLICY;
   passed: boolean;
   complete: boolean;
@@ -37,6 +39,7 @@ export function fullSuiteResult(
   identity: SuiteIdentity,
   purpose: SuitePurpose = "release",
   verificationFamily: VerificationFamily = "all",
+  verificationTest = "",
 ): FullSuiteResult {
   const legs = Object.fromEntries([...new Set([...FULL_SUITE_JOBS, ...Object.keys(needs)])]
     .map((job) => [job, needs[job]?.result ?? "missing"]));
@@ -44,7 +47,20 @@ export function fullSuiteResult(
     .map(([name]) => name).sort();
   const omittedLegs: string[] = purpose === "live-verification" ? [...LIVE_VERIFICATION_OMITTED_JOBS] : [];
   if (purpose === "live-verification" && verificationFamily !== "all") omittedLegs.push("release_contract_windows");
+  let validTestSelection = !verificationTest;
+  let verificationPlatforms: NodeJS.Platform[] | undefined;
+  if (verificationTest && purpose === "live-verification" && verificationFamily !== "all") {
+    try {
+      const hosted = liveMatrix("hosted", verificationFamily, verificationTest).include;
+      const windows = liveMatrix("windows", verificationFamily, verificationTest).include;
+      verificationPlatforms = [...new Set([...hosted, ...windows].map(row => row.platform))];
+      validTestSelection = verificationPlatforms.length > 0;
+      if (hosted.length === 0) omittedLegs.push("live_hosted");
+      if (windows.length === 0) omittedLegs.push("live_windows");
+    } catch { /* Unknown or mismatched selections never qualify. */ }
+  }
   const passed = /^[a-f0-9]{40}$/.test(identity.sha) &&
+    validTestSelection &&
     VERIFICATION_FAMILIES.includes(verificationFamily) &&
     (purpose === "live-verification" || verificationFamily === "all") &&
     Object.entries(legs).every(([job, status]) => status === (omittedLegs.includes(job) ? "skipped" : "success"));
@@ -52,6 +68,8 @@ export function fullSuiteResult(
     ...identity,
     purpose,
     verificationFamily,
+    ...(verificationTest ? { verificationTest } : {}),
+    ...(verificationPlatforms ? { verificationPlatforms } : {}),
     coveragePolicy: FULL_SUITE_COVERAGE_POLICY,
     passed,
     complete: purpose === "release" && passed && excluded.length === 0,
@@ -78,12 +96,15 @@ if (import.meta.main) {
     sha: process.env.FULL_SUITE_SHA ?? "",
     runId: process.env.GITHUB_RUN_ID ?? "",
     runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "",
-  }, purpose, verificationFamily as VerificationFamily);
+  }, purpose, verificationFamily as VerificationFamily, process.env.FULL_SUITE_VERIFICATION_TEST ?? "");
   await Bun.write(process.argv[2] ?? "full-suite-result.json", `${JSON.stringify(result, null, 2)}\n`);
   if (result.excluded.length) {
     console.error(`::warning::Full suite excluded families: ${result.excluded.join(", ")}`);
   }
   if (!result.passed) {
+    if (result.verificationTest && (purpose !== "live-verification" || verificationFamily === "all")) {
+      console.error("::error::Exact test selection requires live-verification mode and one verification family");
+    }
     if (purpose === "release" && verificationFamily !== "all") {
       console.error("::error::Release evidence requires verificationFamily=all");
     }
