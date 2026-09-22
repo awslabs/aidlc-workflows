@@ -238,7 +238,9 @@ jobs:
   # jobs. Any deterministic matrix failure collapses its result to failure.
   test:
     name: Tests (smoke + unit)
-    if: ${{ always() }}
+    # Still collect failures, but let a superseded run release its concurrency
+    # slot instead of waiting for this summary job to obtain another runner.
+    if: ${{ !cancelled() }}
     needs: [deterministic, test_native_terminal, test_guards, test_live_isolation]
     runs-on: ubuntu-latest
     steps:
