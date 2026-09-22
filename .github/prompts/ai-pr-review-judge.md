@@ -49,7 +49,10 @@ not the PR description:
   wording fits the current head); `"findingIndex": null` only when it still
   holds but you did not restate it (the publisher keeps it verdict-bearing);
   `{"id": "F3", "disposition": "resolved", "findingIndex": null}` when this head
-  corrected it. Never open a new finding for a defect an open entry already
+  corrected it. The publisher honors `resolved` on a P0/P1 only with
+  deterministic evidence that the author acted (a cited line gone, or a cited
+  file changed since the last review); otherwise the entry stays retained for a
+  maintainer to accept. Never open a new finding for a defect an open entry already
   names — bind it instead. An open entry you leave undisposed is retained by
   the publisher while its cited lines are unchanged and is reported as
   undisposed.

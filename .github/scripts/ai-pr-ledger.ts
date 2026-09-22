@@ -160,9 +160,16 @@ export interface ReconcileResult<T extends ReviewFindingInput> {
   resolvedByJudgeIds: string[];
   // Open entries the judge neither restated nor disposed of.
   undisposedIds: string[];
+  // Blocking entries the judge declared resolved while their cited code and
+  // files are unchanged: kept open and retained until a maintainer accepts.
+  unverifiedResolutionIds: string[];
 }
 
 export type LedgerDispositions = ReadonlyMap<string, "resolved" | "still-open">;
+
+// Files the current head changed since the last review (incremental scope), or
+// null when the whole PR diff is under review.
+export type ChangedFiles = ReadonlySet<string> | null;
 
 export type AnchorPresence = (anchor: LedgerAnchor) => boolean | null;
 
@@ -842,11 +849,12 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   at: string,
   presentAtHead: AnchorPresence,
   dispositions: LedgerDispositions = new Map(),
+  changedFiles: ChangedFiles = null,
 ): ReconcileResult<T> {
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("head must be a 40-character SHA");
   const ledger: Ledger = structuredClone(loaded.ledger);
   const result: ReconcileResult<T> = {
-    ledger, kept: [], restatedAccepted: [], suppressed: [], reopenedIds: [], retained: [], resolvedIds: [], resolvedByJudgeIds: [], undisposedIds: [],
+    ledger, kept: [], restatedAccepted: [], suppressed: [], reopenedIds: [], retained: [], resolvedIds: [], resolvedByJudgeIds: [], undisposedIds: [], unverifiedResolutionIds: [],
   };
   const matchedIds = new Set<string>();
   const push = (kind: LedgerEventKind, id: string, extra: Partial<LedgerEvent> = {}): void => {
@@ -857,7 +865,10 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   // after the omitted pass, so a head that fixes old findings frees their slots
   // before capacity is enforced.
   const pendingByFingerprint = new Map<string, T>();
-  for (const finding of findings) {
+  // Explicit bindings are processed first so an implicit fingerprint match can
+  // never consume an entry another finding names by id.
+  const ordered = [...findings.filter(finding => finding.ledgerId), ...findings.filter(finding => !finding.ledgerId)];
+  for (const finding of ordered) {
     const hashes = anchorSet(finding.anchors);
     // Model output is influenced by PR content, so it can identify OPEN entries
     // only. Accepted and rejected state is never inherited from a judge-selected
@@ -914,16 +925,33 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     if (entry.status !== "open" || matchedIds.has(entry.id)) continue;
     const disposition = dispositions.get(entry.id);
     if (disposition === "resolved") {
-      const unchanged = entry.anchors.map(anchor => presentAtHead(anchor)).some(verdict => verdict === true);
+      // The judge's word alone never retires a blocker whose cited code and
+      // files the author did not touch: model output is PR-influenced. A
+      // blocker resolves on a disposition only with deterministic evidence that
+      // the author acted — a cited line gone, or a cited file changed since the
+      // last review. Advisory entries follow the judge.
+      const verdicts = entry.anchors.map(anchor => presentAtHead(anchor));
+      const gone = verdicts.some(verdict => verdict === false);
+      const touched = changedFiles === null || entry.anchors.some(anchor => anchor.path !== undefined && changedFiles.has(anchor.path));
+      if (isBlocking(entry.priority) && !gone && !touched) {
+        entry.lastSeen = { head, at };
+        push("seen", entry.id, { reason: "retained: declared corrected by the judge, but cited code and files are unchanged; a maintainer may accept" });
+        result.retained.push(structuredClone(entry));
+        result.unverifiedResolutionIds.push(entry.id);
+        continue;
+      }
       entry.status = "resolved";
       entry.lastSeen = { head, at };
-      push("resolved", entry.id, { reason: unchanged ? "declared corrected by the judge; cited lines unchanged" : "declared corrected by the judge" });
+      push("resolved", entry.id, {
+        reason: gone ? "declared corrected by the judge; a cited line is gone" : "declared corrected by the judge; cited files changed since the last review",
+      });
       result.resolvedIds.push(entry.id);
       result.resolvedByJudgeIds.push(entry.id);
       continue;
     }
     if (disposition === "still-open") {
-      if (!isBlocking(entry.priority)) continue;
+      // Retained whatever the priority: the judge said it still holds. Only
+      // blocking entries bear on the verdict.
       entry.lastSeen = { head, at };
       push("seen", entry.id, { reason: "retained: still open per the judge, not restated" });
       result.retained.push(structuredClone(entry));

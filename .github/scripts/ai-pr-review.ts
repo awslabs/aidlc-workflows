@@ -284,10 +284,12 @@ export interface ReviewLedgerSummary {
   open: number;
   migrated: boolean;
   decisionAdjusted: boolean;
-  // Open entries the judge explicitly resolved at this head, and open entries it
-  // left without a disposition (retained by presence, as before).
+  // Open entries the judge explicitly resolved at this head, open entries it
+  // left without a disposition (retained by presence, as before), and blockers
+  // it declared resolved without deterministic evidence (kept retained).
   resolvedByJudge: string[];
   undisposed: string[];
+  unverifiedResolutions: string[];
 }
 
 export interface ReviewPayload {
@@ -1082,7 +1084,7 @@ export interface SecurityCitations {
   files: Set<string>;
 }
 
-export function securityCitations(lensDir: string): SecurityCitations {
+export function securityCitations(lensDir: string, manifest?: ChangedFileManifest): SecurityCitations {
   const cited: SecurityCitations = { lines: new Set(), files: new Set() };
   for (const name of ["security.json", "prompt-injection.json"]) {
     const file = join(lensDir, name);
@@ -1099,10 +1101,18 @@ export function securityCitations(lensDir: string): SecurityCitations {
       if (!Array.isArray(evidence)) continue;
       for (const item of evidence) {
         if (!item || typeof item !== "object") continue;
-        const { source, path, line } = item as Record<string, unknown>;
+        const { source, path, line, side } = item as Record<string, unknown>;
         if (typeof path !== "string" || path.length === 0) continue;
-        if (source === "DIFF" && Number.isSafeInteger(line) && Number(line) >= 1) cited.lines.add(`${path}:${line}`);
-        if (source === "DIFF_FILE") cited.files.add(path);
+        if (source === "DIFF" && Number.isSafeInteger(line) && Number(line) >= 1 && (side === "LEFT" || side === "RIGHT")) {
+          // Only a line the PR diff actually changed can be trusted as evidence.
+          const changed = manifest?.files.find(file => file.path === path || file.previousPath === path);
+          if (manifest && (!changed || !isChangedLine(changed, { source: "DIFF", path, line: Number(line), side }))) continue;
+          cited.lines.add(`${path}:${line}:${side}`);
+        }
+        if (source === "DIFF_FILE") {
+          if (manifest && !manifest.files.some(file => file.path === path && file.fileLevelEvidence)) continue;
+          cited.files.add(path);
+        }
       }
     }
   }
@@ -1127,7 +1137,7 @@ export function findingInScope(
       case "DIFF_FILE":
         return securityCited.files.has(item.path) || scope.files.some(entry => entry.path === item.path);
       case "DIFF": {
-        if (securityCited.lines.has(`${item.path}:${item.line}`)) return true;
+        if (securityCited.lines.has(`${item.path}:${item.line}:${item.side}`)) return true;
         if (item.side === "LEFT") {
           const file = scope.files.find(entry => (entry.previousPath ?? entry.path) === item.path);
           return file !== undefined && (file.deletedFile || within(item.line, file.deleted));
@@ -1201,7 +1211,7 @@ export function enforceDecision(review: StructuredReview): StructuredReview {
     review.findings,
     review.assessment,
     review.decision,
-    review.ledger?.retained.length ?? 0,
+    review.ledger?.retained.filter(entry => entry.priority === "P0" || entry.priority === "P1").length ?? 0,
   );
   if (error) throw new Error(error);
   return review;
@@ -1596,24 +1606,41 @@ export function applyLedgerToReview(
   // Explicit dispositions for entries not restated among the kept findings: a
   // resolved entry closes at this head; a still-open one stays verdict-bearing.
   // (A restatement deferred by the scope counts as still-open, unrestated.)
+  // Every id the judge used must name an OPEN entry of the live ledger: a
+  // decided, resolved, or unknown id is a validation error, never a new finding.
+  const openIds = new Set(loaded.ledger.findings.filter(entry => entry.status === "open").map(entry => entry.id));
+  for (const entry of review.dispositions ?? []) {
+    if (!openIds.has(entry.id)) throw new Error(`ledger disposition names ${entry.id}, which is not an open ledger entry`);
+  }
+  // A direct ledgerId naming a decided or unknown entry is dropped: the finding
+  // is recorded as new, and a decision is never reachable from model output.
+  for (const input of inputs) {
+    if (input.ledgerId && !openIds.has(input.ledgerId)) delete input.ledgerId;
+  }
   const restatedIds = new Set(inputs.flatMap(input => (input.ledgerId ? [input.ledgerId] : [])));
   const dispositions = new Map<string, "resolved" | "still-open">();
   for (const entry of review.dispositions ?? []) {
     if (restatedIds.has(entry.id)) continue;
     dispositions.set(entry.id, entry.disposition);
   }
-  const result = reconcileLedger(loaded, inputs, review.head, at, presence, dispositions);
+  const changedFiles =
+    review.scope?.mode === "incremental"
+      ? new Set(review.scope.files.flatMap(file => [file.path, ...(file.previousPath ? [file.previousPath] : [])]))
+      : null;
+  const result = reconcileLedger(loaded, inputs, review.head, at, presence, dispositions, changedFiles);
   // The ledger's effective priority wins: a restatement never lowers an open
   // finding's priority.
   const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, ledgerId: entry.ledgerId }));
-  const retained = result.retained.filter(entry => isBlocking(entry.priority));
+  // Every retained entry is rendered; only blocking ones bear on the verdict.
+  const retained = result.retained;
+  const retainedBlocking = retained.filter(entry => isBlocking(entry.priority));
   const accepted = acceptedRisks(result.ledger, presence);
   const removed = result.restatedAccepted.length + result.suppressed.length;
   let decision = review.decision;
   let decisionAdjusted = false;
-  if (retained.length > 0 || removed > 0) {
+  if (retainedBlocking.length > 0 || removed > 0) {
     // Same rule a later /aida command applies from persisted state (deriveDecision).
-    const openBlocking = retained.length + kept.filter(finding => isBlocking(finding.priority)).length;
+    const openBlocking = retainedBlocking.length + kept.filter(finding => isBlocking(finding.priority)).length;
     const derived = deriveDecision(
       review.decision.action,
       openBlocking,
@@ -1628,10 +1655,10 @@ export function applyLedgerToReview(
           ? {
               actor: "author",
               action: "change",
-              rationale: `${review.decision.rationale} Re-derived from the ledger: ${retained.length} open blocking finding${
-                retained.length === 1 ? "" : "s"
-              } (${retained.map(entry => entry.id).join(", ")}) ${
-                retained.length === 1 ? "was" : "were"
+              rationale: `${review.decision.rationale} Re-derived from the ledger: ${retainedBlocking.length} open blocking finding${
+                retainedBlocking.length === 1 ? "" : "s"
+              } (${retainedBlocking.map(entry => entry.id).join(", ")}) ${
+                retainedBlocking.length === 1 ? "was" : "were"
               } not restated this run and the cited code is unchanged, so the author still needs to act.`,
             }
           : {
@@ -1670,6 +1697,7 @@ export function applyLedgerToReview(
       decisionAdjusted,
       resolvedByJudge: result.resolvedByJudgeIds,
       undisposed: result.undisposedIds,
+      unverifiedResolutions: result.unverifiedResolutionIds,
     },
   };
   return { review: enforceDecision(adjusted), ledger: result.ledger };
@@ -1818,11 +1846,19 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     const summary = review.ledger;
     lines.push(
       "",
-      `Ledger: ${summary.open} open, ${summary.retained.length} retained blocking, ${summary.accepted.length} accepted, ${summary.suppressed} suppressed as rejected by a maintainer${
+      `Ledger: ${summary.open} open, ${summary.retained.filter(entry => entry.priority === "P0" || entry.priority === "P1").length} retained blocking${
+        summary.retained.some(entry => entry.priority !== "P0" && entry.priority !== "P1")
+          ? `, ${summary.retained.filter(entry => entry.priority !== "P0" && entry.priority !== "P1").length} retained advisory`
+          : ""
+      }, ${summary.accepted.length} accepted, ${summary.suppressed} suppressed as rejected by a maintainer${
         summary.reopened > 0 ? `, ${summary.reopened} reopened on new evidence` : ""
       }${summary.resolvedIds.length > 0 ? `, resolved ${summary.resolvedIds.join(", ")}` : ""}${
         summary.resolvedByJudge.length > 0 ? ` (${summary.resolvedByJudge.join(", ")} declared corrected by the judge)` : ""
-      }${summary.undisposed.length > 0 ? `; ${summary.undisposed.length} open entr${summary.undisposed.length === 1 ? "y" : "ies"} left undisposed by the judge (${summary.undisposed.join(", ")})` : ""}.${
+      }${summary.undisposed.length > 0 ? `; ${summary.undisposed.length} open entr${summary.undisposed.length === 1 ? "y" : "ies"} left undisposed by the judge (${summary.undisposed.join(", ")})` : ""}${
+        summary.unverifiedResolutions.length > 0
+          ? `; the judge declared ${summary.unverifiedResolutions.join(", ")} corrected but the cited code and files are unchanged, so ${summary.unverifiedResolutions.length === 1 ? "it stays" : "they stay"} retained until a maintainer accepts`
+          : ""
+      }.${
         summary.decisionAdjusted ? " The next decision was re-derived from the ledger." : ""
       }${
         summary.migrated ? " The ledger was migrated from schema v1; earlier decisions were reset." : ""
@@ -1870,14 +1906,22 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       appendFinding(finding);
     }
   }
-  if (review.ledger && review.ledger.retained.length > 0) {
+  const retainedBlockingEntries = review.ledger?.retained.filter(entry => entry.priority === "P0" || entry.priority === "P1") ?? [];
+  const retainedAdvisoryEntries = review.ledger?.retained.filter(entry => entry.priority !== "P0" && entry.priority !== "P1") ?? [];
+  if (retainedAdvisoryEntries.length > 0) {
+    lines.push("", "## Retained advisory findings", "", "Open P2/P3 findings from the ledger that the judge marked still open without restating them. They do not affect the decision.");
+    for (const entry of retainedAdvisoryEntries) {
+      lines.push("", `**${entry.priority} [${entry.id}]: ${markdownText(entry.title)}** — first reported at \`${entry.firstSeen.head.slice(0, 8)}\`.`);
+    }
+  }
+  if (retainedBlockingEntries.length > 0) {
     lines.push(
       "",
       "## Retained blocking findings",
       "",
       "Open P0/P1 findings from the ledger that this review did not restate and whose cited code is unchanged. They keep the next action with the author until the code changes or a maintainer accepts them.",
     );
-    for (const entry of review.ledger.retained) {
+    for (const entry of retainedBlockingEntries) {
       const paths = [...new Set(entry.anchors.map(anchor => anchor.path).filter((path): path is string => Boolean(path)))];
       lines.push(
         "",
@@ -1923,7 +1967,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     `[AI-PR-REVIEWED] ${review.head}`,
   );
-  const retainedBlocking = (review.ledger?.retained.length ?? 0) > 0;
+  const retainedBlocking = (review.ledger?.retained.some(entry => entry.priority === "P0" || entry.priority === "P1")) ?? false;
   const event = retainedBlocking ||
       review.findings.some(item => item.priority === "P0" || item.priority === "P1")
     ? "REQUEST_CHANGES"
@@ -1982,7 +2026,7 @@ function main(): void {
     const scope = args.includes("--scope")
       ? (JSON.parse(readFileSync(argValue(args, "--scope"), "utf8")) as ReviewScope)
       : undefined;
-    const securityCited = args.includes("--lens-dir") ? securityCitations(argValue(args, "--lens-dir")) : NO_CITATIONS;
+    const securityCited = args.includes("--lens-dir") ? securityCitations(argValue(args, "--lens-dir"), manifest) : NO_CITATIONS;
     let review: StructuredReview;
     if (args.includes("--ledger")) {
       const ledgerFile = readLedgerFile(argValue(args, "--ledger"));

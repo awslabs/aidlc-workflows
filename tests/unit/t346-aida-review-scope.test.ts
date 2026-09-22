@@ -244,7 +244,17 @@ describe("t346 AIDA incremental review scope", () => {
       }));
       writeFileSync(join(lensDir, "security.json"), "{not json");
       const cited = securityCitations(lensDir);
-      expect([...cited.lines]).toEqual([`${PATH}:42`]);
+      // Keyed by side: a LEFT citation never exempts a RIGHT finding on the same coordinates.
+      expect([...cited.lines]).toEqual([`${PATH}:42:RIGHT`]);
+      expect(findingInScope(finding("correctness", diffLine(42, "LEFT")), INCREMENTAL, cited)).toBe(false);
+      // With the manifest, only lines the PR diff changed (and file-level files) are trusted.
+      const validated = securityCitations(lensDir, MANIFEST);
+      expect([...validated.lines]).toEqual([`${PATH}:42:RIGHT`]);
+      expect(validated.files).toEqual(new Set(["assets/logo.png"]));
+      writeFileSync(join(lensDir, "security.json"), JSON.stringify({ marker: "m", status: "complete", candidates: [{ priority: "P1", title: "t", evidence: [{ source: "DIFF", path: PATH, line: 7, side: "RIGHT" }, { source: "DIFF_FILE", path: PATH }], problem: "p", impact: "i", requiredCorrection: "r" }] }));
+      expect([...securityCitations(lensDir, MANIFEST).lines]).toEqual([`${PATH}:42:RIGHT`]);
+      expect(securityCitations(lensDir, MANIFEST).files).toEqual(new Set(["assets/logo.png"]));
+      writeFileSync(join(lensDir, "security.json"), "{not json");
       // Bare paths count as file-level evidence exactly as the lens cited them.
       expect(cited.files).toEqual(new Set(["assets/logo.png", "my docs/plan.md"]));
       expect(findingInScope(finding("correctness", diffLine(42)), INCREMENTAL, cited)).toBe(true);
@@ -353,7 +363,8 @@ describe("t346 AIDA incremental review scope", () => {
     expect(REVIEW_WORKFLOW.split('"$lens_schema"')).toHaveLength(3);
     for (const lens of ["prompt-injection", "security"]) {
       expect(REVIEW_WORKFLOW).toContain(`".ai-review-lenses/${lens}.json"`);
-      expect(REVIEW_WORKFLOW).toContain(`'.marker == $marker' .ai-review-lenses/${lens}.json >/dev/null`);
+      expect(REVIEW_WORKFLOW).toContain(`'.marker == $marker and .status == "complete"' .ai-review-lenses/${lens}.json >/dev/null`);
+      expect(REVIEW_WORKFLOW).toContain(`::error::${lens} lens did not complete its inspection`);
       expect(REVIEW_WORKFLOW).toContain(`.ai-review-controls/prompts/ai-pr-review-lens-json.md \\\n              .ai-review-controls/prompts/ai-pr-review-${lens}.md`);
     }
     for (const lens of ["aidlc", "user-experience", "direction"]) {

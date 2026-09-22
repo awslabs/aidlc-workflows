@@ -510,7 +510,8 @@ jobs:
             "$prompt_injection_prompt" \
             "$lens_schema"
           jq -e --arg marker "[LENS-REVIEWED] prompt-injection $HEAD_SHA" \
-            '.marker == $marker' .ai-review-lenses/prompt-injection.json >/dev/null
+            '.marker == $marker and .status == "complete"' .ai-review-lenses/prompt-injection.json >/dev/null \
+            || { echo "::error::prompt-injection lens did not complete its inspection"; exit 1; }
 
           security_prompt="$(
             cat \
@@ -529,7 +530,8 @@ jobs:
             "$security_prompt" \
             "$lens_schema"
           jq -e --arg marker "[LENS-REVIEWED] security $HEAD_SHA" \
-            '.marker == $marker' .ai-review-lenses/security.json >/dev/null
+            '.marker == $marker and .status == "complete"' .ai-review-lenses/security.json >/dev/null \
+            || { echo "::error::security lens did not complete its inspection"; exit 1; }
 
           aidlc_prompt="$(
             cat \
