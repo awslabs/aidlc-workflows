@@ -122,11 +122,14 @@ function withLegacyCodexProviderBlock(config: string, block: string): string {
   const developerInstructions =
     /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m
       .exec(config);
-  const from = developerInstructions
+  // sandbox_mode is a root key, not part of a model_providers table:
+  // https://developers.openai.com/codex/config-reference/#sandbox_mode
+  // Insert after all root assignments, skipping headers inside onboarding text.
+  const afterInstructions = developerInstructions
     ? developerInstructions.index + developerInstructions[0].length
     : 0;
-  const header = /^\[/m.exec(config.slice(from));
-  const insertion = header ? from + header.index : config.length;
+  const table = /^[\t ]*\[/m.exec(config.slice(afterInstructions));
+  const insertion = table ? afterInstructions + table.index : config.length;
   return config.slice(0, insertion) + block + config.slice(insertion);
 }
 
@@ -778,16 +781,13 @@ describe("t294 provider diagnostics", () => {
     );
     writeFileSync(
       codexPath,
-      withLegacyCodexProviderBlock(
-        legacyFrameworkConfig,
-        `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
-          `# unavailable there; the market-research stage degrades gracefully). For\n` +
-          `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
-          `# block.\n` +
-          `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
-          `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
-          `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n`,
-      ),
+      withLegacyCodexProviderBlock(legacyFrameworkConfig, `# D-9: Amazon Bedrock is the shipped default provider (web_search is\n` +
+        `# unavailable there; the market-research stage degrades gracefully). For\n` +
+        `# OpenAI-auth setups, comment out model_provider and the [model_providers]\n` +
+        `# block.\n` +
+        `model = "openai.gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
+        `model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n` +
+        `[model_providers.amazon-bedrock.aws]\nprofile = "default"\nregion = "us-east-1"\n\n`),
     );
     expect(providerIssues(codex, ".codex", "codex", record)
       .map((issue) => issue.id)).toContain("provider-codex-project-override");
@@ -798,6 +798,7 @@ describe("t294 provider diagnostics", () => {
       emptyRecords(record),
     );
     expect(providerIssues(codex, ".codex", "codex", record)).toEqual([]);
+    expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("workspace-write");
 
     const customCodex = temp("aidlc-t294-custom-codex-");
     cpSync(join(DIST, "codex"), customCodex, { recursive: true });
@@ -805,7 +806,7 @@ describe("t294 provider diagnostics", () => {
     const customConfig = withLegacyCodexProviderBlock(
       readFileSync(customCodexPath, "utf-8"),
       `model = "gpt-5.5"\nmodel_provider = "amazon-bedrock"\n` +
-        `model_context_window = 262144\nmodel_reasoning_effort = "low"\n\n` +
+      `model_context_window = 262144\nmodel_reasoning_effort = "low"\n\n` +
         `[model_providers.amazon-bedrock.aws]\nprofile = "dev"\nregion = "eu-west-1"\n\n`,
     );
     writeFileSync(customCodexPath, customConfig);
@@ -1339,12 +1340,12 @@ describe("t294 instruction-file doctor row", () => {
     const descriptorPath = join(project, ".codex", "tools", "data", "aidlc-projection.json");
     const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
     delete descriptor.onboarding;
-    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
     const absent = instructionFileDoctorCheck(project, ".codex");
     expect(absent.pass).toBe(true);
 
     descriptor.onboarding = "../../x\n";
-    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(absent);
   }, 60_000);
 
@@ -1357,18 +1358,18 @@ describe("t294 instruction-file doctor row", () => {
     const descriptorPath = join(project, ".codex", "tools", "data", "aidlc-projection.json");
     const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
     descriptor.onboarding = onboarding;
-    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
     const baselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
     const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
     baseline.files[onboarding] = baseline.files[".codex/onboarding.md"];
-    writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n");
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
 
     const conflict = instructionFileDoctorCheck(project, ".codex");
     expect(conflict.pass).toBe(false);
     expect(conflict.label).toContain(`conflict (${onboarding})`);
 
     delete baseline.files[onboarding];
-    writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n");
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
     rmSync(baselinePath);
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
@@ -1455,7 +1456,7 @@ describe("t294 instruction-file doctor row", () => {
     expect(intact.pass).toBe(true);
     expect(intact.label).toContain("framework-owned file intact");
 
-    writeFileSync(onboardingPath, onboarding + "\nLocal onboarding change\n");
+    writeFileSync(onboardingPath, `${onboarding}\nLocal onboarding change\n`);
     const modified = instructionFileDoctorCheck(project, ".kiro");
     expect(modified.pass).toBe(false);
     expect(modified.label).toContain("hand-modified - conflict (.kiro/steering/aidlc-onboarding.md)");
@@ -1467,7 +1468,7 @@ describe("t294 instruction-file doctor row", () => {
     expect(instructionFileDoctorCheck(project, ".kiro").label)
       .toContain("block or file missing (AGENTS.md)");
 
-    writeFileSync(claudePath, readFileSync(claudePath, "utf-8") + "\nLocal Claude change\n");
+    writeFileSync(claudePath, `${readFileSync(claudePath, "utf-8")}\nLocal Claude change\n`);
     const claudeModified = instructionFileDoctorCheck(project, ".claude");
     expect(claudeModified.pass).toBe(false);
     expect(claudeModified.label).toContain("hand-modified - conflict (.claude/CLAUDE.md)");
@@ -1872,12 +1873,13 @@ describe("t294 config diagnostics CLI", () => {
     const current = readFileSync(configPath, "utf-8");
     writeFileSync(
       configPath,
-      `model = "team-model"\n` +
-        `model_provider = "team-provider"\n` +
-        `model_context_window = 262144\n` +
-        `model_reasoning_effort = "low"\n\n` +
-        `[model_providers.team-provider]\n` +
-        `name = "Team Provider"\n\n${current}`,
+      withLegacyCodexProviderBlock(current,
+        `model = "team-model"\n` +
+          `model_provider = "team-provider"\n` +
+          `model_context_window = 262144\n` +
+          `model_reasoning_effort = "low"\n\n` +
+          `[model_providers.team-provider]\n` +
+          `name = "Team Provider"\n\n`),
     );
     const refreshed = run([
       "config",
@@ -1961,10 +1963,10 @@ describe("t294 config diagnostics CLI", () => {
     const codexPath = join(codex, ".codex", "config.toml");
     writeFileSync(
       codexPath,
-      (
+      withLegacyCodexProviderBlock(
+        readFileSync(codexPath, "utf-8"),
         `model = "team-model"\nmodel_provider = "team-provider"\n\n` +
-        `[model_providers.team-provider]\nname = "Team Provider"\n\n` +
-        readFileSync(codexPath, "utf-8")
+          `[model_providers.team-provider]\nname = "Team Provider"\n\n`,
       )
         .replace("# AI-DLC on Codex CLI", "# Team-owned Codex instructions")
         .replace(
@@ -1989,8 +1991,7 @@ describe("t294 config diagnostics CLI", () => {
       codexRecorded.status,
       codexRecorded.stdout + codexRecorded.stderr,
     ).toBe(0);
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('sandbox_mode = "read-only"');
+    expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("# Team-owned Codex instructions");
     expect(readFileSync(codexPath, "utf-8"))
@@ -2005,8 +2006,7 @@ describe("t294 config diagnostics CLI", () => {
       codexRefreshed.status,
       codexRefreshed.stdout + codexRefreshed.stderr,
     ).toBe(4);
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('sandbox_mode = "read-only"');
+    expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
     const codexRepaired = run([
       "config",
       "--project-dir",
@@ -2016,8 +2016,7 @@ describe("t294 config diagnostics CLI", () => {
     ], codex, env);
     expect(codexRepaired.status, codexRepaired.stdout + codexRepaired.stderr)
       .toBe(0);
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('sandbox_mode = "workspace-write"');
+    expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("workspace-write");
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("# AI-DLC on Codex CLI");
     expect(readFileSync(codexPath, "utf-8"))
@@ -2028,6 +2027,43 @@ describe("t294 config diagnostics CLI", () => {
       .toContain('model = "team-model"');
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("[model_providers.team-provider]");
+  }, 90_000);
+
+  test("Codex refresh repairs only the owned root sandbox mode, not prose or custom-table keys", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const shipped = readFileSync(configPath, "utf-8");
+    const prose = 'sandbox_mode = "danger-full-access"';
+    const custom = '\n[model_providers.team-provider]\nname = "Team Provider"\nsandbox_mode = "team-value"\n';
+    const edited = shipped
+      .replace('sandbox_mode = "workspace-write"', '"sandbox_mode" = \'read-only\'')
+      .replace("# AI-DLC on Codex CLI", `# AI-DLC on Codex CLI\n${prose}`) + custom;
+    writeFileSync(configPath, edited);
+    const args = ["config", "--project-dir", project, "--yes"];
+    const refused = run(args, project, env);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    expect(readFileSync(configPath, "utf-8")).toBe(edited);
+    const forced = run([...args, "--force"], project, env);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    const repaired = parseToml(readFileSync(configPath, "utf-8"));
+    expect(repaired.sandbox_mode).toBe("workspace-write");
+    expect(repaired.model_providers).toEqual({
+      "team-provider": { name: "Team Provider", sandbox_mode: "team-value" },
+    });
+    expect(repaired.developer_instructions).not.toContain(prose);
+
+    // Removing the owned root key must not promote a same-named custom-table key.
+    const missing = (shipped + custom).replace(/^sandbox_mode = "workspace-write"\n/m, "");
+    writeFileSync(configPath, missing);
+    const missingRefused = run(args, project, env);
+    expect(missingRefused.status, missingRefused.stdout + missingRefused.stderr).toBe(4);
+    expect(readFileSync(configPath, "utf-8")).toBe(missing);
+    const restored = run([...args, "--force"], project, env);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    const restoredConfig = parseToml(readFileSync(configPath, "utf-8"));
+    expect(restoredConfig.sandbox_mode).toBe("workspace-write");
+    expect(restoredConfig.model_providers).toEqual(repaired.model_providers);
   }, 90_000);
 
   test("release refresh adds framework developer instructions to a legacy Codex config", () => {
@@ -2088,6 +2124,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after).not.toContain("[model_providers.amazon-bedrock.aws]");
     expect(after).not.toContain('model_provider = "amazon-bedrock"');
     expect(typeof parseToml(after).developer_instructions).toBe("string");
+    expect(parseToml(after).sandbox_mode).toBe("workspace-write");
   }, 60_000);
 
   test("refresh treats deleted Codex developer instructions as framework drift", () => {
@@ -2448,6 +2485,7 @@ describe("t294 config diagnostics CLI", () => {
       agents: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       developer_instructions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       features: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      sandbox_mode: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       sandbox_workspace_write: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       shell_environment_policy: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),

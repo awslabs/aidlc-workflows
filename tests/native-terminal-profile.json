@@ -1,0 +1,2522 @@
+{
+  "version": 1,
+  "name": "native-terminal-parity",
+  "jobs": [
+    {
+      "id": "linux-bun",
+      "platform": "linux",
+      "architecture": "arm64",
+      "backend": "bun",
+      "files": [
+        {
+          "path": "tests/e2e/t-tui-preflight.serial.test.ts",
+          "cases": [
+            {
+              "classname": "t-tui-preflight (terminal substrate capability gate)",
+              "name": "substrate preserves exact fragmented Unicode and ANSI grid rendering"
+            }
+          ]
+        },
+        {
+          "path": "tests/integration/t-tui-bun-backend-posix.test.ts",
+          "cases": [
+            {
+              "classname": "native launch namespace security",
+              "name": "client commands refuse unsafe records instead of using their RPC credentials"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "default world-writable root is refused before any lock/session publication"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "explicit world-writable root is refused before any lock/session publication"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "untrusted daemon directories receive no error record or supervisor"
+            }
+          ]
+        },
+        {
+          "path": "tests/integration/t-tui-bun-backend.test.ts",
+          "cases": [
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "a delayed old-generation kill fallback cannot stop or overwrite a replacement's stop"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "an unfinished client cannot delay daemon retirement or produce a premature wait-dead"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "eight concurrent sessions isolate their screens, input, and teardown"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "failed target launch leaves a cleaned record and allows a same-name retry"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "framed IPC accepts fragmented requests and refuses invalid ownership, malformed and oversized messages"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "kill completes while its caller already holds the native session lock"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "natural exit drains final UTF-8, preserves the target exit code, and permits same-name restart"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "physical repaint rows drive wait, startup and approval while public logical capture stays compatible"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "plain/ANSI/cell capture, literal/named input, bracketed paste, and real resize"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "wrap-spanning wait patterns keep logical compatibility and both views share one snapshot"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "an explicit root symlink/junction is refused without touching its target"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced parent before PTY/supervisor creation"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced session before PTY/supervisor creation"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-bun-process-linux.test.ts",
+          "cases": [
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "cooked Ctrl-C reaches the real target while wrapper survives descendant cleanup"
+            },
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "daemon SIGKILL triggers cleanup even without a PTY hangup"
+            },
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "eight simultaneous native trees reap detached orphans during mixed natural exit and stop"
+            },
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "pidfd waits preserve exit status, tolerate another reaper, and leave Bun's child status intact"
+            },
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "ready gates launch; release inherits PTY/cwd/env; natural exit reaps detached orphans"
+            },
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "signal termination is recorded independently of wrapper exit and PTY EOF"
+            },
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "stop before release never launches the command"
+            },
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "stop bounds cleanup of TERM-resistant detached descendants to eight seconds"
+            },
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "uncertain cleanup retains the same subreaper until a later authenticated retry gets a fresh budget"
+            },
+            {
+              "classname": "Linux native supervision fixtures",
+              "name": "wrong parent identity fails closed before ready or target spawn"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-bun-process.test.ts",
+          "cases": [
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "an inherited token owns a detached orphan but never a different uid or the supervisor"
+            },
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "process arguments distinguish argv from environment and reject truncated strings"
+            },
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "start seconds and microseconds reject PID reuse even with a stale ownership token"
+            },
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "verified ancestry owns descendants without tokens but rejects incomplete and reused ancestors"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "owns descendants and reparented orphans, excludes unrelated processes and self"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "PID equality alone does not establish process identity"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "proc stat parses comm containing parentheses/newlines and preserves 64-bit ticks"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "refuses incomplete, cyclic and reused ancestry"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "Win64 extended job limit buffer matches the Windows ABI, without breakaway flags"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "a deadline consumed by earlier operations cannot be restarted after access denied"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "a process signaled immediately after access denied does not spend the cleanup budget"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "a wait failure and an unexpected termination error cannot become successful cleanup"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "access denied during concurrent termination waits on the same handle within the remaining budget"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "an already signaled member needs no termination, and an accepted termination needs no error retry"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "ownership changes and expired deadlines refuse termination"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "persistent denial remains an error after one finite wait, with PID and wait evidence"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-drive-socket-isolation.test.ts",
+          "cases": [
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "a private TMUX_SOCKET is defined with a non-empty default"
+            },
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "no tmux server op bypasses the helper onto the default server"
+            },
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "the single tmux() chokepoint passes -L <socket> ahead of the args"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-fixture-cleanup.test.ts",
+          "cases": [
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks error records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks exited records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks running records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks starting records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks stopped records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "confirmed cleanup allows AfterKill removal while retaining the native final snapshot"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "missing or truthy non-boolean cleanup flags cannot release the project"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "missing roots and directories without records do not block unrelated cleanup"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "native cwd matching respects platform case rules and directory boundaries"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "native directory names provide diagnostics when launch metadata has no session name"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "raw cleanup uses the configured native root and preserves project artifacts on error"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "the third root overrides native scanning while the custom legacy root still works"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "unreadable native records preserve the project instead of allowing uncertain cleanup"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-private-root-posix.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced after opening its temporary record"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "unsafe roots and records are rejected, never chmod-repaired"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-private-root.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "a copied record cannot authorize a replaced session or parent directory"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "identity checks preserve 64-bit values and refuse unpinned records"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "Node can load the record helper and validate its private root without bun:ffi"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "POSIX validator rejects foreign owners, public modes and links"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "private roots with missing parents work and private records round-trip"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced before opening its temporary record"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-onboarding.test.ts",
+          "cases": [
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "an explicit profile neither creates a home nor falls back to it on write failure"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "first-run preparation can preserve the interactive project trust dialog"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "model-upgrade navigation selects No and refuses ambiguous or ordinary workflow output"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "permission-mode acceptance follows the painted choice in owned fixtures"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "separate explicit profiles preserve their own settings and never write the host home"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "standalone owned sessions decline model upgrades once without runner-specific environment"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "the Windows configuration-trust menu retains the same visible Yes selection"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "without an override the legacy home-level config is still seeded additively"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-process-identity.test.ts",
+          "cases": [
+            {
+              "classname": "Darwin native process identity",
+              "name": "incomplete and mismatched native identities fail instead of claiming process absence"
+            },
+            {
+              "classname": "Darwin native process identity",
+              "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
+            },
+            {
+              "classname": "Darwin native process identity",
+              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "comm delimiters and 64-bit ticks cannot alias a different process"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "malformed procfs data throws, including malformed data claiming a zombie"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "missing target is gone only when live procfs can still be read"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "permission and I/O failures are not absence"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "zombies and dead states are gone; sleeping/stopped tasks remain live"
+            },
+            {
+              "classname": "native process identity input validation",
+              "name": "invalid PIDs are rejected before accessing the operating system"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "a child that has exited no longer has an identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "an absent Bun override is an error, never a gone process"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "self has a repeatable creation identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "the bounded Bun entrypoint returns the same identity for a Node caller"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "a child owner's exit releases its lock automatically"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "a child owner's interruption releases its lock automatically"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "a spawned process cannot inherit and retain its parent's lock"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "contention fails immediately; release preserves the same file and is idempotent"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "filesystem errors do not masquerade as contention"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "native and core locks retain ownership beyond the Windows MAX_PATH boundary"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "a failed handle close is reported even after observing exit"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "creation time retains all 64 bits and every query uses the same handle"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "observed exit before or during the creation-time read returns null and closes"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "only nonexistent PID errors count as a missing process"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "wait/time read failures always close the handle and throw"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-record-file-posix.test.ts",
+          "cases": [
+            {
+              "classname": "POSIX record filesystem behavior",
+              "name": "a real failed rename preserves an occupied destination and removes the temporary"
+            },
+            {
+              "classname": "POSIX record filesystem behavior",
+              "name": "an open reader retains the old document while new readers see the replacement"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-record-file.test.ts",
+          "cases": [
+            {
+              "classname": "atomic native terminal records",
+              "name": "a partial EACCES write failure closes and removes only the unpublished file"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "a partial ENOSPC write failure closes and removes only the unpublished file"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "an exclusive-create failure never removes a file it does not own"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "creates and replaces complete JSON through distinct private files"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EACCES retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EBUSY retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EPERM retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "permanent rename errors propagate immediately, preserving the old record"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "serialization failure leaves the old record intact without a temporary"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "temporary cleanup failure reports both errors and leaves the old record intact"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-runtime.test.ts",
+          "cases": [
+            {
+              "classname": "native driver Node handoff",
+              "name": "a Node override fails after one handoff; a real Bun override executes the command"
+            },
+            {
+              "classname": "TUI backend selection",
+              "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
+            },
+            {
+              "classname": "TUI backend selection",
+              "name": "explicit selections are retained independently of platform"
+            },
+            {
+              "classname": "TUI backend selection",
+              "name": "unknown and empty selections throw instead of becoming capability skips"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "a Bun override wins over the current executable, including paths with spaces"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "a non-Bun parent launches PATH bun instead of its own executable"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "Bun and tmux use the current Bun executable without probing Node"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "explicit legacy Windows selection uses its Node override and type stripping"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "legacy Windows resolution finds an off-PATH Program Files Node installation"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "malformed selected executable overrides throw"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "a missing Bun override reports absence without falling back to another executable"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "a non-Bun executable or malformed probe response is reported as unavailable"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "changing runtime overrides and probe environments takes effect in the same process"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "legacy node-pty prerequisites use Node with type stripping and report load failures"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "missing Node is a capability reason, including an absent Windows fallback"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "native Bun needs neither tmux nor Node on every supported platform"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "native lifecycle on unsupported platforms reports a reason without probing"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "the selected Bun executable must meet the version and API requirements"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "tmux requires Bun and tmux, but not the native API or renderer dependencies"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-screen.test.ts",
+          "cases": [
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
+            },
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "invalid or oversized geometry is rejected before construction and resize"
+            },
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "large writes and cumulative queued output reject explicitly without losing accepted bytes"
+            },
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "many tiny operations are bounded separately from byte payloads"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "cursor modes, modifiers, navigation and F1..F12 use exact terminal sequences"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "emulator queries reply through onInput in parse order without painting replies"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "named keys and literal fallback retain exact bytes and optional Enter"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "paste follows bracketed mode, normalizes line endings, and never appends Enter"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "reply callback errors reject flush and snapshots instead of hanging the parser"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "captures only the active viewport and restores the normal buffer"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "captures palette/RGB, every exposed attribute, and selective resets"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "copies Buffer subarrays rather than retaining a view of reused PTY memory"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "cursor-addressed repaint exposes approval rows even when old soft-wrap flags survive"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "erasure removes history and retains the erase background on blank cells"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "every partition of 2/3/4-byte UTF-8 preserves zero-bit continuation bytes"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "exact preflight payload survives every fixed chunk size with separate parser drains"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "exact preflight payload survives every two-chunk byte partition"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "flush drains a final fragment without requiring newline or a later output event"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "flush retains incomplete UTF-8 for the next write without inventing replacement cells"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "joins soft wraps, preserves intervening spaces, and keeps the physical grid"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "malformed UTF-8 is visible as replacement cells instead of silently dropping bytes"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "resize is ordered with output and snapshots and resizes both xterm buffers"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "snapshots are ordered, independent frames; reads cannot return stale cached output"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "split UTF-8, combining characters, and wide cells retain column positions"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "t27's exact completed-turn pattern matches the physical idle caret after a repaint"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-time-budget.test.ts",
+          "cases": [
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "a completed driver keeps its actual exit code"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "a short remaining budget is not stretched to a 60-second minimum"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "exhausted or invalid deadlines fail before a driver can start"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "later calculations cannot restart the overall clock"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "rounding preserves the cleanup reserve"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "startup longer than 37 seconds consumes the driver budget"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "the watchdog reaps only its owned driver before the test cap"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-user-settings-isolation.test.ts",
+          "cases": [
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "bounds the wait for a partial menu without sending keys"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "bounds the wait for a repainting menu without sending keys"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "does not automate an unmarked directory or a stale fixture owner"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "navigates both unnumbered and numbered layouts using the selected label"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "never retries a dropped navigation or presses Enter while No stays selected"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "presses Enter only after the marked fixture paints Yes as selected"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "refuses Enter when binding changes after the selected-Yes paint"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "refuses Enter when owner changes after the selected-Yes paint"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "refuses Enter when selection changes after the selected-Yes paint"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "revalidates fixture ownership after waiting for readiness"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "waits for a complete stable repaint before sending one Down to an input-ready menu"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "binds the exact revision backstop unset launcher without altering its argv"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "completion matching rejects a streaming sentinel until the idle prompt returns"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "isolated user profiles clear machine config and setting-source overrides"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "path-resolved Windows launchers preserve explicit setting sources without duplication"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "rejects cwd-changing, malformed, non-Claude and unknown wrappers without normalization"
+            }
+          ]
+        }
+      ],
+      "gates": {
+        "AIDLC_CLAUDE_SDK_LIVE": "0",
+        "AIDLC_TUI_LIVE": "0",
+        "AIDLC_KIRO_ACP_LIVE": "0",
+        "AIDLC_KIRO_TUI_LIVE": "0",
+        "AIDLC_CODEX_EXEC_LIVE": "0",
+        "AIDLC_COPILOT_EXEC_LIVE": "0",
+        "AIDLC_CURSOR_RUN_LIVE": "0",
+        "AIDLC_KIRO_IDE_LIVE": "0",
+        "AIDLC_OPENCODE_RUN_LIVE": "0"
+      }
+    },
+    {
+      "id": "windows-bun",
+      "platform": "win32",
+      "architecture": "x64",
+      "backend": "bun",
+      "files": [
+        {
+          "path": "tests/e2e/t-tui-preflight.serial.test.ts",
+          "cases": [
+            {
+              "classname": "t-tui-preflight (terminal substrate capability gate)",
+              "name": "substrate preserves exact fragmented Unicode and ANSI grid rendering"
+            }
+          ]
+        },
+        {
+          "path": "tests/integration/t-tui-bun-backend.test.ts",
+          "cases": [
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "a delayed old-generation kill fallback cannot stop or overwrite a replacement's stop"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "an unfinished client cannot delay daemon retirement or produce a premature wait-dead"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "eight concurrent sessions isolate their screens, input, and teardown"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "failed target launch leaves a cleaned record and allows a same-name retry"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "framed IPC accepts fragmented requests and refuses invalid ownership, malformed and oversized messages"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "kill completes while its caller already holds the native session lock"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "natural exit drains final UTF-8, preserves the target exit code, and permits same-name restart"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "physical repaint rows drive wait, startup and approval while public logical capture stays compatible"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "plain/ANSI/cell capture, literal/named input, bracketed paste, and real resize"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "wrap-spanning wait patterns keep logical compatibility and both views share one snapshot"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "an explicit root symlink/junction is refused without touching its target"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced parent before PTY/supervisor creation"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced session before PTY/supervisor creation"
+            }
+          ]
+        },
+        {
+          "path": "tests/integration/t-tui-bun-lifecycle.test.ts",
+          "cases": [
+            {
+              "classname": "Windows native supervisor lifecycle",
+              "name": "competing target exit and stop still require verified descendant retirement"
+            },
+            {
+              "classname": "Windows native supervisor lifecycle",
+              "name": "cooked Ctrl-C reaches the actual target and leaves supervision intact"
+            },
+            {
+              "classname": "Windows native supervisor lifecycle",
+              "name": "daemon-parent death cleans a detached descendant while the test retains the PTY"
+            },
+            {
+              "classname": "Windows native supervisor lifecycle",
+              "name": "explicit stop cleans detached descendants without affecting another process"
+            },
+            {
+              "classname": "Windows native supervisor lifecycle",
+              "name": "readiness gates release; stop wins before launch"
+            },
+            {
+              "classname": "Windows native supervisor lifecycle",
+              "name": "target exit 0 preserves final UTF-8 through root exit and PTY drain"
+            },
+            {
+              "classname": "Windows native supervisor lifecycle",
+              "name": "target exit 7 preserves final UTF-8 through root exit and PTY drain"
+            },
+            {
+              "classname": "Windows native supervisor lifecycle",
+              "name": "target exit cleans detached descendants without affecting another process"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-bun-process.test.ts",
+          "cases": [
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "an inherited token owns a detached orphan but never a different uid or the supervisor"
+            },
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "process arguments distinguish argv from environment and reject truncated strings"
+            },
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "start seconds and microseconds reject PID reuse even with a stale ownership token"
+            },
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "verified ancestry owns descendants without tokens but rejects incomplete and reused ancestors"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "owns descendants and reparented orphans, excludes unrelated processes and self"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "PID equality alone does not establish process identity"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "proc stat parses comm containing parentheses/newlines and preserves 64-bit ticks"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "refuses incomplete, cyclic and reused ancestry"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "Win64 extended job limit buffer matches the Windows ABI, without breakaway flags"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "a deadline consumed by earlier operations cannot be restarted after access denied"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "a process signaled immediately after access denied does not spend the cleanup budget"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "a wait failure and an unexpected termination error cannot become successful cleanup"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "access denied during concurrent termination waits on the same handle within the remaining budget"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "an already signaled member needs no termination, and an accepted termination needs no error retry"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "ownership changes and expired deadlines refuse termination"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "persistent denial remains an error after one finite wait, with PID and wait evidence"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-drive-socket-isolation.test.ts",
+          "cases": [
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "a private TMUX_SOCKET is defined with a non-empty default"
+            },
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "no tmux server op bypasses the helper onto the default server"
+            },
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "the single tmux() chokepoint passes -L <socket> ahead of the args"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-fixture-cleanup.test.ts",
+          "cases": [
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks error records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks exited records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks running records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks starting records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks stopped records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "confirmed cleanup allows AfterKill removal while retaining the native final snapshot"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "missing or truthy non-boolean cleanup flags cannot release the project"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "missing roots and directories without records do not block unrelated cleanup"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "native cwd matching respects platform case rules and directory boundaries"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "native directory names provide diagnostics when launch metadata has no session name"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "raw cleanup uses the configured native root and preserves project artifacts on error"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "the third root overrides native scanning while the custom legacy root still works"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "unreadable native records preserve the project instead of allowing uncertain cleanup"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-private-root-windows.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "Bun creates and reads private roots with no PowerShell on PATH"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "Windows blocks directory replacement while the publication handle is open"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "Windows refuses public allow ACEs on an otherwise owned root"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-private-root.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "a copied record cannot authorize a replaced session or parent directory"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "identity checks preserve 64-bit values and refuse unpinned records"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "Node can load the record helper and validate its private root without bun:ffi"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "POSIX validator rejects foreign owners, public modes and links"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "private roots with missing parents work and private records round-trip"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced before opening its temporary record"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-onboarding.test.ts",
+          "cases": [
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "an explicit profile neither creates a home nor falls back to it on write failure"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "first-run preparation can preserve the interactive project trust dialog"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "model-upgrade navigation selects No and refuses ambiguous or ordinary workflow output"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "permission-mode acceptance follows the painted choice in owned fixtures"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "separate explicit profiles preserve their own settings and never write the host home"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "standalone owned sessions decline model upgrades once without runner-specific environment"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "the Windows configuration-trust menu retains the same visible Yes selection"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "without an override the legacy home-level config is still seeded additively"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-process-identity.test.ts",
+          "cases": [
+            {
+              "classname": "Darwin native process identity",
+              "name": "incomplete and mismatched native identities fail instead of claiming process absence"
+            },
+            {
+              "classname": "Darwin native process identity",
+              "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
+            },
+            {
+              "classname": "Darwin native process identity",
+              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "comm delimiters and 64-bit ticks cannot alias a different process"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "malformed procfs data throws, including malformed data claiming a zombie"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "missing target is gone only when live procfs can still be read"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "permission and I/O failures are not absence"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "zombies and dead states are gone; sleeping/stopped tasks remain live"
+            },
+            {
+              "classname": "native process identity input validation",
+              "name": "invalid PIDs are rejected before accessing the operating system"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "a child that has exited no longer has an identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "an absent Bun override is an error, never a gone process"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "self has a repeatable creation identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "the bounded Bun entrypoint returns the same identity for a Node caller"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "a child owner's exit releases its lock automatically"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "a child owner's interruption releases its lock automatically"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "a spawned process cannot inherit and retain its parent's lock"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "contention fails immediately; release preserves the same file and is idempotent"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "filesystem errors do not masquerade as contention"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "native and core locks retain ownership beyond the Windows MAX_PATH boundary"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "a failed handle close is reported even after observing exit"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "creation time retains all 64 bits and every query uses the same handle"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "observed exit before or during the creation-time read returns null and closes"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "only nonexistent PID errors count as a missing process"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "wait/time read failures always close the handle and throw"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-record-file-windows.test.ts",
+          "cases": [
+            {
+              "classname": "Windows record sharing runtime",
+              "name": "session.json: a permanent read hold fails within budget and preserves unconfirmed cleanup"
+            },
+            {
+              "classname": "Windows record sharing runtime",
+              "name": "session.json: retries a real sharing-denied rename until an owned reader releases"
+            },
+            {
+              "classname": "Windows record sharing runtime",
+              "name": "supervisor.json: a permanent read hold fails within budget and preserves unconfirmed cleanup"
+            },
+            {
+              "classname": "Windows record sharing runtime",
+              "name": "supervisor.json: retries a real sharing-denied rename until an owned reader releases"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-record-file.test.ts",
+          "cases": [
+            {
+              "classname": "atomic native terminal records",
+              "name": "a partial EACCES write failure closes and removes only the unpublished file"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "a partial ENOSPC write failure closes and removes only the unpublished file"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "an exclusive-create failure never removes a file it does not own"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "creates and replaces complete JSON through distinct private files"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EACCES retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EBUSY retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EPERM retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "permanent rename errors propagate immediately, preserving the old record"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "serialization failure leaves the old record intact without a temporary"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "temporary cleanup failure reports both errors and leaves the old record intact"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-runtime.test.ts",
+          "cases": [
+            {
+              "classname": "native driver Node handoff",
+              "name": "a Node override fails after one handoff; a real Bun override executes the command"
+            },
+            {
+              "classname": "TUI backend selection",
+              "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
+            },
+            {
+              "classname": "TUI backend selection",
+              "name": "explicit selections are retained independently of platform"
+            },
+            {
+              "classname": "TUI backend selection",
+              "name": "unknown and empty selections throw instead of becoming capability skips"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "a Bun override wins over the current executable, including paths with spaces"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "a non-Bun parent launches PATH bun instead of its own executable"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "Bun and tmux use the current Bun executable without probing Node"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "explicit legacy Windows selection uses its Node override and type stripping"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "legacy Windows resolution finds an off-PATH Program Files Node installation"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "malformed selected executable overrides throw"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "a missing Bun override reports absence without falling back to another executable"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "a non-Bun executable or malformed probe response is reported as unavailable"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "changing runtime overrides and probe environments takes effect in the same process"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "legacy node-pty prerequisites use Node with type stripping and report load failures"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "missing Node is a capability reason, including an absent Windows fallback"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "native Bun needs neither tmux nor Node on every supported platform"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "native lifecycle on unsupported platforms reports a reason without probing"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "the selected Bun executable must meet the version and API requirements"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "tmux requires Bun and tmux, but not the native API or renderer dependencies"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-screen.test.ts",
+          "cases": [
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
+            },
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "invalid or oversized geometry is rejected before construction and resize"
+            },
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "large writes and cumulative queued output reject explicitly without losing accepted bytes"
+            },
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "many tiny operations are bounded separately from byte payloads"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "cursor modes, modifiers, navigation and F1..F12 use exact terminal sequences"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "emulator queries reply through onInput in parse order without painting replies"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "named keys and literal fallback retain exact bytes and optional Enter"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "paste follows bracketed mode, normalizes line endings, and never appends Enter"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "reply callback errors reject flush and snapshots instead of hanging the parser"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "captures only the active viewport and restores the normal buffer"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "captures palette/RGB, every exposed attribute, and selective resets"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "copies Buffer subarrays rather than retaining a view of reused PTY memory"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "cursor-addressed repaint exposes approval rows even when old soft-wrap flags survive"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "erasure removes history and retains the erase background on blank cells"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "every partition of 2/3/4-byte UTF-8 preserves zero-bit continuation bytes"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "exact preflight payload survives every fixed chunk size with separate parser drains"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "exact preflight payload survives every two-chunk byte partition"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "flush drains a final fragment without requiring newline or a later output event"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "flush retains incomplete UTF-8 for the next write without inventing replacement cells"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "joins soft wraps, preserves intervening spaces, and keeps the physical grid"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "malformed UTF-8 is visible as replacement cells instead of silently dropping bytes"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "resize is ordered with output and snapshots and resizes both xterm buffers"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "snapshots are ordered, independent frames; reads cannot return stale cached output"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "split UTF-8, combining characters, and wide cells retain column positions"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "t27's exact completed-turn pattern matches the physical idle caret after a repaint"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-time-budget.test.ts",
+          "cases": [
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "a completed driver keeps its actual exit code"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "a short remaining budget is not stretched to a 60-second minimum"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "exhausted or invalid deadlines fail before a driver can start"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "later calculations cannot restart the overall clock"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "rounding preserves the cleanup reserve"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "startup longer than 37 seconds consumes the driver budget"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "the watchdog reaps only its owned driver before the test cap"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-user-settings-isolation.test.ts",
+          "cases": [
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "bounds the wait for a partial menu without sending keys"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "bounds the wait for a repainting menu without sending keys"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "does not automate an unmarked directory or a stale fixture owner"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "navigates both unnumbered and numbered layouts using the selected label"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "never retries a dropped navigation or presses Enter while No stays selected"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "presses Enter only after the marked fixture paints Yes as selected"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "refuses Enter when binding changes after the selected-Yes paint"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "refuses Enter when owner changes after the selected-Yes paint"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "refuses Enter when selection changes after the selected-Yes paint"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "revalidates fixture ownership after waiting for readiness"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "waits for a complete stable repaint before sending one Down to an input-ready menu"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "binds the exact revision backstop unset launcher without altering its argv"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "completion matching rejects a streaming sentinel until the idle prompt returns"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "isolated user profiles clear machine config and setting-source overrides"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "path-resolved Windows launchers preserve explicit setting sources without duplication"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "rejects cwd-changing, malformed, non-Claude and unknown wrappers without normalization"
+            }
+          ]
+        }
+      ],
+      "gates": {
+        "AIDLC_CLAUDE_SDK_LIVE": "0",
+        "AIDLC_TUI_LIVE": "0",
+        "AIDLC_KIRO_ACP_LIVE": "0",
+        "AIDLC_KIRO_TUI_LIVE": "0",
+        "AIDLC_CODEX_EXEC_LIVE": "0",
+        "AIDLC_COPILOT_EXEC_LIVE": "0",
+        "AIDLC_CURSOR_RUN_LIVE": "0",
+        "AIDLC_KIRO_IDE_LIVE": "0",
+        "AIDLC_OPENCODE_RUN_LIVE": "0"
+      }
+    },
+    {
+      "id": "darwin-bun",
+      "platform": "darwin",
+      "architecture": "arm64",
+      "backend": "bun",
+      "files": [
+        {
+          "path": "tests/e2e/t-tui-preflight.serial.test.ts",
+          "cases": [
+            {
+              "classname": "t-tui-preflight (terminal substrate capability gate)",
+              "name": "substrate preserves exact fragmented Unicode and ANSI grid rendering"
+            }
+          ]
+        },
+        {
+          "path": "tests/integration/t-tui-bun-backend-posix.test.ts",
+          "cases": [
+            {
+              "classname": "native launch namespace security",
+              "name": "client commands refuse unsafe records instead of using their RPC credentials"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "default world-writable root is refused before any lock/session publication"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "explicit world-writable root is refused before any lock/session publication"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "untrusted daemon directories receive no error record or supervisor"
+            }
+          ]
+        },
+        {
+          "path": "tests/integration/t-tui-bun-backend.test.ts",
+          "cases": [
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "a delayed old-generation kill fallback cannot stop or overwrite a replacement's stop"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "an unfinished client cannot delay daemon retirement or produce a premature wait-dead"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "eight concurrent sessions isolate their screens, input, and teardown"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "failed target launch leaves a cleaned record and allows a same-name retry"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "framed IPC accepts fragmented requests and refuses invalid ownership, malformed and oversized messages"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "kill completes while its caller already holds the native session lock"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "natural exit drains final UTF-8, preserves the target exit code, and permits same-name restart"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "physical repaint rows drive wait, startup and approval while public logical capture stays compatible"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "plain/ANSI/cell capture, literal/named input, bracketed paste, and real resize"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "wrap-spanning wait patterns keep logical compatibility and both views share one snapshot"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "an explicit root symlink/junction is refused without touching its target"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced parent before PTY/supervisor creation"
+            },
+            {
+              "classname": "native launch namespace security",
+              "name": "daemon refuses a replaced session before PTY/supervisor creation"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-bun-process-darwin.test.ts",
+          "cases": [
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "cooked Ctrl-C reaches the real target while wrapper survives descendant cleanup"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "daemon SIGKILL triggers cleanup even without a PTY hangup"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "eight simultaneous native trees reap detached orphans during mixed natural exit and stop"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "native process identity rejects PID reuse while preserving identity across reparenting"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "ready gates launch; release inherits PTY/cwd/env; natural exit reaps detached orphans"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "signal termination is recorded independently of wrapper exit and PTY EOF"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "stop before release never launches the command"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "stop bounds cleanup of TERM-resistant detached descendants to eight seconds"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "uncertain cleanup retains the same supervisor until a later authenticated retry gets a fresh budget"
+            },
+            {
+              "classname": "Darwin native supervision fixtures",
+              "name": "wrong parent identity fails closed before ready or target spawn"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-bun-process.test.ts",
+          "cases": [
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "an inherited token owns a detached orphan but never a different uid or the supervisor"
+            },
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "process arguments distinguish argv from environment and reject truncated strings"
+            },
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "start seconds and microseconds reject PID reuse even with a stale ownership token"
+            },
+            {
+              "classname": "Darwin supervisor ownership checks",
+              "name": "verified ancestry owns descendants without tokens but rejects incomplete and reused ancestors"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "owns descendants and reparented orphans, excludes unrelated processes and self"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "PID equality alone does not establish process identity"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "proc stat parses comm containing parentheses/newlines and preserves 64-bit ticks"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "refuses incomplete, cyclic and reused ancestry"
+            },
+            {
+              "classname": "native supervisor identity checks",
+              "name": "Win64 extended job limit buffer matches the Windows ABI, without breakaway flags"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "a deadline consumed by earlier operations cannot be restarted after access denied"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "a process signaled immediately after access denied does not spend the cleanup budget"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "a wait failure and an unexpected termination error cannot become successful cleanup"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "access denied during concurrent termination waits on the same handle within the remaining budget"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "an already signaled member needs no termination, and an accepted termination needs no error retry"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "ownership changes and expired deadlines refuse termination"
+            },
+            {
+              "classname": "Windows job member termination races",
+              "name": "persistent denial remains an error after one finite wait, with PID and wait evidence"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-drive-socket-isolation.test.ts",
+          "cases": [
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "a private TMUX_SOCKET is defined with a non-empty default"
+            },
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "no tmux server op bypasses the helper onto the default server"
+            },
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "the single tmux() chokepoint passes -L <socket> ahead of the args"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-fixture-cleanup.test.ts",
+          "cases": [
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks error records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks exited records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks running records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks starting records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "blocks stopped records until cleanup is explicitly confirmed, without needing a PID"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "confirmed cleanup allows AfterKill removal while retaining the native final snapshot"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "missing or truthy non-boolean cleanup flags cannot release the project"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "missing roots and directories without records do not block unrelated cleanup"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "native cwd matching respects platform case rules and directory boundaries"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "native directory names provide diagnostics when launch metadata has no session name"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "raw cleanup uses the configured native root and preserves project artifacts on error"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "the third root overrides native scanning while the custom legacy root still works"
+            },
+            {
+              "classname": "native TUI fixture cleanup guard",
+              "name": "unreadable native records preserve the project instead of allowing uncertain cleanup"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-private-root-posix.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced after opening its temporary record"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "unsafe roots and records are rejected, never chmod-repaired"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-native-private-root.test.ts",
+          "cases": [
+            {
+              "classname": "native private namespace",
+              "name": "a copied record cannot authorize a replaced session or parent directory"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "identity checks preserve 64-bit values and refuse unpinned records"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "Node can load the record helper and validate its private root without bun:ffi"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "POSIX validator rejects foreign owners, public modes and links"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "private roots with missing parents work and private records round-trip"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "publication refuses a directory replaced before opening its temporary record"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-onboarding.test.ts",
+          "cases": [
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "an explicit profile neither creates a home nor falls back to it on write failure"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "first-run preparation can preserve the interactive project trust dialog"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "model-upgrade navigation selects No and refuses ambiguous or ordinary workflow output"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "permission-mode acceptance follows the painted choice in owned fixtures"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "separate explicit profiles preserve their own settings and never write the host home"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "standalone owned sessions decline model upgrades once without runner-specific environment"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "the Windows configuration-trust menu retains the same visible Yes selection"
+            },
+            {
+              "classname": "Claude onboarding profile isolation",
+              "name": "without an override the legacy home-level config is still seeded additively"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-process-identity.test.ts",
+          "cases": [
+            {
+              "classname": "Darwin native process identity",
+              "name": "incomplete and mismatched native identities fail instead of claiming process absence"
+            },
+            {
+              "classname": "Darwin native process identity",
+              "name": "start-time identities retain both 64-bit fields and distinguish PID reuse"
+            },
+            {
+              "classname": "Darwin native process identity",
+              "name": "system enumeration excludes EPERM while required identities and other errors fail closed"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "comm delimiters and 64-bit ticks cannot alias a different process"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "malformed procfs data throws, including malformed data claiming a zombie"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "missing target is gone only when live procfs can still be read"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "permission and I/O failures are not absence"
+            },
+            {
+              "classname": "Linux native process identity",
+              "name": "zombies and dead states are gone; sleeping/stopped tasks remain live"
+            },
+            {
+              "classname": "native process identity input validation",
+              "name": "invalid PIDs are rejected before accessing the operating system"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "a child that has exited no longer has an identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "an absent Bun override is an error, never a gone process"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "self has a repeatable creation identity"
+            },
+            {
+              "classname": "native process identity OS reads",
+              "name": "the bounded Bun entrypoint returns the same identity for a Node caller"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "a child owner's exit releases its lock automatically"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "a child owner's interruption releases its lock automatically"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "a spawned process cannot inherit and retain its parent's lock"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "contention fails immediately; release preserves the same file and is idempotent"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "filesystem errors do not masquerade as contention"
+            },
+            {
+              "classname": "OS-owned native locks",
+              "name": "native and core locks retain ownership beyond the Windows MAX_PATH boundary"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "a failed handle close is reported even after observing exit"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "creation time retains all 64 bits and every query uses the same handle"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "observed exit before or during the creation-time read returns null and closes"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "only nonexistent PID errors count as a missing process"
+            },
+            {
+              "classname": "Windows native process identity",
+              "name": "wait/time read failures always close the handle and throw"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-record-file.test.ts",
+          "cases": [
+            {
+              "classname": "atomic native terminal records",
+              "name": "a partial EACCES write failure closes and removes only the unpublished file"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "a partial ENOSPC write failure closes and removes only the unpublished file"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "an exclusive-create failure never removes a file it does not own"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "creates and replaces complete JSON through distinct private files"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EACCES retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EBUSY retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "EPERM retries only on native Windows"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "permanent rename errors propagate immediately, preserving the old record"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "serialization failure leaves the old record intact without a temporary"
+            },
+            {
+              "classname": "atomic native terminal records",
+              "name": "temporary cleanup failure reports both errors and leaves the old record intact"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-runtime.test.ts",
+          "cases": [
+            {
+              "classname": "native driver Node handoff",
+              "name": "a Node override fails after one handoff; a real Bun override executes the command"
+            },
+            {
+              "classname": "TUI backend selection",
+              "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
+            },
+            {
+              "classname": "TUI backend selection",
+              "name": "explicit selections are retained independently of platform"
+            },
+            {
+              "classname": "TUI backend selection",
+              "name": "unknown and empty selections throw instead of becoming capability skips"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "a Bun override wins over the current executable, including paths with spaces"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "a non-Bun parent launches PATH bun instead of its own executable"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "Bun and tmux use the current Bun executable without probing Node"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "explicit legacy Windows selection uses its Node override and type stripping"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "legacy Windows resolution finds an off-PATH Program Files Node installation"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "malformed selected executable overrides throw"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "a missing Bun override reports absence without falling back to another executable"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "a non-Bun executable or malformed probe response is reported as unavailable"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "changing runtime overrides and probe environments takes effect in the same process"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "legacy node-pty prerequisites use Node with type stripping and report load failures"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "missing Node is a capability reason, including an absent Windows fallback"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "native Bun needs neither tmux nor Node on every supported platform"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "native lifecycle on unsupported platforms reports a reason without probing"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "the selected Bun executable must meet the version and API requirements"
+            },
+            {
+              "classname": "TUI substrate prerequisites",
+              "name": "tmux requires Bun and tmux, but not the native API or renderer dependencies"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-screen.test.ts",
+          "cases": [
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
+            },
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "invalid or oversized geometry is rejected before construction and resize"
+            },
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "large writes and cumulative queued output reject explicitly without losing accepted bytes"
+            },
+            {
+              "classname": "native TUI bounds and lifetime",
+              "name": "many tiny operations are bounded separately from byte payloads"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "cursor modes, modifiers, navigation and F1..F12 use exact terminal sequences"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "emulator queries reply through onInput in parse order without painting replies"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "named keys and literal fallback retain exact bytes and optional Enter"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "paste follows bracketed mode, normalizes line endings, and never appends Enter"
+            },
+            {
+              "classname": "native TUI input transcripts",
+              "name": "reply callback errors reject flush and snapshots instead of hanging the parser"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "captures only the active viewport and restores the normal buffer"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "captures palette/RGB, every exposed attribute, and selective resets"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "copies Buffer subarrays rather than retaining a view of reused PTY memory"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "cursor-addressed repaint exposes approval rows even when old soft-wrap flags survive"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "erasure removes history and retains the erase background on blank cells"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "every partition of 2/3/4-byte UTF-8 preserves zero-bit continuation bytes"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "exact preflight payload survives every fixed chunk size with separate parser drains"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "exact preflight payload survives every two-chunk byte partition"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "flush drains a final fragment without requiring newline or a later output event"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "flush retains incomplete UTF-8 for the next write without inventing replacement cells"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "joins soft wraps, preserves intervening spaces, and keeps the physical grid"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "malformed UTF-8 is visible as replacement cells instead of silently dropping bytes"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "resize is ordered with output and snapshots and resizes both xterm buffers"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "snapshots are ordered, independent frames; reads cannot return stale cached output"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "split UTF-8, combining characters, and wide cells retain column positions"
+            },
+            {
+              "classname": "native TUI screen transcripts",
+              "name": "t27's exact completed-turn pattern matches the physical idle caret after a repaint"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-time-budget.test.ts",
+          "cases": [
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "a completed driver keeps its actual exit code"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "a short remaining budget is not stretched to a 60-second minimum"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "exhausted or invalid deadlines fail before a driver can start"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "later calculations cannot restart the overall clock"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "rounding preserves the cleanup reserve"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "startup longer than 37 seconds consumes the driver budget"
+            },
+            {
+              "classname": "TUI driver shares the test deadline",
+              "name": "the watchdog reaps only its owned driver before the test cap"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-user-settings-isolation.test.ts",
+          "cases": [
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "bounds the wait for a partial menu without sending keys"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "bounds the wait for a repainting menu without sending keys"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "does not automate an unmarked directory or a stale fixture owner"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "navigates both unnumbered and numbered layouts using the selected label"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "never retries a dropped navigation or presses Enter while No stays selected"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "presses Enter only after the marked fixture paints Yes as selected"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "refuses Enter when binding changes after the selected-Yes paint"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "refuses Enter when owner changes after the selected-Yes paint"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "refuses Enter when selection changes after the selected-Yes paint"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "revalidates fixture ownership after waiting for readiness"
+            },
+            {
+              "classname": "Claude fixture trust menu",
+              "name": "waits for a complete stable repaint before sending one Down to an input-ready menu"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "binds the exact revision backstop unset launcher without altering its argv"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "completion matching rejects a streaming sentinel until the idle prompt returns"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "isolated user profiles clear machine config and setting-source overrides"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "path-resolved Windows launchers preserve explicit setting sources without duplication"
+            },
+            {
+              "classname": "TUI user-settings journey guards",
+              "name": "rejects cwd-changing, malformed, non-Claude and unknown wrappers without normalization"
+            }
+          ]
+        }
+      ],
+      "gates": {
+        "AIDLC_CLAUDE_SDK_LIVE": "0",
+        "AIDLC_TUI_LIVE": "0",
+        "AIDLC_KIRO_ACP_LIVE": "0",
+        "AIDLC_KIRO_TUI_LIVE": "0",
+        "AIDLC_CODEX_EXEC_LIVE": "0",
+        "AIDLC_COPILOT_EXEC_LIVE": "0",
+        "AIDLC_CURSOR_RUN_LIVE": "0",
+        "AIDLC_KIRO_IDE_LIVE": "0",
+        "AIDLC_OPENCODE_RUN_LIVE": "0"
+      }
+    },
+    {
+      "id": "linux-tmux",
+      "platform": "linux",
+      "architecture": "arm64",
+      "backend": "tmux",
+      "files": [
+        {
+          "path": "tests/e2e/t-tui-preflight.serial.test.ts",
+          "cases": [
+            {
+              "classname": "t-tui-preflight (terminal substrate capability gate)",
+              "name": "substrate preserves exact fragmented Unicode and ANSI grid rendering"
+            }
+          ]
+        },
+        {
+          "path": "tests/unit/t-tui-tmux-compat.test.ts",
+          "cases": [
+            {
+              "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
+              "name": "physical wait/startup omit wrap joining while public capture keeps it"
+            }
+          ]
+        }
+      ],
+      "gates": {
+        "AIDLC_CLAUDE_SDK_LIVE": "0",
+        "AIDLC_TUI_LIVE": "0",
+        "AIDLC_KIRO_ACP_LIVE": "0",
+        "AIDLC_KIRO_TUI_LIVE": "0",
+        "AIDLC_CODEX_EXEC_LIVE": "0",
+        "AIDLC_COPILOT_EXEC_LIVE": "0",
+        "AIDLC_CURSOR_RUN_LIVE": "0",
+        "AIDLC_KIRO_IDE_LIVE": "0",
+        "AIDLC_OPENCODE_RUN_LIVE": "0"
+      }
+    },
+    {
+      "id": "windows-node-pty",
+      "platform": "win32",
+      "architecture": "x64",
+      "backend": "node-pty",
+      "files": [
+        {
+          "path": "tests/e2e/t-tui-preflight.serial.test.ts",
+          "cases": [
+            {
+              "classname": "t-tui-preflight (terminal substrate capability gate)",
+              "name": "substrate preserves exact fragmented Unicode and ANSI grid rendering"
+            }
+          ]
+        },
+        {
+          "path": "tests/integration/t-tui-node-pty-compat.test.ts",
+          "cases": [
+            {
+              "classname": "t-tui-preflight (terminal substrate capability gate)",
+              "name": "Windows until-file paths detect early, preserve post-write work, and reap on teardown"
+            }
+          ]
+        }
+      ],
+      "gates": {
+        "AIDLC_CLAUDE_SDK_LIVE": "0",
+        "AIDLC_TUI_LIVE": "0",
+        "AIDLC_KIRO_ACP_LIVE": "0",
+        "AIDLC_KIRO_TUI_LIVE": "0",
+        "AIDLC_CODEX_EXEC_LIVE": "0",
+        "AIDLC_COPILOT_EXEC_LIVE": "0",
+        "AIDLC_CURSOR_RUN_LIVE": "0",
+        "AIDLC_KIRO_IDE_LIVE": "0",
+        "AIDLC_OPENCODE_RUN_LIVE": "0"
+      }
+    }
+  ]
+}

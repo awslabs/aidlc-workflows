@@ -773,7 +773,11 @@ describe("t283 engine-owned continuation cursor", () => {
       const first = invoke(installed, "next").directive;
       const receipt = first.receipt ?? "";
       const before = readFileSync(markerPath(installed), "utf-8");
-      const roFd = openSync(markerPath(installed), "r");
+      // Fail stdout after publication without pinning the marker itself.
+      // Windows refuses replacing a file held as the child's stdout handle.
+      const stdoutSink = join(installed.dir, ".readonly-stdout-sink");
+      writeFileSync(stdoutSink, "read-only output fixture");
+      const roFd = openSync(stdoutSink, "r");
       const failed = (() => {
         try {
           return Bun.spawnSync(command(installed, "continue", receipt), {
@@ -783,14 +787,17 @@ describe("t283 engine-owned continuation cursor", () => {
           });
         } finally {
           closeSync(roFd);
+          rmSync(stdoutSink, { force: true });
         }
       })();
 
       // The cursor advanced (the marker moved to part 2) even though the
       // directive could not be written, so the receipt is consumed: a replay is
       // a restart, and a fresh `next` answers the same restart byte for byte.
-      expect(failed.exitCode).not.toBe(0);
-      expect(readFileSync(markerPath(installed), "utf-8")).not.toBe(before);
+      const failureDetail = `exit=${failed.exitCode}; signal=${failed.signalCode}\n${failed.stderr.toString()}`;
+      expect(failed.exitCode, failureDetail).not.toBeNull();
+      expect(failed.exitCode, failureDetail).not.toBe(0);
+      expect(readFileSync(markerPath(installed), "utf-8"), failureDetail).not.toBe(before);
       expect(marker(installed).part).toBe(2);
       const replay = invoke(installed, "continue", receipt);
       expect(isRestart(replay.directive)).toBe(true);

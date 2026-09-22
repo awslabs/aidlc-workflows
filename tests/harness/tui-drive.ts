@@ -14,39 +14,13 @@
 // pattern-matches the rendered pane.
 //
 // ---------------------------------------------------------------------------
-// Two backends, one subcommand surface (D-TUI-2).
+// Native Bun.Terminal on Linux / Windows / macOS. Select explicitly with
+// AIDLC_TUI_BACKEND=bun|tmux|node-pty (auto is the platform default).
+// Native sessions use an inline PTY, an owned supervisor and @xterm/headless.
+// Each CLI invocation talks to the persistent daemon over framed local IPC.
+// Legacy tmux and Windows Node/node-pty remain available for comparison.
 //
-//   darwin / linux → tmux backend. A detached tmux session lives in the tmux
-//                    server, so each subcommand invocation (start/send/capture/
-//                    wait/kill) is a fresh process that re-attaches to the
-//                    server-side session by name. Proven; byte-for-byte the
-//                    behaviour of the original tools/aidlc-tui-drive.ts spike.
-//
-//   win32          → node-pty backend, spawned UNDER NODE (never bun — node-pty
-//                    input wedges under bun on Windows, microsoft/node-pty #748;
-//                    so the tui tests spawn `<resolved-node> --experimental-strip-types
-//                    tui-drive.ts`, not bun — resolveWinNode() finds node even when
-//                    it is off PATH, and the strip-types flag lets node < 22.18 run
-//                    the `.ts` entrypoint). node-pty
-//                    has no server: a pty + its rendered grid cannot survive
-//                    across separate CLI invocations the way a tmux session does.
-//                    So `start` forks a long-lived DAEMON (this file re-exec'd as
-//                    `__win-daemon`) that owns the pty, pipes pty.onData into an
-//                    @xterm/headless Terminal of the same cols/rows, and snapshots
-//                    the reconstructed GRID to a file every poll. send/capture/
-//                    wait/kill are thin clients that talk to the daemon through
-//                    two on-disk channels (a command log the daemon tails, and the
-//                    grid snapshot the readers poll). Piping node-pty's raw stream
-//                    through @xterm/headless makes Windows `capture` return the
-//                    same current-screen grid tmux capture-pane does, so the test
-//                    layer needs ZERO platform branches (D-TUI-2).
-//
-//                    NOTE: the Windows backend is written faithfully to the spike
-//                    but CANNOT be validated in this session (no Windows host). Its
-//                    live validation is DEFERRED to the EC2 box. Do not assume it
-//                    is proven end-to-end — the tmux path is.
-//
-// Subcommands (identical on both backends):
+// Shared subcommands (native-only additions are labelled):
 //   start  --session <name> --cwd <dir> [--width N] [--height N] -- <cmd...>
 //          Launch <cmd> in a fresh session of a fixed size.
 //   send   --session <name> --keys "<text>" [--literal] [--no-enter]
@@ -54,6 +28,7 @@
 //          --literal sends the string verbatim for free text / slash commands;
 //          omit it for named keys (Enter, Down, C-c).
 //   wait   --session <name> --pattern <regex> [--timeout-ms N] [--stable-ms N]
+//          [--view auto|physical|logical]
 //          Poll the captured grid until <regex> appears. With --stable-ms > 0 the
 //          screen must also be unchanged for that long (use for static menus
 //          / prompts). With --stable-ms 0 it matches the instant the pattern
@@ -61,12 +36,19 @@
 //          token counter / spinner means it never goes byte-stable).
 //          Exits 0 on match, 1 on timeout.
 //   startup --session <name> --ready-pattern <regex> [--timeout-ms N]
+//          [--view auto|physical|logical]
 //          One bounded grid-driven startup loop for Claude: dismiss a visible
 //          supported trust / bypass modal, or return immediately once the
 //          caller's ready UI/statusline pattern is painted. Exits 1 on timeout.
-//   capture --session <name> [--ansi]
-//          Print the current pane (plain text; --ansi keeps colour escapes —
-//          tmux only; the node-pty grid is always plain text).
+//   capture --session <name> [--physical | --ansi | --json]
+//          Current viewport; ANSI supported by Bun/tmux, full cells by Bun.
+//          Plain text defaults to joined logical lines; --physical keeps rows.
+//          Menus always inspect physical rows. Wait/readiness patterns default
+//          to physical-first with logical fallback from the same frame.
+//   resize --session <name> --width N --height N
+//          Resize the native PTY and emulator together.
+//   paste --session <name> --text "<text>"
+//          Native paste honours bracketed-paste mode; no implicit Enter.
 //   kill   --session <name>
 //          Kill the session (idempotent).
 //   wait-dead --session <name> [--timeout-ms N]
@@ -151,6 +133,9 @@ import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
 import { stateFilePathFor } from "./sdk-drive.ts";
+import { createBunBackend } from "./tui-bun-backend.ts";
+import { selectedTuiBackend } from "./tui-runtime.ts";
+import type { TuiSnapshot, TuiTextLayout, TuiTextViews } from "./tui-screen.ts";
 
 const POLL_INTERVAL_MS = 150;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -1223,13 +1208,18 @@ interface Backend {
     keys: string,
     literal: boolean,
     noEnter: boolean,
-  ): void;
-  /** Current visible grid as text. ansi keeps colour escapes (tmux only). */
-  capture(session: string, ansi: boolean): string;
+  ): void | Promise<void>;
+  /** Public text defaults to logical lines; automation requests physical rows. */
+  capture(session: string, ansi: boolean, layout?: TuiTextLayout): string | Promise<string>;
+  /** Both text projections of one frame; never independent polling reads. */
+  captureViews?(session: string): TuiTextViews | Promise<TuiTextViews>;
   /** Kill the session (idempotent). */
-  kill(session: string): void;
+  kill(session: string): void | Promise<void>;
   /** Labels for live backend processes or cleanup-verification blockers. */
-  liveProcesses(session: string): string[];
+  liveProcesses(session: string): string[] | Promise<string[]>;
+  snapshot?(session: string): Promise<TuiSnapshot>;
+  resize?(session: string, width: number, height: number): Promise<void>;
+  paste?(session: string, text: string): Promise<void>;
   /** Disposable fixture recorded when this session launched Claude. */
   fixtureCwd(session: string): string | null;
 }
@@ -1312,13 +1302,29 @@ const tmuxBackend: Backend = {
     }
   },
 
-  capture(session, ansi) {
-    // -p print to stdout, -J join wrapped lines, -e keep escapes (ansi mode).
-    const args = ["capture-pane", "-t", session, "-p", "-J"];
+  capture(session, ansi, layout = "logical") {
+    // -J is public logical capture compatibility, never automation's grid.
+    const args = ["capture-pane", "-t", session, "-p"];
+    if (layout === "logical") args.push("-J");
     if (ansi) args.push("-e");
     const r = tmux(args);
     if (r.code !== 0) fail(`capture-pane failed: ${r.stderr.trim()}`, 1);
     return r.stdout;
+  },
+
+  captureViews(session) {
+    const separator = `aidlc-frame-${randomUUID()}`;
+    // These synchronous commands drain together in one tmux server queue turn.
+    // Do not make two client calls: a repaint could fall between the views.
+    const result = tmux([
+      "capture-pane", "-t", session, "-p", ";",
+      "display-message", "-p", separator, ";",
+      "capture-pane", "-t", session, "-p", "-J",
+    ]);
+    if (result.code !== 0) fail(`capture-pane failed: ${result.stderr.trim()}`, 1);
+    const views = result.stdout.split(`${separator}\n`);
+    if (views.length !== 2) fail("tmux capture returned an ambiguous frame boundary", 1);
+    return { physical: views[0], logical: views[1] };
   },
 
   kill(session) {
@@ -1464,15 +1470,15 @@ const win32Backend: Backend = {
 
     const dir = winSessionDir(session);
     // Idempotent start: tear down any stale daemon + channel dir first.
-    win32Backend.kill(session);
+    await win32Backend.kill(session);
     const staleDeadline = Date.now() + DEFAULT_DEAD_TIMEOUT_MS;
     while (
-      win32Backend.liveProcesses(session).length > 0 &&
+      (await win32Backend.liveProcesses(session)).length > 0 &&
       Date.now() < staleDeadline
     ) {
       await sleep(POLL_INTERVAL_MS);
     }
-    const stale = win32Backend.liveProcesses(session);
+    const stale = await win32Backend.liveProcesses(session);
     if (stale.length > 0) {
       fail(
         `stale Windows session '${session}' survived cleanup: ${stale.join(", ")}`,
@@ -2061,7 +2067,7 @@ function fileURLToPathSafe(url: string): string {
 // win32 DAEMON — owns the pty + @xterm/headless Terminal for one session.
 //
 // Runs UNDER NODE only. node-pty + @xterm/headless are imported HERE (inside the
-// daemon path) via dynamic import so the macOS/Linux tmux path — and any bun
+// daemon path) via dynamic import so the native Bun and tmux paths — and any bun
 // process that merely loads this module — never touches node-pty (the #748
 // in-process wedge can only happen if node-pty is loaded; we keep it out of
 // every path except the node daemon).
@@ -2862,13 +2868,19 @@ function encodeKeys(keys: string, literal: boolean): string {
   return keys in named ? named[keys] : keys;
 }
 
-// Write ~/.claude.json with hasCompletedOnboarding + a forward-slash project key
-// so the Windows zero-keystroke path skips the startup modals (§2.3). Best-effort
-// and additive: never clobbers an existing config beyond the two keys.
-function preseedClaudeOnboarding(projectDir: string): void {
+// Claude keeps .claude.json inside an explicit CLAUDE_CONFIG_DIR; without the
+// override it uses the legacy home-level file. Explicit inputs let synthetic
+// checks exercise the Windows preseed without changing the host environment.
+export function preseedClaudeOnboarding(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+  trustProject = true,
+): void {
   try {
-    const home = os.homedir();
-    const cfgPath = join(home, ".claude.json");
+    const configDir = env.CLAUDE_CONFIG_DIR || homeDir;
+    mkdirSync(configDir, { recursive: true });
+    const cfgPath = join(configDir, ".claude.json");
     let cfg: Record<string, unknown> = {};
     if (existsSync(cfgPath)) {
       try {
@@ -2878,13 +2890,14 @@ function preseedClaudeOnboarding(projectDir: string): void {
       }
     }
     cfg.hasCompletedOnboarding = true;
-    const projects =
-      (cfg.projects as Record<string, unknown> | undefined) ?? {};
-    // Forward-slash key — claude normalises to forward-slash; a backslash key
-    // silently misses and the trust modal reappears.
-    const key = projectDir.replaceAll("\\", "/");
-    if (!(key in projects)) projects[key] = { hasTrustDialogAccepted: true };
-    cfg.projects = projects;
+    if (trustProject) {
+      const projects =
+        (cfg.projects as Record<string, unknown> | undefined) ?? {};
+      // Forward-slash key — Claude normalises project paths this way.
+      const key = projectDir.replaceAll("\\", "/");
+      if (!(key in projects)) projects[key] = { hasTrustDialogAccepted: true };
+      cfg.projects = projects;
+    }
     writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
   } catch {
     // best-effort preseed; the interactive path still answers modals by keystroke
@@ -2897,9 +2910,23 @@ function preseedClaudeOnboarding(projectDir: string): void {
 // ---------------------------------------------------------------------------
 
 function selectBackend(): Backend {
-  const plat = os.platform();
-  if (plat === "win32") return win32Backend;
-  // darwin / linux (and any other POSIX) → tmux. The original spike's behaviour.
+  const selected = selectedTuiBackend();
+  if (selected === "bun") {
+    if (process.platform !== "linux" && process.platform !== "win32" && process.platform !== "darwin") {
+      fail(`native lifecycle is unsupported on ${process.platform}; select AIDLC_TUI_BACKEND=tmux`);
+    }
+    return createBunBackend({
+      fixtureCwd: claudeFixtureCwd,
+      windowsCommand(command) {
+        return adaptWindowsLaunch(resolveWinExecutable(command[0]), command.slice(1), process.env);
+      },
+    });
+  }
+  if (selected === "node-pty") {
+    if (process.platform !== "win32") fail("node-pty backend supports Windows only");
+    return win32Backend;
+  }
+  if (process.platform === "win32") fail("tmux backend requires POSIX");
   return tmuxBackend;
 }
 
@@ -2914,6 +2941,19 @@ async function cmdStart(backend: Backend, a: Args): Promise<void> {
   const width = Number(a.flags.width ?? "120");
   const height = Number(a.flags.height ?? "40");
   const command = normalizeTuiCommand(a.rest);
+  if (
+    process.env.AIDLC_TEST_WORKER_ROOT &&
+    process.env.CLAUDE_CONFIG_DIR &&
+    claudeFixtureCwd(cwd, command)
+  ) {
+    // A fresh worker profile otherwise stops at Claude's first-run theme
+    // chooser. Preserve the real trust dialog that these journeys already
+    // drive, while keeping first-run setup inside the disposable profile.
+    preseedClaudeOnboarding(cwd, process.env, os.homedir(), false);
+  }
+  if (process.platform === "win32" && selectedTuiBackend() === "bun" && claudeFixtureCwd(cwd, command)) {
+    preseedClaudeOnboarding(cwd);
+  }
   writeTuiTrace(session, "start", {
     cwd,
     width,
@@ -2932,14 +2972,108 @@ async function cmdSend(backend: Backend, a: Args): Promise<void> {
   if (
     keys === "1" && !a.bools.literal && !a.bools["no-enter"] &&
     backend.fixtureCwd(session) &&
-    await acceptTuiFixtureTrust(backend, session, backend.capture(session, false))
+    await acceptTuiFixtureTrust(backend, session, await backend.capture(session, false, "physical"))
+  ) return;
+  if (
+    keys === "2" && !a.bools.literal && !a.bools["no-enter"] &&
+    backend.fixtureCwd(session) &&
+    await acceptTuiFixturePermissionMode(backend, session, await backend.capture(session, false, "physical"))
   ) return;
   writeTuiTrace(session, "send", {
     keys,
     literal: a.bools.literal === true,
     noEnter: a.bools["no-enter"] === true,
   });
-  backend.send(session, keys, a.bools.literal === true, a.bools["no-enter"] === true);
+  await backend.send(session, keys, a.bools.literal === true, a.bools["no-enter"] === true);
+}
+
+/** Preserve the shipped model pin when a fresh profile shows an upgrade offer. */
+export function claudeModelUpgradeNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  if (
+    /\[AIDLC\]/.test(screen) ||
+    !/^\s*Newer .+ model available\s*$/m.test(screen) ||
+    !/Currently pinned:/.test(screen) || !/Latest available:/.test(screen) ||
+    !/Update settings to use .+\? Claude Code will restart to apply\./.test(screen)
+  ) return null;
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes|No)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], no: match[2] === "No" }] : [];
+  });
+  if (
+    options.length !== 2 || options.filter((option) => option.no).length !== 1 ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  const no = options.findIndex((option) => option.no);
+  return selected === no ? "Enter" : no > selected ? "Down" : "Up";
+}
+
+export async function declineOwnedModelUpgrade(
+  backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
+  session: string,
+  screen: string,
+): Promise<boolean> {
+  const cwd = backend.fixtureCwd(session);
+  if (!cwd || !isOwnedTuiFixture(cwd) || !claudeModelUpgradeNavigation(screen)) return false;
+  // The fixture itself is the ownership boundary. Standalone native callers do
+  // not necessarily have a parallel runner's AIDLC_TEST_WORKER_ROOT variable.
+  const marker = join(cwd, `.model-offer-${createHash("sha256").update(session).digest("hex")}`);
+  if (existsSync(marker)) return false;
+  // Require the modal to settle before navigating, just like the trust dialog.
+  const deadline = Date.now() + 5_000;
+  let previous = screen;
+  let stableSince = Date.now();
+  let navigation: ReturnType<typeof claudeModelUpgradeNavigation> = null;
+  while (Date.now() < deadline) {
+    screen = await backend.capture(session, false, "physical");
+    navigation = claudeModelUpgradeNavigation(screen);
+    if (!navigation) return false;
+    if (screen !== previous) stableSince = Date.now();
+    previous = screen;
+    if (Date.now() - stableSince >= DEFAULT_STABLE_MS) break;
+    navigation = null;
+    await sleep(POLL_INTERVAL_MS);
+  }
+  if (!navigation || backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)) return false;
+  // One attempt per session: a stale repaint cannot cause another Enter.
+  writeFileSync(marker, "attempted\n");
+  if (navigation !== "Enter") {
+    await backend.send(session, navigation, false, true);
+    await sleep(DEFAULT_STABLE_MS);
+  }
+  const selected = await backend.capture(session, false, "physical");
+  if (
+    claudeModelUpgradeNavigation(selected) !== "Enter" ||
+    backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)
+  ) fail("model upgrade offer did not settle on No; refusing Enter", 1);
+  await backend.send(session, "Enter", false, true);
+  writeTuiTrace(session, "model_upgrade_declined", { screen: selected });
+  return true;
+}
+
+type TuiPatternView = TuiTextLayout | "auto";
+
+function patternView(a: Args): TuiPatternView {
+  const view = a.flags.view ?? "auto";
+  if (a.bools.view || !["auto", "physical", "logical"].includes(view)) {
+    fail("--view requires auto, physical, or logical");
+  }
+  return view as TuiPatternView;
+}
+
+async function captureTextViews(backend: Backend, session: string): Promise<TuiTextViews> {
+  if (backend.captureViews) return await backend.captureViews(session);
+  // Legacy Windows has always exposed only physical rows, without wrap metadata.
+  const text = await backend.capture(session, false, "physical");
+  return { physical: text, logical: text };
+}
+
+export function matchTuiPattern(
+  views: TuiTextViews, pattern: RegExp, view: TuiPatternView = "auto",
+): TuiTextLayout | null {
+  if (view !== "logical" && regexMatches(pattern, views.physical)) return "physical";
+  if (view !== "physical" && regexMatches(pattern, views.logical)) return "logical";
+  return null;
 }
 
 async function cmdWait(backend: Backend, a: Args): Promise<void> {
@@ -2948,20 +3082,35 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
   const timeoutMs = Number(a.flags["timeout-ms"] ?? DEFAULT_TIMEOUT_MS);
   const stableMs = Number(a.flags["stable-ms"] ?? DEFAULT_STABLE_MS);
   const re = new RegExp(pattern);
-  writeTuiTrace(session, "wait_start", { pattern, timeoutMs, stableMs });
+  const view = patternView(a);
+  writeTuiTrace(session, "wait_start", { pattern, timeoutMs, stableMs, view });
 
   const deadline = Date.now() + timeoutMs;
   let prev = "";
   let stableSince = 0;
+  let lastViews: TuiTextViews = { physical: "", logical: "" };
 
   while (Date.now() < deadline) {
-    const screen = backend.capture(session, false);
+    const views = await captureTextViews(backend, session);
+    lastViews = views;
+    const screen = views.physical;
+    if (await declineOwnedModelUpgrade(backend, session, screen)) {
+      prev = "";
+      stableSince = 0;
+      continue;
+    }
+    const matchedView = matchTuiPattern(views, re, view);
+    const observed = matchedView === "logical" || view === "logical" ? views.logical : views.physical;
+    // Stability belongs to the matched view. Physical UI stability must not be
+    // reset by stale wrap flags, nor may a newly matching logical view inherit
+    // elapsed stability from a different physical observation.
+    const observation = `${matchedView ?? view}\0${observed}`;
     const now = Date.now();
-    if (screen === prev) {
+    if (observation === prev) {
       if (stableSince === 0) stableSince = now;
     } else {
       stableSince = 0;
-      prev = screen;
+      prev = observation;
     }
     // stableMs <= 0 means "match the instant the pattern appears" — no
     // stability requirement. This is essential when asserting against a
@@ -2971,11 +3120,13 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     // prompts that are static while awaiting input.
     const stable =
       stableMs <= 0 || (stableSince !== 0 && now - stableSince >= stableMs);
-    if (re.test(screen) && stable) {
+    if (matchedView && stable) {
       writeTuiTrace(session, "wait_match", {
         pattern,
         stableMs,
         screen,
+        matchedView,
+        ...(matchedView === "logical" ? { logicalScreen: views.logical } : {}),
       });
       process.stdout.write(`matched /${pattern}/ (stable ${stableMs}ms)\n`);
       return;
@@ -2986,11 +3137,12 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     pattern,
     timeoutMs,
     stableMs,
-    screen: prev,
+    screen: lastViews.physical,
+    ...(lastViews.logical !== lastViews.physical ? { logicalScreen: lastViews.logical } : {}),
   });
   process.stderr.write(
     `tui-drive: timed out after ${timeoutMs}ms waiting for /${pattern}/\n` +
-      `---- last pane ----\n${prev}\n-------------------\n`,
+      `---- last pane ----\n${lastViews.physical}\n-------------------\n`,
   );
   process.exit(1);
 }
@@ -3020,7 +3172,7 @@ export function claudeTrustNavigation(screen: string): "Up" | "Down" | "Enter" |
     return null;
   }
   const options = screen.split(/\r?\n/).flatMap((line) => {
-    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I trust this folder|No, exit)\s*$/.exec(line);
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I trust this folder|No, exit|No, continue without these permissions)\s*$/.exec(line);
     return match ? [{ selected: !!match[1], yes: match[2] === "Yes, I trust this folder" }] : [];
   });
   if (
@@ -3033,15 +3185,48 @@ export function claudeTrustNavigation(screen: string): "Up" | "Down" | "Enter" |
   return selected === yes ? "Enter" : yes > selected ? "Down" : "Up";
 }
 
-export async function acceptTuiFixtureTrust(
+export function claudePermissionNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  if (!CLAUDE_BYPASS_MODAL_RE.test(screen)) return null;
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I accept|No, exit)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], yes: match[2] === "Yes, I accept" }] : [];
+  });
+  if (
+    options.length !== 2 || options.filter((option) => option.yes).length !== 1 ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  const yes = options.findIndex((option) => option.yes);
+  return selected === yes ? "Enter" : yes > selected ? "Down" : "Up";
+}
+
+type FixtureMenuBackend = Pick<Backend, "fixtureCwd" | "capture" | "send">;
+type FixtureMenuTiming = { now?: () => number; sleep?: (ms: number) => Promise<void> };
+
+export function acceptTuiFixtureTrust(
+  backend: FixtureMenuBackend, session: string, screen: string, timing: FixtureMenuTiming = {},
+): Promise<boolean> {
+  return acceptTuiFixtureMenu(backend, session, screen, timing, "trust");
+}
+
+export function acceptTuiFixturePermissionMode(
+  backend: FixtureMenuBackend, session: string, screen: string, timing: FixtureMenuTiming = {},
+): Promise<boolean> {
+  return acceptTuiFixtureMenu(backend, session, screen, timing, "permission");
+}
+
+async function acceptTuiFixtureMenu(
   backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
   session: string,
   screen: string,
-  timing: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+  timing: FixtureMenuTiming,
+  kind: "trust" | "permission",
 ): Promise<boolean> {
   const cwd = backend.fixtureCwd(session);
   if (!cwd || !isOwnedTuiFixture(cwd)) return false;
-  if (!CLAUDE_TRUST_MODAL_RE.test(screen)) return false;
+  const modal = kind === "trust" ? CLAUDE_TRUST_MODAL_RE : CLAUDE_BYPASS_MODAL_RE;
+  const choose = kind === "trust" ? claudeTrustNavigation : claudePermissionNavigation;
+  if (!modal.test(screen)) return false;
   const now = timing.now ?? Date.now;
   const pause = timing.sleep ?? sleep;
   const startedAt = now();
@@ -3053,8 +3238,8 @@ export async function acceptTuiFixtureTrust(
   // to remain byte-stable, as legacy `wait --stable-ms 600` callers do, before
   // sending even one navigation key. Partial/repainting grids reset the wait.
   while (now() < readyDeadline) {
-    screen = backend.capture(session, false);
-    navigation = claudeTrustNavigation(screen);
+    screen = await backend.capture(session, false, "physical");
+    navigation = choose(screen);
     if (!navigation || screen !== previous) stableSince = now();
     previous = screen;
     if (navigation && now() - stableSince >= DEFAULT_STABLE_MS) break;
@@ -3062,36 +3247,36 @@ export async function acceptTuiFixtureTrust(
     await pause(POLL_INTERVAL_MS);
   }
   if (!navigation) {
-    throw new Error("fixture trust menu never became stable; refusing navigation");
+    throw new Error(`fixture ${kind} menu never became stable; refusing navigation`);
   }
   if (backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)) {
-    throw new Error("fixture trust context changed; refusing navigation");
+    throw new Error(`fixture ${kind} context changed; refusing navigation`);
   }
-  writeTuiTrace(session, "fixture_trust_action", {
+  writeTuiTrace(session, `fixture_${kind}_action`, {
     cwd, navigation, screen, readyAfterMs: now() - startedAt, stableMs: DEFAULT_STABLE_MS,
   });
   if (navigation !== "Enter") {
-    backend.send(session, navigation, false, true);
+    await backend.send(session, navigation, false, true);
     const deadline = now() + 5_000;
     do {
       await pause(POLL_INTERVAL_MS);
-      screen = backend.capture(session, false);
-      if (claudeTrustNavigation(screen) === "Enter") break;
+      screen = await backend.capture(session, false, "physical");
+      if (choose(screen) === "Enter") break;
     } while (now() < deadline);
-    if (claudeTrustNavigation(screen) !== "Enter") {
-      throw new Error("fixture trust selection never moved to Yes; refusing Enter");
+    if (choose(screen) !== "Enter") {
+      throw new Error(`fixture ${kind} selection never moved to Yes; refusing Enter`);
     }
   }
   // Revalidate both the fixture and visible selection immediately before Enter.
-  screen = backend.capture(session, false);
+  screen = await backend.capture(session, false, "physical");
   if (
     backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd) ||
-    claudeTrustNavigation(screen) !== "Enter"
+    choose(screen) !== "Enter"
   ) {
-    throw new Error("fixture trust context changed; refusing Enter");
+    throw new Error(`fixture ${kind} context changed; refusing Enter`);
   }
-  backend.send(session, "Enter", false, true);
-  writeTuiTrace(session, "fixture_trust_accepted", { cwd, screen });
+  await backend.send(session, "Enter", false, true);
+  writeTuiTrace(session, `fixture_${kind}_accepted`, { cwd, screen });
   return true;
 }
 
@@ -3110,6 +3295,7 @@ export function advanceTuiStartup(
   state: TuiStartupState,
   screen: string,
   readyPattern: RegExp,
+  readyText: string | null = screen,
 ): { state: TuiStartupState; action: TuiStartupAction } {
   const trustVisible = regexMatches(CLAUDE_TRUST_MODAL_RE, screen);
   const bypassVisible = regexMatches(CLAUDE_BYPASS_MODAL_RE, screen);
@@ -3129,7 +3315,7 @@ export function advanceTuiStartup(
   if (trustVisible || bypassVisible) {
     return { state, action: "wait" };
   }
-  if (regexMatches(readyPattern, screen)) {
+  if (readyText !== null && regexMatches(readyPattern, readyText)) {
     return { state, action: "ready" };
   }
   return { state, action: "wait" };
@@ -3142,6 +3328,7 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
     a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS,
   );
   const readyPattern = new RegExp(readyPatternText);
+  const view = patternView(a);
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
   let state = initialTuiStartupState();
@@ -3150,11 +3337,15 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   writeTuiTrace(session, "startup_begin", {
     readyPattern: readyPatternText,
     timeoutMs,
+    view,
   });
 
   while (Date.now() < deadline) {
-    screen = backend.capture(session, false);
-    const step = advanceTuiStartup(state, screen, readyPattern);
+    const views = await captureTextViews(backend, session);
+    screen = views.physical;
+    if (await declineOwnedModelUpgrade(backend, session, screen)) continue;
+    const matchedView = matchTuiPattern(views, readyPattern, view);
+    const step = advanceTuiStartup(state, screen, readyPattern, matchedView ? views[matchedView] : null);
     state = step.state;
 
     if (step.action === "ready") {
@@ -3164,6 +3355,7 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         elapsedMs,
         state,
         screen,
+        matchedView,
       });
       process.stdout.write(
         `startup ready /${readyPatternText}/ after ${elapsedMs}ms\n`,
@@ -3184,7 +3376,9 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         action: step.action,
         screen,
       });
-      backend.send(session, "2", false, false);
+      if (!await acceptTuiFixturePermissionMode(backend, session, screen)) {
+        throw new Error("refusing automatic permission-mode acceptance outside a disposable TUI fixture");
+      }
     }
 
     await sleep(POLL_INTERVAL_MS);
@@ -3204,18 +3398,28 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   process.exit(1);
 }
 
-function cmdCapture(backend: Backend, a: Args): void {
+async function cmdCapture(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
+  if (a.bools.physical && (a.bools.ansi || a.bools.json)) {
+    fail("capture --physical selects plain text; use it without --ansi or --json");
+  }
+  if (a.bools.json) {
+    if (a.bools.ansi) fail("capture accepts either --json or --ansi");
+    if (!backend.snapshot) fail("capture --json requires AIDLC_TUI_BACKEND=bun");
+    process.stdout.write(`${JSON.stringify(await backend.snapshot(session))}\n`);
+    return;
+  }
   const ansi = a.bools.ansi === true;
-  const screen = backend.capture(session, ansi);
-  writeTuiTrace(session, "capture", { ansi, screen });
+  const layout = a.bools.physical ? "physical" : "logical";
+  const screen = await backend.capture(session, ansi, layout);
+  writeTuiTrace(session, "capture", { ansi, layout, screen });
   process.stdout.write(screen);
 }
 
-function cmdKill(backend: Backend, a: Args): void {
+async function cmdKill(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   writeTuiTrace(session, "kill", {});
-  backend.kill(session);
+  await backend.kill(session);
   process.stdout.write(`killed session '${session}'\n`);
 }
 
@@ -3226,12 +3430,12 @@ async function cmdWaitDead(backend: Backend, a: Args): Promise<void> {
   );
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
-  let live = backend.liveProcesses(session);
+  let live = await backend.liveProcesses(session);
   writeTuiTrace(session, "wait_dead_begin", { timeoutMs, live });
 
   while (live.length > 0 && Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
-    live = backend.liveProcesses(session);
+    live = await backend.liveProcesses(session);
   }
 
   const elapsedMs = Date.now() - startedAt;
@@ -3686,10 +3890,10 @@ async function chooseNumberedMenuOption(
   optionNum: number,
 ): Promise<void> {
   for (let i = 1; i < optionNum; i++) {
-    backend.send(session, "Down", false, true);
+    await backend.send(session, "Down", false, true);
     await sleep(120);
   }
-  backend.send(session, "Enter", false, true);
+  await backend.send(session, "Enter", false, true);
 }
 
 const REVISION_FEEDBACK =
@@ -3749,7 +3953,7 @@ async function handleRevisionRecovery(
   const recoveryDeadline = Date.now() + 60_000;
   while (Date.now() < recoveryDeadline) {
     await sleep(POLL_INTERVAL_MS);
-    const after = backend.capture(session, false);
+    const after = await backend.capture(session, false, "physical");
     const typeSomethingNum = pickRevisionTypeSomethingOption(after);
     if (typeSomethingNum !== null) {
       await chooseNumberedMenuOption(backend, session, typeSomethingNum);
@@ -3763,11 +3967,11 @@ async function handleRevisionRecovery(
       const promptDeadline = Date.now() + 10_000;
       while (Date.now() < promptDeadline) {
         await sleep(POLL_INTERVAL_MS);
-        const prompt = backend.capture(session, false);
+        const prompt = await backend.capture(session, false, "physical");
         if (!gridHasMenu(prompt)) {
-          backend.send(session, REVISION_FEEDBACK, true, true);
+          await backend.send(session, REVISION_FEEDBACK, true, true);
           await sleep(300);
-          backend.send(session, "Enter", false, true);
+          await backend.send(session, "Enter", false, true);
           writeTuiTrace(session, "answer_gate_action", {
             answered,
             action: "reject_free_text_feedback",
@@ -3806,9 +4010,9 @@ async function handleRevisionRecovery(
       gridLooksLikeRevisionFreeTextPrompt(after) ||
       (!gridHasMenu(after) && Date.now() > recoveryDeadline - 30_000)
     ) {
-      backend.send(session, REVISION_FEEDBACK, true, true);
+      await backend.send(session, REVISION_FEEDBACK, true, true);
       await sleep(300);
-      backend.send(session, "Enter", false, true);
+      await backend.send(session, "Enter", false, true);
       writeTuiTrace(session, "answer_gate_action", {
         answered,
         action: "reject_free_text_feedback",
@@ -3824,22 +4028,22 @@ async function handleRevisionRecovery(
   return false;
 }
 
-function teardownAnswerGate(
+async function teardownAnswerGate(
   backend: Backend,
   session: string,
   reason: string,
-): void {
+): Promise<void> {
   writeTuiTrace(session, "answer_gate_teardown", { reason });
-  backend.kill(session);
+  await backend.kill(session);
 }
 
-function failAnswerGate(
+async function failAnswerGate(
   backend: Backend,
   session: string,
   msg: string,
   code = 1,
-): never {
-  teardownAnswerGate(backend, session, "error");
+): Promise<never> {
+  await teardownAnswerGate(backend, session, "error");
   fail(msg, code);
 }
 
@@ -3847,7 +4051,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const projectDir = a.flags["project-dir"];
   if (!projectDir) {
-    failAnswerGate(backend, session, "missing required --project-dir", 2);
+    return failAnswerGate(backend, session, "missing required --project-dir", 2);
   }
   // The journey's pass condition is the ON-DISK terminator (--until-*); these
   // timeouts are pure HANG-BACKSTOPS, never budgets — a healthy run returns the
@@ -3871,7 +4075,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // only this terminator differs.
   const untilField = a.flags["until-state-field"];
   if (untilField && untilField.indexOf("=") <= 0) {
-    failAnswerGate(
+    await failAnswerGate(
       backend,
       session,
       `--until-state-field expects <name>=<regex>, got '${untilField}'`,
@@ -3900,7 +4104,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   try {
     term = makeTerminator(projectDir, a);
   } catch (err) {
-    teardownAnswerGate(backend, session, "invalid-terminator");
+    await teardownAnswerGate(backend, session, "invalid-terminator");
     throw err;
   }
 
@@ -3928,7 +4132,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     (assertFileAbsentAtOption === undefined) !==
       (assertFileAbsent === undefined)
   ) {
-    failAnswerGate(
+    await failAnswerGate(
       backend,
       session,
       "--assert-file-absent-at-option and --assert-file-absent must be supplied together",
@@ -3936,9 +4140,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     );
   }
   let absenceAssertionObserved = false;
-  const assertAbsenceObservationCompleted = (): void => {
+  const assertAbsenceObservationCompleted = async (): Promise<void> => {
     if (assertFileAbsentAtOption && !absenceAssertionObserved) {
-      failAnswerGate(
+      await failAnswerGate(
         backend,
         session,
         `option '${assertFileAbsentAtOption}' was never observed; ` +
@@ -3982,7 +4186,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // Disk is the terminator — check it FIRST so we exit the instant the
     // journey's completion signal lands, even if a stale menu lingers on screen.
     if (!stopAtApprovalGate && term.done()) {
-      assertAbsenceObservationCompleted();
+      await assertAbsenceObservationCompleted();
       writeTuiTrace(session, "answer_gate_done", {
         answered,
         terminator: term.describe,
@@ -3997,9 +4201,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         answered,
         terminator: term.describe,
         overallMs,
-        screen: backend.capture(session, false),
+        screen: await backend.capture(session, false, "physical"),
       });
-      failAnswerGate(
+      await failAnswerGate(
         backend,
         session,
         `answer-gate: overall timeout (${overallMs}ms) — terminator (${term.describe}) ` +
@@ -4017,7 +4221,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     let sawMenu = false;
     while (Date.now() < gateDeadline) {
       if (!stopAtApprovalGate && term.done()) {
-        assertAbsenceObservationCompleted();
+        await assertAbsenceObservationCompleted();
         writeTuiTrace(session, "answer_gate_done", {
           answered,
           terminator: term.describe,
@@ -4027,7 +4231,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         );
         return;
       }
-      const grid = backend.capture(session, false);
+      const grid = await backend.capture(session, false, "physical");
       maybeTracePoll(grid, gateDeadline);
       if (gridHasMenu(grid)) {
         sawMenu = true;
@@ -4037,14 +4241,14 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     }
 
     if (!sawMenu) {
-      const screen = backend.capture(session, false);
+      const screen = await backend.capture(session, false, "physical");
       writeTuiTrace(session, "answer_gate_menu_timeout", {
         answered,
         perGateMs,
         terminator: term.describe,
         screen,
       });
-      failAnswerGate(
+      await failAnswerGate(
         backend,
         session,
         `answer-gate: per-gate timeout (${perGateMs}ms) — no menu appeared and ` +
@@ -4075,7 +4279,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     //
     // SINGLE-SELECT question (no checkbox): Enter SELECTS the highlighted/Recommended
     // option and auto-advances to the next tab (or approves a lone-question gate).
-    const grid = backend.capture(session, false);
+    const grid = await backend.capture(session, false, "physical");
     if (
       !absenceAssertionObserved &&
       assertFileAbsentAtOption &&
@@ -4083,7 +4287,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       gridHasOption(grid, assertFileAbsentAtOption)
     ) {
       if (fileSignalMet(projectDir, assertFileAbsent, false)) {
-        failAnswerGate(
+        await failAnswerGate(
           backend,
           session,
           `'${assertFileAbsent}' already exists while option ` +
@@ -4099,7 +4303,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       });
     }
     if (stopAtApprovalGate && gridIsApprovalGate(grid)) {
-      assertAbsenceObservationCompleted();
+      await assertAbsenceObservationCompleted();
       writeTuiTrace(session, "answer_gate_stopped_at_approval", {
         answered,
         screen: grid,
@@ -4115,7 +4319,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "submit",
         screen: grid,
       });
-      backend.send(session, "Enter", false, true); // commit the whole form
+      await backend.send(session, "Enter", false, true); // commit the whole form
       if (revisionFeedbackPending) {
         revisionFeedbackPending = false;
         await handleRevisionRecovery(backend, session, answered);
@@ -4126,12 +4330,12 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: gridIsMultiTabForm(grid) ? "multi_select_next_tab" : "multi_select_commit",
         screen: grid,
       });
-      backend.send(session, "Space", false, true); // toggle the Recommended option ON
+      await backend.send(session, "Space", false, true); // toggle the Recommended option ON
       await sleep(150);
       if (gridIsMultiTabForm(grid)) {
-        backend.send(session, "Right", false, true); // advance to the next tab / Submit
+        await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
-        backend.send(session, "Enter", false, true); // lone multi-select: commit it
+        await backend.send(session, "Enter", false, true); // lone multi-select: commit it
       }
     } else if (rejectFirstGate && gridIsApprovalGate(grid)) {
       const requestChangesNeedsSubmit = gridIsMultiTabForm(grid);
@@ -4145,9 +4349,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       // than the highlighted "Approve" (option 1). Down moves the caret to option
       // 2; Enter selects it → handleReject (GATE_REJECTED + STAGE_REVISING +
       // Revision Count++). Consume the one-shot so every later gate is approved.
-      backend.send(session, "Down", false, true);
+      await backend.send(session, "Down", false, true);
       await sleep(150);
-      backend.send(session, "Enter", false, true);
+      await backend.send(session, "Enter", false, true);
       rejectFirstGate = false;
       process.stdout.write("answer-gate: rejected first approval gate (Request changes)\n");
       // What the engine does NEXT changed in v0.6.0, so we READ the screen and
@@ -4172,7 +4376,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "single_select_default",
         screen: grid,
       });
-      backend.send(session, "Enter", false, true); // select Recommended + advance
+      await backend.send(session, "Enter", false, true); // select Recommended + advance
     }
     answered++;
 
@@ -4200,6 +4404,22 @@ async function main(): Promise<void> {
     return cmdSnapshotTimeoutProbe(a);
   }
 
+  // Legacy Windows commands still run under Node. If a direct Node caller
+  // selects native Bun, hand off before loading the OS lock/identity helpers.
+  const handoff = process.env.AIDLC_TUI_BUN_HANDOFF;
+  if (process.versions.bun) delete process.env.AIDLC_TUI_BUN_HANDOFF;
+  if (selectedTuiBackend() === "bun" && !process.versions.bun) {
+    if (handoff === "1") fail("native TUI handoff requires Bun; AIDLC_BUN_BIN resolved to a non-Bun runtime");
+    const code = await new Promise<number>((accept, reject) => {
+      const child = spawn(process.env.AIDLC_BUN_BIN || "bun", [
+        fileURLToPathSafe(import.meta.url), ...process.argv.slice(2),
+      ], { env: { ...process.env, AIDLC_TUI_BUN_HANDOFF: "1" }, stdio: "inherit" });
+      child.once("error", reject);
+      child.once("exit", (status) => accept(status ?? 1));
+    });
+    process.exit(code);
+  }
+
   const backend = selectBackend();
   switch (sub) {
     case "start":
@@ -4212,6 +4432,12 @@ async function main(): Promise<void> {
       return cmdStartup(backend, a);
     case "capture":
       return cmdCapture(backend, a);
+    case "resize":
+      if (!backend.resize) fail("resize requires AIDLC_TUI_BACKEND=bun");
+      return backend.resize(requireFlag(a, "session"), Number(requireFlag(a, "width")), Number(requireFlag(a, "height")));
+    case "paste":
+      if (!backend.paste) fail("paste requires AIDLC_TUI_BACKEND=bun");
+      return backend.paste(requireFlag(a, "session"), requireFlag(a, "text"));
     case "kill":
       return cmdKill(backend, a);
     case "wait-dead":
@@ -4221,7 +4447,7 @@ async function main(): Promise<void> {
     default:
       fail(
         `unknown subcommand '${sub ?? ""}'. ` +
-          `Use: start | send | wait | startup | capture | kill | wait-dead | answer-gate`,
+          `Use: start | send | wait | startup | capture | resize | paste | kill | wait-dead | answer-gate`,
       );
   }
 }

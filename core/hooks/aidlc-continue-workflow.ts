@@ -161,6 +161,7 @@ import {
   harnessDir,
   unitGateStatus,
 } from "../tools/aidlc-lib.ts";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -788,7 +789,7 @@ function isInjectedHookFeedback(text: string): boolean {
 // both delivered formats; returns true ONLY with positive evidence. `format`
 // distinguishes Claude's message-shaped JSONL from Codex's {type,payload}
 // rollout. Fail-closed on every miss.
-function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex"): boolean {
+function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex", projectDir: string): boolean {
   let raw: string;
   try {
     raw = readFileSync(transcriptPath, "utf-8");
@@ -1019,7 +1020,7 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         const result = turns[results[0]].result;
         if (
           result && !result.failed &&
-          !isEngineToolCall(call.name, call.input, result.output)
+          !isEngineToolCall(call.name, call.input, result.output, projectDir)
         ) {
           continue;
         }
@@ -1075,7 +1076,7 @@ function isConversationalStop(
       // No transcript delivered — fall back to the marker mtimes.
       return turnMarkersShowConversational(projectDir);
     }
-    return transcriptIsConversational(transcriptPath, format);
+    return transcriptIsConversational(transcriptPath, format, projectDir);
   } catch {
     // Unparseable / odd content: fall through to decideBlock (never trap).
     return false;
@@ -1127,14 +1128,17 @@ function runEngineNextDirective(
   // marker it would refresh the engine mtime first and the answer would be `no`
   // forever: tier 3 would look implemented and never fire. markEngineTouch() is a
   // no-op when it sees this env var (aidlc-lib.ts).
+  // Native installs ship no Bun: the binary carries the runtime and runs this
+  // hook in-process, so a bare "bun" child is an ENOENT that throws before the
+  // null-means-fail-open branch below and leaves the stop unenforced. Route
+  // through the dispatcher helper, which names the compiled executable when
+  // there is one and Bun's own absolute path otherwise.
   const proc = Bun.spawnSync({
-    cmd: [
-      "bun",
+    cmd: aidlcEngineCommand(
+      "orchestrate",
+      ["next", "--project-dir", projectDir],
       enginePath,
-      "next",
-      "--project-dir",
-      projectDir,
-    ],
+    ),
     stdout: "pipe",
     stderr: "pipe",
     timeout: ENGINE_TIMEOUT_MS,

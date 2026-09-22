@@ -210,16 +210,18 @@ delivery remains future work.
 
 On POSIX, the Codex adapter pins the validated hook payload session into every
 core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
-Codex workflow selection. On Windows, PID ancestry resolution returns no session
-identity and the POSIX command rewrite is unavailable. Shared-process harnesses
-also cannot distinguish chats that use one process, including Kiro IDE
-multi-chat and multi-session opencode. Children of payload-bearing hooks follow
+Codex workflow selection. On Windows x64 and arm64, native process handles,
+creation times, and parent PIDs identify the owning session within the same
+50 ms / 64-ancestor budget. Reused PID generations and unverified ancestry do not
+select a session; the POSIX command rewrite remains unavailable on Windows.
+Shared-process harnesses still cannot distinguish chats that use one process,
+including Kiro IDE multi-chat and multi-session opencode. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
 cursors when ancestry is unavailable unless the harness process has a valid
 `AIDLC_SESSION_OVERRIDE`.
 
-Known limitation: hook writes and the intent and space switch verbs on those
-platforms retain the pre-existing v2 shared-cursor and `.current-session`
+Known limitation: hook writes and the intent and space switch verbs in those
+shared-process chats retain the pre-existing v2 shared-cursor and `.current-session`
 behavior. One chat can therefore affect another chat's navigation or hook
 attribution. Per-session isolation for those paths is future work.
 

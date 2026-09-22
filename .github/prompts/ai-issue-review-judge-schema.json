@@ -7,6 +7,8 @@
     "inspection",
     "validation",
     "assessment",
+    "alignment",
+    "decision",
     "findings",
     "residualRisk"
   ],
@@ -52,6 +54,42 @@
         }
       }
     },
+    "alignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "rationale"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["aligned", "not-aligned"]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor", "action", "rationale"],
+      "properties": {
+        "actor": {
+          "type": "string",
+          "enum": ["author", "maintainer"]
+        },
+        "action": {
+          "type": "string",
+          "enum": ["clarify", "direction", "plan"]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
     "findings": {
       "type": "array",
       "items": {
@@ -86,6 +124,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "priority",
         "level",
         "category",
         "title",
@@ -95,6 +134,10 @@
         "suggestedIssueChange"
       ],
       "properties": {
+        "priority": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"]
+        },
         "level": {
           "type": "string",
           "enum": ["blocking-question", "recommendation"]

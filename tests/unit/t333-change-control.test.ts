@@ -133,7 +133,6 @@ function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv 
   };
 }
 
-
 function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv = {}): string {
   const result = Bun.spawnSync({
     cmd: [BUN, join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")],
@@ -147,6 +146,19 @@ function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv 
   });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString();
+}
+
+function utilityError(stderr: string): string {
+  const parsed: unknown = JSON.parse(stderr);
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    !("error" in parsed) ||
+    typeof parsed.error !== "string"
+  ) {
+    throw new Error(`Expected a utility error envelope: ${stderr}`);
+  }
+  return parsed.error;
 }
 
 async function waitForPath(path: string): Promise<void> {
@@ -1092,8 +1104,8 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const before = readFileSync(invalid.state, "utf-8");
     const refused = run(UTILITY, ["scope-change", "--scope", "classic"], invalid.proj);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(
-      `Invalid Guard Policy \\"stricct (set by you)\\" in ${invalid.state} (field: Guard Policy). Expected one of: strict, relaxed, off. Run /aidlc --guard-policy strict, relaxed, or off to repair it.`,
+    expect(utilityError(refused.stderr)).toContain(
+      `Invalid Guard Policy "stricct (set by you)" in ${invalid.state} (field: Guard Policy). Expected one of: strict, relaxed, off. Run /aidlc --guard-policy strict, relaxed, or off to repair it.`,
     );
     expect(readFileSync(invalid.state, "utf-8")).toBe(before);
     expect(rowsOf(invalid.proj, "SCOPE_CHANGED")).toHaveLength(0);
@@ -1116,14 +1128,14 @@ describe("t333 (5) an explicit workflow selection governs Guard Policy end to en
     );
 
     expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain(altMemoryFile(selected.proj));
+    expect(utilityError(refused.stderr)).toContain(altMemoryFile(selected.proj));
     expect(readFileSync(selected.targetState, "utf-8")).toBe(beforeState);
     expect(readAuditShardEvents(selected.proj, selected.defaultIntent, "default")).toEqual(beforeDefault);
     const targetAfter = readAuditShardEvents(selected.proj, selected.targetIntent, "alt");
     expect(targetAfter).toHaveLength(beforeTarget.length + 1);
     const refusalRow = targetAfter[targetAfter.length - 1];
     expect(refusalRow.event).toBe("ERROR_LOGGED");
-    expect(auditBlockField(refusalRow.block, "Error")).toContain(
+    expect(auditBlockField(refusalRow.block, "Error")?.replaceAll("\\", "/")).toContain(
       "<project-dir>/aidlc/spaces/alt/memory/project.md",
     );
     expect(targetAfter.filter((row) => row.event === "GUARD_POLICY_SET")).toHaveLength(0);
@@ -1460,7 +1472,7 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
       );
 
       expect(refused.status, value).toBe(1);
-      expect(refused.stderr).toContain(
+      expect(utilityError(refused.stderr)).toContain(
         `Guard Policy is set to strict in ${altMemoryFile(selected.proj)} (section: Guard Policy)`,
       );
       expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);

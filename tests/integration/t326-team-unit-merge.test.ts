@@ -4,6 +4,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -77,6 +78,15 @@ function run(
   enforceHumanPresence = false,
   extraEnv: Record<string, string> = {},
 ): { status: number; stdout: string; out: string } {
+  // Keep Git's own diagnostics for Windows claim/pin failures: the production
+  // helper currently replaces git-show stderr with a missing-artifact message.
+  // Store traces outside the checkout so dirty-tree policies stay meaningful.
+  const traceDir = process.platform === "win32" && tool === UNIT &&
+      (args[0] === "claim" || args[0] === "pin")
+    ? mkdtempSync(join(tmpdir(), "aidlc-inc3-git-trace-"))
+    : null;
+  if (traceDir) tempDirs.push(traceDir);
+  const tracePath = traceDir ? join(traceDir, "git-events.ndjson") : null;
   const result = spawnSync(
     process.execPath,
     [tool, ...args, "--project-dir", cwd],
@@ -88,10 +98,14 @@ function run(
         AIDLC_SKIP_HUMAN_PRESENCE_GUARD: enforceHumanPresence ? "0" : "1",
         AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
         AIDLC_SKIP_ARTIFACT_GUARD: "1",
+        ...(tracePath ? { GIT_TRACE2_EVENT: tracePath.replaceAll("\\", "/") } : {}),
         ...extraEnv,
       },
     },
   );
+  if (result.status !== 0 && tracePath && existsSync(tracePath)) {
+    console.error(`t326 ${args[0]} Git trace (${tracePath}):\n${readFileSync(tracePath, "utf-8")}`);
+  }
   return {
     status: result.status ?? -1,
     stdout: result.stdout ?? "",

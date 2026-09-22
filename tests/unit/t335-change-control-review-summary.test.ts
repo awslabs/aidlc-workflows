@@ -134,7 +134,26 @@ function artifact(proj: string): string {
 
 /** The output as the human line names it: relative to the project. */
 function artifactRelative(proj: string): string {
-  return relative(proj, artifact(proj));
+  return relative(proj, artifact(proj)).replaceAll("\\", "/");
+}
+
+/** Replace only the fixture identity, preserving every other output byte.
+ * Fixtures return portable roots; hook paths can use native separators and
+ * CLI error envelopes can additionally JSON-escape those same roots. */
+function replaceProjectRoot(output: string, from: string, to: string): string {
+  for (const [source, target] of [[from, to], [join(from), join(to)]]) {
+    output = output
+      .replaceAll(JSON.stringify(source).slice(1, -1), JSON.stringify(target).slice(1, -1))
+      .replaceAll(source, target);
+  }
+  return output;
+}
+
+function expectValidationError(stderr: string, path: string): void {
+  const parsed = JSON.parse(stderr) as { error: string };
+  expect(parsed.error).toContain(
+    `Invalid Guard Policy Mode "sometimes" in ${path} (section: Guard Policy). Expected one of: strict, relaxed, off.`,
+  );
 }
 
 /** Request and record one READY review through the shipped review command. */
@@ -719,12 +738,6 @@ describe("t335 (4) an invalid memory Mode is the validation error at the checkpo
     return path;
   }
 
-  function expectValidationError(stderr: string, path: string): void {
-    // The tool prints its error as a JSON line, so the quotes arrive escaped.
-    expect(stderr).toContain(
-      `Invalid Guard Policy Mode \\"sometimes\\" in ${path} (section: Guard Policy). Expected one of: strict, relaxed, off.`,
-    );
-  }
 
   test("the summary checkpoint names the file and the allowed values, not a swallowed strict refusal", () => {
     const proj = project("relaxed");
@@ -886,7 +899,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     editReviewedUnitArtifact(proj);
     const gate = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
     expect(gate.status, gate.stderr).toBe(0);
-    const relativeArtifact = relative(proj, reviewedUnitArtifact(proj));
+    const relativeArtifact = relative(proj, reviewedUnitArtifact(proj)).replaceAll("\\", "/");
     expect(printedNotices(gate.stdout)).toEqual([
       `${relativeArtifact} changed after it was reviewed. Continuing to the gate with the diff ${CONTINUING}`,
     ]);
@@ -924,9 +937,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     );
     const refused = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
     expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain(
-      `Invalid Guard Policy Mode \\"sometimes\\" in ${path} (section: Guard Policy). Expected one of: strict, relaxed, off.`,
-    );
+    expectValidationError(refused.stderr, path);
     expect(refused.stderr).not.toContain("Refusing gate for unit");
     expect(acceptedRows(proj)).toHaveLength(0);
   });
@@ -940,8 +951,8 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     const off = build("off");
     return {
       strict: strict.out,
-      relaxed: relaxed.out.replaceAll(relaxed.proj, strict.proj),
-      off: off.out.replaceAll(off.proj, strict.proj),
+      relaxed: replaceProjectRoot(relaxed.out, relaxed.proj, strict.proj),
+      off: replaceProjectRoot(off.out, off.proj, strict.proj),
     };
   }
 

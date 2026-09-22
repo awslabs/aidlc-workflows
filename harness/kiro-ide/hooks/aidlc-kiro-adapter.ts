@@ -714,7 +714,7 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
 const promptEmpty = ide.prompt !== undefined && ide.prompt.trim() === "" &&
   (ide.malformedFields?.length ?? 0) === 0;
 
-// Persist the effective SessionStart identity under the existing gitignored
+// Persist the effective startup or event-local prompt identity under the existing gitignored
 // runtime dir so separate adapter processes can forward it to payload-free
 // SessionEnd and use it when a legacy or broken-channel Stop has no event-local
 // session_id. A legacy promptSubmit writes its host-derived id, replacing any
@@ -1391,7 +1391,12 @@ function buildForward(): Forward {
     }
 
     case "record-human-turn": {
+      const eventSessionId = ide.sessionId?.trim();
       const sessionId = terminalSessionId();
+      // Some IDE sessions submit real prompt events without a workspace
+      // SessionStart callback. Retain only an event-supplied identity here;
+      // never manufacture a current-session marker from the legacy fallback.
+      if (eventSessionId) rememberKiroIdeSessionId(eventSessionId);
       recordPromptEmpty(sessionId, readTurn(sessionId) || bumpTurn(sessionId));
       if (ide.channel === "legacy") {
         markKiroIdeLegacyPlanApprovalHost(projectDir, sessionId);

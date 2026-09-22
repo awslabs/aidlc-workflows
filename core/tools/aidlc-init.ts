@@ -3842,15 +3842,55 @@ const CODEX_FRAMEWORK_ASSIGNMENTS = [
   {
     name: "developer_instructions",
     pattern:
-      /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m,
+      /[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/y,
+  },
+  {
+    name: "sandbox_mode",
+    pattern: /[\t ]*(?:sandbox_mode|"sandbox_mode"|'sandbox_mode')[\t ]*=[^\r\n]*(?:\r?\n|$)/y,
   },
 ] as const;
+
+// Match only real root assignments, not lookalikes in onboarding prose, arrays,
+// or user-owned tables. TOML tables keep their scope through blank lines.
+function codexFrameworkAssignmentMatch(content: string, pattern: RegExp): RegExpExecArray | null {
+  let lineStart = true;
+  let depth = 0;
+  for (let index = 0; index < content.length; index++) {
+    const char = content[index];
+    if (char === "\n") { lineStart = true; continue; }
+    if (char === " " || char === "\t" || char === "\r") continue;
+    if (char === "#") {
+      const end = content.indexOf("\n", index);
+      if (end === -1) break;
+      index = end - 1;
+      continue;
+    }
+    if (lineStart && depth === 0) {
+      if (char === "[") return null;
+      pattern.lastIndex = index;
+      const match = pattern.exec(content);
+      if (match) return match;
+    }
+    lineStart = false;
+    if (char === '"' || char === "'") {
+      const delimiter = content.startsWith(char.repeat(3), index) ? char.repeat(3) : char;
+      index += delimiter.length;
+      while (index < content.length && !content.startsWith(delimiter, index)) {
+        if (char === '"' && content[index] === "\\") index++;
+        index++;
+      }
+      index += delimiter.length - 1;
+    } else if (char === "[" || char === "{") depth++;
+    else if (char === "]" || char === "}") depth--;
+  }
+  return null;
+}
 
 function codexFrameworkAssignments(
   content: string,
 ): Array<{ name: string; text: string }> {
   return CODEX_FRAMEWORK_ASSIGNMENTS.flatMap(({ name, pattern }) => {
-    const text = pattern.exec(content)?.[0]
+    const text = codexFrameworkAssignmentMatch(content, pattern)?.[0]
       .replaceAll("\r\n", "\n")
       .trimEnd();
     return text === undefined ? [] : [{ name, text }];
@@ -3904,19 +3944,17 @@ function mergeCodexUserConfiguration(
       ({ name }) => name === assignment.name,
     );
     if (!definition) continue;
-    const existing = definition.pattern.exec(merged)?.[0];
-    const currentText = existing?.replaceAll("\r\n", "\n").trimEnd();
+    const existing = codexFrameworkAssignmentMatch(merged, definition.pattern);
+    const currentText = existing?.[0].replaceAll("\r\n", "\n").trimEnd();
     const priorHash = priorEntries?.[assignment.name];
     const owned = priorHash
       ? currentText !== undefined && sha256Bytes(currentText) === priorHash
       : currentText === undefined || pristine;
     if (!owned) frameworkOwnedClean = false;
     if (currentText === assignment.text) continue;
-    if (existing !== undefined) {
-      merged = merged.replace(
-        definition.pattern,
-        () => `${assignment.text}\n`,
-      );
+    if (existing) {
+      merged = merged.slice(0, existing.index) + `${assignment.text}\n` +
+        merged.slice(existing.index + existing[0].length);
     } else {
       missingAssignments.push(assignment.text);
     }

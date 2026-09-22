@@ -49,7 +49,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertAuditEvent, assertResultOk } from "../harness/assert.ts";
 import {
@@ -65,7 +65,6 @@ import {
 // 2026-09-12: with the reviewer on, four live runs took 45 to 60+ minutes (two adversarial iterations at nfr-requirements in three of them). With --review none the budget below is a wedge backstop, not the expected duration.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "3600", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 3600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 
 const SCOPE = "security-patch";
 
@@ -153,6 +152,14 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
   test(
     `every SKIP-for-${SCOPE} stage emits zero STAGE_STARTED (SKIP set derived from scope-grid.json)`,
     async () => {
+      // Setup, initialization and continuation share the original case limit.
+      // Keep cleanup/assertion headroom instead of granting each drive a new clock.
+      const deadline = performance.now() + TEST_TIMEOUT_MS - 15_000;
+      const remaining = (cap = Number.POSITIVE_INFINITY): number => {
+        const ms = Math.floor(deadline - performance.now());
+        if (ms <= 0) throw new Error("scope-exclusion workflow exhausted its shared time budget");
+        return Math.min(cap, ms);
+      };
       const { skip, execute } = deriveStageSets(SCOPE);
       // VACUOUS-PASS GUARD (pre-run): the derived SKIP set must be non-empty, or
       // the disjointness check is meaningless. security-patch is Minimal — it
@@ -170,13 +177,18 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
         );
 
         const r = await driveAidlc(
-          `/aidlc ${SCOPE} This is a synthetic test fixture. Remediate CVE-2021-23337 ` +
-            "by scaffolding the smallest sensible Node.js CLI with lodash 4.17.20, then upgrade " +
-            "lodash to 4.17.21 and add a regression check. Choose recommended answers, approve " +
+          `/aidlc ${SCOPE} This is a synthetic security-patch fixture. Scaffold a tiny ` +
+            "dependency-free Bun CLI that prints an HTML greeting for its argument, then fix " +
+            "unsafe interpolation by exporting and using escapeHtmlText. Its exact contract is " +
+            "to encode & as &amp;, < as &lt;, > as &gt;, double quote as &quot;, and single " +
+            "quote as &#39;, while preserving ordinary and Unicode text. Add table-driven " +
+            "regression tests that call the real exported function and a CLI test proving " +
+            "the greeting uses it; those tests must fail against the unescaped implementation. " +
+            "Use Bun built-in APIs. Choose recommended answers, approve " +
             "each gate, and continue through workflow completion.",
           {
             projectDir: proj,
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remaining(),
             // Whole-workflow completion exercises Stop and human-choice hooks;
             // keep their session transcript available until the SDK turn ends.
             persistSession: true,
@@ -215,7 +227,18 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
           expect(started.has(slug)).toBe(true);
         }
       } finally {
-        cleanupTestProject(proj);
+        try {
+          if (process.env.AIDLC_TEST_LOG_DIR) {
+            for (const [path, name] of [
+              [stateFilePathFor(proj), "t138-last-state.md"],
+              [auditFilePathFor(proj), "t138-last-audit.md"],
+            ]) {
+              if (existsSync(path)) writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, name), readFileSync(path));
+            }
+          }
+        } finally {
+          cleanupTestProject(proj);
+        }
       }
     },
     TEST_TIMEOUT_MS,

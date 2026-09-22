@@ -112,6 +112,14 @@ ${onboarding}'''
 # 28 KiB as one shell result, so the budget is raised for every model.
 tool_output_token_limit = 20000
 
+# Sandbox: workspace-write keeps <workspace>/.git read-only BY DESIGN;
+# interactive sessions escalate (deny -> approve -> retry unsandboxed) and the
+# shipped rules/default.rules pre-allows git worktree/commit/add prefixes so
+# escalations vanish. HEADLESS runs (codex exec workers, CI, test drivers)
+# cannot escalate: uncomment writable_roots with the MAIN repo's absolute
+# .git path (linked worktrees resolve into <main>/.git/worktrees/*).
+sandbox_mode = "workspace-write"
+
 # The AIDLC method (the markdown rule layers: org/team/project + phases/) now
 # lives at the workspace root under aidlc/spaces/<space>/memory/ — the single
 # hand-editable source of truth, identical on every harness (NOT a per-harness
@@ -124,14 +132,6 @@ tool_output_token_limit = 20000
 # Starlark permission-rules dir — D-10 — distinct from the AIDLC method.)
 [shell_environment_policy]
 set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }
-
-# Sandbox: workspace-write keeps <workspace>/.git read-only BY DESIGN;
-# interactive sessions escalate (deny -> approve -> retry unsandboxed) and the
-# shipped rules/default.rules pre-allows git worktree/commit/add prefixes so
-# escalations vanish. HEADLESS runs (codex exec workers, CI, test drivers)
-# cannot escalate: uncomment writable_roots with the MAIN repo's absolute
-# .git path (linked worktrees resolve into <main>/.git/worktrees/*).
-sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 network_access = true

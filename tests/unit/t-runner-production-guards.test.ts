@@ -13,10 +13,12 @@ import { REPO_ROOT, resetAidlcEnv } from "../harness/fixtures.ts";
 import {
   GUARD_PROFILE_ENV,
   parseRunnerArgs,
+  preflightVerdict,
   PRODUCTION_GUARD_OFF_SWITCHES,
   RunnerArgsError,
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
+import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 
 // The runner sets the profile marker; a direct `bun test` launch has none to assert.
 const runnerTest = process.env[GUARD_PROFILE_ENV] === undefined ? test.skip : test;
@@ -117,6 +119,57 @@ describe("runner guard profile options", () => {
   });
 });
 
+describe("runner Claude preflight verdict", () => {
+  const optional = { liveRequested: false, requireCoverage: false };
+  const policies = [
+    optional,
+    { liveRequested: true, requireCoverage: false },
+    { liveRequested: false, requireCoverage: true },
+  ];
+  const passed = {
+    status: "PASS" as const, cases: { total: 2, skipped: 0 },
+    evidenceComplete: true, timedOut: false,
+  };
+  const unavailable = {
+    status: "SKIP" as const, cases: { total: 0, skipped: 0 }, timedOut: false,
+  };
+
+  test("an unavailable Claude substrate skips without opting into live coverage", () => {
+    expect(preflightVerdict(unavailable, optional)).toBe("skip");
+    expect(preflightVerdict({
+      ...unavailable, cases: { total: 2, skipped: 2 }, evidenceComplete: true,
+    }, optional)).toBe("skip");
+  });
+
+  test("live opt-in and required coverage each reject a skipped prerequisite", () => {
+    expect(preflightVerdict(unavailable, policies[1]!)).toBe("fail");
+    expect(preflightVerdict(unavailable, policies[2]!)).toBe("fail");
+  });
+
+  test("complete non-skipped passing evidence opens the gate in every mode", () => {
+    for (const policy of policies) expect(preflightVerdict(passed, policy)).toBe("pass");
+  });
+
+  test("assertion failures, timeouts and cleanup errors fail even optional preflights", () => {
+    for (const policy of policies) {
+      expect(preflightVerdict({ ...passed, status: "FAIL" }, policy)).toBe("fail");
+      for (const result of [passed, unavailable]) {
+        expect(preflightVerdict({ ...result, timedOut: true }, policy)).toBe("fail");
+        expect(preflightVerdict({ ...result, cleanupError: "worker still running" }, policy)).toBe("fail");
+      }
+    }
+  });
+
+  test("missing, empty, partial and mixed-skip PASS evidence cannot satisfy a prerequisite", () => {
+    for (const policy of policies) {
+      expect(preflightVerdict(undefined, policy)).toBe("fail");
+      expect(preflightVerdict({ ...passed, cases: { total: 0, skipped: 0 } }, policy)).toBe("fail");
+      expect(preflightVerdict({ ...passed, evidenceComplete: false }, policy)).toBe("fail");
+      expect(preflightVerdict({ ...passed, cases: { total: 2, skipped: 1 } }, policy)).toBe("fail");
+    }
+  });
+});
+
 // Copy the runner unchanged, then give it a tiny discovered suite. No planted
 // files enter the checkout's test directories, and no model/guard setup runs.
 // Keep child logs, stamps and XML for inspection alongside the outer evidence.
@@ -133,12 +186,21 @@ function runnerFixture(files: Record<string, string>) {
     "tests/run-tests.sh",
     "tests/run-tests.ts",
     "tests/harness/runner-profile.ts",
+    "tests/gen-coverage-registry.ts",
+    "tests/harness/tui-runtime.ts",
+    "tests/harness/tui-record-file.ts",
+    "tests/harness/tui-windows-private-file.ts",
+    "tests/lib/e2e-plan.ts",
+    "tests/lib/e2e-scheduler.ts",
+    "tests/lib/e2e-workers.ts",
+    "tests/lib/e2e-process.ts",
     "tests/lib/bun-junit-to-meta.ts",
     "tests/lib/test-sharding.ts",
   ]) {
     mkdirSync(dirname(join(root, file)), { recursive: true });
     copyFileSync(join(REPO_ROOT, file), join(root, file));
   }
+  assertRunnerFixtureImports(root);
   for (const [file, source] of Object.entries(files)) {
     mkdirSync(dirname(join(root, "tests", file)), { recursive: true });
     writeFileSync(join(root, "tests", file), source);
@@ -150,7 +212,7 @@ function runnerFixture(files: Record<string, string>) {
   let runs = 0;
   return {
     root,
-    run(argv: string[], overrides: NodeJS.ProcessEnv = {}) {
+    run(argv: string[], overrides: NodeJS.ProcessEnv = {}, bare = false) {
       const log = join(root, `runner-${++runs}.log`);
       const env: NodeJS.ProcessEnv = {
         ...process.env,
@@ -161,17 +223,24 @@ function runnerFixture(files: Record<string, string>) {
       };
       delete env.BUN_OPTIONS;
       const fd = openSync(log, "w");
+      const command = bare
+        ? [process.execPath, "tests/run-tests.ts"]
+        : ["bash", "tests/run-tests.sh", "--debug", "-P", "8", ...argv];
       let child: ReturnType<typeof spawnSync>;
       try {
-        child = spawnSync("bash", ["tests/run-tests.sh", "--debug", "-P", "8", ...argv], {
+        child = spawnSync(command[0]!, command.slice(1), {
           cwd: root, env, stdio: ["ignore", fd, fd], timeout: 30_000,
         });
       } finally {
         closeSync(fd);
       }
       const out = readFileSync(log, "utf8");
-      console.log(`Runner command: bash tests/run-tests.sh --debug -P 8 ${argv.map((arg) => JSON.stringify(arg)).join(" ")} (cwd: ${root}; exit: ${child.status})`);
+      console.log(`Runner command: ${command.map((arg) => JSON.stringify(arg)).join(" ")} (cwd: ${root}; exit: ${child.status})`);
       console.log(`Runner log: ${log}`);
+      if (bare) {
+        expect(child.error, out).toBeUndefined();
+        return { status: child.status, out, stamp: "", summary: "", failures: "" };
+      }
       const stamp = out.match(/^Verbose mode: logging to (.+)$/m)?.[1];
       expect(stamp, out).toBeDefined();
       const summaryPath = join(stamp!, "summary.txt");
@@ -212,6 +281,35 @@ describe("production journeys", () => {
 const PASSING_CASE = 'import { test } from "bun:test"; test("runs without expect calls", () => {});\n';
 
 describe("explicit runner coverage uses real JUnit execution evidence", () => {
+  test("the bare no-flag runner stays green when Claude is absent", () => {
+    const fixture = runnerFixture({
+      "smoke/t-smoke.test.ts": PASSING_CASE,
+      "unit/t-unit.test.ts": PASSING_CASE,
+      "integration/t-sibling.test.ts": PASSING_CASE,
+      "integration/t19.test.ts": 'throw new Error("unavailable preflight must not launch");\n',
+      "integration/t-live.test.ts": 'throw new Error("unavailable live file must not launch");\n',
+    });
+    writeFileSync(join(fixture.root, "tests/harness/claude-gate.ts"),
+      'console.log("tests/integration/t19.test.ts\\ntests/integration/t-live.test.ts");\n');
+    // Settings replace PATH after the runner's home-bin prepend. Its absolute
+    // Bun entrypoint remains usable, but no host Claude CLI can satisfy the gate.
+    const bin = join(fixture.root, "empty-bin");
+    mkdirSync(bin);
+    mkdirSync(join(fixture.root, ".claude"));
+    writeFileSync(join(fixture.root, ".claude/settings.json"), JSON.stringify({ env: { PATH: bin } }));
+    const run = fixture.run([], {}, true);
+    expect(run.status, run.out).toBe(0);
+    expect(run.out).toContain("=== DONE t19.test.ts (SKIP) ===");
+    expect(run.out).toContain("PREFLIGHT SKIP -- skipping remaining Claude-dependent tests");
+    expect(run.out).toContain("=== DONE t-live.test.ts (SKIP) ===");
+    for (const file of ["t-smoke.test.ts", "t-unit.test.ts", "t-sibling.test.ts"]) {
+      expect(run.out).toContain(`=== DONE ${file} (PASS) ===`);
+    }
+    expect(run.out).toContain("Executed test cases: 3");
+    expect(run.out).toContain("Skipped files: 2");
+    expect(run.out).toContain("RESULT: PASS");
+  }, 45_000);
+
   test("missing --production-guards fails the selected journey file despite a passing sibling", () => {
     const fixture = runnerFixture({
       "unit/t-journeys.test.ts": PRODUCTION_JOURNEYS,

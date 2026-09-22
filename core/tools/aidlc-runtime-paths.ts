@@ -147,7 +147,7 @@ export function compiledExecutable(
 // changes nor a native executable's process.execPath can turn a script into a
 // dispatcher command.
 export function aidlcEngineCommand(
-  route: "orchestrate" | "log" | "state" | "bolt",
+  route: "orchestrate" | "log" | "state" | "bolt" | "runtime" | "sensor",
   args: readonly string[],
   sourceToolPath?: string,
   executable: string | null = compiledExecutable(),

@@ -294,8 +294,8 @@ function readPayload(
   options: { localOnly?: boolean } = {},
 ): UnitClaimPayload | null {
   const shown = options.localOnly
-    ? localGit(projectDir, ["show", `${oid}:${CLAIM_FILE}`])
-    : git(projectDir, ["show", `${oid}:${CLAIM_FILE}`]);
+    ? localGit(projectDir, ["show", `${oid}:${CLAIM_FILE}`, "--"])
+    : git(projectDir, ["show", `${oid}:${CLAIM_FILE}`, "--"]);
   if (!shown.ok) return null;
   try {
     const parsed = JSON.parse(shown.stdout) as UnitClaimPayload;
@@ -495,7 +495,7 @@ function activeIdentity(projectDir: string): {
 function stateAtOid(projectDir: string, oid: string): string {
   const relative = relativeRecordDir(projectDir);
   if (!relative) fail("Cannot resolve the active intent record path.");
-  const shown = git(projectDir, ["show", `${oid}:${relative}/aidlc-state.md`]);
+  const shown = git(projectDir, ["show", `${oid}:${relative}/aidlc-state.md`, "--"]);
   if (!shown.ok) fail("The fetched integration ref does not contain the active intent state.");
   return shown.stdout;
 }
@@ -505,7 +505,7 @@ function dependencyEdgesAtOid(projectDir: string, oid: string): ReturnType<typeo
   if (!relative) fail("Cannot resolve the active intent record path.");
   const shown = git(
     projectDir,
-    ["show", `${oid}:${relative}/inception/units-generation/unit-of-work-dependency.md`],
+    ["show", `${oid}:${relative}/inception/units-generation/unit-of-work-dependency.md`, "--"],
   );
   if (!shown.ok) fail("The fetched integration ref has no Unit dependency artifact.");
   return parseBoltDag(shown.stdout);
@@ -570,7 +570,7 @@ function skeletonCompletedAtOid(projectDir: string, oid: string): boolean {
   }> = [];
   let position = 0;
   for (const path of listed.stdout.split(/\r?\n/).filter(Boolean)) {
-    const shown = git(projectDir, ["show", `${oid}:${path}`]);
+    const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
     if (!shown.ok) continue;
     for (const block of shown.stdout.split(/\n---\n/)) {
       const event = /^\*\*Event\*\*:\s*(.+)$/m.exec(block)?.[1]?.trim();
@@ -947,7 +947,9 @@ function gitTextAt(
   oid: string,
   path: string,
 ): string {
-  const shown = git(projectDir, ["show", `${oid}:${path}`]);
+  // This is an object, never a worktree path. Without the separator Git also
+  // stats the composite oid:path, which can exceed Windows' path limit.
+  const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
   if (!shown.ok) fail(`Pinned candidate is missing ${path}.`);
   return shown.stdout;
 }

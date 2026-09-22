@@ -66,7 +66,7 @@
 // trivially "catch".
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -86,9 +86,9 @@ afterAll(() => {
 });
 
 /**
- * Stand up a fresh sandbox copy of the three subtrees t48 touches: dist/claude
- * (the source it scans), docs (the 12-state-machine doc), and tests (t48 itself
- * + the lib/ it sources). Mirrors the .sh's mkdir+cp -R of exactly these three.
+ * Copy the source surfaces t48 scans plus its detector and harness imports.
+ * Never copy tests/logs: other runners can be writing or removing transient
+ * workers there, and their retained artifacts are not detector inputs.
  */
 function makeSandbox(): string {
   const sb = mkdtempSync(join(tmpdir(), "aidlc-t52-sandbox-"));
@@ -97,7 +97,15 @@ function makeSandbox(): string {
     recursive: true,
   });
   cpSync(join(REPO_ROOT, "docs"), join(sb, "docs"), { recursive: true });
-  cpSync(join(REPO_ROOT, "tests"), join(sb, "tests"), { recursive: true });
+  mkdirSync(join(sb, "tests", "integration"), { recursive: true });
+  mkdirSync(join(sb, "tests", "harness"), { recursive: true });
+  for (const file of [
+    T48_REL,
+    join("tests", "harness", "fixtures.ts"),
+    join("tests", "harness", "custom-harness.ts"),
+  ]) {
+    cpSync(join(REPO_ROOT, file), join(sb, file));
+  }
   return sb;
 }
 

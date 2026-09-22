@@ -1,0 +1,551 @@
+name: "Full Suite"
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+    secrets:
+      AWS_NIGHTLY_TEST_ROLE_ARN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit or ref to test"
+        required: true
+        default: main
+        type: string
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+env:
+  BUN_VERSION: 1.3.14
+  CLAUDE_CODE_VERSION: 2.1.278 # @anthropic-ai/claude-code npm latest, verified 2026-09-21
+  CODEX_VERSION: 0.151.0
+  OPENCODE_VERSION: 1.18.31 # opencode-ai npm latest, verified 2026-09-21
+  AWS_REGION: us-east-1
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: "${{ steps.source.outputs.sha }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ inputs.ref }}"
+          fetch-depth: 0
+      - name: "Resolve immutable source"
+        id: source
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$sha" origin/main || {
+            echo "::error::full-suite only runs source already on main"
+            exit 1
+          }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - name: "Prepare native obligations"
+        run: |
+          bun tests/reconcile-tests.ts prepare --profile tests/native-terminal-profile.json --cohort "nightly-${{ github.run_id }}-${{ github.run_attempt }}" --repo . --output "$RUNNER_TEMP/native-plan.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-native-plan
+          path: "${{ runner.temp }}/native-plan.json"
+  native_terminal:
+    needs: plan
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: linux-bun
+            runner: ubuntu-24.04-arm
+            backend: bun
+          - job: linux-tmux
+            runner: ubuntu-24.04-arm
+            backend: tmux
+          - job: darwin-bun
+            runner: macos-15
+            backend: bun
+          - job: windows-bun
+            runner: windows-latest
+            backend: bun
+          - job: windows-node-pty
+            runner: windows-latest
+            backend: node-pty
+    env:
+      AIDLC_TUI_BACKEND: "${{ matrix.backend }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Install compatibility tmux"
+        if: "matrix.backend == 'tmux'"
+        run: "sudo apt-get update -qq && sudo apt-get install -y -qq tmux"
+      - name: "Verify hosted Node compatibility runtime"
+        if: "matrix.backend == 'node-pty'"
+        run: "node --version"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: full-suite-native-plan
+          path: "${{ runner.temp }}"
+      - name: "Run exact native obligations"
+        run: |
+          TEST_MATRIX_FILTER=$(bun -e '
+            const plan = await Bun.file(process.argv[1]).json();
+            const job = plan.jobs.find(job => job.id === process.argv[2]);
+            if (!job) throw new Error("unknown matrix job");
+            const names = job.files.map(({path}) => {
+              const parts = path.split("/");
+              if (parts[0] !== "tests") throw new Error("expected native-profile test path");
+              return `${parts[1]}-${parts.at(-1).replace(/\.test\.ts$/, "")}`
+                .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            });
+            console.log(`^(?:${names.join("|")})$`);
+          ' "$RUNNER_TEMP/native-plan.json" "${{ matrix.job }}")
+          bun tests/run-tests.ts --debug -P 4 --unit --integration --e2e --no-llm --isolated-e2e --filter "$TEST_MATRIX_FILTER" --matrix-plan "$RUNNER_TEMP/native-plan.json" --matrix-job "${{ matrix.job }}"
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-native-${{ matrix.job }}"
+          path: tests/logs/
+          include-hidden-files: true
+  native_reconcile:
+    if: "${{ always() && needs.plan.result == 'success' }}"
+    needs: [plan, native_terminal]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: full-suite-native-plan
+          path: "${{ runner.temp }}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: "full-suite-native-*"
+          path: "${{ runner.temp }}/native-receipts"
+      - name: "Reconcile source-bound receipts"
+        run: |
+          bun -e '
+            const root = process.env.RUNNER_TEMP;
+            const receipts = [...new Bun.Glob("**/test-matrix-receipt.json").scanSync({ cwd: `${root}/native-receipts`, absolute: true })];
+            const child = Bun.spawnSync([process.execPath, "tests/reconcile-tests.ts", "reconcile", "--plan", `${root}/native-plan.json`, ...receipts.flatMap(path => ["--receipt", path]), "--output", `${root}/native-matrix-result.json`], { stdout: "inherit", stderr: "inherit" });
+            process.exit(child.exitCode);
+          '
+      - if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-native-result
+          path: "${{ runner.temp }}/native-matrix-result.json"
+  deterministic:
+    needs: plan
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+        tier: [smoke-unit, deep]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Install zsh completion substrate"
+        if: "runner.os == 'Linux' && matrix.tier == 'smoke-unit'"
+        run: "sudo apt-get update -qq && sudo apt-get install -y -qq zsh"
+      - name: "Run smoke and unit"
+        if: "matrix.tier == 'smoke-unit'"
+        run: "bun tests/run-tests.ts --smoke --unit"
+      - name: "Run deterministic deep tiers"
+        if: "matrix.tier == 'deep'"
+        run: "bun tests/run-tests.ts --debug -P 4 --integration --e2e --no-llm --isolated-e2e"
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-deterministic-${{ matrix.tier }}-${{ runner.os }}"
+          path: tests/logs/
+          include-hidden-files: true
+  # Closes #1306: lifecycle installers have no OIDC capability; live lanes consume
+  # only validated prepared artifacts. AIDLC_NIGHTLY_LIVE remains explicit opt-in.
+  live_prepare:
+    if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
+    needs: plan
+    permissions:
+      contents: read
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - name: Install relocatable pinned CLIs
+        if: "runner.os != 'Windows'"
+        run: npm install -g --prefix "$RUNNER_TEMP/aidlc-cli" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION" "opencode-ai@$OPENCODE_VERSION"
+      - name: Pack POSIX live dependencies
+        if: "runner.os != 'Windows'"
+        run: python3 scripts/ci-live-deps.py pack "$RUNNER_TEMP/live-deps.tar.gz" --workspace "$GITHUB_WORKSPACE" --cli "$RUNNER_TEMP/aidlc-cli"
+      - name: Pack Windows live dependencies
+        if: "runner.os == 'Windows'"
+        shell: powershell
+        run: python scripts/ci-live-deps.py pack "$env:RUNNER_TEMP/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps.tar.gz"
+          retention-days: 1
+          if-no-files-found: error
+  live_hosted:
+    if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
+    needs: [plan, live_prepare]
+    environment: nightly-live
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - family: claude-sdk
+            runner: ubuntu-latest
+            platform: linux
+          - family: claude-sdk
+            runner: macos-15
+            platform: darwin
+          - family: claude-tui
+            runner: ubuntu-latest
+            platform: linux
+          - family: claude-tui
+            runner: macos-15
+            platform: darwin
+          - family: codex
+            runner: ubuntu-latest
+            platform: linux
+          - family: codex
+            runner: macos-15
+            platform: darwin
+          - family: opencode
+            runner: ubuntu-latest
+            platform: linux
+          - family: opencode
+            runner: macos-15
+            platform: darwin
+          - family: release-contract
+            runner: ubuntu-latest
+            platform: linux
+          - family: release-contract
+            runner: macos-15
+            platform: darwin
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: "${{ needs.plan.outputs.sha }}"
+      # Pinned setup-bun supplies the broker runtime, not dependency lifecycle scripts.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps"
+      - name: Validate and unpack live dependencies
+        run: |
+          python3 scripts/ci-live-deps.py unpack "$RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$GITHUB_WORKSPACE" --temporary "$RUNNER_TEMP" --posix-clis
+          echo "$RUNNER_TEMP/aidlc-cli/bin" >> "$GITHUB_PATH"
+      - name: "Prepare separate-user live runtime"
+        run: bash .github/scripts/prepare-live-runtime.sh prepare ${{ matrix.family }}
+      - name: "Assume nightly Bedrock role"
+        id: aws
+        if: "matrix.family != 'release-contract'"
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: "${{ secrets.AWS_NIGHTLY_TEST_ROLE_ARN }}"
+          role-session-name: "aidlc-nightly-${{ matrix.family }}-${{ runner.os }}"
+          role-duration-seconds: 21600
+          aws-region: "${{ env.AWS_REGION }}"
+          output-credentials: true
+          output-env-credentials: false
+      # https://code.claude.com/docs/en/env-vars documents Bedrock base URL + skip-auth.
+      # Opencode endpoint support: https://opencode.ai/docs/providers/#amazon-bedrock
+      # Codex 0.151.0 honors provider base_url for Mantle (verified with a dummy-profile loopback probe).
+      - name: "Start credential-isolated Bedrock broker"
+        if: "matrix.family != 'release-contract'"
+        env:
+          BROKER_ACCESS_KEY_ID: "${{ steps.aws.outputs.aws-access-key-id }}"
+          BROKER_SECRET_ACCESS_KEY: "${{ steps.aws.outputs.aws-secret-access-key }}"
+          BROKER_SESSION_TOKEN: "${{ steps.aws.outputs.aws-session-token }}"
+        run: bun scripts/ci-start-credential-broker.ts ${{ matrix.family }}
+      - name: "Assert live runner has no AWS credentials"
+        run: |
+          bun -e 'for (const key of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]) { if (process.env[key] !== undefined) throw new Error(`Unexpected credential environment: ${key}`); }'
+      - name: "Prove isolation"
+        run: bash .github/scripts/prepare-live-runtime.sh prove
+      - name: "Require authenticated live substrates"
+        run: |
+          case "${{ matrix.family }}" in
+            claude-*) claude --version ;;
+            codex) codex --version ;;
+          esac
+          case "${{ matrix.family }}" in
+            opencode) opencode --version ;;
+          esac
+      - name: "Run claude-sdk"
+        if: "matrix.family == 'claude-sdk'"
+        env:
+          AIDLC_CLAUDE_SDK_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-sdk ${{ matrix.platform }}
+      - name: "Run claude-tui"
+        if: "matrix.family == 'claude-tui'"
+        env:
+          AIDLC_TUI_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-tui ${{ matrix.platform }}
+      - name: "Run codex"
+        if: "matrix.family == 'codex'"
+        env:
+          AIDLC_CODEX_EXEC_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" codex ${{ matrix.platform }}
+      - name: "Run opencode"
+        if: "matrix.family == 'opencode'"
+        env:
+          AIDLC_OPENCODE_RUN_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" opencode ${{ matrix.platform }}
+      - name: "Run release-contract"
+        if: "matrix.family == 'release-contract'"
+        env:
+          AIDLC_RELEASE_CONTRACT_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" release-contract ${{ matrix.platform }}
+      - name: "Collect isolated live logs"
+        if: "${{ always() }}"
+        run: bash .github/scripts/prepare-live-runtime.sh collect
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-live-${{ matrix.family }}-${{ runner.os }}"
+          path: tests/logs/
+          include-hidden-files: true
+  live_windows:
+    if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
+    needs: [plan, live_prepare]
+    runs-on: windows-latest
+    environment: nightly-live
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: powershell
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [claude-sdk, claude-tui, codex, opencode]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      # Pinned setup-bun supplies the broker runtime; dependencies arrive as inert artifacts.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps"
+      - name: Validate and unpack live dependencies
+        run: python scripts/ci-live-deps.py unpack "$env:RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE" --temporary "$env:RUNNER_TEMP"
+      - name: "Prepare separate-user live runtime"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode prepare -Family ${{ matrix.family }}
+      - name: "Assume nightly Bedrock role"
+        id: aws
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: "${{ secrets.AWS_NIGHTLY_TEST_ROLE_ARN }}"
+          role-session-name: "aidlc-nightly-${{ matrix.family }}-Windows"
+          role-duration-seconds: 21600
+          aws-region: "${{ env.AWS_REGION }}"
+          output-credentials: true
+          output-env-credentials: false
+      - name: "Start credential-isolated Bedrock broker"
+        env:
+          BROKER_ACCESS_KEY_ID: "${{ steps.aws.outputs.aws-access-key-id }}"
+          BROKER_SECRET_ACCESS_KEY: "${{ steps.aws.outputs.aws-secret-access-key }}"
+          BROKER_SESSION_TOKEN: "${{ steps.aws.outputs.aws-session-token }}"
+        run: bun scripts/ci-start-credential-broker.ts ${{ matrix.family }}
+      - name: "Assert live runner has no AWS credentials"
+        run: |
+          foreach ($key in @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN')) {
+            if (Test-Path "Env:$key") { throw "Unexpected credential environment: $key" }
+          }
+      - name: "Prove isolation"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode prove -Family ${{ matrix.family }}
+      - name: "Run claude-sdk"
+        if: "matrix.family == 'claude-sdk'"
+        env:
+          AIDLC_CLAUDE_SDK_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-sdk
+      - name: "Run claude-tui"
+        if: "matrix.family == 'claude-tui'"
+        env:
+          AIDLC_TUI_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-tui
+      - name: "Run codex"
+        if: "matrix.family == 'codex'"
+        env:
+          AIDLC_CODEX_EXEC_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family codex
+      - name: "Run opencode"
+        if: "matrix.family == 'opencode'"
+        env:
+          AIDLC_OPENCODE_RUN_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family opencode
+      - name: "Collect isolated live logs"
+        if: "${{ always() }}"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode collect -Family ${{ matrix.family }}
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-live-${{ matrix.family }}-Windows"
+          path: tests/logs/
+          include-hidden-files: true
+  release_contract_windows:
+    needs: plan
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        family: [release-contract]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - name: "Run release-contract"
+        env:
+          AIDLC_RELEASE_CONTRACT_LIVE: "1"
+        run: bun scripts/ci-live-filter.ts release-contract --platform win32 --run -- --debug -P 4
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-live-release-contract-Windows
+          path: tests/logs/
+          include-hidden-files: true
+  result:
+    if: "${{ always() }}"
+    needs: [plan, native_terminal, native_reconcile, deterministic, live_prepare, live_hosted, live_windows, release_contract_windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Reject unauthorized source without executing repository code"
+        if: "${{ needs.plan.result != 'success' }}"
+        run: |
+          echo "::error::Full-suite source authorization or planning failed"
+          exit 1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: "${{ needs.plan.result == 'success' }}"
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: "${{ needs.plan.result == 'success' }}"
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - name: "Bind result to checked-out SHA"
+        if: "${{ needs.plan.result == 'success' }}"
+        run: |
+          echo "FULL_SUITE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: "Require every declared leg"
+        if: "${{ needs.plan.result == 'success' }}"
+        env:
+          FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
+          FULL_SUITE_REF: "${{ inputs.ref }}"
+          AIDLC_NIGHTLY_LIVE: "${{ vars.AIDLC_NIGHTLY_LIVE }}"
+        run: |
+          bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
+      - if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-result
+          path: "${{ runner.temp }}/full-suite-result.json"
+          retention-days: 90

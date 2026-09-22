@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1126,
+    "total": 1128,
     "enumeratedByClass": {
-      "function": 802,
+      "function": 804,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 471,
+      "function": 473,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -3927,7 +3927,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5560,6 +5560,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseLiteralShellInvocation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t226-detector-corpus.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseMemoryEntries",
       "minMechanism": "none",
       "coveredBy": [
@@ -6302,7 +6314,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7113,7 +7125,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7143,7 +7155,7 @@
         },
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7800,7 +7812,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9062,7 +9074,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9112,6 +9124,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:windowsSessionProcessIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9537,7 +9561,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9572,7 +9596,7 @@
         },
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9584,7 +9608,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10028,6 +10052,10 @@
       "unitId": "aidlc-statusline",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/e2e/t-tui-journey-orientation-windows.serial.test.ts",
+          "mechanism": "tui"
+        },
         {
           "file": "tests/e2e/t-tui-journey-orientation.serial.test.ts",
           "mechanism": "tui"

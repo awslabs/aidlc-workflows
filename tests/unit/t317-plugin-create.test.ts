@@ -126,6 +126,8 @@ describe("t317 standalone plugin creator", () => {
     );
   });
 
+  // This four-command toolchain completed in 6.4s on quiet Windows; retain
+  // Linux's existing backstop and keep the short creator-only cases unchanged.
   test("fresh scaffold validates, builds, and composes cleanly", () => {
     const name = "toolchain-plugin";
     const parent = join(scratch, "whole-toolchain");
@@ -189,7 +191,7 @@ describe("t317 standalone plugin creator", () => {
     );
     expect(testJson.idempotent).toBe(true);
     expect(treeDigest(installRoot)).toBe(before);
-  });
+  }, process.platform === "win32" ? 20_000 : 5_000);
 
   test("non-empty targets and invalid names are refused without writes", () => {
     const name = "occupied-plugin";

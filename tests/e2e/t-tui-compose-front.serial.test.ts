@@ -17,7 +17,7 @@
 //   - the created aidlc-state.md carries the composed (non-stock) scope.
 //
 // SPENDS Claude credits - gated behind AIDLC_TUI_LIVE=1 with skip-reasons;
-// tmux-backend only (mirrors t-tui-t50's gating).
+// POSIX only; the selected TUI backend supplies the terminal.
 
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
@@ -29,8 +29,10 @@ import {
   cleanupTuiProjectAfterKill,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 const IS_WIN = os.platform() === "win32";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
@@ -45,7 +47,7 @@ const STOCK_SCOPES = new Set([
 ]);
 
 function drive(args: string[]): { rc: number; stdout: string } {
-  const res = spawnSync(process.execPath, [DRIVER, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -61,8 +63,9 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live compose TUI journey (uses Claude credits)";
   }
-  if (IS_WIN) return "compose TUI journey is tmux-backend only";
-  if (spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) return "tmux not found";
+  if (IS_WIN) return "compose TUI journey is supported on POSIX only";
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
   if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
     return "claude CLI not found";
   }
@@ -83,13 +86,14 @@ describe("t-tui compose front journey (live claude TUI)", () => {
           "--", "claude", "--dangerously-skip-permissions",
         ]).rc).toBe(0);
 
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
-        expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
+        // Share the original 60s trust + 15s permission + 45s readiness budget.
+        const startupDeadlineMs = Date.now() + 120_000;
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", "120000",
+        ]);
+        expect(startup.rc).toBe(0);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
 
         drive([
           "send", "--session", session, "--keys",
@@ -104,9 +108,9 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         // timeout - the disk terminator is the pass condition.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
-            process.execPath,
+            DRIVE_BIN,
             [
-              DRIVER, "answer-gate",
+              ...DRIVE_PREFIX, "answer-gate",
               "--session", session,
               "--project-dir", sandbox,
               "--until-state-field", "Scope=\\S+",

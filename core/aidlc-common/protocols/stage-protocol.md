@@ -815,7 +815,15 @@ Each stage specifies its lead and supporting agents. To load a persona:
 
 ### For subagent stages:
 1. Dispatch the agent named by the stage metadata; its harness agent config loads the persona automatically (reviewer checklists are baked into the reviewer agents' own bodies at build time).
-2. Paste the accumulated `load-steering` rule bundle into every agent brief verbatim. Artifact references stay exact paths; never copy persona or knowledge prose into a brief.
+2. Paste the accumulated `load-steering` rule bundle into every agent brief
+   verbatim. On harnesses whose agent definitions declare native preload of
+   the full active-space memory tree (Kiro CLI `resources`), deliver the rule
+   bundle through that preload instead of pasting it; every other harness
+   retains the verbatim-paste contract. Every brief still carries
+   `directive.ceremony`, `directive.protocol_modules`, and the diary discipline
+   verbatim. An unloadable required rule blocks dispatch with repair guidance.
+   Artifact references stay exact paths; never copy persona or knowledge prose
+   into a brief.
 3. Keep support briefs topology-correct (mutually blind for hub-and-spoke and first-round mob work).
 4. Every delegated lead, support, and reviewer is artifact-scoped, never a
    workflow conductor. It MUST NOT call `aidlc-orchestrate.ts next`, `report`,
