@@ -540,6 +540,153 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
+  test("runtime integrity refuses direct hook invocation and harness control assignments", () => {
+    const env = unownedEnv();
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    for (const command of [
+      `printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"chosen","prompt":"/aidlc --guard-policy off"}' | bun .claude/hooks/aidlc-record-human-turn.ts`,
+      "bun .claude/tools/aidlc.ts engine hook record-human-turn",
+      'bun ".claude/tools/aidlc.ts" engine hook record-human-turn',
+      "aidlc engine hook record-human-turn",
+      "bun .kiro/hooks/aidlc-kiro-adapter.ts record-human-turn",
+      "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn",
+      "bun .aidlc/hooks/aidlc-copilot-adapter.ts record-human-turn",
+      "bun .cursor/hooks/aidlc-cursor-adapter.ts record-human-turn",
+      "AIDLC_SESSION_OVERRIDE=abc bun .claude/tools/aidlc-utility.ts config-change --guard-policy off",
+      "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .claude/tools/aidlc-utility.ts config-change --guard-policy off",
+      "export AIDLC_SESSION_OVERRIDE_SOURCE=hook",
+      "AIDLC_UNATTENDED=0 bun .claude/tools/aidlc-utility.ts config-change --guard-policy off",
+      "export AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS=1",
+      "env AIDLC_STATE_TRANSITION_OWNER=orchestrate bun .claude/tools/aidlc-state.ts approve feasibility",
+    ]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stdout, command).toBe("");
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+  });
+
+  test("runtime integrity refuses shell mutations of session and Plan Approval records", () => {
+    for (const command of [
+      "echo x > aidlc/.aidlc-sessions/foo.json",
+      "printf x | tee aidlc/.aidlc-sessions/foo.json",
+      "cp f aidlc/.aidlc-sessions/.aidlc-plan-approval/override-s.json",
+      "cp -t aidlc/.aidlc-sessions f",
+      "mv aidlc/.aidlc-sessions/foo.json /tmp/moved.json",
+      "mv f .aidlc-plan-approval/override-s.json",
+      "rm -rf aidlc/.aidlc-sessions",
+      "mkdir -p aidlc/.aidlc-sessions/.aidlc-plan-approval",
+      "touch aidlc/.aidlc-sessions/presence-bypass-s",
+      "sed -i 's/strict/off/' aidlc/.aidlc-sessions/foo.json",
+      `python3 -c "open('aidlc/.aidlc-sessions/x','w')"`,
+      `node -e "require('node:fs').writeFileSync('aidlc/.aidlc-sessions/x', 'x')"`,
+      `bun -e "Bun.write('.aidlc-plan-approval/x', 'x')"`,
+      `python -c "print('.aidlc-sessions')"`,
+    ]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+  });
+
+  test("runtime integrity refuses file-write tools before the Bash-only lifecycle check", () => {
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: "aidlc/.aidlc-sessions/.aidlc-plan-approval/presence-bypass-s" }],
+      ["Edit", { file_path: "aidlc/.aidlc-sessions/foo.json" }],
+      ["MultiEdit", { edits: [{ file_path: "notes.md" }, { file_path: ".aidlc-plan-approval/override-s.json" }] }],
+      ["NotebookEdit", { notebook_path: "aidlc/.aidlc-sessions/records.ipynb" }],
+      ["Write", { file_path: String.raw`C:\project\aidlc\.aidlc-sessions\foo.json` }],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, tool_name).toBe(2);
+      expect(r.stderr, tool_name).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    const relativeWrite = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: "/tmp/aidlc/.aidlc-sessions",
+        tool_name: "Write",
+        tool_input: { file_path: "foo.json" },
+      }),
+      encoding: "utf-8",
+      env: unownedEnv(),
+    });
+    expect(relativeWrite.status).toBe(2);
+    expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+  });
+
+  test("runtime integrity allows engine commands, conductor records, and ordinary documents", () => {
+    for (const [tool_name, tool_input] of [
+      ["Bash", { command: "bun .claude/tools/aidlc.ts engine orchestrate next" }],
+      ["Bash", { command: "bun .claude/tools/aidlc-utility.ts config-change --guard-policy strict" }],
+      ["Bash", { command: "echo > aidlc/.aidlc-compose-pending" }],
+      ["Bash", { command: "git status" }],
+      ["Bash", { command: "cat aidlc/.aidlc-sessions/foo.json" }],
+      ["Bash", { command: "cp aidlc/.aidlc-sessions/foo.json /tmp/copy.json" }],
+      ["Bash", { command: "echo x > aidlc/.aidlc-sessions-backup/foo.json" }],
+      ["Bash", { command: "aidlc_session_override=abc git status" }],
+      ["Write", { file_path: "aidlc/spaces/default/intents/x/.aidlc-engine/reviewer-dispatch.json" }],
+      ["Edit", { file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }],
+      ["MultiEdit", { edits: [{ file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }] }],
+      ["NotebookEdit", { notebook_path: "aidlc/analysis.ipynb" }],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(0);
+      expect(r.stderr, JSON.stringify(tool_input)).toBe("");
+    }
+  });
+
+  test("runtime integrity stays enforced with state-transition off and the presence bypass", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const statePath = seededStateFile(project);
+    const state = readFileSync(statePath, "utf-8");
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    for (const mode of ["fence-off", "presence-bypass"] as const) {
+      writeFileSync(statePath, mode === "fence-off"
+        ? state.replace("## Scope Configuration\n", "## Scope Configuration\n- **Guards Off**: state-transition (set by you)\n")
+        : state);
+      for (const [tool_name, tool_input] of [
+        ["Bash", { command: "bun .claude/hooks/aidlc-record-human-turn.ts" }],
+        ["Write", { file_path: "aidlc/.aidlc-sessions/presence-bypass-s" }],
+      ] as const) {
+        const r = spawnSync(process.execPath, [HOOK], {
+          input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input }),
+          encoding: "utf-8",
+          env: mode === "presence-bypass" ? { ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" } : env,
+        });
+        expect(r.status, `${mode}: ${tool_name}`).toBe(2);
+        expect(r.stderr, mode).toContain("AIDLC runtime records and hooks belong to the harness");
+      }
+    }
+  });
+
   test("the Claude hook exits 2 with a redirecting stderr reason", () => {
     const r = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({

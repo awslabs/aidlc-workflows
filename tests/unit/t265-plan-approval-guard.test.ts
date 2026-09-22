@@ -411,12 +411,20 @@ function scratchProject(): string {
     join(dir, ".claude", "hooks", "aidlc-plan-approval-guard.ts"),
   );
   cpSync(
+    join(AIDLC_SRC, "hooks", "aidlc-state-transition-guard.ts"),
+    join(dir, ".claude", "hooks", "aidlc-state-transition-guard.ts"),
+  );
+  cpSync(
     join(AIDLC_SRC, "hooks", "aidlc-review-freeze.ts"),
     join(dir, ".claude", "hooks", "aidlc-review-freeze.ts"),
   );
   cpSync(
     join(AIDLC_SRC, "hooks", "review-freeze-command.ts"),
     join(dir, ".claude", "hooks", "review-freeze-command.ts"),
+  );
+  cpSync(
+    join(AIDLC_SRC, "hooks", "runtime-integrity.ts"),
+    join(dir, ".claude", "hooks", "runtime-integrity.ts"),
   );
   cpSync(
     join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts"),
@@ -433,6 +441,7 @@ function scratchProject(): string {
     "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-guard-fences.ts",
+    "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
     "aidlc-audit.ts",
     "aidlc-log.ts",
@@ -703,6 +712,23 @@ describe("t265b hook lifecycle", () => {
   const APPENDIX =
     "\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n" +
     "**Iteration:** 1\n\n### Findings\n\n- [ ] Step 9: also delete the legacy tree before shipping\n";
+
+  test("runtime integrity refuses session-record writes even when Plan Approval is disabled", () => {
+    const proj = scratchProject();
+    try {
+      const payload = WRITE(join(proj, "aidlc", ".aidlc-sessions", "presence-bypass-s"));
+      for (const disabled of ["0", "1"]) {
+        const result = runHook(proj, payload, {
+          AIDLC_DISABLE_PLAN_APPROVAL_GUARD: disabled,
+          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: disabled,
+        });
+        expect(result.code).toBe(2);
+        expect(result.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
 
   test("a review section appended to the instructions after approval blocks the dispatch and begin", () => {
     const proj = scratchProject();

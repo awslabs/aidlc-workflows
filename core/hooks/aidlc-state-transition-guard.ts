@@ -1,4 +1,4 @@
-// PreToolUse hook: refuse direct lifecycle mutations through aidlc-state.ts.
+// PreToolUse hook: protect harness runtime records and lifecycle mutations.
 //
 // The orchestration engine owns stage pinning, evidence checks, idempotency,
 // and transition selection. A conductor that calls state transition verbs
@@ -17,6 +17,7 @@ import {
   resolveProjectDirFromHook,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
   "set",
@@ -994,6 +995,9 @@ export async function run(input: string): Promise<number> {
   } catch {
     return 0;
   }
+  // This is the harness trust boundary, not a fence. Never consult policy,
+  // memory, session presence, or a bypass before enforcing it.
+  if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   if (parsed.tool_name !== "Bash") return 0;
   // The fence is up only while nobody with authority asked for this. A human
   // message newer than the engine's last directive, or a lowered fence, lets

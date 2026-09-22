@@ -3400,15 +3400,6 @@ export interface GuardSwitch {
   key: GuardSwitchKey;
   value: "relaxed" | "off";
 }
-export interface GuardSwitchRequest {
-  version: 1;
-  session: string;
-  intentId: string;
-  space: string;
-  requestedAt: string;
-  switches: GuardSwitch[];
-}
-export type GuardSwitchAuthority = { source: "typed-request"; session: string };
 
 export interface PlanApprovalRuntimeViolation {
   version: 1;
@@ -3995,90 +3986,6 @@ export function clearPlanApprovalOverrideRequest(
   }
 }
 
-function guardSwitchRequestPath(projectDir: string, session: string): string {
-  const segment = runtimeSessionSegment(session);
-  return segment
-    ? join(planApprovalRuntimeDir(projectDir), `fence-switch-${segment}.json`)
-    : "";
-}
-
-export function recordTypedGuardSwitchRequest(
-  projectDir: string,
-  session: string,
-  promptText: string,
-): boolean {
-  const parsed = parseTypedGuardSwitchRequest(promptText);
-  if (parsed.switches.length === 0) return false;
-  const path = guardSwitchRequestPath(projectDir, session);
-  if (!path) throw new Error("Guard switch request requires a nonblank session");
-  let space: string;
-  let intentId: string;
-  try {
-    const selection = resolveWorkflowSelection(projectDir, {
-      sessionId: session,
-      ...(parsed.space ? { space: parsed.space } : {}),
-      ...(parsed.intent ? { intent: parsed.intent } : {}),
-    });
-    const uuid = intentUuidForSelection(projectDir, selection);
-    if (parsed.intent !== null && uuid === null) return false;
-    space = selection.space;
-    intentId = uuid ?? "bare-space";
-  } catch {
-    return false;
-  }
-  const request: GuardSwitchRequest = {
-    version: 1,
-    session,
-    intentId,
-    space,
-    requestedAt: isoTimestamp(),
-    switches: parsed.switches,
-  };
-  ensurePlanApprovalRuntimeDir(projectDir);
-  writeFileAtomic(path, `${JSON.stringify(request, null, 2)}\n`);
-  return true;
-}
-
-export function readGuardSwitchRequest(
-  projectDir: string,
-  session: string,
-): GuardSwitchRequest | null {
-  const value = readPlanApprovalRuntimeJson<GuardSwitchRequest>(
-    guardSwitchRequestPath(projectDir, session),
-    "Guard switch request",
-  );
-  return isPlainObject(value) &&
-      value.version === 1 &&
-      value.session === session &&
-      typeof value.intentId === "string" &&
-      value.intentId.length > 0 &&
-      typeof value.space === "string" &&
-      value.space.length > 0 &&
-      typeof value.requestedAt === "string" &&
-      Number.isFinite(Date.parse(value.requestedAt)) &&
-      Array.isArray(value.switches) &&
-      value.switches.length > 0 &&
-      value.switches.every((entry: unknown) =>
-        isPlainObject(entry) &&
-        (entry.key === "guard-policy"
-          ? entry.value === "relaxed" || entry.value === "off"
-          : typeof entry.key === "string" && entry.key.startsWith("guard.") &&
-            isSwitchableGuardFence(entry.key.slice("guard.".length)) && entry.value === "off")
-      )
-    ? (value as GuardSwitchRequest)
-    : null;
-}
-
-export function clearGuardSwitchRequest(projectDir: string, session: string): void {
-  const path = guardSwitchRequestPath(projectDir, session);
-  if (!path) return;
-  try {
-    unlinkSync(path);
-  } catch {
-    // Missing runtime state is already clear.
-  }
-}
-
 export function recordSessionPresenceBypass(projectDir: string, session: string): void {
   const segment = runtimeSessionSegment(session);
   if (!segment) throw new Error("Session presence bypass requires a nonblank session");
@@ -4100,11 +4007,11 @@ export function sessionPresenceBypassRecorded(projectDir: string, session: strin
   }
 }
 
-// The presence bypass is fixture or harness-launch state, never a value a
-// workflow command may set for itself. A resolved session honors it only when
-// the session-start hook recorded it from its own environment; an unresolved
-// session honors it only when no harness session has been recorded in this
-// project at all.
+// The fixture or harness-launch presence bypass lets the CLI setter lower a
+// fence without the person; nothing else does. A workflow command may not set
+// it for itself. A resolved session honors it only when the session-start hook
+// recorded it from its own environment; an unresolved session honors it only
+// when no harness session has been recorded in this project at all.
 export function fenceKeyBypassed(projectDir: string, sessionId: string | null): boolean {
   return humanPresenceGuardDisabled() &&
     (sessionId !== null
@@ -30305,6 +30212,8 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
   return [];
 }
 
+// The human-turn hook applies these switches at prompt time, as the host's
+// channel for what the person typed. No request waits for a later setter.
 // Accept /aidlc, $aidlc, or bare aidlc followed by flags first or config set
 // <key> <value> with only optional --intent and --space pairs, each at most once.
 // Both command forms capture those selectors; flags stop at a description or
@@ -30376,44 +30285,21 @@ export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
   return parseTypedGuardSwitchRequest(prompt).switches;
 }
 
-// Lowering needs an exact typed request bound to this session, the space and
-// the intent the setter mutates, not the cursor. The guard-recovery remedy tells
-// the person to type the command; selecting it is not authority. A fresh human
-// turn alone says nothing about which fence or policy the person chose.
-export function guardSwitchAuthority(
-  projectDir: string,
-  wanted: GuardSwitch,
-  sessionId: string | null,
-  target: { space: string; intentId: string },
-): GuardSwitchAuthority | null {
-  if (process.env.AIDLC_UNATTENDED === "1" || sessionId === null) return null;
-  const request = readGuardSwitchRequest(projectDir, sessionId);
-  return request !== null &&
-      request.space === target.space &&
-      request.intentId === target.intentId &&
-      request.switches.some((entry) => entry.key === wanted.key && entry.value === wanted.value)
-    ? { source: "typed-request", session: sessionId }
-    : null;
-}
-
 export function guardSwitchRefusal(
   wanted: GuardSwitch,
   context: "config" | "intent-create",
-  options: { sessionMissing?: boolean } = {},
 ): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
-  const sessionMissing = options.sessionMissing
-    ? " This command ran with no resolvable session, so no typed request can be matched to it." : "";
   const entry = entrySkillInvocation();
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
-    return `Turning the ${fence} check off is the person's decision. It is accepted only when they typed \`${entry} config set guard.${fence} off\` in this session. Ask them, and run this again after they do.${sessionMissing}${hint}`;
+    return `Turning the ${fence} check off is the person's move: they type \`${entry} config set guard.${fence} off\` and the harness applies it as they say it. This command does not lower a fence on its own.${hint}`;
   }
   const value = wanted.value;
   if (context === "intent-create") {
-    return `Creating this intent with Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`${entry} --guard-policy ${value}\` in this session. Create it without the flag, or ask them and run this again after they do.${sessionMissing}${hint}`;
+    return `Creating this intent with Guard Policy ${value} would lower fences. Create it, then have the person type \`${entry} --guard-policy ${value}\`; the harness applies it as they say it. A scope default applies without asking.${hint}`;
   }
-  return `Setting Guard Policy ${value} lowers fences and is the person's decision. It is accepted only when they typed \`${entry} --guard-policy ${value}\` in this session. Ask them, and run this again after they do.${sessionMissing}${hint}`;
+  return `Setting Guard Policy ${value} lowers fences and is the person's move: they type \`${entry} --guard-policy ${value}\` and the harness applies it as they say it. This command does not lower fences on its own.${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {

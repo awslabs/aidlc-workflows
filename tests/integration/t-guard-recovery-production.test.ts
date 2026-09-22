@@ -529,7 +529,11 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const p = new Journey("verdict-refusal-keeps-notice");
     succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
     p.humanPrompt("/aidlc --guard-policy relaxed");
-    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
+    expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
+    const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
+    expect(unchanged.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     p.confirm();
     p.write(p.artifact, artifactBody());
     const pending = p.requestReview();
@@ -553,7 +557,11 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const p = new Journey("verdict-relaxed-acceptance");
     succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
     p.humanPrompt("/aidlc --guard-policy relaxed");
-    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
+    expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
+    const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
+    expect(unchanged.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     const original = p.confirm();
     p.write(p.artifact, artifactBody());
     const pending = p.requestReview();
@@ -578,7 +586,11 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const p = new Journey("verdict-acceptance-ledger-failure");
     succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
     p.humanPrompt("/aidlc --guard-policy relaxed");
-    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
+    expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
+    const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
+    expect(unchanged.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     p.confirm();
     p.write(p.artifact, artifactBody());
     const pending = p.requestReview();

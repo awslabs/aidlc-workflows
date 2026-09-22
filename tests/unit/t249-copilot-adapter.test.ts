@@ -53,7 +53,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   markSubagentInflight,
-  readGuardSwitchRequest,
   subagentInflightMarkerPath,
   stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
@@ -1241,7 +1240,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readAudit(noStateDir)).toBe("");
   });
 
-  test("12a: first-use UserPromptSubmit records a guard switch before workflow state exists", () => {
+  test("12a: a first-use typed switch reaches the core hook before workflow state exists and applies nothing yet", () => {
     const dir = scratchProject(false);
     const session = "copilot-first-use-switch";
     const result = runAdapter(dir, "record-human-turn", {
@@ -1251,9 +1250,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       prompt: "/aidlc --guard-policy relaxed build the auth service",
     });
     expect(result.code, result.stderr).toBe(0);
-    expect(readGuardSwitchRequest(dir, session)?.switches).toEqual([
-      { key: "guard-policy", value: "relaxed" },
-    ]);
+    // The adapter forwards the prompt without a state-file gate of its own; the
+    // core hook finds no piece of work to apply the switch to and writes nothing.
     expect(existsSync(seededStateFile(dir))).toBe(false);
     expect(readAudit(dir)).toBe("");
   });

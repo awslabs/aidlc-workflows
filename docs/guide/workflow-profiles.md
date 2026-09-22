@@ -76,6 +76,11 @@ and CI Pipeline. It disables stage reviewer dispatch and uses Minimal artifacts
 and requirement-driven tests. Reverse Engineering and deployment stages remain
 conditional.
 
+Express also turns sensors, learnings, and summary confirmation off.
+Override them per intent with [`/aidlc --sensors on|off`](12-cli-commands.md#aidlc---sensors---learnings---summary-confirmation--ceremony-controls),
+[`/aidlc --learnings on|off`](12-cli-commands.md#aidlc---sensors---learnings---summary-confirmation--ceremony-controls),
+or [`/aidlc --summary-confirmation on|off`](12-cli-commands.md#aidlc---sensors---learnings---summary-confirmation--ceremony-controls).
+
 Do not choose Express for ambiguous, cross-team, regulated, or architecture-heavy
 work. Its speed comes from intentionally removing those decision surfaces.
 

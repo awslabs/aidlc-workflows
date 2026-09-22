@@ -8,9 +8,9 @@
 //
 // Presence remains the gate signal; the prompt payload also answers the single
 // active protected challenge (plan, verification command, policy, or checkpoint).
-// A typed prompt also records the exact fence switches requested for this session's
-// selected workflow, even before workflow state exists. The setter consumes the
-// request after the selected change succeeds.
+// As the host's channel for the prompt, the hook applies a typed fence switch
+// to this session's selected piece of work at prompt time. There is no request
+// file for a later setter to consume.
 // appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
 // to gate, so the hook skips ledger writes (same self-gate as
 // aidlc-session-start.ts) - otherwise every prompt in a project that carries the
@@ -63,11 +63,11 @@ import {
   humanTurnMintAllowed,
   markHumanTurn,
   resolveProjectDirFromHook,
-  recordTypedGuardSwitchRequest,
   stateFilePath,
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { applyTypedGuardSwitchPrompt } from "../tools/aidlc-guard-switch.ts";
 import {
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
@@ -186,14 +186,16 @@ try {
         ) ?? "";
     }
   } catch { /* presence still records without identity on legacy payloads */ }
-  // The fence switch the person typed is recorded before the state-file gate:
-  // a first-use `/aidlc --guard-policy relaxed <description>` arrives before
-  // any workflow exists, and the setter it leads to needs this record.
+  // Apply before the state-file gate so a first-use switch reports that the
+  // person must create the piece of work, then type the switch again.
   if (humanTurnMintAllowed() && sessionId && typedPrompt) {
     try {
-      recordTypedGuardSwitchRequest(projectDir, sessionId, typedPrompt);
+      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt);
+      if (outcome !== null) {
+        process.stdout.write(`${JSON.stringify({ additionalContext: `AIDLC Guard Policy: ${outcome.lines.join(" ")}` })}\n`);
+      }
     } catch {
-      // Fence switch bookkeeping must never block the human's turn.
+      // A switch failure must never block the human's turn.
     }
   }
   if (existsSync(stateFilePath(projectDir))) {

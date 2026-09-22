@@ -39,7 +39,6 @@ const FENCE_ENV_CLEAR = {
   AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "0",
   AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "0",
   AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
-  AIDLC_SESSION_OVERRIDE: FENCE_SESSION,
   AIDLC_UNATTENDED: "0",
 };
 
@@ -178,15 +177,19 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", "test-strategy"], project).stdout).toBe("Standard\n");
   });
 
-  test("one config-change exposes all eleven settings through get and both list formats", () => {
+  test("a typed hook switch and config-change expose all eleven settings through get and both list formats", () => {
     const project = stateProject();
     recordHumanPrompt(project, "/aidlc --guard-policy relaxed --guard.state-transition off");
+    expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
+    expect(stateField(project, "Guards Off")).toBe("state-transition (set by you)");
     const changed = utility([
       "config-change", "--depth", "minimal", "--test-strategy", "comprehensive",
       "--review", "advisory", "--guard-policy", "relaxed", "--sensors", "off",
       "--learnings", "off", "--summary-confirmation", "off", "--guard.state-transition", "off",
     ], project, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
+    expect(changed.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(changed.stdout).toContain("Fence state-transition is already off");
     expect(renameNotices(changed.stderr)).toBe(0);
     // The seven settings the human names plus the four per-run fence switches,
     // in the order config list prints them. relaxed lowers two fences by
@@ -285,14 +288,17 @@ describe("t231 config get/list/set handlers", () => {
   });
 
   test.each(["plan-approval", "review-freeze", "state-transition", "reviewer-scope"])(
-    "engine config set accepts guard.%s as the leading setting and config get reads the switch",
+    "the hook applies guard.%s and engine config set can repeat or restore it",
     (fence) => {
       const project = stateProject();
       const key = `guard.${fence}`;
       recordHumanPrompt(project, `/aidlc config set ${key} off`);
-      const lowered = dispatcher(["engine", "config", "set", key, "off"], project, FENCE_ENV_CLEAR);
-      expect(lowered.status, lowered.stderr).toBe(0);
       expect(stateField(project, "Guards Off")).toBe(`${fence} (set by you)`);
+      const before = readFileSync(seededStateFile(project), "utf-8");
+      const unchanged = dispatcher(["engine", "config", "set", key, "off"], project, FENCE_ENV_CLEAR);
+      expect(unchanged.status, unchanged.stderr).toBe(0);
+      expect(unchanged.stdout).toContain(`Fence ${fence} is already off`);
+      expect(readFileSync(seededStateFile(project), "utf-8")).toBe(before);
       expect(utility(["config-get", key], project, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
       const restored = dispatcher(["engine", "config", "set", key, "on"], project, FENCE_ENV_CLEAR);
       expect(restored.status, restored.stderr).toBe(0);

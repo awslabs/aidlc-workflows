@@ -56,6 +56,11 @@ the other nine declare all three on. Classic's gated flow also caps reviews to
 one advisory pass and disables walking-skeleton ceremony, while explicit autonomy
 keeps the single pre-merge review.
 
+Express turns sensors, learnings, and summary confirmation off; override them
+per intent with [`/aidlc --sensors on|off`](../guide/12-cli-commands.md#aidlc---sensors---learnings---summary-confirmation--ceremony-controls),
+[`/aidlc --learnings on|off`](../guide/12-cli-commands.md#aidlc---sensors---learnings---summary-confirmation--ceremony-controls),
+or [`/aidlc --summary-confirmation on|off`](../guide/12-cli-commands.md#aidlc---sensors---learnings---summary-confirmation--ceremony-controls).
+
 ### Freeform default
 
 `freeform_default: true` lets an install nominate the scope used when the

@@ -22,6 +22,10 @@ pass or reviewer dispatch.
 
 Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
 
+Sensors, learnings, and summary confirmation are off too; override them per intent
+with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
+`/aidlc --summary-confirmation on|off`.
+
 ## Why these stages, why skip those
 
 Requirements Analysis establishes the contract, Code Generation implements

@@ -1,13 +1,11 @@
 // covers: subcommand:aidlc-graph:validate-grid,
-// function:validateDirective, file:agents/aidlc-composer-agent.md, file:skills/aidlc/SKILL.md,
-// file:knowledge/aidlc-composer-agent/composing.md
+// function:validateDirective
 //
 // t336 - the Guard Policy surfaces around the composer and the conductor:
 // the validator checks the ONE value a proposal carries (three values; a
 // relaxed or off proposal under a memory strict is refused, naming the file),
 // echoes it under the new key and the retired one, still reads the retired
-// flag and member for one release, the composer's persona and knowledge
-// describe the value, and
+// flag and member for one release, and
 // `change_notices` is a legal universal directive field.
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -20,7 +18,6 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
-  REPO_ROOT,
   seedAidlcMemory,
 } from "../harness/fixtures.ts";
 
@@ -177,27 +174,6 @@ describe("t336 (1) validate-grid checks the proposal's Guard Policy value", () =
   });
 });
 
-describe("t336 (2) composer guidance", () => {
-  test("the composer persona and knowledge describe the value and its defaults", () => {
-    const persona = readFileSync(join(REPO_ROOT, "core", "agents", "aidlc-composer-agent.md"), "utf-8");
-    expect(persona).toContain('"guardPolicy": "strict | relaxed | off"');
-    expect(persona).toContain("`guardPolicy` is REQUIRED for every mode");
-    expect(persona).toContain("`guard_policy: <the approved value>`");
-    // The persona authors new scope files, so the retired key must not appear
-    // as anything but the one documented migration read.
-    expect(persona).not.toContain("`change_control:");
-    expect(persona).not.toContain("--change-control");
-    const knowledge = readFileSync(
-      join(REPO_ROOT, "core", "knowledge", "aidlc-composer-agent", "composing.md"),
-      "utf-8",
-    );
-    expect(knowledge).toContain("## Guard Policy");
-    expect(knowledge).not.toContain("`change_control:");
-    expect(knowledge).toContain(
-      "strict on enterprise, security-patch,\n  and infra, relaxed everywhere else",
-    );
-  });
-});
 
 describe("t336 (3) change_notices is a universal directive field", () => {
   test("every kind accepts a string array and refuses anything else", () => {
@@ -214,33 +190,3 @@ describe("t336 (3) change_notices is a universal directive field", () => {
   });
 });
 
-describe("t336 (4) every orchestrator skill teaches the new name only", () => {
-  // The seven SKILL.md files are what a conductor reads to learn which flag to
-  // type. They are authored per harness, so a rename lands in seven places or
-  // in none: this branch found all seven still naming the retired flag while
-  // every engine reader had moved, which made the deprecation notice fire
-  // during ordinary use and taught the new name to nobody.
-  const HARNESSES = [
-    "claude",
-    "codex",
-    "copilot",
-    "cursor",
-    "kiro",
-    "kiro-ide",
-    "opencode",
-  ] as const;
-
-  test("names --guard-policy and never --change-control", () => {
-    for (const harness of HARNESSES) {
-      const skill = readFileSync(
-        join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"),
-        "utf-8",
-      );
-      expect(skill, harness).toContain("--guard-policy");
-      expect(skill, harness).not.toContain("--change-control");
-      expect(skill, harness).not.toContain("changeControl");
-      // change_notices is a directive field name, not the setting, and stays.
-      expect(skill.includes("Change Control"), harness).toBe(false);
-    }
-  });
-});

@@ -52,10 +52,9 @@
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Missing session_id uses the host-derived or retained identity.
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
-//     per session and refuses lowering before a shell command runs. Otherwise
-//     a recognized lowering setter runs inside the hook under this chat's
-//     session, with its output latched and relayed through a shell refusal.
-//     A model command cannot establish what the person typed; no request is minted.
+//     per session and refuses lowering before a shell command runs. Non-empty
+//     prompts need no special shell path: the core human-turn hook applied the
+//     person's typed switch when the prompt arrived.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +
@@ -91,7 +90,6 @@ import {
   clearPlanApprovalViolation,
   getField,
   hookDebug,
-  hookChildEnv,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
@@ -757,7 +755,7 @@ interface TerminalResult {
   output: string;
   exitCode: number;
   typed: string;
-  source: TerminalCommand["source"] | "guard-switch";
+  source: TerminalCommand["source"];
 }
 
 interface TerminalLatch extends TerminalResult {
@@ -936,7 +934,7 @@ function recordPromptEmpty(sessionId: string, turn: number): void {
       "utf-8",
     );
   } catch {
-    // Without prompt evidence, leave lowering to the core typed-request gate.
+    // Without the marker, core setters still refuse to lower fences on their own.
   }
 }
 
@@ -971,13 +969,13 @@ function hasLoweringGuardFlags(args: string[], allowFences: boolean): boolean {
 
 function loweringGuardInvocation(
   rawCommand: string,
-): (TerminalInvocation & { toolPath: string }) | null {
+): boolean {
   const match = rawCommand.trim().match(
     /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
   );
-  if (match === null) return null;
+  if (match === null) return false;
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
-  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return null;
+  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return false;
   const args = splitKiroCommandArgs(match[5] ?? "");
   let lowering: boolean;
   if (match[4].toLowerCase().endsWith("aidlc-utility.ts")) {
@@ -988,7 +986,7 @@ function loweringGuardInvocation(
   } else {
     // The intent setter lives under the dispatcher's `engine` namespace; the
     // public `aidlc config <section>` is machine configuration and never lowers.
-    if (args[0]?.toLowerCase() !== "engine") return null;
+    if (args[0]?.toLowerCase() !== "engine") return false;
     const noun = args[1]?.toLowerCase();
     const verb = args[2]?.toLowerCase();
     if (noun === "config" && verb === "set") {
@@ -1000,40 +998,9 @@ function loweringGuardInvocation(
         hasLoweringGuardFlags(args.slice(3), false);
     }
   }
-  return lowering ? { raw: rawCommand.trim(), args, toolPath: match[4] } : null;
+  return lowering;
 }
 
-function runLoweringGuardCommand(
-  invocation: TerminalInvocation & { toolPath: string },
-  sessionId: string,
-): TerminalResult {
-  try {
-    // Recognize command-prefix assignments, but discard them: only the hook's
-    // trusted child environment may reach the setter, never a model's bypass.
-    const result = Bun.spawnSync([process.execPath, invocation.toolPath, ...invocation.args], {
-      cwd: projectDir,
-      env: hookChildEnv(projectDir, sessionId),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    return {
-      output: (
-        decodeHarnessPlainText(result.stdout) +
-        decodeHarnessPlainText(result.stderr)
-      ).trim(),
-      exitCode: result.exitCode ?? 1,
-      typed: invocation.raw,
-      source: "guard-switch",
-    };
-  } catch (error) {
-    return {
-      output: sanitizeHarnessPlainText(String(error)),
-      exitCode: 1,
-      typed: invocation.raw,
-      source: "guard-switch",
-    };
-  }
-}
 
 function promptWasEmpty(sessionId: string, turn: number): boolean {
   if (turn <= 0) return false;
@@ -1146,7 +1113,7 @@ if (target === "terminal-command-guard") {
   const sessionId = terminalSessionId();
   const turn = readTurn(sessionId) || bumpTurn(sessionId);
   if (promptWasEmpty(sessionId, turn) && (
-    invocation !== null ? hasLoweringGuardFlags(invocation.args, false) : lowering !== null
+    invocation !== null ? hasLoweringGuardFlags(invocation.args, false) : lowering
   )) {
     process.stderr.write(
       "This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.\n",
@@ -1158,17 +1125,11 @@ if (target === "terminal-command-guard") {
     existing?.turn === turn &&
     (
       invocation !== null ||
-      lowering !== null ||
+      lowering ||
       /aidlc-(?:orchestrate|utility|knowledge)\.ts/i.test(rawCommand)
     )
   ) {
     process.stderr.write(terminalRefusal(existing));
-    return 2;
-  }
-  if (lowering !== null) {
-    const result = runLoweringGuardCommand(lowering, sessionId);
-    writeTerminalLatch(sessionId, turn, lowering, result);
-    process.stderr.write(terminalRefusal(result));
     return 2;
   }
   if (invocation === null) return 0;
@@ -1182,7 +1143,7 @@ if (target === "terminal-command-guard") {
 }
 
 // UserPromptSubmit forwards to the core human-turn hook below. That hook
-// records typed switches before its state-file gate, then records HUMAN_TURN
+// applies typed switches before its state-file gate, then records HUMAN_TURN
 // and the conversational Stop marker only when workflow state exists.
 // The adapter separately tracks empty prompts against the terminal turn so
 // lowering is refused when IDE 1.0.242 hides what the person typed.

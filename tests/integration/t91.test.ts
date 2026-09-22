@@ -160,6 +160,10 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "aidlc-guard-fences.ts"),
   );
   copyFileSync(
+    join(SRC_TOOLS, "aidlc-guard-switch.ts"),
+    join(proj, ".claude", "tools", "aidlc-guard-switch.ts"),
+  );
+  copyFileSync(
     join(SRC_TOOLS, "aidlc-guard-operation.ts"),
     join(proj, ".claude", "tools", "aidlc-guard-operation.ts"),
   );

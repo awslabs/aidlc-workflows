@@ -111,6 +111,7 @@ import {
   planReviewAppendix,
   promptTestingContractMarkers,
 } from "../tools/aidlc-testing-posture.ts";
+import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
 export {
   questionsFileApproved,
@@ -1079,12 +1080,23 @@ function recordGuardDisabled(input: string): void {
 }
 
 export async function run(input: string): Promise<number> {
-  // Deterministic off-switch: enforcement disabled entirely, recorded once.
+  let parsed: ClaudeCodeHookInput;
+  try {
+    const raw: unknown = JSON.parse(input);
+    if (!isClaudeCodeHookInput(raw)) return 0;
+    parsed = raw;
+  } catch {
+    return 0; // malformed stdin - fail open
+  }
+  // Runtime integrity is not a fence and cannot be disabled with this hook.
+  if (refuseRuntimeIntegrityViolation(parsed)) return 2;
+
+  // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {
     try {
       recordGuardDisabled(input);
     } catch {
-      // Fail-open: the off-switch always allows.
+      // Fail-open: disabled fence bookkeeping does not refuse the call.
     }
     return 0;
   }
@@ -1102,14 +1114,6 @@ export async function run(input: string): Promise<number> {
   // A TTY means no harness JSON is coming (test / debug contexts) - allow.
   if (process.stdin.isTTY) return 0;
 
-  let parsed: ClaudeCodeHookInput;
-  try {
-    const raw: unknown = JSON.parse(input);
-    if (!isClaudeCodeHookInput(raw)) return 0;
-    parsed = raw;
-  } catch {
-    return 0; // malformed stdin - fail open
-  }
 
   const toolName = parsed.tool_name ?? "";
   const toolInput = parsed.tool_input ?? {};

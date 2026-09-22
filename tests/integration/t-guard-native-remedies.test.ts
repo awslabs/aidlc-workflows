@@ -892,8 +892,8 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(readFileSync(questions, "utf-8")).toMatch(/\[Answer\]:[ \t]*$/m);
       expect(p.exact(show.command!).status).toBe(2);
 
-      // lower-fence requires a typed request before the dispatcher may switch it
-      // off. Then the same dispatch stands aside instead of being refused.
+      // The typed human prompt lowers the fence at hook time. The dispatcher
+      // can repeat that setting, then the same dispatch stands aside.
       expect(p.state()).not.toContain("- **Guards Off**:");
       const lowerFenceCommand = projection === "native"
         ? "aidlc engine config set guard.plan-approval off"
@@ -903,20 +903,23 @@ describe("source and native guard remedies execute their owning operations", () 
       markEngineTouch(p.project);
       const unchosen = p.exact(lowerFenceCommand);
       expect(unchosen.status).not.toBe(0);
-      expect(unchosen.stderr).toContain("is the person's decision");
+      expect(unchosen.stderr).toContain("is the person's move");
       expect(p.state()).not.toContain("- **Guards Off**:");
       succeeded(p.hook("record-human-turn", {
-        hook_event_name: "UserPromptSubmit", prompt: "/aidlc config set guard.plan-approval off",
+        hook_event_name: "UserPromptSubmit", prompt: "/aidlc config set guard.plan-approval off", session_id: session,
       }));
-      const lowered = p.exact(lowerFenceCommand);
-      expect(lowered.status, lowered.stderr).toBe(0);
-      expect(lowered.stdout).toContain("Fence plan-approval is off for this piece of work");
       expect(p.state()).toMatch(/^- \*\*Guards Off\*\*: plan-approval \(set by you\)$/m);
       let audit = p.audit();
       expect(audit).toContain("**Event**: GUARD_DISABLED");
       expect(audit).toContain("**Guard**: plan-approval");
       expect(audit).not.toContain("**Event**: GUARD_STOOD_ASIDE");
       expect(approvalRows(audit)).toBe(1);
+      const stateAfterPrompt = p.state();
+      const unchanged = p.exact(lowerFenceCommand);
+      expect(unchanged.status, unchanged.stderr).toBe(0);
+      expect(unchanged.stdout).toContain("Fence plan-approval is already off");
+      expect(p.state()).toBe(stateAfterPrompt);
+      expect(p.audit()).toBe(audit);
       const stoodAside = p.guard("Task", dispatch);
       expect(stoodAside.status, stoodAside.stderr).toBe(0);
       expect(stoodAside.stdout).toContain("Continuing past the plan-approval check because it is off for this piece of work");
