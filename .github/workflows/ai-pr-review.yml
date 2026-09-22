@@ -52,11 +52,11 @@ jobs:
           && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
-      group: ai-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
-      cancel-in-progress: true
+      group: aida-pr-${{ github.event.pull_request.number || inputs.pr_number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ai-pr-review
-    timeout-minutes: 100
+    timeout-minutes: 110
     permissions:
       contents: read
       id-token: write
@@ -136,6 +136,7 @@ jobs:
             case "$path" in
               .github/workflows/ai-pr-review.yml|\
               .github/scripts/ai-pr-review.ts|\
+              .github/scripts/ai-pr-ledger.ts|\
               .github/scripts/prepare-ai-review-runtime.sh|\
               .github/prompts/ai-pr-review-*.md|\
               .github/prompts/ai-pr-review-*.json)
@@ -160,7 +161,8 @@ jobs:
           fi
           mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts
           cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/
-          cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh \
+          cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts \
+            .github/scripts/prepare-ai-review-runtime.sh \
             .ai-review-controls/scripts/
           echo "::notice::AI review controls from $controls_sha"
 
@@ -179,17 +181,31 @@ jobs:
             --base "$base" \
             --head "$head" \
             --output .ai-review-context
+          # The findings ledger is live maintainer state, not review input identity:
+          # it is read after the context digest so a /aida decision never forces a
+          # new full review of an unchanged head.
+          bun .ai-review-controls/scripts/ai-pr-ledger.ts fetch \
+            --repo "$REPO" \
+            --pr "$REQUESTED_PR" \
+            --output .ai-review-context/ledger.json
 
           context_id="$(cat .ai-review-context/context-id.txt)"
           existing_record="$(gh api "repos/$REPO/pulls/$REQUESTED_PR/reviews" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=$context_id -->\"))) | [.id, .state] | @tsv" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=$context_id -->\")) and (.state == \"CHANGES_REQUESTED\" or ((.body // \"\") | test(\"<!-- ai-pr-review decision=(author/change|maintainer/merge) -->\")))) | [.id, .state, (try ((.body // \"\") | capture(\"<!-- ai-pr-review decision=(?<decision>author/change|maintainer/merge) -->\").decision) catch \"\")] | @tsv" \
             | head -n1 || true)"
           existing_review=""
           existing_state=""
+          existing_decision=""
           if [ -n "$existing_record" ]; then
-            IFS=$'\t' read -r existing_review existing_state <<<"$existing_record"
+            IFS=$'\t' read -r existing_review existing_state existing_decision \
+              <<<"$existing_record"
           fi
-          already_reviewed="$([ -n "$existing_review" ] && echo true || echo false)"
+          already_reviewed=false
+          if [ -n "$existing_review" ] \
+            && { [ -n "$existing_decision" ] \
+              || [ "$existing_state" = "CHANGES_REQUESTED" ]; }; then
+            already_reviewed=true
+          fi
           if [ "$already_reviewed" = "true" ]; then
             echo "::notice::This exact PR context was already reviewed"
           fi
@@ -198,6 +214,7 @@ jobs:
             echo "already_reviewed=$already_reviewed"
             echo "base=$base"
             echo "context_id=$context_id"
+            echo "existing_decision=$existing_decision"
             echo "existing_state=$existing_state"
             echo "head=$head"
             echo "pr=$REQUESTED_PR"
@@ -205,12 +222,34 @@ jobs:
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Start AIDA review label state
+        id: label_start
+        if: >-
+          steps.context.outputs.skip != 'true'
+          && steps.context.outputs.already_reviewed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          review_script=".ai-review-controls/scripts/ai-pr-review.ts"
+          previous_outcome="$(bun "$review_script" label-state \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.context.outputs.pr }}" \
+            --expected-head "${{ steps.context.outputs.head }}")"
+          echo "previous_outcome=$previous_outcome" >> "$GITHUB_OUTPUT"
+          bun "$review_script" labels \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.context.outputs.pr }}" \
+            --expected-head "${{ steps.context.outputs.head }}" \
+            --outcome started
+
       - name: Finalize existing SHA-bound review
         if: >-
           steps.context.outputs.skip != 'true'
           && steps.context.outputs.already_reviewed == 'true'
         env:
           CONTEXT_ID: ${{ steps.context.outputs.context_id }}
+          EXISTING_DECISION: ${{ steps.context.outputs.existing_decision }}
           EXISTING_STATE: ${{ steps.context.outputs.existing_state }}
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.context.outputs.head }}
@@ -225,6 +264,40 @@ jobs:
             gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$review_id/dismissals" \
               -f message="Superseded by AI review of $HEAD_SHA" >/dev/null
           done
+          label_outcome=""
+          if [ "$EXISTING_DECISION" = "author/change" ] \
+            || [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]; then
+            label_outcome="reviewed-change"
+          elif [ "$EXISTING_DECISION" = "maintainer/merge" ]; then
+            label_outcome="reviewed-merge"
+          fi
+          # The serialized ledger verdict is authoritative for every review
+          # surface associated with this head.
+          ledger_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+            --repo "$REPO" --pr "$PR_NUMBER")"
+          if [ "$(jq -r '.head // empty' <<<"$ledger_verdict")" = "$HEAD_SHA" ]; then
+            refresh="$(bun .ai-review-controls/scripts/ai-pr-review.ts converge-verdict \
+              --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+              --reason "existing SHA-bound review")"
+            if [ "$refresh" != "applied" ]; then
+              echo "::error::The existing review verdict could not be converged ($refresh)"
+              exit 1
+            fi
+            ledger_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+              --repo "$REPO" --pr "$PR_NUMBER")"
+            case "$(jq -r .decision <<<"$ledger_verdict")" in
+              merge) label_outcome="reviewed-merge"; EXISTING_STATE="COMMENTED" ;;
+              change) label_outcome="reviewed-change"; EXISTING_STATE="CHANGES_REQUESTED" ;;
+            esac
+          fi
+          if [ -n "$label_outcome" ] \
+            && [ "$(jq -r '.head // empty' <<<"$ledger_verdict")" != "$HEAD_SHA" ]; then
+            bun .ai-review-controls/scripts/ai-pr-review.ts labels \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --expected-head "$HEAD_SHA" \
+              --outcome "$label_outcome"
+          fi
           if [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]; then
             echo "::error::The existing SHA-bound AI review still requests changes"
             exit 1
@@ -274,17 +347,30 @@ jobs:
             local output_dir
             local output_file
             local error_file
+            local schema_file
             local structured_file
+            local structured_filter
             local status
             local size
             local -a fable_output_args
+            local -a sol_output_args
 
             output_dir="$(sudo -u ai-pr-review mktemp -d -t aidlc-review.XXXXXX)"
             output_file="$output_dir/output"
             error_file="$output_dir/error"
             echo "Running $name..."
+            if [ -n "$schema" ]; then
+              schema_file="$output_dir/schema.json"
+              printf '%s' "$schema" \
+                | sudo -u ai-pr-review tee "$schema_file" >/dev/null
+            fi
             set +e
             if [ "$runtime" = "sol" ]; then
+              if [ -n "$schema" ]; then
+                sol_output_args=(--output-schema "$schema_file")
+              else
+                sol_output_args=()
+              fi
               sudo -u ai-pr-review -- timeout \
                 --signal=TERM \
                 --kill-after=30s \
@@ -302,6 +388,7 @@ jobs:
                 --config "model_reasoning_effort=\"$effort\"" \
                 --config 'shell_environment_policy.inherit="all"' \
                 --config 'shell_environment_policy.exclude=["AWS_*","ACTIONS_*","GITHUB_*","GH_*"]' \
+                "${sol_output_args[@]}" \
                 --output-last-message "$output_file" \
                 "$prompt" \
                 > /dev/null 2>&1
@@ -360,9 +447,14 @@ jobs:
 
             if [ -n "$schema" ]; then
               structured_file="$output_dir/structured-output"
+              if [ "$runtime" = "fable" ]; then
+                structured_filter='.structured_output | select(type == "object")'
+              else
+                structured_filter='select(type == "object")'
+              fi
               if ! sudo -u ai-pr-review -- /bin/bash -c \
-                'jq -c -e ".structured_output | select(type == \"object\")" "$1" >"$2"' \
-                bash "$output_file" "$structured_file"; then
+                'jq -c -e "$1" "$2" >"$3"' \
+                bash "$structured_filter" "$output_file" "$structured_file"; then
                 echo "::error::$name did not produce a structured JSON object"
                 sudo find "$output_dir" -depth -delete
                 return 1
@@ -452,7 +544,7 @@ jobs:
             printf '[LENS-REVIEWED] user-experience %s\n' "$HEAD_SHA"
           )"
           run_model \
-            "fable" \
+            "sol" \
             "User-experience review" \
             "high" \
             50000 \
@@ -471,7 +563,7 @@ jobs:
             printf '[LENS-REVIEWED] direction %s\n' "$HEAD_SHA"
           )"
           run_model \
-            "fable" \
+            "sol" \
             "Direction review" \
             "high" \
             50000 \
@@ -491,7 +583,7 @@ jobs:
           )"
           judge_schema="$(jq -c . .ai-review-controls/prompts/ai-pr-review-judge-schema.json)"
           run_model \
-            "fable" \
+            "sol" \
             "Final review judge" \
             "high" \
             100000 \
@@ -506,12 +598,22 @@ jobs:
             --input .ai-pr-review-final/review.md \
             --manifest .ai-review-context/changed-files.json \
             --metadata .ai-review-context/pr.json \
-            --output .ai-pr-review-final/review.json)"
+            --output .ai-pr-review-final/review.json \
+            --decision-output .ai-pr-review-final/decision.json \
+            --ledger .ai-review-context/ledger.json \
+            --ledger-output .ai-pr-review-final/ledger.json \
+            --context-dir .ai-review-context \
+            --repo-dir .)"
           echo "event=$event" >> "$GITHUB_OUTPUT"
+          decision="$(jq -r '"\(.actor)/\(.action)"' \
+            .ai-pr-review-final/decision.json)"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
 
       - name: Publish SHA-bound review
+        id: publish
         if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
         env:
+          BASE_SHA: ${{ steps.context.outputs.base }}
           CONTEXT_ID: ${{ steps.context.outputs.context_id }}
           EVENT: ${{ steps.model.outputs.event }}
           GH_TOKEN: ${{ github.token }}
@@ -544,9 +646,55 @@ jobs:
             exit 1
           fi
 
+          # Compare-and-swap on the findings ledger. A maintainer may have applied
+          # /aida decisions while the models ran, or between our read and our write.
+          # Each attempt merges the live ledger into the pre-review snapshot,
+          # re-derives the verdict deterministically (no model rerun) and publishes
+          # the ledger only if the comment still carries the digest that was read.
+          # The ledger is written BEFORE the review so a command landing afterwards
+          # always builds on this head's state.
+          ledger_published=""
+          for attempt in 1 2 3; do
+            bun .ai-review-controls/scripts/ai-pr-ledger.ts merge \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --input .ai-review-context/ledger.json \
+              --output .ai-pr-review-final/ledger.live.json >/dev/null
+            EVENT="$(bun .ai-review-controls/scripts/ai-pr-review.ts validate \
+              --base "$BASE_SHA" \
+              --head "$HEAD_SHA" \
+              --context-id "$CONTEXT_ID" \
+              --input .ai-pr-review-final/review.md \
+              --manifest .ai-review-context/changed-files.json \
+              --metadata .ai-review-context/pr.json \
+              --output .ai-pr-review-final/review.json \
+              --decision-output .ai-pr-review-final/decision.json \
+              --ledger .ai-pr-review-final/ledger.live.json \
+              --ledger-output .ai-pr-review-final/ledger.json \
+              --context-dir .ai-review-context \
+              --repo-dir .)"
+            publish_status=0
+            ledger_published_record="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --input .ai-pr-review-final/ledger.json)" || publish_status=$?
+            if [ "$publish_status" -eq 0 ]; then
+              ledger_published=true
+              break
+            elif [ "$publish_status" -eq 3 ]; then
+              echo "::notice::The findings ledger changed during publication (attempt $attempt); re-deriving the verdict"
+            else
+              exit "$publish_status"
+            fi
+          done
+          if [ -z "$ledger_published" ]; then
+            echo "::error::The findings ledger kept changing during publication"
+            exit 1
+          fi
+
           marker="<!-- ai-pr-review context=$CONTEXT_ID -->"
           existing_record="$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"$marker\"))) | [.id, .state] | @tsv" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state != \"DISMISSED\" and ((.body // \"\") | startswith(\"$marker\")) and (.state == \"CHANGES_REQUESTED\" or ((.body // \"\") | test(\"<!-- ai-pr-review decision=(author/change|maintainer/merge) -->\")))) | [.id, .state] | @tsv" \
             | head -n1 || true)"
           existing=""
           existing_state=""
@@ -601,8 +749,98 @@ jobs:
             gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$review_id/dismissals" \
               -f message="Superseded by AI review of $HEAD_SHA" >/dev/null
           done
+          echo "published=true" >> "$GITHUB_OUTPUT"
+          : > .ai-pr-review-final/published
+
+          # The live ledger is the final authority. Converge the review gate first
+          # and labels second, retrying if a /aida command changes the ledger while
+          # publication is finishing.
+          refresh="$(bun .ai-review-controls/scripts/ai-pr-review.ts converge-verdict \
+            --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+            --reason "review publication")"
+          if [ "$refresh" != "applied" ]; then
+            echo "::error::The live ledger verdict could not be converged ($refresh)"
+            exit 1
+          fi
+          live_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+            --repo "$REPO" --pr "$PR_NUMBER")"
+          case "$(jq -r .decision <<<"$live_verdict")" in
+            change) EVENT="REQUEST_CHANGES" ;;
+            merge) EVENT="COMMENT" ;;
+            *)
+              echo "::error::The live ledger has no verdict for $HEAD_SHA"
+              exit 1
+              ;;
+          esac
 
           if [ "$EVENT" = "REQUEST_CHANGES" ]; then
             echo "::error::AI review found a P0 or P1 issue"
             exit 1
           fi
+
+      - name: Restore AIDA review labels after cancellation
+        if: >-
+          cancelled()
+          && steps.context.outputs.skip != 'true'
+          && steps.context.outputs.already_reviewed != 'true'
+          && steps.label_start.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bun .ai-review-controls/scripts/ai-pr-review.ts labels \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.context.outputs.pr }}" \
+            --expected-head "${{ steps.context.outputs.head }}" \
+            --outcome "${{ steps.label_start.outputs.previous_outcome }}"
+
+      - name: Reconcile AIDA review labels
+        if: >-
+          always()
+          && !cancelled()
+          && steps.context.outputs.skip != 'true'
+          && steps.context.outputs.already_reviewed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_HEAD: ${{ github.event.pull_request.head.sha }}
+          TRIGGER_PR: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          review_script=".ai-review-controls/scripts/ai-pr-review.ts"
+          if [ ! -f "$review_script" ]; then
+            echo "::notice::AIDA controls were unavailable before label reconciliation"
+            exit 0
+          fi
+          pr_number="${{ steps.context.outputs.pr }}"
+          expected_head="${{ steps.context.outputs.head }}"
+          if [ -z "$pr_number" ]; then
+            pr_number="$TRIGGER_PR"
+          fi
+          if [ -z "$expected_head" ]; then
+            expected_head="$TRIGGER_HEAD"
+          fi
+          if [ -z "$pr_number" ]; then
+            echo "::notice::No pull request is available for AIDA review labels"
+            exit 0
+          fi
+
+          if [ -f .ai-pr-review-final/published ]; then
+            refresh="$(bun "$review_script" converge-verdict \
+              --repo "${{ github.repository }}" \
+              --pr "$pr_number" \
+              --head "$expected_head" \
+              --reason "final workflow reconciliation")"
+            echo "::notice::Final verdict convergence: $refresh"
+            exit 0
+          fi
+
+          args=(
+            labels
+            --repo "${{ github.repository }}"
+            --pr "$pr_number"
+            --outcome review-error
+          )
+          if [ -n "$expected_head" ]; then
+            args+=(--expected-head "$expected_head")
+          fi
+          bun "$review_script" "${args[@]}"

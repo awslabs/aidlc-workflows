@@ -62,13 +62,12 @@
 // SERIAL (.serial. in the filename): two full back-to-back TUI run-throughs in one
 // test, each its own claude session, sequential. SPENDS REAL TOKENS (two bugfix
 // workflows on Opus/Bedrock — the heaviest journey in the §5-D set). Gated behind
-// AIDLC_TUI_LIVE=1; tmux/claude/distributable/Windows-node absence SKIP with a
+// AIDLC_TUI_LIVE=1; selected TUI substrate/claude/distributable absence SKIP with a
 // reason — never a hollow pass.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts as a subprocess
-// (node on Windows so node-pty never loads under bun, #748; bun elsewhere). The
-// tui-drive.ts spawn is what DERIVES the `tui` mechanism (Phase 0). Platform-
-// invariant plain-text grid asserts.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
@@ -77,21 +76,23 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { basename, dirname, join } from "node:path";
 import { stateFilePathFor } from "../harness/sdk-drive.ts";
-import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
-import { comparableTerminal, guardBypassCommands, nativeToolCalls } from "../harness/t139-fidelity.ts";
+import { gridHasMenu } from "../harness/tui-drive.ts";
+import {
+  comparableTerminal, guardBypassCommands, monitorNativeAnswerGate,
+  nativeRootProviderFailure, nativeToolCalls,
+} from "../harness/t139-fidelity.ts";
 import {
   assertTuiDriveKill,
   cleanupTuiProject,
   cleanupTuiProjectAfterKill,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
 const IS_WIN = os.platform() === "win32";
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 const LIVE_CHILD_ENV = { ...process.env };
 delete LIVE_CHILD_ENV.AIDLC_SKIP_REVISION_BACKSTOP;
 
@@ -128,6 +129,11 @@ function drive(args: string[]): Run {
   });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
+
+function captureTeardownFailure(failures: unknown[], operation: () => void): void {
+  try { operation(); } catch (error) { failures.push(error); }
+}
+
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
   return (
     drive([
@@ -148,15 +154,8 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live revision-loop journey (uses Bedrock tokens — two run-throughs)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
   if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
     return "claude CLI not found";
   }
@@ -170,7 +169,7 @@ class NativeFidelity {
   readonly sessionId = randomUUID();
   private transcriptPath: string | undefined;
 
-  inspect(final = false): void {
+  inspect(final = false, completedCounter: () => number = () => 0): void {
     if (!this.transcriptPath) {
       const projects = join(process.env.CLAUDE_CONFIG_DIR || join(os.homedir(), ".claude"), "projects");
       if (existsSync(projects)) {
@@ -195,17 +194,36 @@ class NativeFidelity {
       const raw = readFileSync(path, "utf8");
       // Claude can be appending its last JSONL row during a polling read.
       const complete = raw.endsWith("\n") ? raw : raw.slice(0, raw.lastIndexOf("\n") + 1);
-      return { path, complete };
+      return { path, raw, complete };
     });
+    // Failure-fast observation ends with the answer-gate wait. The final fidelity
+    // audit after its Completed milestone keeps the original goal boundary.
     const calls = transcripts.flatMap(({ complete }) => nativeToolCalls(complete));
     const bypasses = guardBypassCommands(calls);
-    if (final || bypasses.length > 0) {
+    const providerFailure = final ? null
+      : nativeRootProviderFailure(transcripts[0].raw, this.sessionId, completedCounter());
+    if (final || bypasses.length > 0 || providerFailure) {
       const logDir = process.env.AIDLC_TEST_LOG_DIR;
       if (logDir) {
         for (const { path, complete } of transcripts) {
           writeFileSync(join(logDir, `t139-native-${this.sessionId}-${basename(path)}`), complete);
         }
+        if (providerFailure) {
+          writeFileSync(join(logDir, `t139-provider-error-${this.sessionId}.json`),
+            `${JSON.stringify({ ...providerFailure, transcript: this.transcriptPath }, null, 2)}\n`);
+        }
       }
+    }
+    if (providerFailure) {
+      const error = new Error(
+        `t139 root terminal provider error HTTP ${providerFailure.status} (${providerFailure.errorType}) ` +
+        `in session ${this.sessionId}, event ${providerFailure.eventId}: ${providerFailure.message}`,
+      );
+      if (bypasses.length > 0) {
+        throw new AggregateError([error, new Error(`t139 guard self-bypass:\n${bypasses.join("\n")}`)],
+          `${error.message}\nt139 guard self-bypass:\n${bypasses.join("\n")}`, { cause: error });
+      }
+      throw error;
     }
     if (bypasses.length > 0) {
       throw new Error(`t139 guard self-bypass in native tool calls:\n${bypasses.join("\n")}`);
@@ -233,46 +251,31 @@ function runAnswerGateToMilestone(
   overallMs: number,
   fidelity: NativeFidelity,
 ): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const child = spawn(
-      DRIVE_BIN,
-      [
-        ...DRIVE_PREFIX,
-        "answer-gate",
-        "--session",
-        session,
-        "--project-dir",
-        sandbox,
-        "--until-state-field",
-        UNTIL_COMPLETED,
-        "--overall-timeout-ms",
-        String(overallMs),
-        ...(rejectFirstGate ? ["--reject-first-gate"] : []),
-      ],
-      { stdio: "inherit", env: LIVE_CHILD_ENV },
-    );
-    let fidelityFailure: unknown;
-    const monitor = setInterval(() => {
-      try {
-        fidelity.inspect();
-      } catch (error) {
-        fidelityFailure = error;
-        clearInterval(monitor);
-        // This is the exact child handle just spawned by this test. Its exit
-        // returns control to the existing finally, which reaps the owned TUI.
-        child.kill("SIGTERM");
-      }
-    }, 1_000);
-    child.on("exit", (code) => {
-      clearInterval(monitor);
-      if (fidelityFailure) reject(fidelityFailure);
-      else resolve(code ?? -1);
-    });
-    child.on("error", () => {
-      clearInterval(monitor);
-      resolve(-1);
-    });
-  });
+  const child = spawn(
+    DRIVE_BIN,
+    [
+      ...DRIVE_PREFIX,
+      "answer-gate",
+      "--session",
+      session,
+      "--project-dir",
+      sandbox,
+      "--until-state-field",
+      UNTIL_COMPLETED,
+      "--overall-timeout-ms",
+      String(overallMs),
+      ...(rejectFirstGate ? ["--reject-first-gate"] : []),
+    ],
+    { stdio: "inherit", env: LIVE_CHILD_ENV },
+  );
+  // The exact child handle is stopped on fidelity/provider failure; the existing
+  // outer cleanup still owns terminal retirement and fixture removal.
+  return monitorNativeAnswerGate(child, () => fidelity.inspect(false, () => {
+    try { return readTerminal(sandbox).completedCounter; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; // State not initialized yet.
+      throw error;
+    }
+  }));
 }
 
 interface Terminal {
@@ -353,13 +356,14 @@ function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity
       fidelity.sessionId,
     ]).rc,
   ).toBe(0);
-  if (waitFor(session, "trust this folder", 60000, 600)) {
-    drive(["send", "--session", session, "--keys", "1"]);
-  }
-  if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-    drive(["send", "--session", session, "--keys", "2"]);
-  }
-  expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
+  // Share the original 60s trust + 15s permission + 45s readiness budget.
+  const startupDeadlineMs = Date.now() + 120_000;
+  const startup = drive([
+    "startup", "--session", session,
+    "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", "120000",
+  ]);
+  expect(startup.rc).toBe(0);
+  expect(waitFor(session, "\\[AIDLC\\].*ready", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
 
   // Explicit `--scope bugfix` (not the bare keyword) so the shipped
   // AWS_AIDLC_DEFAULT_SCOPE=classic env-default does NOT trigger a scope-
@@ -394,6 +398,7 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
       const cleanFidelity = new NativeFidelity();
       let revisedSession = "";
       let revisedSandbox = "";
+      const failures: unknown[] = [];
       try {
         const testStartMs = Date.now();
         launchBugfix(cleanSession, cleanSandbox, cleanFidelity);
@@ -505,22 +510,40 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
 
           // The ONE allowed difference: Revision Count diverges (revised > clean).
           expect(revised.revisionCount).toBeGreaterThan(clean.revisionCount);
+        } catch (error) {
+          failures.push(error);
         } finally {
           if (pollTimer) clearInterval(pollTimer);
           if (revisedSession) {
-            assertTuiDriveKill(
-              drive(["kill", "--session", revisedSession]),
-              revisedSession,
-            );
+            captureTeardownFailure(failures, () => {
+              assertTuiDriveKill(
+                drive(["kill", "--session", revisedSession]),
+                revisedSession,
+              );
+            });
           }
         }
+      } catch (error) {
+        failures.push(error);
       } finally {
-        cleanupTuiProjectAfterKill(
-          cleanSandbox,
-          cleanSession,
-          drive(["kill", "--session", cleanSession]),
-        );
-        if (revisedSandbox) cleanupTuiProject(revisedSandbox);
+        captureTeardownFailure(failures, () => {
+          cleanupTuiProjectAfterKill(
+            cleanSandbox,
+            cleanSession,
+            drive(["kill", "--session", cleanSession]),
+          );
+        });
+        if (revisedSandbox) {
+          captureTeardownFailure(failures, () => cleanupTuiProject(revisedSandbox));
+        }
+      }
+      // Throw only after both owned cleanup paths have been attempted. Keep the
+      // original error objects/stacks and include every message in JUnit/logs.
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures,
+          `t139 workflow/teardown failures:\n${failures.map((error, i) => `[${i + 1}] ${String(error)}`).join("\n")}`,
+          { cause: failures[0] });
       }
     },
     TEST_TIMEOUT_MS,

@@ -1,3 +1,137 @@
+import type { ChildProcess } from "node:child_process";
+
+export interface NativeRootProviderFailure {
+  sessionId: string;
+  eventId: string;
+  timestamp: string;
+  turnEndId: string;
+  status: number;
+  errorType: "server_error";
+  message: string;
+}
+
+/** Recognize a completed, unrecovered root provider failure, never screen text. */
+export function nativeRootProviderFailure(
+  transcript: string,
+  sessionId: string,
+  completedCounter = 0,
+): NativeRootProviderFailure | null {
+  if (completedCounter >= 5) return null;
+  // A partial tail may be the beginning of recovery; wait for a complete snapshot.
+  if (!sessionId || !transcript.endsWith("\n")) return null;
+  type Row = Record<string, unknown>;
+  const object = (value: unknown): Row | null =>
+    value !== null && typeof value === "object" && !Array.isArray(value) ? value as Row : null;
+  const time = (value: unknown): number =>
+    typeof value === "string" ? Date.parse(value) : Number.NaN;
+  let assistant: Row | null = null;
+  let ended: Row | null = null;
+  let newest = Number.NEGATIVE_INFINITY;
+  const ids = new Map<string, number>();
+  for (const line of transcript.split("\n")) {
+    if (!line.trim()) continue;
+    let row: Row | null;
+    try { row = object(JSON.parse(line)); } catch { return null; }
+    if (!row || row.sessionId !== sessionId || row.isSidechain === true || row.agentId != null) continue;
+    if (row.session_id !== undefined && row.session_id !== sessionId) return null;
+    if (typeof row.uuid === "string") ids.set(row.uuid, (ids.get(row.uuid) ?? 0) + 1);
+    const at = time(row.timestamp);
+    if (Number.isFinite(at)) newest = Math.max(newest, at);
+    if (row.type === "assistant") {
+      assistant = row;
+      ended = null;
+    } else if (
+      row.type === "system" && row.subtype === "turn_duration" &&
+      assistant && row.parentUuid === assistant.uuid
+    ) {
+      ended = row;
+    } else {
+      // A new user turn, queued task, retry/progress event, or other root activity
+      // supersedes an old failure. Unknown activity never proves the CLI is idle.
+      assistant = null;
+      ended = null;
+    }
+  }
+  if (
+    !assistant || !ended || assistant.isSidechain !== false || ended.isSidechain !== false ||
+    assistant.isApiErrorMessage !== true || assistant.error !== "server_error" ||
+    typeof assistant.uuid !== "string" || !assistant.uuid || ids.get(assistant.uuid) !== 1 ||
+    typeof ended.uuid !== "string" || !ended.uuid || ids.get(ended.uuid) !== 1 ||
+    typeof assistant.apiErrorStatus !== "number" || !Number.isInteger(assistant.apiErrorStatus) ||
+    assistant.apiErrorStatus < 500 || assistant.apiErrorStatus > 599 ||
+    typeof ended.durationMs !== "number" || !Number.isFinite(ended.durationMs) || ended.durationMs < 0
+  ) return null;
+  const at = time(assistant.timestamp);
+  const finishedAt = time(ended.timestamp);
+  if (!Number.isFinite(at) || !Number.isFinite(finishedAt) || finishedAt < at || finishedAt < newest) return null;
+  const message = object(assistant.message);
+  if (
+    message?.role !== "assistant" || message.model !== "<synthetic>" || message.stop_reason !== "stop_sequence" ||
+    !Array.isArray(message.content) || message.content.length === 0 ||
+    !message.content.every((value) => {
+      const block = object(value);
+      return block?.type === "text" && typeof block.text === "string";
+    })
+  ) return null;
+  const text = message.content.map((block) => block.text).join("\n");
+  if (!text.trim()) return null;
+  return {
+    sessionId, eventId: assistant.uuid, timestamp: assistant.timestamp as string,
+    turnEndId: ended.uuid, status: assistant.apiErrorStatus, errorType: "server_error", message: text,
+  };
+}
+
+/** Monitor only this owned client; healthy runs retain their driver's deadline. */
+export function monitorNativeAnswerGate(
+  child: ChildProcess,
+  inspect: () => void,
+  timing: { pollMs?: number; terminateGraceMs?: number; killWaitMs?: number } = {},
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let failed = false;
+    let settled = false;
+    const failures: unknown[] = [];
+    let escalation: ReturnType<typeof setTimeout> | undefined;
+    let stopDeadline: ReturnType<typeof setTimeout> | undefined;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(monitor);
+      clearTimeout(escalation);
+      clearTimeout(stopDeadline);
+      if (!failed) resolve(code);
+      else if (failures.length === 1) reject(failures[0]);
+      else reject(new AggregateError(failures,
+        `t139 answer-gate failure: ${failures.map(String).join("; ")}`, { cause: failures[0] }));
+    };
+    const signal = (name: NodeJS.Signals) => {
+      try { child.kill(name); } catch (error) { failures.push(error); }
+    };
+    const monitor = setInterval(() => {
+      try { inspect(); } catch (error) {
+        failed = true;
+        failures.push(error);
+        clearInterval(monitor);
+        signal("SIGTERM");
+        escalation = setTimeout(() => {
+          if (settled) return;
+          signal("SIGKILL");
+          stopDeadline = setTimeout(() => {
+            failures.push(new Error("owned answer-gate client exit remains unconfirmed after forced termination"));
+            finish(-1);
+          }, timing.killWaitMs ?? 2_000);
+        }, timing.terminateGraceMs ?? 1_000);
+      }
+    }, timing.pollMs ?? 1_000);
+    child.once("exit", (code) => finish(code ?? -1));
+    child.on("error", (error) => {
+      if (settled) return;
+      if (failed) failures.push(error); // Preserve the provider error if signalling fails.
+      else finish(-1);
+    });
+  });
+}
+
 export interface NativeToolCall {
   name: string;
   input: Record<string, unknown>;

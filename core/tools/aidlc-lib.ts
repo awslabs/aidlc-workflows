@@ -1589,13 +1589,135 @@ function canonicalEngineCommand(text: string): string {
     );
 }
 
+/**
+ * A deliberately small literal shell grammar: one command, optionally preceded
+ * by `cd [--] <absolute literal directory> &&`, with an optional final `2>&1`.
+ * No execution, expansion, relative CDPATH lookup, or other shell operators.
+ * ASCII blanks delimit words; NBSP is data. Backslash-newline is unsupported,
+ * rather than being mistaken for either whitespace or a preserved backslash.
+ */
+export function parseLiteralShellInvocation(text: string): {
+  directory: string | null;
+  command: string;
+  argv: string[];
+  rawWords: string[];
+} | null {
+  if (/[\0\r\n]|\$\(|`/.test(text)) return null;
+  text = text.replace(/^[ \t]+|[ \t]+$/g, "").replace(/[ \t]+2>&1$/, "");
+  const tokens: Array<{ value: string; raw: string; start: number; and: boolean }> = [];
+  for (let i = 0; i < text.length;) {
+    if (text[i] === " " || text[i] === "\t") { i++; continue; }
+    if (text.slice(i, i + 2) === "&&") {
+      tokens.push({ value: "&&", raw: "&&", start: i, and: true });
+      i += 2;
+      continue;
+    }
+    const start = i;
+    let value = "";
+    let quote: "'" | '"' | null = null;
+    while (i < text.length) {
+      const ch = text[i];
+      if (quote === "'") {
+        if (ch === "'") quote = null;
+        else value += ch;
+        i++;
+      } else if (quote === '"') {
+        if (ch === '"') { quote = null; i++; }
+        else if (ch === "$") return null;
+        else if (ch === "\\" && /["\\$`]/.test(text[i + 1] ?? "")) {
+          value += text[i + 1];
+          i += 2;
+        } else { value += ch; i++; }
+      } else {
+        if (ch === " " || ch === "\t" || text.slice(i, i + 2) === "&&") break;
+        if (ch === "'" || ch === '"') { quote = ch; i++; }
+        else if (ch === "\\" || "()[]{}*?;|<>&$#".includes(ch) || (ch === "~" && i === start)) return null;
+        else { value += ch; i++; }
+      }
+    }
+    if (quote !== null) return null;
+    tokens.push({ value, raw: text.slice(start, i), start, and: false });
+  }
+  const separators = tokens.flatMap((token, i) => token.and ? [i] : []);
+  let directory: string | null = null;
+  let words = tokens;
+  if (separators.length > 0) {
+    if (separators.length !== 1) return null;
+    const at = separators[0];
+    const prefix = tokens.slice(0, at);
+    if (
+      prefix[0]?.raw !== "cd" ||
+      !(prefix.length === 2 || (prefix.length === 3 && prefix[1].raw === "--"))
+    ) return null;
+    directory = prefix.at(-1)!.value;
+    if (
+      !directory.startsWith("/") &&
+      !/^[A-Za-z]:[/\\]/.test(directory) &&
+      !/^\\\\[^/\\]+[/\\][^/\\]+/.test(directory)
+    ) return null;
+    words = tokens.slice(at + 1);
+  }
+  if (words.length === 0 || words.some((word) => word.and)) return null;
+  return {
+    directory,
+    command: text.slice(words[0].start),
+    argv: words.map((word) => word.value),
+    rawWords: words.map((word) => word.raw),
+  };
+}
+
+// Detection only: Bash removes an ordinary unquoted escape before looking up an
+// executable. Keep quoted backslashes intact (notably native Windows paths).
+// This representation must never supply argv for a terminal-output exemption.
+function unescapeUnquotedShellTextForEngagement(text: string): string {
+  let result = "";
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === "'") {
+      result += ch;
+      if (ch === "'") quote = null;
+    } else if (quote === '"') {
+      result += ch;
+      if (ch === "\\" && i + 1 < text.length) result += text[++i];
+      else if (ch === '"') quote = null;
+    } else if (ch === "\\" && i + 1 < text.length) {
+      const next = text[++i];
+      if (next !== "\n") result += next;
+    } else {
+      result += ch;
+      if (ch === "'" || ch === '"') quote = ch;
+    }
+  }
+  return result;
+}
+
+function sameDirectory(left: string, right: string): boolean {
+  const canonical = (directory: string): string => {
+    let path = resolvePath(directory);
+    try {
+      path = realpathSync.native(path);
+    } catch {
+      // Unavailable directories retain their resolved lexical identity.
+    }
+    path = path.replace(process.platform === "win32" ? /[\\/]+$/ : /\/+$/, "");
+    return process.platform === "win32" ? path.toLowerCase() : path;
+  };
+  return canonical(left) === canonical(right);
+}
+
 // A workflow-engine tool call: a Bash invocation of legacy
 // aidlc-orchestrate/aidlc-state, a new-grammar `aidlc ...` engine command, or a
 // tool whose name itself references aidlc. These are the calls that mean "the
 // conductor engaged the workflow this turn"; their presence in the turn that
 // answered the human disqualifies the turn from the conversational carve-out (a
 // conductor that ran the engine and then quit mid-loop must still be nudged).
-export function isEngineToolCall(name: string, input: unknown, observedOutput?: unknown): boolean {
+export function isEngineToolCall(
+  name: string,
+  input: unknown,
+  observedOutput?: unknown,
+  projectDir?: string,
+): boolean {
   const cmd =
     input !== null && typeof input === "object"
       ? String((input as Record<string, unknown>).command ?? "")
@@ -1603,7 +1725,34 @@ export function isEngineToolCall(name: string, input: unknown, observedOutput?: 
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
   const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
-  const text = canonicalEngineCommand(rawText);
+  // Correlated output can prove only one literal engine invocation terminal.
+  // A directory-only prelude and explicit --project-dir must each resolve to the
+  // known active project directory. Resolve a relative --project-dir against the
+  // cd prelude when present, otherwise against the active project. Unknown/other
+  // directory bindings and every other chain stay on the conservative per-segment path.
+  const literal = parseLiteralShellInvocation(rawText);
+  if (literal) {
+    const invocation = engineInvocationFromWords(literal.argv, literal.rawWords);
+    if (
+      invocation !== null && typeof invocation !== "string" &&
+      isTerminalConfigurationDispatch(invocation, observedOutput) &&
+      (literal.directory === null ||
+        (projectDir !== undefined && sameDirectory(literal.directory, projectDir))) &&
+      (invocation.projectDir === null ||
+        (projectDir !== undefined &&
+          sameDirectory(resolvePath(literal.directory ?? projectDir, invocation.projectDir), projectDir)))
+    ) return false;
+  }
+  const unescaped = unescapeUnquotedShellTextForEngagement(rawText);
+  if (unescaped !== rawText) {
+    for (const seg of canonicalEngineCommand(unescaped).split(/&&|\|\||[;|\n]/)) {
+      if (isEngineEngagementSegment(seg, undefined, false)) return true;
+    }
+  }
+  // A shell removes backslash-LF before parsing words. Detect engine names
+  // assembled that way, but never use this normalization to grant an exemption.
+  const continued = rawText.includes("\\\n");
+  const text = canonicalEngineCommand(continued ? rawText.replaceAll("\\\n", "") : rawText);
   // Split on shell separators so a CHAINED command is judged per sub-command,
   // not as one blob. Otherwise a read-only flag anywhere in the line
   // (`... --status && aidlc-orchestrate report ...`) would wrongly exempt a
@@ -1614,8 +1763,8 @@ export function isEngineToolCall(name: string, input: unknown, observedOutput?: 
     // Preserve that uncertainty rather than granting a terminal-command exemption.
     if (isEngineEngagementSegment(
       seg,
-      segments.length === 1 ? observedOutput : undefined,
-      !/\$\(|`/.test(rawText),
+      undefined,
+      !continued && !/\$\(|`/.test(rawText),
     )) return true;
   }
   return false;
@@ -1688,6 +1837,13 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
   if (tokenStart >= 0) rawTokens.push(seg.slice(tokenStart));
   const tokens = splitKiroCommandArgs(seg);
   if (tokens.length !== rawTokens.length) return "uncertain";
+  return engineInvocationFromWords(tokens, rawTokens);
+}
+
+function engineInvocationFromWords(
+  tokens: string[],
+  rawTokens: string[],
+): { command: string; args: string[]; projectDir: string | null } | "uncertain" | "opaque" | null {
   const base = (token: string): string => token.replaceAll("\\", "/").split("/").pop() ?? "";
   // Only transparent prefixes establish an executable position. In particular,
   // words following sh -c (or an arbitrary script) are data, not an executable.
@@ -1722,6 +1878,7 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
     command = "aidlc";
   }
   const native = command === "aidlc";
+  let projectDir: string | null = null;
   // Match dispatcher global extraction, then the orchestrator's own attempt
   // selector extraction. Neither consumes options after the literal delimiter.
   const stripGlobals = (args: string[], attempt: boolean): string[] | null => {
@@ -1732,10 +1889,11 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
       if (arg === "--") literal = true;
       if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
         if (i + 1 >= args.length) return null;
+        if (arg === "--project-dir") projectDir = args[i + 1];
         i++;
-      } else if (!literal && native && ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
-        continue;
-      } else {
+      } else if (!literal && arg.startsWith("--project-dir=")) {
+        projectDir = arg.slice("--project-dir=".length);
+      } else if (literal || !native || !["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
         clean.push(arg);
       }
     }
@@ -1748,7 +1906,7 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
     args = stripGlobals(args, true);
     if (!args) return null;
   }
-  return { command, args };
+  return { command, args, projectDir };
 }
 
 function parsedNextArgv(invocation: { command: string; args: string[] }): string[] | null {
@@ -1814,18 +1972,27 @@ function isTerminalConfigurationDispatch(
   } else if (values.has("--review") && key !== "review") {
     expected.push("--review", values.get("--review"));
   }
+  // Git Bash can prefix captured stdout with this non-fatal startup diagnostic.
+  // Remove only the observed diagnostic line; never search arbitrary output
+  // for a convenient JSON fragment or discard an unknown prefix/suffix.
+  const directiveOutput = output.replace(
+    /^bash\.exe: warning: could not find \/tmp, please create!\r?\n/,
+    "",
+  );
   try {
-    const parsed: unknown = JSON.parse(output);
+    const parsed: unknown = JSON.parse(directiveOutput);
     // emit() uses canonical JSON; duplicate keys, concatenated objects and
     // convenient embedded fragments cannot establish a dispatch receipt.
-    if (JSON.stringify(parsed) !== output.trim()) return false;
+    if (JSON.stringify(parsed) !== directiveOutput.trim()) return false;
     // Lazy load avoids the directive validator's import cycle with this module.
     const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
     const validated = validateDirective(parsed);
     if (!validated.valid || validated.data.kind !== "print") return false;
     const match = /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/.exec(validated.data.message);
     if (!match) return false;
-    const command = literalEngineCommand(canonicalEngineCommand(match[1]));
+    const literal = parseLiteralShellInvocation(match[1]);
+    if (!literal || literal.directory !== null) return false;
+    const command = engineInvocationFromWords(literal.argv, literal.rawWords);
     return command !== null && typeof command !== "string" && command.command === "aidlc" &&
       JSON.stringify(command.args) === JSON.stringify(expected);
   } catch {
@@ -4539,13 +4706,126 @@ function macProcessIdentity(pid: number, deadlineMs: number): ProcessIdentity | 
   }
 }
 
+function loadWindowsSessionProcessApi() {
+  const kernel = dlopen("kernel32.dll", {
+    // Win32 BOOL is a 32-bit int, including on x64 and arm64.
+    OpenProcess: { args: [FFIType.u32, FFIType.i32, FFIType.u32], returns: FFIType.ptr },
+    GetProcessTimes: {
+      args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
+      returns: FFIType.i32,
+    },
+    WaitForSingleObject: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.u32 },
+    CloseHandle: { args: [FFIType.ptr], returns: FFIType.i32 },
+  });
+  try {
+    const ntdll = dlopen("ntdll.dll", {
+      NtQueryInformationProcess: {
+        args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32, FFIType.ptr],
+        returns: FFIType.i32,
+      },
+    });
+    return { kernel, ntdll };
+  } catch (error) {
+    kernel.close();
+    throw error;
+  }
+}
+
+let windowsSessionProcessApi: ReturnType<typeof loadWindowsSessionProcessApi> | null | undefined;
+
+// Read one process generation through one stable handle. These API bindings are
+// independent of the lock subsystem's process probes.
+export function windowsSessionProcessIdentity(
+  pid: number,
+  deadlineMs = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+): ProcessIdentity | null {
+  // A test platform override must never load Windows DLLs on another host.
+  if (
+    process.platform !== "win32" ||
+    (process.arch !== "x64" && process.arch !== "arm64") ||
+    !Number.isSafeInteger(pid) || pid <= 1 || pid > 0xffffffff ||
+    Date.now() >= deadlineMs
+  ) return null;
+  if (windowsSessionProcessApi === undefined) {
+    try {
+      windowsSessionProcessApi = loadWindowsSessionProcessApi();
+    } catch {
+      windowsSessionProcessApi = null;
+    }
+  }
+  const api = windowsSessionProcessApi;
+  if (!api || Date.now() >= deadlineMs) return null;
+
+  let handle: Pointer | null = null;
+  let identity: ProcessIdentity | null = null;
+  try {
+    // PROCESS_QUERY_INFORMATION | SYNCHRONIZE; never request mutation rights.
+    handle = api.kernel.symbols.OpenProcess(0x0400 | 0x00100000, 0, pid);
+    if (!handle) return null;
+    // WAIT_TIMEOUT means the process object is still running. An exit code of
+    // STILL_ACTIVE alone is insufficient: 259 can also be a process's exit code.
+    if (api.kernel.symbols.WaitForSingleObject(handle, 0) !== 0x102) return null;
+
+    // Native Windows x64/arm64 use little-endian LLP64. The documented
+    // PROCESS_BASIC_INFORMATION is 48 bytes, aligned to 8: NTSTATUS at 0,
+    // PEB* at 8, ULONG_PTR at 16, KPRIORITY at 24, PID at 32, parent PID at 40.
+    // https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntqueryinformationprocess
+    const basic = new BigUint64Array(6);
+    const returned = new Uint32Array(1);
+    const status = api.ntdll.symbols.NtQueryInformationProcess(
+      handle, 0, basic, basic.byteLength, returned,
+    );
+    if (
+      status !== 0 || returned[0] !== basic.byteLength ||
+      basic[4] !== BigInt(pid) || basic[5] > 0xffffffffn ||
+      basic[5] === BigInt(pid) || Date.now() >= deadlineMs
+    ) return null;
+
+    // Each FILETIME consists of two DWORDs (8 bytes); keep all 64 bits.
+    const creation = new BigUint64Array(1);
+    const exit = new BigUint64Array(1);
+    const kernel = new BigUint64Array(1);
+    const user = new BigUint64Array(1);
+    if (!api.kernel.symbols.GetProcessTimes(handle, creation, exit, kernel, user)) return null;
+    if (creation[0] === 0n || api.kernel.symbols.WaitForSingleObject(handle, 0) !== 0x102) return null;
+    identity = {
+      ppid: Number(basic[5]),
+      startTime: `win32:${creation[0].toString(16).padStart(16, "0")}`,
+    };
+  } catch {
+    identity = null;
+  } finally {
+    if (handle) {
+      try {
+        if (!api.kernel.symbols.CloseHandle(handle)) identity = null;
+      } catch {
+        identity = null;
+      }
+    }
+  }
+  return Date.now() < deadlineMs ? identity : null;
+}
+
+function windowsParentEdge(
+  parent: ProcessIdentity | null,
+  child: ProcessIdentity | null,
+): "verified" | "rejected" | "unknown" {
+  const generation = /^win32:[0-9a-f]{16}$/;
+  if (
+    typeof parent?.startTime !== "string" || !generation.test(parent.startTime) ||
+    typeof child?.startTime !== "string" || !generation.test(child.startTime)
+  ) return "unknown";
+  // Fixed-width hex preserves FILETIME order without rounding to JS numbers.
+  // Equal timestamps do not establish order, so that edge also fails closed.
+  return parent.startTime < child.startTime ? "verified" : "rejected";
+}
+
 function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
   if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
   const platform = sessionProcessPlatform();
   if (platform === "linux") return linuxProcessIdentity(pid);
   if (platform === "darwin") return macProcessIdentity(pid, deadlineMs);
-  // Windows process ancestry is optional in this increment. Returning null
-  // preserves cursor behavior without paying for a PowerShell process.
+  if (platform === "win32") return windowsSessionProcessIdentity(pid, deadlineMs);
   return null;
 }
 
@@ -4617,6 +4897,15 @@ export function writeSessionPidEntry(
   }
   const resolvedIdentity =
     identity === undefined ? processIdentity(pid, deadlineMs) : identity;
+  if (
+    sessionProcessPlatform() === "win32" &&
+    (resolvedIdentity?.startTime == null || Date.now() >= deadlineMs)
+  ) {
+    // A legacy Windows record without a creation time cannot establish PID
+    // ownership. Retire the previous claim rather than publish an unverified one.
+    writeSessionPidRecord(projectDir, pid, { sessionId: null, startTime: null });
+    return;
+  }
   writeSessionPidRecord(projectDir, pid, {
     sessionId,
     startTime: resolvedIdentity?.startTime ?? null,
@@ -4662,28 +4951,52 @@ function gcSessionPidEntries(
 // Map the harness process and each ancestor to the current session. The hook
 // process itself is intentionally excluded because later tool subprocesses are
 // siblings, not descendants, of that short-lived hook.
-export function writeSessionPidAncestry(projectDir: string, sessionId: string): void {
+export function writeSessionPidAncestry(
+  projectDir: string,
+  sessionId: string,
+  // Narrow reader seam for deterministic Windows edge/publication fixtures.
+  // Production uses native identity; the POSIX path does not consult this reader.
+  readWindowsIdentity = windowsSessionProcessIdentity,
+): void {
   sessionAncestryCache.delete(projectDir);
-  if (validSessionId(sessionId) === null || sessionProcessPlatform() === "win32") return;
+  if (validSessionId(sessionId) === null) return;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const windows = sessionProcessPlatform() === "win32";
+  let childIdentity: ProcessIdentity | null = null;
   const seen = new Set<number>();
   let pid = process.ppid;
   for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
     if (pid <= 1 || seen.has(pid)) break;
     seen.add(pid);
-    // Retire this PID's previous session before the bounded lookup. If lookup
-    // fails, a null record stops later tools from falling through to an older
-    // ancestor when process inspection recovers. A verified write replaces it.
+    let identity: ProcessIdentity | null = null;
+    let windowsEdge: ReturnType<typeof windowsParentEdge> = "unknown";
+    if (windows) {
+      if (depth === 0) {
+        childIdentity = readWindowsIdentity(process.pid, deadline);
+        if (childIdentity && childIdentity.ppid !== pid) break;
+      }
+      identity = childIdentity ? readWindowsIdentity(pid, deadline) : null;
+      windowsEdge = windowsParentEdge(identity, childIdentity);
+      // A verified newer/equal-time parent is not our ancestor: leave its PID
+      // record untouched. `seen` also excludes it from the subsequent GC pass.
+      if (windowsEdge === "rejected") break;
+    }
+    // POSIX keeps its before-lookup barrier. Windows preflights the edge above:
+    // unknown inspection still retires the known parent slot, preventing an old
+    // session from returning when lookup recovers. Verified reuse must never
+    // erase somebody else's claim. Only a verified, in-budget write replaces null.
     writeSessionPidRecord(projectDir, pid, { sessionId: null, startTime: null });
     if (Date.now() >= deadline) break;
-    const identity = processIdentity(pid, deadline);
+    if (windows && windowsEdge !== "verified") break;
+    if (!windows) identity = processIdentity(pid, deadline);
     if (!identity) break;
     writeSessionPidEntry(projectDir, pid, sessionId, deadline, identity);
+    childIdentity = identity;
     pid = identity.ppid;
   }
   // GC is best-effort hygiene: dead pids are reaped without spawning, a live
   // process whose identity cannot be read within the budget is left alone, and
-  // entries written by this ancestry walk are never re-examined.
+  // visited slots, including rejected Windows edges, are never re-examined.
   gcSessionPidEntries(projectDir, deadline, seen);
 }
 
@@ -4729,9 +5042,11 @@ export function hookChildEnv(
 }
 
 function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
-  if (sessionProcessPlatform() === "win32") return null;
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const windows = sessionProcessPlatform() === "win32";
+  let childIdentity = windows ? windowsSessionProcessIdentity(process.pid, deadline) : null;
+  if (windows && (!childIdentity || childIdentity.ppid !== process.ppid)) return null;
   const seen = new Set<number>();
   let pid = process.ppid;
   for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
@@ -4739,13 +5054,17 @@ function resolveSessionIdFromAncestryUncached(projectDir: string): string | null
     seen.add(pid);
     const identity = processIdentity(pid, deadline);
     if (!identity || !processIsAlive(pid)) return null;
+    // A parent PID can outlive its original owner. Do not join this walk to a
+    // replacement process born after (or indistinguishably close to) its child.
+    if (windows && windowsParentEdge(identity, childIdentity) !== "verified") return null;
     const entry = readSessionPidEntry(projectDir, pid);
     if (
       entry &&
       (entry.startTime === null || entry.startTime === identity.startTime)
     ) {
-      return entry.sessionId;
+      return windows && entry.startTime === null ? null : entry.sessionId;
     }
+    childIdentity = identity;
     pid = identity.ppid;
   }
   return null;
@@ -21078,7 +21397,7 @@ function claimPayloadAtTip(
   }
   const shown = claimRegistryGit(
     projectDir,
-    ["show", `${tip.oid}:.aidlc-unit-claim.json`],
+    ["show", `${tip.oid}:.aidlc-unit-claim.json`, "--"],
     localOnly,
   );
   if (!shown.ok) {
@@ -21322,7 +21641,7 @@ function cachedClaimFanoutActive(projectDir: string): boolean {
     }
     const shown = claimRegistryGit(
       projectDir,
-      ["show", `${oid}:.aidlc-unit-claim.json`],
+      ["show", `${oid}:.aidlc-unit-claim.json`, "--"],
       { localOnly: true },
     );
     if (!shown.ok) continue;
@@ -24034,7 +24353,7 @@ function tryAcquireNativeGateMutex(
         WINDOWS_PROCESS_API = loadWindowsProcessApi();
       }
       if (WINDOWS_PROCESS_API === null) return null;
-      const widePath = Buffer.from(`${path}\0`, "utf16le");
+      const widePath = Buffer.from(`${win32.toNamespacedPath(resolvePath(path))}\0`, "utf16le");
       const rawHandle = WINDOWS_PROCESS_API.symbols.CreateFileW(
         widePath,
         0xc0000000,

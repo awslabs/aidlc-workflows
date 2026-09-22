@@ -1110,6 +1110,9 @@ function swarmFixture(
 ): string {
   const project = setupWorktreeFixture();
   worktreeDirs.push(project);
+  // This is a new repository; it does not inherit the execution checkout's
+  // local long-path setting. Nested Unit review records can exceed MAX_PATH.
+  if (process.platform === "win32") git(project, ["config", "core.longpaths", "true"]);
   git(project, ["config", "user.email", "t@test"]);
   git(project, ["config", "user.name", "t"]);
   const state = readFileSync(
@@ -1361,15 +1364,17 @@ describe("t305 real receipt and guard flows", () => {
     const recovered = review(project, record, "beta", [{ path: "beta.ts" }]); expect(recovered.verdict.rc).toBe(0); expect(approve(project).rc).toBe(0);
   }, 30000);
 
-  test("executable-bit changes invalidate the owning unit after another review refreshes the global binding", () => {
+  test.skipIf(process.platform === "win32")("POSIX executable-bit changes invalidate the owning unit after another review refreshes the global binding", () => {
     const { project, record } = runtimeFixture();
     const script = join(project, "script.sh");
     writeFileSync(script, "#!/bin/sh\nexit 0\n");
     chmodSync(script, 0o644);
+    expect(statSync(script).mode & 0o111).toBe(0);
     review(project, record, "alpha", [{ path: "script.sh" }]);
     review(project, record, "beta", []);
 
     chmodSync(script, 0o755);
+    expect(statSync(script).mode & 0o111).not.toBe(0);
     review(project, record, "beta", []);
     const refused = approve(project);
     expect(refused.rc).toBe(1);

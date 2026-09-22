@@ -62,6 +62,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
@@ -164,21 +165,24 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       `model_reasoning_effort = "low"`,
       ``,
       `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
+      `profile = ${JSON.stringify(AWS_PROFILE)}`,
+      `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
-      `[projects."${proj}"]`,
+      `[projects.${JSON.stringify(proj)}]`,
       `trust_level = "trusted"`,
       ``,
       trust.stdout,
+      ...codexWindowsSandboxConfig(),
     ].join("\n"),
     "utf-8",
   );
   return { proj, home, root };
 }
+
+let execNumber = 0;
 
 // One codex turn. `resume: true` continues the newest recorded session for this
 // cwd (`codex exec resume --last "<prompt>"`) instead of starting fresh. stderr
@@ -198,6 +202,16 @@ function codexTurn(
     env: { ...process.env, CODEX_HOME: home },
     timeout: PER_BEAT_TIMEOUT_MS,
   });
+  // Fixtures are deleted even on assertion failure. Keep stderr (effective
+  // sandbox mode and command-policy errors) alongside the final response.
+  const logDir = process.env.AIDLC_TEST_LOG_DIR;
+  if (logDir) {
+    writeFileSync(
+      join(logDir, `exec-codex-compose-inflight-${++execNumber}.log`),
+      `Command: ${JSON.stringify([CODEX_BIN, ...argv])}\nCwd: ${proj}\nExit code: ${r.status ?? -1}\nSignal: ${r.signal ?? "none"}\nSpawn error: ${r.error?.message ?? "none"}\n\nSTDOUT:\n${r.stdout ?? ""}\nSTDERR:\n${r.stderr ?? ""}`,
+      "utf-8",
+    );
+  }
   return { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 

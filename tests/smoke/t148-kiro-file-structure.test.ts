@@ -11,7 +11,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -344,23 +345,29 @@ describe("t148 dist/kiro file structure", () => {
   });
 
   test("doctor accepts IDE shape and keeps CLI settings validation", () => {
-    const run = (projectDir: string): string => {
-      const tool = join(projectDir, ".kiro", "tools", "aidlc-utility.ts");
-      const result = spawnSync(process.execPath, [tool, "doctor", "--project-dir", projectDir, "--verbose"], {
-        encoding: "utf-8",
-        env: { ...process.env, AIDLC_HARNESS_DIR: ".kiro" },
-      });
-      return `${result.stdout ?? ""}${result.stderr ?? ""}`;
-    };
-    const ide = run(KIRO_IDE);
-    expect(ide).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
-    expect(ide).not.toContain("settings/cli.json present");
+    // This shape check must not validate the developer's global installed runtime.
+    const installRoot = mkdtempSync(join(tmpdir(), "t148-doctor-install-"));
+    try {
+      const run = (projectDir: string): string => {
+        const tool = join(projectDir, ".kiro", "tools", "aidlc-utility.ts");
+        const result = spawnSync(process.execPath, [tool, "doctor", "--project-dir", projectDir, "--verbose"], {
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".kiro", AIDLC_INSTALL_ROOT: installRoot },
+        });
+        return `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      };
+      const ide = run(KIRO_IDE);
+      expect(ide).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+      expect(ide).not.toContain("settings/cli.json present");
 
-    const cli = run(KIRO);
-    expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
-    expect(cli).toContain(
-      "ok    settings/cli.json present (workspace default-agent activation)",
-    );
+      const cli = run(KIRO);
+      expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+      expect(cli).toContain(
+        "ok    settings/cli.json present (workspace default-agent activation)",
+      );
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
   });
 
   test("conductor hooks all route through the adapter", () => {

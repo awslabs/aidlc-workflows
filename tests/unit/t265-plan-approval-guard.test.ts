@@ -23,6 +23,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1272,6 +1273,111 @@ describe("t265b hook lifecycle", () => {
       }
     }, 30000);
   }
+
+  test("a redundant absolute cd permits recovery without changing execution context", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
+      const prefix = `cd "${proj}" && `;
+      for (const command of [
+        `${prefix}bun .claude/tools/aidlc.ts engine orchestrate next`,
+        `${prefix}bun .claude/tools/aidlc.ts engine orchestrate continue stage-rules-token`,
+        `${prefix}bun .claude/tools/aidlc-orchestrate.ts next`,
+        `cd -- "${proj}" && bun .claude/tools/aidlc.ts engine orchestrate next`,
+      ]) {
+        const result = runHook(proj, { ...BASH(command), cwd: proj });
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      mkdirSync(join(proj, "other"), { recursive: true });
+      for (const command of [
+        `${prefix}echo code > src/inline.ts`,
+        `${prefix}bun .claude/tools/aidlc.ts engine orchestrate next; echo code > src/inline.ts`,
+        `cd "${join(proj, "other")}" && bun .claude/tools/aidlc.ts engine orchestrate next`,
+        `env cd "${proj}" && bun .claude/tools/aidlc.ts engine orchestrate next`,
+        `cd "${proj}/." && bun .claude/tools/aidlc.ts engine orchestrate next`,
+        'cd "$PWD" && bun .claude/tools/aidlc.ts engine orchestrate next',
+        "cd && bun .claude/tools/aidlc.ts engine orchestrate next",
+      ]) {
+        expect(runHook(proj, { ...BASH(command), cwd: proj }).code, command).toBe(2);
+      }
+      const globCwd = join(proj, "literal[12]");
+      mkdirSync(globCwd);
+      const globCommand = `cd ${globCwd} && bun "${join(proj, ".claude", "tools", "aidlc.ts")}" engine orchestrate next`;
+      expect(runHook(proj, { ...BASH(globCommand), cwd: globCwd }).code, globCommand).toBe(2);
+      const suffixed = `${proj}\u00a0`;
+      mkdirSync(suffixed);
+      try {
+        const changedByBlank = `cd "${proj}"\u00a0 && bun .claude/tools/aidlc.ts engine orchestrate next`;
+        expect(runHook(proj, { ...BASH(changedByBlank), cwd: proj }).code).toBe(2);
+        const actual = spawnSync("bash", [
+          "-c", 'cd "$1"\u00a0 && "$2" -e \'process.stdout.write(JSON.stringify(process.cwd()))\'',
+          "fixture", proj, BUN.replaceAll("\\", "/"),
+        ], { cwd: proj, encoding: "utf8" });
+        expect(actual.status, actual.stderr).toBe(0);
+        expect(JSON.parse(actual.stdout).endsWith("\u00a0")).toBe(true);
+      } finally {
+        rmSync(suffixed, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test.skipIf(process.platform === "win32")(
+    "a removed shell continuation cannot authorize a different cwd",
+    () => {
+      const original = scratchProject();
+      const proj = `${original}\nline`;
+      const other = `${original}line`;
+      renameSync(original, proj);
+      mkdirSync(other);
+      try {
+        seedState(proj);
+        const operand = proj.replace(/[\\$`"]/g, "\\$&").replaceAll("\n", "\\\n");
+        const command = `cd "${operand}" && bun .claude/tools/aidlc.ts engine orchestrate next`;
+        expect(runHook(proj, { ...BASH(command), cwd: proj }).code).toBe(2);
+        const actual = spawnSync("bash", [
+          "-c", `cd "${operand}" && "$1" -e 'process.stdout.write(JSON.stringify(process.cwd()))'`,
+          "fixture", BUN,
+        ], { cwd: proj, encoding: "utf8" });
+        expect(actual.status, actual.stderr).toBe(0);
+        expect(JSON.parse(actual.stdout)).toBe(other);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+        rmSync(other, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows cwd casing preserves recovery without authorizing workspace changes",
+    () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const cwd = proj.toLowerCase();
+        expect(cwd).not.toBe(proj);
+        for (const command of [
+          "bun .claude/tools/aidlc.ts engine orchestrate next",
+          "bun .claude/tools/aidlc.ts engine orchestrate continue stage-rules-token",
+        ]) {
+          const result = runHook(proj, { ...BASH(command), cwd });
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+        }
+        for (const command of [
+          "echo code > src/inline.ts",
+          "bun .claude/tools/aidlc.ts engine orchestrate next; echo code > src/inline.ts",
+          "bun other/aidlc.ts engine orchestrate next",
+        ]) {
+          expect(runHook(proj, { ...BASH(command), cwd }).code, command).toBe(2);
+        }
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("planning through the Bun entry point requires a real installed file", () => {
     const proj = scratchProject();

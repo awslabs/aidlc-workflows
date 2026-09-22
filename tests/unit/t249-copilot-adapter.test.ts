@@ -176,7 +176,16 @@ function orchestrationProject(): string {
   return dir;
 }
 
+const COMPILED_COVERAGE_REQUIRED =
+  process.env.AIDLC_REQUIRE_COMPILED_COVERAGE === "1";
 function compiledBinary(): string | null {
+  const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
+  if (compiledDir) {
+    const artifact = join(compiledDir, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    return existsSync(artifact) ? realpathSync(artifact) : null;
+  }
+  // A shard must exercise this run's verified build, never a stale local one.
+  if (COMPILED_COVERAGE_REQUIRED) return null;
   const explicit = process.env.AIDLC_TEST_COMPILED_EXECUTABLE;
   if (explicit && existsSync(explicit)) return realpathSync(explicit);
   const results = join(REPO_ROOT, "build", "binaries", "build-results-native.json");
@@ -186,8 +195,6 @@ function compiledBinary(): string | null {
   return artifact && existsSync(artifact) ? realpathSync(artifact) : null;
 }
 const COMPILED_BINARY = compiledBinary();
-const COMPILED_COVERAGE_REQUIRED =
-  process.env.AIDLC_REQUIRE_COMPILED_COVERAGE === "1";
 
 function readAudit(dir: string): string {
   const auditDir = seededAuditDir(dir);
@@ -737,16 +744,22 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(r.stdout.trim()).toBe("");
   });
 
-  test.skipIf(process.platform === "win32")(
+  test.skipIf(process.platform === "win32" && !COMPILED_BINARY)(
     "11a: compiled executable delegation runs core hooks through the engine route",
     () => {
       const dir = scratchProject(true);
-      const executable = join(dir, "aidlc-native-stub");
-      writeFileSync(
-        executable,
-        `#!/bin/sh\nexec bun ${JSON.stringify(join(dir, ".aidlc", "tools", "aidlc.ts"))} "$@"\n`,
-        { mode: 0o755 },
-      );
+      // Windows cannot execute the POSIX shebang stub. Use the same native
+      // dispatcher already required by the compiled lifecycle cases below.
+      const executable = process.platform === "win32"
+        ? COMPILED_BINARY!
+        : join(dir, "aidlc-native-stub");
+      if (process.platform !== "win32") {
+        writeFileSync(
+          executable,
+          `#!/bin/sh\nexec bun ${JSON.stringify(join(dir, ".aidlc", "tools", "aidlc.ts"))} "$@"\n`,
+          { mode: 0o755 },
+        );
+      }
 
       const r = runAdapter(
         dir,
@@ -755,7 +768,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         { AIDLC_COMPILED_EXECUTABLE: executable },
       );
 
-      expect(r.code).toBe(0);
+      expect(r.code, r.stderr).toBe(0);
       expect(
         existsSync(
           join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "validate-state.last"),
@@ -2287,7 +2300,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "guard-tool-call",
       commandPayload(dir, "contention-owner", "aidlc next", "contention-attempt"),
     );
-    expect(blocked.stdout).toContain('"permissionDecision":"deny"');
+    expect(blocked.code, blocked.stderr).toBe(0);
+    expect(blocked.stdout, blocked.stderr).toContain('"permissionDecision":"deny"');
     expect(blocked.stdout).toContain("Retry this exact command");
     expect(blocked.stdout).not.toContain("Run a fresh");
     expect(blocked.stdout).not.toContain("do not reuse");

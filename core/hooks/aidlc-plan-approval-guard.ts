@@ -513,6 +513,17 @@ function isWithinDir(path: string, dir: string): boolean {
   return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 }
 
+function sameDirectoryIdentity(left: string, right: string): boolean {
+  try {
+    const actual = lstatSync(left, { bigint: true });
+    const expected = lstatSync(right, { bigint: true });
+    return actual.isDirectory() && expected.isDirectory() &&
+      actual.ino !== 0n && actual.ino === expected.ino && actual.dev === expected.dev;
+  } catch {
+    return false;
+  }
+}
+
 function isTrustedRecordTarget(
   projectDir: string,
   target: string,
@@ -721,7 +732,7 @@ function isFrameworkToolInvocation(
   const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
   const unifiedEntryPoint = basename(absolute) === "aidlc.ts";
   if (
-    dirname(absolute) !== trustedToolsDir ||
+    relative(trustedToolsDir, dirname(absolute)) !== "" ||
     (!unifiedEntryPoint && !/^aidlc-[A-Za-z0-9._-]+\.ts$/.test(basename(absolute)))
   ) {
     return false;
@@ -748,6 +759,11 @@ function isFrameworkToolInvocation(
       projectReal,
       relative(projectLexical, absolute),
     );
+    // Windows realpath can preserve caller casing. For a case-only spelling
+    // difference, require the same directory identity as well: a distinct
+    // case-sensitive directory must not inherit the installed tool's authority.
+    if (dirname(absolute) !== trustedToolsDir &&
+      !sameDirectoryIdentity(dirname(absolute), trustedToolsDir)) return false;
     return lstatSync(absolute).isFile() && !lstatSync(absolute).isSymbolicLink();
   } catch {
     return false;
@@ -766,8 +782,28 @@ function shellInvocationNeedsApproval(
     executableResolutionChanged?: boolean;
   },
   hasConcreteTargets: boolean,
+  rawCommand: string,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
+  if (name === "cd") {
+    // The shared lexer is intentionally not a full Bash parser. Do not grant
+    // this exception where its whitespace/continuation decoding differs.
+    if (/[^\S \t\n]/u.test(rawCommand) || rawCommand.includes("\\\n")) return true;
+    // A literal, absolute return to the current directory changes no execution
+    // context. Keep every actual cwd change, wrapper and dynamic operand opaque.
+    const args = invocation.args[0] === "--" ? invocation.args.slice(1) : invocation.args;
+    const target = args[0];
+    const direct = (invocation.executable ?? invocation.name) === "cd" &&
+      (invocation.launchers?.length ?? 0) === 0 &&
+      !invocation.dataDriven && !invocation.executableResolutionChanged;
+    if (!direct || args.length !== 1 || !target || !isAbsolute(target) ||
+      ["*", "?", "[", "]", "{", "}"].some((part) => target.includes(part)) ||
+      target.split(/[\\/]+/).some((part) => part === "." || part === "..")) return true;
+    const current = resolve(cwd);
+    const destination = resolve(target);
+    return relative(current, destination) !== "" ||
+      !sameDirectoryIdentity(current, destination);
+  }
   if (name === "sort") {
     return invocation.args.some(
       (arg) => arg === "-o" || arg === "--output" || arg.startsWith("--output="),
@@ -986,7 +1022,7 @@ async function mutationIntent(
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
-        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0)
+        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0, command)
       );
     if (!dynamic && targets.length === 0) {
       swarmUnits = swarmCommandUnits(projectDir, cwd, command, invocations);

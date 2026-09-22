@@ -3177,6 +3177,32 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   });
 
+  test.each([
+    ["adapter", runIdeStdin],
+    ["dispatcher", runIdeDispatcherStdin],
+  ] as const)("N6c: %s retains real prompt session identities without a startup callback", (_name, invoke) => {
+    const dir = scratchProject(true);
+    const marker = join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session");
+    const prompt = (session: string | undefined) => JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      session_id: session,
+      prompt: "Continue the current work",
+    });
+    try {
+      expect(invoke(dir, "record-human-turn", prompt(undefined)).code).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      for (const session of ["sess_prompt_first", "sess_prompt_first", "sess_prompt_second"]) {
+        expect(invoke(dir, "record-human-turn", prompt(session)).code).toBe(0);
+        expect(readFileSync(marker, "utf8").trim()).toBe(session);
+      }
+      expect(invoke(dir, "record-human-turn", prompt(undefined)).code).toBe(0);
+      expect(readFileSync(marker, "utf8").trim()).toBe("sess_prompt_second");
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("N7: a 0.12 payload target consumes USER_PROMPT without probing held-open stdin", async () => {
     // The #543 0.12 shape: USER_PROMPT carries the payload while stdin is opened
     // and never closed. With the ceiling raised to 15s, probing stdin first

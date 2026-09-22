@@ -8,12 +8,33 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import {
+  acceptedRisks,
+  deriveDecision,
+  fileAnchor,
+  headContainsAnchor,
+  headFileSha256,
+  isBlocking,
+  ledgerVerdict,
+  lineAnchor,
+  loadLedgerComment,
+  positionAnchor,
+  quoteAnchor,
+  readContextLine,
+  readLedgerFile,
+  reconcileLedger,
+  type LedgerAnchor,
+  type LedgerFinding,
+  type LoadedLedger,
+  writeLedgerFile,
+} from "./ai-pr-ledger.ts";
 
 const MAX_CHANGED_FILES = 500;
 const MAX_REVIEW_BYTES = 100_000;
 const CURRENT_AI_REVIEWS_FILE = "current-ai-reviews.json";
 const DISCUSSION_FILE = "discussion.json";
 const AI_REVIEW_MARKER = "<!-- ai-pr-review context=";
+const AI_REVIEW_DECISION_MARKER = "<!-- ai-pr-review decision=";
 
 export type Priority = "P0" | "P1" | "P2" | "P3";
 export type FindingCategory =
@@ -25,6 +46,53 @@ export type FindingCategory =
   | "correctness";
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
 export type DiffSide = "LEFT" | "RIGHT";
+export type PullRequestDecision =
+  | { actor: "author"; action: "change"; rationale: string }
+  | { actor: "maintainer"; action: "merge"; rationale: string };
+export type ReviewLabelOutcome =
+  | "started"
+  | "reviewed-change"
+  | "reviewed-merge"
+  | "review-error";
+
+export interface ReviewLabelDefinition {
+  name: string;
+  color: string;
+  description: string;
+}
+
+export const REVIEW_LABELS: readonly ReviewLabelDefinition[] = [
+  {
+    name: "aida:reviewed",
+    color: "1F883D",
+    description: "AIDA successfully reviewed the latest PR state",
+  },
+  {
+    name: "aida:review-error",
+    color: "D1242F",
+    description: "AIDA could not produce a reliable review for the latest PR state",
+  },
+  {
+    name: "next:author",
+    color: "FBCA04",
+    description: "AIDA indicates the PR author needs to act next",
+  },
+  {
+    name: "next:maintainer",
+    color: "0969DA",
+    description: "AIDA indicates a maintainer needs to act next",
+  },
+  {
+    name: "action:change",
+    color: "D93F0B",
+    description: "AIDA indicates changes are required before the PR proceeds",
+  },
+  {
+    name: "action:merge",
+    color: "0E8A16",
+    description: "AIDA considers the PR ready for a maintainer merge decision",
+  },
+] as const;
 
 const FINDING_CATEGORIES: Array<{ value: FindingCategory; heading: string }> = [
   { value: "direction", heading: "Direction" },
@@ -116,6 +184,16 @@ export interface Finding {
   problem: string;
   impact: string;
   requiredCorrection: string;
+  ledgerId?: string;
+}
+
+export interface UserExperienceAssessment {
+  status: "changed" | "no-user-visible-change" | "uncertain";
+  change: string;
+  before: string | null;
+  after: string | null;
+  example: string | null;
+  assessment: string;
 }
 
 export interface StructuredReview {
@@ -136,8 +214,22 @@ export interface StructuredReview {
       rationale: string;
     };
   };
+  userExperience: UserExperienceAssessment;
+  decision: PullRequestDecision;
   findings: Finding[];
   residualRisk: string;
+  ledger?: ReviewLedgerSummary;
+}
+
+export interface ReviewLedgerSummary {
+  accepted: LedgerFinding[];
+  retained: LedgerFinding[];
+  suppressed: number;
+  reopened: number;
+  resolvedIds: string[];
+  open: number;
+  migrated: boolean;
+  decisionAdjusted: boolean;
 }
 
 export interface ReviewPayload {
@@ -174,6 +266,304 @@ function gh(args: string[], executable = "gh"): unknown {
     maxBuffer: Number.POSITIVE_INFINITY,
     stdio: ["ignore", "pipe", "pipe"],
   }));
+}
+
+function ghRaw(
+  args: string[],
+  executable = "gh",
+  input?: string,
+): string {
+  return execFileSync(executable, args, {
+    encoding: "utf8",
+    input,
+    maxBuffer: Number.POSITIVE_INFINITY,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+export function labelsForOutcome(outcome: ReviewLabelOutcome): string[] {
+  if (outcome === "started") return [];
+  if (outcome === "review-error") return ["aida:review-error"];
+  if (outcome === "reviewed-change") {
+    return ["aida:reviewed", "next:author", "action:change"];
+  }
+  return ["aida:reviewed", "next:maintainer", "action:merge"];
+}
+
+export function outcomeForLabels(labels: string[]): ReviewLabelOutcome {
+  const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
+  const actual = [...new Set(labels.filter(label => managed.has(label)))].sort();
+  for (const outcome of [
+    "review-error",
+    "reviewed-change",
+    "reviewed-merge",
+  ] as const) {
+    const expected = [...labelsForOutcome(outcome)].sort();
+    if (
+      actual.length === expected.length &&
+      actual.every((label, index) => label === expected[index])
+    ) {
+      return outcome;
+    }
+  }
+  return "started";
+}
+
+function pullLabels(pull: Record<string, unknown>): string[] {
+  return Array.isArray(pull.labels)
+    ? pull.labels.map((value, index) =>
+      text(record(value, `pull request labels[${index}]`).name)
+    )
+    : [];
+}
+
+function pullIsEligible(pull: Record<string, unknown>, expectedHead?: string): boolean {
+  const head = record(pull.head, "pull request head");
+  if (expectedHead !== undefined && head.sha !== expectedHead) return false;
+  return pull.state === "open" && pull.draft !== true;
+}
+
+function removeManagedLabels(
+  repository: string,
+  pullRequest: number,
+  labels: string[],
+  ghExecutable: string,
+): void {
+  const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
+  for (const label of labels) {
+    if (!managed.has(label)) continue;
+    ghRaw(
+      [
+        "api",
+        "--silent",
+        "--method",
+        "DELETE",
+        `repos/${repository}/issues/${pullRequest}/labels/${encodeURIComponent(label)}`,
+      ],
+      ghExecutable,
+    );
+  }
+}
+
+export function reconcileReviewLabels(
+  repository: string,
+  pullRequest: number,
+  outcome: ReviewLabelOutcome,
+  expectedHead?: string,
+  ghExecutable = "gh",
+): boolean {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("repository must use owner/name format");
+  }
+  if (!Number.isInteger(pullRequest) || pullRequest < 1) {
+    throw new Error("pull request number must be a positive integer");
+  }
+  if (expectedHead !== undefined) assertSha(expectedHead, "expected head");
+
+  const readPull = (): Record<string, unknown> =>
+    record(
+      JSON.parse(ghRaw(["api", `repos/${repository}/pulls/${pullRequest}`], ghExecutable)),
+      "pull request",
+    );
+  if (!pullIsEligible(readPull(), expectedHead)) return false;
+
+  for (const definition of REVIEW_LABELS) {
+    const endpoint = `repos/${repository}/labels/${encodeURIComponent(definition.name)}`;
+    try {
+      ghRaw(["api", "--silent", endpoint], ghExecutable);
+    } catch {
+      try {
+        ghRaw(
+          ["api", "--method", "POST", `repos/${repository}/labels`, "--input", "-"],
+          ghExecutable,
+          `${JSON.stringify(definition)}\n`,
+        );
+      } catch {
+        // Another PR review can create the shared repository label between our
+        // GET and POST. Confirm that it now exists before continuing.
+        ghRaw(["api", "--silent", endpoint], ghExecutable);
+      }
+    }
+  }
+
+  const pullBeforeMutation = readPull();
+  if (!pullIsEligible(pullBeforeMutation, expectedHead)) {
+    removeManagedLabels(repository, pullRequest, pullLabels(pullBeforeMutation), ghExecutable);
+    return false;
+  }
+  const labels = pullLabels(pullBeforeMutation);
+  const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
+  const desired = new Set(labelsForOutcome(outcome));
+  for (const label of labels) {
+    if (!managed.has(label) || desired.has(label)) continue;
+    ghRaw(
+      [
+        "api",
+        "--silent",
+        "--method",
+        "DELETE",
+        `repos/${repository}/issues/${pullRequest}/labels/${encodeURIComponent(label)}`,
+      ],
+      ghExecutable,
+    );
+  }
+  const missing = [...desired].filter(label => !labels.includes(label));
+  if (missing.length > 0) {
+    ghRaw(
+      [
+        "api",
+        "--silent",
+        "--method",
+        "POST",
+        `repos/${repository}/issues/${pullRequest}/labels`,
+        "--input",
+        "-",
+      ],
+      ghExecutable,
+      `${JSON.stringify({ labels: missing })}\n`,
+    );
+  }
+
+  const pullAfterMutation = readPull();
+  if (!pullIsEligible(pullAfterMutation, expectedHead)) {
+    removeManagedLabels(repository, pullRequest, pullLabels(pullAfterMutation), ghExecutable);
+    return false;
+  }
+  return true;
+}
+
+export type RefreshOutcome = "applied" | "moved" | "no-review";
+
+// Applies a verdict re-derived from the findings ledger to every surface a
+// command owns for the reviewed head: the managed labels and the bot's review
+// state. `change` needs an active CHANGES_REQUESTED review from the bot on the
+// head (a stale merge review cannot be dismissed, so a blocking one is posted
+// under the same context); `merge` dismisses the bot's blocking reviews. The
+// workflow check of the original run is not rewritten.
+export function refreshVerdict(
+  repository: string,
+  pullRequest: number,
+  head: string,
+  decision: "merge" | "change",
+  reason: string,
+  ghExecutable = "gh",
+): RefreshOutcome {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("repository must use owner/name format");
+  }
+  assertSha(head, "head");
+  const pull = record(
+    JSON.parse(ghRaw(["api", `repos/${repository}/pulls/${pullRequest}`], ghExecutable)),
+    "pull request",
+  );
+  if (!pullIsEligible(pull, head)) return "moved";
+  const reviewsForHead = (): Record<string, unknown>[] =>
+    paginatedRecords(`repos/${repository}/pulls/${pullRequest}/reviews`, ghExecutable).filter(
+      review =>
+        record(review.user ?? {}, "review user").login === "github-actions[bot]" &&
+        text(review.commit_id) === head &&
+        text(review.body).startsWith("<!-- ai-pr-review context="),
+    );
+  const desiredLabels = decision === "merge" ? "reviewed-merge" : "reviewed-change";
+
+  // Converge the review gate first, then the derived labels. Each attempt
+  // verifies both surfaces after mutation, so interruption or a concurrent
+  // writer can be repaired by the same idempotent operation.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const reviews = reviewsForHead();
+    if (reviews.length === 0) return "no-review";
+    const blocking = reviews.filter(review => text(review.state) === "CHANGES_REQUESTED");
+    if (decision === "merge") {
+      for (const review of blocking) {
+        ghRaw(
+          [
+            "api",
+            "--method",
+            "PUT",
+            `repos/${repository}/pulls/${pullRequest}/reviews/${integer(review.id, "review id")}/dismissals`,
+            "--input",
+            "-",
+          ],
+          ghExecutable,
+          `${JSON.stringify({ message: `The decision for this head was re-derived as maintainer/merge from the findings ledger (${reason}).` })}\n`,
+        );
+      }
+    } else if (blocking.length === 0) {
+      const contextMatch = /<!-- ai-pr-review context=([0-9a-f]{64}) -->/.exec(text(reviews[0].body));
+      if (!contextMatch) return "no-review";
+      const body = [
+        `<!-- ai-pr-review context=${contextMatch[1]} -->`,
+        "<!-- ai-pr-review decision=author/change -->",
+        `The decision for \`${head}\` was re-derived as **author/change** from the findings ledger (${reason}). The open blocking findings are listed in the ledger comment; the earlier review body stays as the assessment of this head.`,
+        "",
+        "Reviewed by AIDA (AI-DLC Developer Agent).",
+        "",
+        `[AI-PR-REVIEWED] ${head}`,
+      ].join("\n");
+      ghRaw(
+        ["api", "--method", "POST", `repos/${repository}/pulls/${pullRequest}/reviews`, "--input", "-"],
+        ghExecutable,
+        `${JSON.stringify({ commit_id: head, event: "REQUEST_CHANGES", body })}\n`,
+      );
+    }
+
+    const gateApplied = reviewsForHead().some(review => text(review.state) === "CHANGES_REQUESTED") ===
+      (decision === "change");
+    if (!gateApplied) continue;
+    if (!reconcileReviewLabels(repository, pullRequest, desiredLabels, head, ghExecutable)) {
+      return "moved";
+    }
+    const labelsApplied = currentReviewLabelOutcome(repository, pullRequest, head, ghExecutable) === desiredLabels;
+    const gateStillApplied = reviewsForHead().some(review => text(review.state) === "CHANGES_REQUESTED") ===
+      (decision === "change");
+    if (labelsApplied && gateStillApplied) return "applied";
+  }
+  throw new Error("review gate and labels did not converge after 3 attempts");
+}
+
+export function convergeLedgerVerdict(
+  repository: string,
+  pullRequest: number,
+  head: string,
+  reason: string,
+  ghExecutable = "gh",
+): RefreshOutcome {
+  assertSha(head, "head");
+  // The review and command workflows share one non-cancelling per-PR
+  // concurrency group. No ledger command can overtake this mutation, so one
+  // live read is the authority for the gate and label convergence below.
+  const loaded = loadLedgerComment(repository, pullRequest, ghExecutable);
+  const verdict = ledgerVerdict(loaded.ledger);
+  if (!verdict || verdict.head !== head) return "moved";
+  return refreshVerdict(
+    repository,
+    pullRequest,
+    head,
+    verdict.decision,
+    reason,
+    ghExecutable,
+  );
+}
+
+export function currentReviewLabelOutcome(
+  repository: string,
+  pullRequest: number,
+  expectedHead?: string,
+  ghExecutable = "gh",
+): ReviewLabelOutcome {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("repository must use owner/name format");
+  }
+  if (!Number.isInteger(pullRequest) || pullRequest < 1) {
+    throw new Error("pull request number must be a positive integer");
+  }
+  if (expectedHead !== undefined) assertSha(expectedHead, "expected head");
+  const pull = record(
+    JSON.parse(ghRaw(["api", `repos/${repository}/pulls/${pullRequest}`], ghExecutable)),
+    "pull request",
+  );
+  if (!pullIsEligible(pull, expectedHead)) return "started";
+  return outcomeForLabels(pullLabels(pull));
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -488,6 +878,11 @@ function requiredText(value: unknown, field: string, maxLength: number): string 
   return value.trim();
 }
 
+function nullableText(value: unknown, field: string, maxLength: number): string | null {
+  if (value === null) return null;
+  return requiredText(value, field, maxLength);
+}
+
 function isChangedLine(file: ChangedFile, evidence: DiffEvidence): boolean {
   const expectedPath = evidence.side === "RIGHT" ? file.path : (file.previousPath ?? file.path);
   if (evidence.path !== expectedPath) return false;
@@ -495,7 +890,61 @@ function isChangedLine(file: ChangedFile, evidence: DiffEvidence): boolean {
   return ranges.some(range => evidence.line >= range.start && evidence.line <= range.end);
 }
 
+export function decisionInvariantError(
+  findings: Finding[],
+  assessment: StructuredReview["assessment"],
+  decision: PullRequestDecision,
+  retainedBlocking = 0,
+): string | null {
+  const blocking = findings.some(
+    finding => finding.priority === "P0" || finding.priority === "P1",
+  );
+  if (decision.action === "merge" && blocking) {
+    return "decision maintainer/merge is invalid while P0 or P1 findings remain";
+  }
+  if (decision.action === "merge" && retainedBlocking > 0) {
+    return "decision maintainer/merge is invalid while retained open blocking findings remain";
+  }
+  if (decision.action === "change" && retainedBlocking > 0) return null;
+  if (
+    decision.action === "merge" &&
+    (assessment.readiness.score < 4 || assessment.risk.score > 2)
+  ) {
+    return "decision maintainer/merge requires readiness at least 4 and risk at most 2";
+  }
+  if (
+    decision.action === "change" &&
+    findings.length === 0 &&
+    assessment.readiness.score >= 4 &&
+    assessment.risk.score <= 2
+  ) {
+    return "decision author/change requires a finding, readiness below 4, or risk above 2";
+  }
+  return null;
+}
+
+export function enforceDecision(review: StructuredReview): StructuredReview {
+  const error = decisionInvariantError(
+    review.findings,
+    review.assessment,
+    review.decision,
+    review.ledger?.retained.length ?? 0,
+  );
+  if (error) throw new Error(error);
+  return review;
+}
+
 export function validateStructuredReview(
+  raw: string,
+  expectedBase: string,
+  expectedHead: string,
+  manifest: ChangedFileManifest,
+  metadata: ReviewMetadata,
+): StructuredReview {
+  return enforceDecision(parseStructuredReview(raw, expectedBase, expectedHead, manifest, metadata));
+}
+
+export function parseStructuredReview(
   raw: string,
   expectedBase: string,
   expectedHead: string,
@@ -584,6 +1033,42 @@ export function validateStructuredReview(
     readiness: assessmentDimension("readiness"),
     risk: assessmentDimension("risk"),
   };
+  const userExperienceCandidate = record(candidate.userExperience, "userExperience");
+  if (
+    userExperienceCandidate.status !== "changed" &&
+    userExperienceCandidate.status !== "no-user-visible-change" &&
+    userExperienceCandidate.status !== "uncertain"
+  ) {
+    throw new Error("userExperience.status is invalid");
+  }
+  const userExperience: UserExperienceAssessment = {
+    status: userExperienceCandidate.status,
+    change: requiredText(userExperienceCandidate.change, "userExperience.change", 1500),
+    before: nullableText(userExperienceCandidate.before, "userExperience.before", 1500),
+    after: nullableText(userExperienceCandidate.after, "userExperience.after", 1500),
+    example: nullableText(userExperienceCandidate.example, "userExperience.example", 2000),
+    assessment: requiredText(
+      userExperienceCandidate.assessment,
+      "userExperience.assessment",
+      1500,
+    ),
+  };
+  if (
+    userExperience.status === "changed" &&
+    (userExperience.before === null || userExperience.after === null)
+  ) {
+    throw new Error("changed user experience requires before and after descriptions");
+  }
+  if (
+    userExperience.status === "no-user-visible-change" &&
+    (userExperience.before !== null ||
+      userExperience.after !== null ||
+      userExperience.example !== null)
+  ) {
+    throw new Error(
+      "no-user-visible-change requires null before, after, and example fields",
+    );
+  }
   if (!Array.isArray(candidate.findings)) throw new Error("findings must be an array");
 
   let previousRank = -1;
@@ -654,10 +1139,21 @@ export function validateStructuredReview(
 
     const title = requiredText(finding.title, `findings[${index}].title`, 160);
     if (/[\r\n]/.test(title)) throw new Error(`findings[${index}].title must be one line`);
+    // The judge's explicit identification of an existing ledger entry (null or
+    // absent when the finding is new). Validated as a shape here; the ledger
+    // decides whether the id exists.
+    let ledgerId: string | undefined;
+    if (finding.ledgerId !== undefined && finding.ledgerId !== null) {
+      if (typeof finding.ledgerId !== "string" || !/^F[1-9][0-9]*$/.test(finding.ledgerId)) {
+        throw new Error(`findings[${index}].ledgerId must be a ledger id such as F3`);
+      }
+      ledgerId = finding.ledgerId;
+    }
     return {
       priority,
       category: category as FindingCategory,
       title,
+      ...(ledgerId ? { ledgerId } : {}),
       evidence,
       problem: requiredText(finding.problem, `findings[${index}].problem`, 3000),
       impact: requiredText(finding.impact, `findings[${index}].impact`, 1500),
@@ -669,6 +1165,20 @@ export function validateStructuredReview(
     };
   });
 
+  const decisionCandidate = record(candidate.decision, "decision");
+  const rationale = requiredText(decisionCandidate.rationale, "decision.rationale", 1000);
+  let decision: PullRequestDecision;
+  if (decisionCandidate.actor === "author" && decisionCandidate.action === "change") {
+    decision = { actor: "author", action: "change", rationale };
+  } else if (
+    decisionCandidate.actor === "maintainer" &&
+    decisionCandidate.action === "merge"
+  ) {
+    decision = { actor: "maintainer", action: "merge", rationale };
+  } else {
+    throw new Error("decision must be author/change or maintainer/merge");
+  }
+
   const residualRisk = requiredText(candidate.residualRisk, "residualRisk", 1000);
   return {
     base: expectedBase,
@@ -676,9 +1186,126 @@ export function validateStructuredReview(
     inspection,
     validation,
     assessment,
+    userExperience,
+    decision,
     findings,
     residualRisk,
   };
+}
+
+export function findingAnchors(
+  finding: Finding,
+  contextDir: string,
+  repoDir: string,
+): LedgerAnchor[] {
+  const anchors: LedgerAnchor[] = [];
+  for (const item of finding.evidence) {
+    if (item.source === "DIFF") {
+      const lineText = readContextLine(contextDir, repoDir, item.path, item.line, item.side);
+      anchors.push(
+        lineText === null
+          ? positionAnchor(item.path, item.line, item.side)
+          : lineAnchor(item.path, item.side, lineText),
+      );
+    } else if (item.source === "DIFF_FILE") {
+      anchors.push(fileAnchor(item.path, headFileSha256(contextDir, item.path) ?? "deleted"));
+    } else {
+      anchors.push(quoteAnchor(item.quote));
+    }
+  }
+  return anchors;
+}
+
+// Applies maintainer decisions recorded in the ledger to a parsed review.
+//
+// Decision rules are the SAME invariants the validator already enforces; only
+// their inputs change: rejected findings with unchanged evidence are removed,
+// accepted ones are set aside, and open blockers the judge omitted but whose
+// cited code is unchanged are RETAINED and keep the next action with the author.
+// A removed finding that was the sole reason for `author/change` leaves that
+// decision without a valid reason under the invariants, so the consistent
+// outcome is `maintainer/merge`, and the rationale says so.
+export function applyLedgerToReview(
+  review: StructuredReview,
+  loaded: LoadedLedger,
+  contextDir: string,
+  repoDir: string,
+  at = new Date().toISOString(),
+): { review: StructuredReview; ledger: LoadedLedger["ledger"] } {
+  const presence = (anchor: LedgerAnchor): boolean | null => headContainsAnchor(contextDir, anchor, repoDir);
+  const inputs = review.findings.map(finding => ({
+    ...(finding.ledgerId ? { ledgerId: finding.ledgerId } : {}),
+    priority: finding.priority,
+    category: finding.category,
+    title: finding.title,
+    anchors: findingAnchors(finding, contextDir, repoDir),
+    finding,
+  }));
+  const result = reconcileLedger(loaded, inputs, review.head, at, presence);
+  // The ledger's effective priority wins: a restatement never lowers an open
+  // finding's priority.
+  const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, ledgerId: entry.ledgerId }));
+  const retained = result.retained.filter(entry => isBlocking(entry.priority));
+  const accepted = acceptedRisks(result.ledger, presence);
+  const removed = result.restatedAccepted.length + result.suppressed.length;
+  let decision = review.decision;
+  let decisionAdjusted = false;
+  if (retained.length > 0 || removed > 0) {
+    // Same rule a later /aida command applies from persisted state (deriveDecision).
+    const openBlocking = retained.length + kept.filter(finding => isBlocking(finding.priority)).length;
+    const derived = deriveDecision(
+      review.decision.action,
+      openBlocking,
+      retained.length + kept.length,
+      review.assessment.readiness.score,
+      review.assessment.risk.score,
+    );
+    if (derived !== review.decision.action) {
+      decisionAdjusted = true;
+      decision =
+        derived === "change"
+          ? {
+              actor: "author",
+              action: "change",
+              rationale: `${review.decision.rationale} Re-derived from the ledger: ${retained.length} open blocking finding${
+                retained.length === 1 ? "" : "s"
+              } (${retained.map(entry => entry.id).join(", ")}) ${
+                retained.length === 1 ? "was" : "were"
+              } not restated this run and the cited code is unchanged, so the author still needs to act.`,
+            }
+          : {
+              actor: "maintainer",
+              action: "merge",
+              rationale: `${review.decision.rationale} Re-derived after applying ${removed} maintainer ledger decision${
+                removed === 1 ? "" : "s"
+              }: no blocking finding remains and the assessment permits a merge decision.`,
+            };
+    }
+  }
+  // Persist this head's verdict so a later /aida command re-derives the decision
+  // under the same invariants without rerunning models.
+  result.ledger.review = {
+    head: review.head,
+    readiness: review.assessment.readiness.score,
+    risk: review.assessment.risk.score,
+    decision: decision.action,
+  };
+  const adjusted: StructuredReview = {
+    ...review,
+    findings: kept,
+    decision,
+    ledger: {
+      accepted,
+      retained,
+      suppressed: result.suppressed.length,
+      reopened: result.reopenedIds.length,
+      resolvedIds: result.resolvedIds,
+      open: result.ledger.findings.filter(entry => entry.status === "open").length,
+      migrated: loaded.migrated,
+      decisionAdjusted,
+    },
+  };
+  return { review: enforceDecision(adjusted), ledger: result.ledger };
 }
 
 function escapeWorkflowCommand(value: string): string {
@@ -751,6 +1378,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
   }
   const lines = [
     `<!-- ai-pr-review context=${contextId} -->`,
+    `${AI_REVIEW_DECISION_MARKER}${review.decision.actor}/${review.decision.action} -->`,
     `Reviewed \`${review.head}\` against \`${review.base}\` and current repository behavior.`,
     "",
     `Inspection: ${review.inspection.changedFiles.length} changed ${
@@ -769,9 +1397,42 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       markdownText(review.assessment.risk.rationale)
     }`,
     "",
+    `Decision required: **${
+      review.decision.action === "change"
+        ? "Author — make changes before this PR proceeds."
+        : "Maintainer — decide whether to merge this PR."
+    }** ${markdownText(review.decision.rationale)}`,
+    "",
     "Validation performed:",
     ...review.validation.map(item => `- ${markdownText(item)}`),
   ];
+  const appendFinding = (finding: Finding): void => {
+    lines.push(
+      "",
+      `**${finding.priority}${finding.ledgerId ? ` [${finding.ledgerId}]` : ""}: ${markdownText(finding.title)}**`,
+      "",
+      `Evidence: ${finding.evidence
+        .map(item => {
+          if (item.source === "DIFF") {
+            return `<code>${codeText(item.path)}:${item.line}</code>${
+              item.side === "LEFT" ? " (deleted line)" : ""
+            }`;
+          }
+          if (item.source === "DIFF_FILE") {
+            return `<code>${codeText(item.path)}</code> (file-level change)`;
+          }
+          const label = item.source === "PR_TITLE" ? "PR title" : "PR body";
+          return `${label}: “${markdownText(item.quote)}”`;
+        })
+        .join(", ")}.`,
+      "",
+      `Problem: ${markdownText(finding.problem)}`,
+      "",
+      `Impact: ${markdownText(finding.impact)}`,
+      "",
+      `Required correction: ${markdownText(finding.requiredCorrection)}`,
+    );
+  };
   const blocking = review.findings.filter(
     finding => finding.priority === "P0" || finding.priority === "P1",
   ).length;
@@ -780,6 +1441,19 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     `Findings: ${blocking} blocking, ${advisory} advisory.`,
   );
+  if (review.ledger) {
+    const summary = review.ledger;
+    lines.push(
+      "",
+      `Ledger: ${summary.open} open, ${summary.retained.length} retained blocking, ${summary.accepted.length} accepted, ${summary.suppressed} suppressed as rejected by a maintainer${
+        summary.reopened > 0 ? `, ${summary.reopened} reopened on new evidence` : ""
+      }${summary.resolvedIds.length > 0 ? `, resolved ${summary.resolvedIds.join(", ")}` : ""}.${
+        summary.decisionAdjusted ? " The next decision was re-derived from the ledger." : ""
+      }${
+        summary.migrated ? " The ledger was migrated from schema v1; earlier decisions were reset." : ""
+      } Maintainers act on findings with \`/aida\` commands in the ledger comment.`,
+    );
+  }
   if (review.findings.length === 0) lines.push("", "No findings.");
   const populatedCategories = FINDING_CATEGORIES
     .map((category, categoryOrder) => ({
@@ -787,39 +1461,66 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       categoryOrder,
       findings: review.findings.filter(finding => finding.category === category.value),
     }))
-    .filter(category => category.findings.length > 0)
+    .filter(category =>
+      category.value === "user-experience" || category.findings.length > 0
+    )
     .sort((left, right) => {
-      const leftRank = Number(left.findings[0].priority.slice(1));
-      const rightRank = Number(right.findings[0].priority.slice(1));
+      const leftRank = left.findings.length > 0
+        ? Number(left.findings[0].priority.slice(1))
+        : 4;
+      const rightRank = right.findings.length > 0
+        ? Number(right.findings[0].priority.slice(1))
+        : 4;
       return leftRank - rightRank || left.categoryOrder - right.categoryOrder;
     });
   for (const category of populatedCategories) {
     lines.push("", `## ${category.heading}`);
-    for (const finding of category.findings) {
+    if (category.value === "user-experience") {
       lines.push(
         "",
-        `**${finding.priority}: ${markdownText(finding.title)}**`,
+        `**User experience change:** ${markdownText(review.userExperience.change)}`,
+      );
+      if (review.userExperience.before !== null) {
+        lines.push("", `**Before:** ${markdownText(review.userExperience.before)}`);
+      }
+      if (review.userExperience.after !== null) {
+        lines.push("", `**After:** ${markdownText(review.userExperience.after)}`);
+      }
+      if (review.userExperience.example !== null) {
+        lines.push("", `**Example:** ${markdownText(review.userExperience.example)}`);
+      }
+      lines.push("", `**Assessment:** ${markdownText(review.userExperience.assessment)}`);
+    }
+    for (const finding of category.findings) {
+      appendFinding(finding);
+    }
+  }
+  if (review.ledger && review.ledger.retained.length > 0) {
+    lines.push(
+      "",
+      "## Retained blocking findings",
+      "",
+      "Open P0/P1 findings from the ledger that this review did not restate and whose cited code is unchanged. They keep the next action with the author until the code changes or a maintainer accepts them.",
+    );
+    for (const entry of review.ledger.retained) {
+      const paths = [...new Set(entry.anchors.map(anchor => anchor.path).filter((path): path is string => Boolean(path)))];
+      lines.push(
         "",
-        `Evidence: ${finding.evidence
-          .map(item => {
-            if (item.source === "DIFF") {
-              return `<code>${codeText(item.path)}:${item.line}</code>${
-                item.side === "LEFT" ? " (deleted line)" : ""
-              }`;
-            }
-            if (item.source === "DIFF_FILE") {
-              return `<code>${codeText(item.path)}</code> (file-level change)`;
-            }
-            const label = item.source === "PR_TITLE" ? "PR title" : "PR body";
-            return `${label}: “${markdownText(item.quote)}”`;
-          })
-          .join(", ")}.`,
+        `**${entry.priority} [${entry.id}]: ${markdownText(entry.title)}** — first reported at \`${entry.firstSeen.head.slice(0, 8)}\`${
+          paths.length > 0 ? `; cited: ${paths.map(path => `<code>${codeText(path)}</code>`).join(", ")}` : ""
+        }.`,
+      );
+    }
+  }
+  if (review.ledger && review.ledger.accepted.length > 0) {
+    lines.push("", "## Accepted risks");
+    for (const entry of review.ledger.accepted) {
+      const decision = entry.decision;
+      lines.push(
         "",
-        `Problem: ${markdownText(finding.problem)}`,
-        "",
-        `Impact: ${markdownText(finding.impact)}`,
-        "",
-        `Required correction: ${markdownText(finding.requiredCorrection)}`,
+        `**${entry.priority} [${entry.id}]: ${markdownText(entry.title)}** — accepted by @${
+          markdownText(decision?.by ?? "unknown")
+        } on ${markdownText((decision?.at ?? "").slice(0, 10))}: ${markdownText(decision?.reason ?? "")}`,
       );
     }
   }
@@ -831,7 +1532,9 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     `[AI-PR-REVIEWED] ${review.head}`,
   );
-  const event = review.findings.some(item => item.priority === "P0" || item.priority === "P1")
+  const retainedBlocking = (review.ledger?.retained.length ?? 0) > 0;
+  const event = retainedBlocking ||
+      review.findings.some(item => item.priority === "P0" || item.priority === "P1")
     ? "REQUEST_CHANGES"
     : "COMMENT";
   return { commit_id: review.head, body: lines.join("\n"), event };
@@ -871,20 +1574,97 @@ function main(): void {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ChangedFileManifest;
     const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as ReviewMetadata;
     lastValidateInput = readFileSync(input, "utf8");
-    const review = validateStructuredReview(
-      lastValidateInput,
-      base,
-      head,
-      manifest,
-      metadata,
-    );
+    let review: StructuredReview;
+    if (args.includes("--ledger")) {
+      const ledgerFile = readLedgerFile(argValue(args, "--ledger"));
+      const loaded: LoadedLedger = {
+        ledger: ledgerFile.ledger,
+        commentId: null,
+        digest: ledgerFile.expectedDigest,
+        migrated: ledgerFile.migrated,
+      };
+      const applied = applyLedgerToReview(
+        parseStructuredReview(lastValidateInput, base, head, manifest, metadata),
+        loaded,
+        argValue(args, "--context-dir"),
+        args.includes("--repo-dir") ? argValue(args, "--repo-dir") : process.cwd(),
+      );
+      review = applied.review;
+      if (args.includes("--ledger-output")) {
+        // Transport fields ride along: the migration note and the live digest for
+        // the publish-time compare-and-swap.
+        writeLedgerFile(argValue(args, "--ledger-output"), applied.ledger, loaded.migrated, loaded.digest);
+      }
+    } else {
+      review = validateStructuredReview(lastValidateInput, base, head, manifest, metadata);
+    }
     const payload = renderReview(review, contextId);
     writeFileSync(output, `${JSON.stringify(payload, null, 2)}\n`);
+    if (args.includes("--decision-output")) {
+      writeFileSync(
+        argValue(args, "--decision-output"),
+        `${JSON.stringify(review.decision, null, 2)}\n`,
+      );
+    }
     process.stdout.write(`${payload.event}\n`);
     return;
   }
+  if (command === "labels") {
+    const expectedHead = args.includes("--expected-head")
+      ? argValue(args, "--expected-head")
+      : undefined;
+    const outcome = argValue(args, "--outcome");
+    if (
+      outcome !== "started" &&
+      outcome !== "reviewed-change" &&
+      outcome !== "reviewed-merge" &&
+      outcome !== "review-error"
+    ) {
+      throw new Error("label outcome is invalid");
+    }
+    const applied = reconcileReviewLabels(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--pr")),
+      outcome,
+      expectedHead,
+    );
+    process.stdout.write(applied ? "applied\n" : "stale\n");
+    return;
+  }
+  if (command === "refresh-verdict") {
+    const decision = argValue(args, "--decision");
+    if (decision !== "merge" && decision !== "change") throw new Error("decision must be merge or change");
+    process.stdout.write(`${refreshVerdict(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--pr")),
+      argValue(args, "--head"),
+      decision,
+      args.includes("--reason") ? argValue(args, "--reason") : "maintainer decision",
+    )}\n`);
+    return;
+  }
+  if (command === "converge-verdict") {
+    process.stdout.write(`${convergeLedgerVerdict(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--pr")),
+      argValue(args, "--head"),
+      args.includes("--reason") ? argValue(args, "--reason") : "maintainer decision",
+    )}\n`);
+    return;
+  }
+  if (command === "label-state") {
+    const expectedHead = args.includes("--expected-head")
+      ? argValue(args, "--expected-head")
+      : undefined;
+    process.stdout.write(`${currentReviewLabelOutcome(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--pr")),
+      expectedHead,
+    )}\n`);
+    return;
+  }
   throw new Error(
-    "usage: ai-pr-review.ts build-discussion|build-context|validate (run with --help in repository docs)",
+    "usage: ai-pr-review.ts build-discussion|build-context|validate|label-state|labels|refresh-verdict|converge-verdict (run with --help in repository docs)",
   );
 }
 

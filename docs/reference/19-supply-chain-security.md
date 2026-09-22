@@ -15,7 +15,11 @@ the release unless all of these conditions hold:
 - the event ref is the pushed tag;
 - the checked-out commit is the tag target;
 - the tag target is contained in `main`;
-- the tag equals `v` plus the version in `core/tools/aidlc-version.ts`.
+- the tag equals `v` plus the version in `core/tools/aidlc-version.ts`;
+- a successful `preview-release.yml` run for the exact tag SHA, or a successful
+  main-branch `workflow_dispatch` run of `full-suite.yml`, supplies a
+  `full-suite-result` artifact with that exact `.sha` and `.passed == true`
+  (declared exclusions are reported as warnings, not release blockers).
 
 Feature, fix, documentation, refactor, and test PRs do not update release
 metadata. The release-preparation PR summarizes the user-visible changes merged
@@ -127,17 +131,39 @@ gate.
    - `core/tools/aidlc-version.ts`;
    - the README version badge;
    - the matching `CHANGELOG.md` heading.
-2. Create and push the matching tag:
+2. Wait for (or dispatch) `preview-release.yml` on the intended release SHA while
+   it is `main`'s tip, and confirm the `full-suite-result` artifact records that
+   exact SHA with `.passed == true`.
+   If its evidence is missing or expired, dispatch `full-suite.yml` on `main`
+   with `ref=<sha>` to renew it without republishing an unchanged preview;
+   confirm the new artifact has the intended `.sha` and `.passed == true`.
 
-```bash
-git switch main
-git pull --ff-only
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
+   ```bash
+   gh workflow run full-suite.yml --ref main -f 'ref=<intended-release-sha>'
+   ```
 
-3. Monitor the `Release` workflow.
-4. Confirm that the GitHub Release contains the binaries, installers,
+3. Create and push the matching tag from that verified commit. The commit may
+   no longer be the tip of `main`, but it must still be contained in `main`.
+   Do not substitute a newer tip without obtaining fresh preview evidence:
+
+   ```bash
+   # Set this to the sha recorded in the passing full-suite-result artifact.
+   RELEASE_SHA='<preview-verified-commit-sha>'
+   RELEASE_VERSION='X.Y.Z'
+   git fetch --no-tags origin \
+     '+refs/heads/main:refs/remotes/origin/main' &&
+   git cat-file -e "${RELEASE_SHA}^{commit}" &&
+   git merge-base --is-ancestor "$RELEASE_SHA" origin/main &&
+   test "$(
+     git show "${RELEASE_SHA}:core/tools/aidlc-version.ts" |
+       awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }'
+   )" = "$RELEASE_VERSION" &&
+   git tag "v$RELEASE_VERSION" "$RELEASE_SHA" &&
+   git push origin "v$RELEASE_VERSION"
+   ```
+
+4. Monitor the `Release` workflow.
+5. Confirm that the GitHub Release contains the binaries, installers,
    `aidlc-copy-runtime-X.Y.Z.tar.gz`, its `.sha256` sidecar,
    `aidlc-runtime-X.Y.Z.tar.gz`, `version.json`, `checksums.txt`, and the
    provenance bundle.

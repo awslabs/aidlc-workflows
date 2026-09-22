@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
+import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
@@ -28,7 +29,7 @@ const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 const OPENCODE_MODEL =
   process.env.AIDLC_OPENCODE_MODEL ??
-  "amazon-bedrock/global.anthropic.claude-sonnet-4-6";
+  `amazon-bedrock/${CI_BEDROCK_MODELS.opencode}`;
 // "auto" is the one model every Cursor plan can use (Free rejects all named
 // models with rc 0). Override for repeatable named-model runs.
 const CURSOR_MODEL = process.env.AIDLC_CURSOR_MODEL ?? "auto";
@@ -56,6 +57,13 @@ export interface CodexProject {
   proj: string;
   home: string;
   root: string;
+}
+
+/** Select the native sandbox for fresh Windows homes without changing its permissions. */
+export function codexWindowsSandboxConfig(
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  return platform === "win32" ? ["", "[windows]", 'sandbox = "elevated"'] : [];
 }
 
 // A scratch install: dist/codex copied verbatim, git-initialized (project
@@ -92,22 +100,29 @@ export function setupCodexProject(): CodexProject {
   writeFileSync(
     join(home, "config.toml"),
     [
-      `model = "openai.gpt-5.5"`,
+      `model = ${JSON.stringify(CI_BEDROCK_MODELS.codex)}`,
       `model_provider = "amazon-bedrock"`,
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
       ``,
+      ...(process.env.AIDLC_BROKER_URL ? [
+        `[model_providers.amazon-bedrock]`,
+        `base_url = ${JSON.stringify(`${process.env.AIDLC_BROKER_URL}/openai/v1`)}`,
+        "",
+      ] : []),
       `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
+      `profile = ${JSON.stringify(AWS_PROFILE)}`,
+      `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
+      `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
-      `[projects."${proj}"]`,
+      `[projects.${JSON.stringify(proj)}]`,
       `trust_level = "trusted"`,
       ``,
       trust.stdout,
+      ...codexWindowsSandboxConfig(),
     ].join("\n"),
     "utf-8",
   );

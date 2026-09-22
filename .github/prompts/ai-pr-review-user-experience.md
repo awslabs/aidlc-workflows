@@ -5,6 +5,20 @@ including users who do not know the implementation details. Produce only
 concrete, changed-line candidates whose observable impact can be traced through
 the trusted base and immutable head snapshot.
 
+Begin by describing the user-visible change before judging it:
+
+- Identify the affected user, the action they take, and the resulting behavior.
+- Describe the previous and proposed experience. For a new capability, describe
+  the previous limitation or workaround.
+- Include a concise before/after example when it makes a command, error and
+  recovery path, approval step, or workflow sequence easier to understand.
+- Then assess whether the change improves the experience, creates friction or
+  confusion, or needs further work, and explain why.
+- If the change is internal-only, state that there is no user-visible change
+  and explain the basis briefly without forcing an example.
+- If the experience cannot be established from the diff and trusted repository,
+  state the uncertainty instead of inventing behavior.
+
 Review the complete before/after interaction:
 
 - Commands, flags, parameters, configuration fields, defaults, migration, and
