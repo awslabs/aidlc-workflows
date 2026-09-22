@@ -894,6 +894,18 @@ export function reconcileLedger<T extends ReviewFindingInput>(
       if (bound) {
         const known = anchorSet(bound.anchors);
         for (const anchor of finding.anchors) if (!known.has(anchor.sha256)) bound.anchors.push(anchor);
+        // A duplicate never lowers, but may raise, the entry: the highest
+        // priority reported for the defect wins, in the ledger and in the
+        // published restatement.
+        if (rank(finding.priority) < rank(bound.priority)) {
+          bound.priority = finding.priority;
+          bound.title = finding.title;
+          const published = result.kept.find(entry => entry.ledgerId === bound.id);
+          if (published) {
+            published.priority = finding.priority;
+            published.title = finding.title;
+          }
+        }
         continue;
       }
     }

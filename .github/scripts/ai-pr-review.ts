@@ -1224,6 +1224,13 @@ export function validateStructuredReview(
   return enforceDecision(parseStructuredReview(raw, expectedBase, expectedHead, manifest, metadata));
 }
 
+// The published rationale must agree with the published action. When a
+// derivation overrides the judge, its explanation leads and the judge's text is
+// kept only as an explicitly superseded note.
+function supersededRationale(explanation: string, judge: string): string {
+  return `${explanation} Judge's note, superseded by finding severity: ${judge}`;
+}
+
 export function parseStructuredReview(
   raw: string,
   expectedBase: string,
@@ -1456,6 +1463,9 @@ export function parseStructuredReview(
   // The publisher derives the next action from finding severity; the judge's
   // rationale is kept, its actor/action pair is not trusted to decide.
   const derivedAction = deriveDecision(findings.filter(finding => finding.priority === "P0" || finding.priority === "P1").length);
+  // When severity overrides the judge's pair, the judge's action-bearing text is
+  // superseded, not merely annotated, so the published rationale never argues
+  // against the published action.
   const decision: PullRequestDecision =
     derivedAction === "change"
       ? {
@@ -1463,7 +1473,7 @@ export function parseStructuredReview(
           action: "change",
           rationale:
             decisionCandidate.action === "merge"
-              ? `${rationale} A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above.`
+              ? supersededRationale("A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above.", rationale)
               : rationale,
         }
       : {
@@ -1471,7 +1481,7 @@ export function parseStructuredReview(
           action: "merge",
           rationale:
             decisionCandidate.action === "change"
-              ? `${rationale} No P0 or P1 finding survives, so the next action is the maintainer's merge decision; readiness and risk above inform it.`
+              ? supersededRationale("No P0 or P1 finding survives, so the next action is the maintainer's merge decision; readiness and risk above inform it.", rationale)
               : rationale,
         };
 
@@ -1656,7 +1666,9 @@ export function applyLedgerToReview(
   const result = reconcileLedger(loaded, inputs, review.head, at, presence, dispositions, changedFiles);
   // The ledger's effective priority wins: a restatement never lowers an open
   // finding's priority.
-  const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, ledgerId: entry.ledgerId }));
+  // The ledger's effective priority (and the title that came with it, when a
+  // duplicate raised the entry) wins over the restatement's own.
+  const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, title: entry.title, ledgerId: entry.ledgerId }));
   // Every retained entry is rendered; only blocking ones bear on the verdict.
   const retained = result.retained;
   const retainedBlocking = retained.filter(entry => isBlocking(entry.priority));
@@ -1687,15 +1699,19 @@ export function applyLedgerToReview(
       decision = {
         actor: "author",
         action: "change",
-        rationale: `${review.decision.rationale} Re-derived from the ledger: ${causes.length > 0 ? causes.join("; ") : "an open blocking finding remains"}, so the author still needs to act.`,
+        rationale: supersededRationale(
+          `Re-derived from the ledger: ${causes.length > 0 ? causes.join("; ") : "an open blocking finding remains"}, so the author still needs to act.`,
+          review.decision.rationale,
+        ),
       };
     } else {
       decision = {
         actor: "maintainer",
         action: "merge",
-        rationale: `${review.decision.rationale} Re-derived after applying ${removed} maintainer ledger decision${
-          removed === 1 ? "" : "s"
-        }: no blocking finding remains.`,
+        rationale: supersededRationale(
+          `Re-derived after applying ${removed} maintainer ledger decision${removed === 1 ? "" : "s"}: no blocking finding remains.`,
+          review.decision.rationale,
+        ),
       };
     }
   }

@@ -330,7 +330,7 @@ process.stdout.write(JSON.stringify(value));
     expect(validate(JSON.stringify(blockingMerge)).decision).toEqual({
       actor: "author",
       action: "change",
-      rationale: "Merge despite the blocker. A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above.",
+      rationale: "A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above. Judge's note, superseded by finding severity: Merge despite the blocker.",
     });
 
     // Low readiness or high risk never turns a clean or P2/P3-only review into author/change.
@@ -343,7 +343,7 @@ process.stdout.write(JSON.stringify(value));
     const derived = validate(JSON.stringify(advisoryOnly)).decision;
     expect(derived.action).toBe("merge");
     expect(derived.rationale).toBe(
-      "Please polish this. No P0 or P1 finding survives, so the next action is the maintainer's merge decision; readiness and risk above inform it.",
+      "No P0 or P1 finding survives, so the next action is the maintainer's merge decision; readiness and risk above inform it. Judge's note, superseded by finding severity: Please polish this.",
     );
 
     const wrongPair = review() as unknown as {
