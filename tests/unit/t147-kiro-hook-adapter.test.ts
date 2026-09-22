@@ -1267,6 +1267,107 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
+  test("native preload leaves non-roster helpers untouched, including mixed crews", () => {
+    const dir = scratchProject(false);
+    try {
+      const helper = "aidlc-custom-helper-agent";
+      writeFileSync(join(dir, ".kiro", "agents", `${helper}.json`), JSON.stringify({ resources: [] }));
+      const result = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "invoke_sub_agent",
+        tool_input: { name: helper, prompt: "Inspect the project." },
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+
+      writeFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "# Organization\n");
+      const crew = {
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [
+            { role: helper, prompt_template: "Inspect the project." },
+            { role: "aidlc-product-agent", prompt_template: "Inspect the project." },
+          ],
+        },
+      };
+      const allowed = runAdapter(dir, "deliver-stage-rules", crew);
+      expect(allowed.code, allowed.stderr).toBe(0);
+      expect(allowed.stdout).toBe("");
+      expect(allowed.stderr).toBe("");
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      writeFileSync(workerFile, JSON.stringify({ resources: [] }));
+      const blocked = runAdapter(dir, "deliver-stage-rules", crew);
+      expect(blocked.code, blocked.stderr).toBe(2);
+      expect(blocked.stderr).toContain(workerFile);
+      expect(blocked.stderr).not.toContain(`${helper}.json`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload leaves the installed composer exempt", () => {
+    const dir = scratchProject(false);
+    try {
+      writeFileSync(join(dir, ".kiro", "agents", "aidlc-composer-agent.json"), JSON.stringify({ resources: [] }));
+      const result = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "subagent_aidlc-composer-agent",
+        tool_input: { prompt: "Compose the requested workflow." },
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload gives plugin roster workers an actionable JSON repair", () => {
+    const dir = scratchProject(false);
+    try {
+      cpSync(join(REPO_ROOT, "core", "memory"), join(dir, "aidlc", "spaces", "default", "memory"), { recursive: true });
+      const agent = "test-pro-metrics-agent";
+      writeFileSync(join(dir, ".kiro", "agents", `${agent}.md`),
+        `---\nname: ${agent}\ndisplay_name: Test Pro Metrics Agent\nplugin: test-pro\n---\n\nInspect testing metrics.\n`);
+      const workerFile = join(dir, ".kiro", "agents", `${agent}.json`);
+      const config = { name: agent, prompt: `file://${agent}.md`, tools: ["fs_read"], resources: [] as string[] };
+      writeFileSync(workerFile, JSON.stringify(config));
+      const conductorFile = join(dir, ".kiro", "agents", "aidlc.json");
+      const conductor = JSON.parse(readFileSync(conductorFile, "utf-8"));
+      conductor.toolsSettings.subagent.trustedAgents.push(agent);
+      writeFileSync(conductorFile, JSON.stringify(conductor));
+      const prompt = "Run .kiro/aidlc-common/stages/inception/user-stories.md.";
+      const shared = runDispatchCore(dir, {
+        cwd: dir, tool_name: "Task", tool_input: { subagent_type: agent, prompt },
+      });
+      expect(shared.code, shared.stderr).toBe(0);
+      const delivered = JSON.parse(shared.stdout).hookSpecificOutput.updatedInput.prompt;
+      expect(delivered).toContain(readFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "utf-8"));
+
+      const payload = { cwd: dir, tool_name: "invoke_sub_agent", tool_input: { name: agent, prompt } };
+      const blocked = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(blocked.code, blocked.stderr).toBe(2);
+      expect(blocked.stdout).toBe("");
+      expect(blocked.stderr).toContain(workerFile);
+      expect(blocked.stderr).toContain("resources");
+      expect(blocked.stderr).toContain("plugin's agent JSON");
+      expect(blocked.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      expect(blocked.stderr).not.toContain("/aidlc space switch");
+      expect(blocked.stderr).not.toContain("/aidlc --doctor");
+
+      config.resources.push("file://aidlc/spaces/default/memory/**/*.md");
+      writeFileSync(workerFile, JSON.stringify(config));
+      const repaired = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(repaired.code, repaired.stderr).toBe(0);
+      expect(repaired.stdout).toBe("");
+      expect(repaired.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("5d: every Kiro worker registers an identity-scoped lifecycle guard", () => {
     const agentDir = join(KIRO_TREE, "agents");
     const workerFiles = require("node:fs")

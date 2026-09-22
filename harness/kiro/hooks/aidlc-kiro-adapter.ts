@@ -46,6 +46,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   activeSpace,
+  agentsDir,
   classifyTerminalCommand,
   decodeHarnessPlainText,
   hasOpenGate,
@@ -174,26 +175,33 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
 }
 
 function nativePreloadError(projectDir: string, agents: string[]): string | null {
+  // Match the shared delivery hook's installed Markdown roster, including
+  // plugin personas, and its composer exemption. JSON-only helpers are outside
+  // that contract even when their names use the aidlc- prefix.
+  const rosterDir = agentsDir();
+  const workers = agents.filter((agent) =>
+    /^[a-z0-9][a-z0-9-]*-agent$/.test(agent) &&
+    agent !== "aidlc-composer-agent" &&
+    existsSync(join(rosterDir, `${agent}.md`))
+  );
+  if (workers.length === 0) return null;
   // Use the same active-space cursor as repointHarnessIncludes. Validate the
   // persisted result rather than repointing here: Kiro may already have read
   // the config, and a skipped or failed repoint must not silently admit work.
   const space = activeSpace(projectDir);
   const pattern = `aidlc/spaces/${space}/memory/**/*.md`;
   const expected = `file://${pattern}`;
-  const workerFile = (agent: string) => join(projectDir, ".kiro", "agents", `${agent}.json`);
-  const failure = (file: string, reason: string) =>
-    `[aidlc] Worker dispatch blocked: ${file}: ${reason}. ` +
+  const failure = (agent: string, reason: string) =>
+    `[aidlc] Worker dispatch blocked: ${join(projectDir, ".kiro", "agents", `${agent}.json`)}: ${reason}. ` +
     `Expected resources to include ${expected}, resolving to at least one existing Markdown file. ` +
-    `Repair the worker JSON and memory files, then rerun /aidlc space switch ${space} ` +
-    `to repoint the resources and /aidlc --doctor before retrying.\n`;
-  if (agents.length === 0) {
-    return failure(workerFile("<name>"), "the dispatch does not identify a worker");
-  }
-  for (const agent of new Set(agents)) {
-    const file = workerFile(agent);
-    if (!/^[a-zA-Z0-9_-]+$/.test(agent)) {
-      return failure(file, "the worker name is not a project-local agent filename");
-    }
+    // Plugin authoring reserves aidlc- for core; other roster namespaces have
+    // hand-authored native JSON that space switch and doctor cannot repair.
+    (agent.startsWith("aidlc-")
+      ? `Add or restore ${expected} in the worker JSON's resources array and repair the memory files, ` +
+        `then rerun /aidlc space switch ${space} to repoint the resources and /aidlc --doctor before retrying.\n`
+      : `Add ${expected} to the resources array in the plugin's agent JSON and repair the active-space memory files before retrying.\n`);
+  for (const agent of new Set(workers)) {
+    const file = join(projectDir, ".kiro", "agents", `${agent}.json`);
     try {
       const config: unknown = JSON.parse(readFileSync(file, "utf-8"));
       if (
@@ -201,10 +209,10 @@ function nativePreloadError(projectDir: string, agents: string[]): string | null
         !("resources" in config) || !Array.isArray(config.resources) ||
         !config.resources.includes(expected)
       ) {
-        return failure(file, "the active-space memory preload is absent or stale (the repoint may have been skipped)");
+        return failure(agent, "the active-space memory preload is absent or stale");
       }
     } catch (error) {
-      return failure(file, `cannot read or parse the worker config: ${String(error).replace(/[\r\n]+/g, " ")}`);
+      return failure(agent, `cannot read or parse the worker config: ${String(error).replace(/[\r\n]+/g, " ")}`);
     }
   }
   try {
@@ -213,9 +221,9 @@ function nativePreloadError(projectDir: string, agents: string[]): string | null
       onlyFiles: true,
       followSymlinks: false,
     })) return null;
-    return failure(workerFile(agents[0]), "the active-space memory glob resolves to no Markdown files");
+    return failure(workers[0], "the active-space memory glob resolves to no Markdown files");
   } catch (error) {
-    return failure(workerFile(agents[0]), `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`);
+    return failure(workers[0], `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`);
   }
 }
 
@@ -877,8 +885,8 @@ if (target === "review-freeze") {
 // conductor cannot reliably reproduce a multi-KB bundle byte-exactly, so
 // every retry re-blocks (observed on the ACP gate - zero dispatches
 // converged). Kiro's delegated agents instead preload the full active memory
-// tree via their `resources` glob. Check every selected worker's persisted
-// preload before running the shared augmenter as an OBSERVER: complete and
+// tree via their `resources` glob. Check selected rule-delivery roster workers'
+// persisted preload before running the shared augmenter as an OBSERVER: complete and
 // preload-served incomplete briefs pass silently; the latter logs only through
 // opt-in hookDebug. Failed preloads and core exit 2 block with repair guidance;
 // exit 3 is advisory only after preload validation succeeds.
