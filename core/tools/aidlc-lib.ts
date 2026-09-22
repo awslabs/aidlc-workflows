@@ -4079,6 +4079,39 @@ export function clearGuardSwitchRequest(projectDir: string, session: string): vo
   }
 }
 
+export function recordSessionPresenceBypass(projectDir: string, session: string): void {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) throw new Error("Session presence bypass requires a nonblank session");
+  const dir = ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(join(dir, `presence-bypass-${segment}`), `${isoTimestamp()}\n`);
+}
+
+export function sessionPresenceBypassRecorded(projectDir: string, session: string): boolean {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) return false;
+  try {
+    const timestamp = readAtomicReplacedFileNoFollowOrThrow(
+      join(planApprovalRuntimeDir(projectDir), `presence-bypass-${segment}`),
+      "Session presence bypass",
+    ).toString("utf-8").trim();
+    return Number.isFinite(Date.parse(timestamp));
+  } catch {
+    return false;
+  }
+}
+
+// The presence bypass is fixture or harness-launch state, never a value a
+// workflow command may set for itself. A resolved session honors it only when
+// the session-start hook recorded it from its own environment; an unresolved
+// session honors it only when no harness session has been recorded in this
+// project at all.
+export function fenceKeyBypassed(projectDir: string, sessionId: string | null): boolean {
+  return humanPresenceGuardDisabled() &&
+    (sessionId !== null
+      ? sessionPresenceBypassRecorded(projectDir, sessionId)
+      : readCurrentSessionId(projectDir) === null);
+}
+
 // Every receipt on disk, newest-irrelevant (callers filter). Reading the dir is
 // how the store is enumerated; there is no index.
 function readPlanApprovalReceipts(

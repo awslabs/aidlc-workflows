@@ -94,6 +94,7 @@ import {
   type GuardSwitch,
   clearGuardSwitchRequest,
   entrySkillInvocation,
+  fenceKeyBypassed,
   guardSwitchAuthority,
   guardSwitchRefusal,
   guardFenceConfigKey,
@@ -152,7 +153,6 @@ import {
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   hooksHealthDir,
-  humanPresenceGuardDisabled,
   isAutonomousMode,
   isPlainObject,
   isTeamUnitOwnership,
@@ -6598,10 +6598,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   let spentSwitchSession: string | null = null;
   if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
-    // An unattended driver never lowers fences. The presence bypass is for
-    // attended fixtures only.
+    // An unattended driver never lowers fences, including a recorded presence bypass.
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
-    if (!humanPresenceGuardDisabled()) {
+    if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) {
       if (initialSelection.sessionId === null) {
         die(guardSwitchRefusal(wanted, "intent-create", { sessionMissing: true }));
       }
@@ -9041,13 +9040,12 @@ function applyIntentSettings(
   if (ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off")) {
     lowering.push({ key: "guard-policy", value: changeControl });
   }
-  // An unattended driver never lowers fences. The presence bypass is for
-  // attended fixtures only.
+  // An unattended driver never lowers fences, including a recorded presence bypass.
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
     die(guardSwitchRefusal(lowering[0], "config"));
   }
   let spentSwitchSession: string | null = null;
-  if (lowering.length > 0 && !humanPresenceGuardDisabled()) {
+  if (lowering.length > 0 && !fenceKeyBypassed(projectDir, sessionId)) {
     if (sessionId === null) die(guardSwitchRefusal(lowering[0], "config", { sessionMissing: true }));
     for (const wanted of lowering) {
       const authority = guardSwitchAuthority(projectDir, wanted, sessionId, target);

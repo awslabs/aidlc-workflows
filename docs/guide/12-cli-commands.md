@@ -1126,6 +1126,13 @@ Setting `guard-policy relaxed` or `guard-policy off` from chat requires the
 person's exact typed switch, such as `/aidlc --guard-policy relaxed` or the
 confirmation words `guard policy relaxed` (use `off` for that value). The
 human-turn hook records the key and value for this session, space, and intent.
+The Guard Policy notices invite these confirmation words; on a message that is
+exactly `guard policy strict|relaxed|off`, the conductor runs
+`config-change --guard-policy <strict|relaxed|off>` with that value at once,
+prints its output verbatim, and stops.
+If the harness has said this Kiro IDE build delivers no prompt text, make the
+notice's choice through the scope-file `guard_policy` or memory route instead
+of the words.
 In either the config or flags-first form, `--intent <name>` and `--space <name>`
 select the target; omitted selectors use the session's workflow selection.
 The target is the intent UUID, or `bare-space` when no intent is selected;
@@ -1142,8 +1149,11 @@ supply the session. Kiro IDE does so on non-empty-prompt turns by running the
 lowering setter inside its hook with the chat's own session.
 An unrelated reply after an engine directive authorizes nothing, and
 `AIDLC_UNATTENDED=1` refuses lowering even if a typed request exists. Scope
-defaults are not gated. The machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`
-bypasses the typed-request check, but does not permit unattended lowering.
+defaults are not gated. For an attended run, `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`
+bypasses the fence key only as harness-launch state recorded by the session-start
+hook in `presence-bypass-<session>` in the Plan Approval runtime directory, or in
+a project with no harness session at all; setting it inline on a workflow command
+in a real session changes nothing.
 Memory-held strict refuses first and overrides both the policy word and any
 fence lowered earlier, which `/aidlc --status` shows as
 `on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch
@@ -1281,8 +1291,12 @@ including Windows; on non-empty-prompt turns Kiro IDE runs the lowering setter
 inside its hook with the chat's own session.
 A typed request is consumed once after a successful write or an already-set
 no-op. A later typed switch replaces it; unrelated prompts retain it.
-`AIDLC_UNATTENDED=1` refuses lowering even with a recorded request; the
-machine-wide human-presence bypass skips the key only for an attended run.
+`AIDLC_UNATTENDED=1` refuses lowering even with a recorded request.
+For an attended run, `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` bypasses the fence key only
+as harness-launch state recorded by the session-start hook in
+`presence-bypass-<session>` in the Plan Approval runtime directory, or in a project
+with no harness session at all; setting it inline on a workflow command in a real
+session changes nothing.
 Memory-held strict refuses first and overrides a fence lowered earlier, which
 `/aidlc --status` shows as `on (guard policy strict (from <layer>.md))` unless a
 machine-wide kill switch takes precedence. Its persisted `Guards Off` entry

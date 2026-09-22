@@ -579,9 +579,12 @@ setter, including an already-set no-op, consumes it once. A `lower-fence` remedy
 is `human-input`, with no `operation` or `command`: selecting it only tells the
 person to type the exact setter command and authorizes or executes nothing.
 An unrelated human turn opens nothing, and `AIDLC_UNATTENDED=1` never accepts
-lowering even with a request on disk. Scope defaults do not need this key;
-`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` bypasses it for an attended run only after
-memory-strict and unattended refusal checks.
+lowering even with a request on disk. Scope defaults do not need this key.
+After memory-strict and unattended refusal checks,
+`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` bypasses the fence key only as harness-launch
+state recorded by the session-start hook in `presence-bypass-<session>` in the
+Plan Approval runtime directory, or in a project with no harness session at all;
+setting it inline on a workflow command in a real session changes nothing.
 
 The retired spellings resolve for one release and are never written: the scope
 key `change_control`, the state field `Change Control` (`setGuardPolicyLine`

@@ -458,26 +458,21 @@ function prepareEmission(directive: Directive): PreparedEmission {
   const route =
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
   const publication = publicationContexts.get(directive);
-  // A route check asks one question: which Unit would the engine route now? It
-  // never loads rules, so it skips transport entirely - which also keeps it from
-  // minting the machine-local steering key on a checkout that has none.
   const askState =
     directive.kind === "ask" && engineProjectDir
       ? loadStateFileIfPresent(engineProjectDir)
       : null;
-  let transported =
-    directive.kind === "run-stage" && route && !isRouteCheckProbe()
-      ? transportRunStage(directive, route)
-      : directive;
+  // Enrich before transport so the inline decision measures the emitted body.
+  // Capture the route and publication first: withChangeNotices can copy it.
   if (activeRetiredGuardPolicyNotice !== null) {
-    transported = withChangeNotices(transported, [
+    directive = withChangeNotices(directive, [
       activeRetiredGuardPolicyNotice,
-      ...(transported.change_notices ?? []),
+      ...(directive.change_notices ?? []),
     ]);
   }
   if (activeStageValidityAdvisory) {
-    transported = {
-      ...transported,
+    directive = {
+      ...directive,
       stage_validity: activeStageValidityAdvisory,
     } as Directive;
   }
@@ -493,10 +488,25 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // says). So a building beat gets ONE short line naming the two things that are
   // real to the user: the stage and the unit. The settle beat stays silent
   // because the gate ritual immediately owns that turn.
-  if (transported.kind === "run-stage" && transported.unit !== undefined) {
-    const line = narratePerUnitBeat(transported);
-    if (line === null) delete transported.narration;
-    else transported.narration = line;
+  if (directive.kind === "run-stage" && directive.unit !== undefined) {
+    const line = narratePerUnitBeat(directive);
+    if (line === null) delete directive.narration;
+    else directive.narration = line;
+  }
+  // A route check asks one question: which Unit would the engine route now? It
+  // never loads rules, so it skips transport entirely - which also keeps it from
+  // minting the machine-local steering key on a checkout that has none.
+  let transported =
+    directive.kind === "run-stage" && route && !isRouteCheckProbe()
+      ? transportRunStage(directive, route)
+      : directive;
+  if (transported !== directive) {
+    // Transport replaces the run-stage with a part or an error. Preserve its
+    // notices and advisory without copying the run-stage's narration.
+    transported = withChangeNotices(transported, directive.change_notices ?? []);
+    if (activeStageValidityAdvisory) {
+      transported.stage_validity = activeStageValidityAdvisory;
+    }
   }
   const result = validateDirective(transported);
   if (!result.valid) {
@@ -4075,8 +4085,8 @@ function steeringNextCommand(receipt: string): string {
 // A run-stage directive carries its own rules whenever they fit beside it under
 // the transport cap. Every shipped stage does (18-20 KB of 28 KiB measured), so
 // this is the ordinary shape; chunked load-steering is the fallback for a bundle
-// a team's memory files pushed past the cap. The margin leaves room for the
-// narration line and validation the emission path adds afterwards.
+// a team's memory files pushed past the cap. The enriched directive already
+// includes notices, advisory and narration; the margin reserves validation room.
 const INLINE_RULES_MARGIN_BYTES = 1024;
 
 function attachRulesIfTheyFit(

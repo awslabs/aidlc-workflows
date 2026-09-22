@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1126,
+    "total": 1129,
     "enumeratedByClass": {
-      "function": 803,
+      "function": 806,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 468,
+      "function": 471,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -3209,6 +3209,18 @@
         },
         {
           "file": "tests/unit/t80.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:fenceKeyBypassed",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6570,6 +6582,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recordSessionPresenceBypass",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordTypedGuardSwitchRequest",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7784,6 +7808,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sessionPresenceBypassRecorded",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9990,6 +10026,10 @@
         },
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         }
       ],

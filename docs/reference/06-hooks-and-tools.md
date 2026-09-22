@@ -168,6 +168,7 @@ through the running Bun executable in the project directory, using `hookChildEnv
 with the same chat session forwarded to the core human-turn hook. The setter
 still requires that chat's matching typed request; `aidlc-orchestrate.ts next`
 only prints a dispatch and is not run as a lowering setter.
+Environment-prefixed invocations, including `NAME=value` assignments and `env NAME=value`, are recognized by both shell recognizers, but the assignments are not applied to in-hook execution.
 
 The adapter refuses the model's shell call with exit 2 and relays both output
 streams plus the setter's exit code on stderr. The per-turn `latch.json` retains
@@ -303,9 +304,12 @@ Every explicit `guard.<fence> off` or `guard-policy relaxed|off` in
 `intent create --guard-policy relaxed|off`, requires `guardSwitchAuthority`.
 Memory-held strict refuses first, naming the file, and also forces earlier
 `Guards Off` entries back on while preserving them for when the memory line no
-longer holds strict. Scope defaults are not gated. The key is bypassed by
-`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` for an attended run; `AIDLC_UNATTENDED=1`
-never accepts lowering, even when a request is on disk.
+longer holds strict. Scope defaults are not gated. For an attended run,
+`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` bypasses the fence key only as harness-launch
+state recorded by the session-start hook in `presence-bypass-<session>` in the
+Plan Approval runtime directory, or in a project with no harness session at all;
+setting it inline on a workflow command in a real session changes nothing.
+`AIDLC_UNATTENDED=1` never accepts lowering, even when a request is on disk.
 
 The only authority is the exact key/value in the typed request bound to the
 invoking session, target space, and target intent UUID (or `bare-space`). A
@@ -409,7 +413,7 @@ Conversational authority is therefore consumed by the evidence trail alone: no
 row of the table reads it, and every `GUARD_STOOD_ASIDE` row still carries the
 `Authority`, `Grant`, and `Actor` in force, so a reader can see who was working
 when a lowered fence let something through. That classification does not replace
-the setter's exact-selection check. Only a fence's supported per-work switch,
+the setter's exact typed-request check. Only a fence's supported per-work switch,
 policy word, or environment kill switch changes its effective setting.
 
 `decideFence(projectDir, fence, options)` is the whole ladder in one call:
@@ -1053,6 +1057,10 @@ These three hooks fire regardless of whether the `/aidlc` skill is active.
 **Purpose:** Inject workflow context as `additionalContext` JSON on session resume
 
 When Claude Code starts a session (or resumes after compaction), this hook checks for an active workflow and injects key state fields into the conversation.
+On every fire, before any workflow guard, it records the current session and pid
+ancestry and, if `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` is set in its launch
+environment, writes `presence-bypass-<session>` in the Plan Approval runtime
+directory.
 
 **Processing steps:**
 

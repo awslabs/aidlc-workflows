@@ -6,6 +6,8 @@
 // function:noteGuardPolicyRename, function:fencesLoweredByPolicy,
 // function:resolveFences, function:formatFence, function:parseGuardsOffLine,
 // function:formatGuardsOffLine, function:setGuardsOffLine,
+// function:recordSessionPresenceBypass, function:sessionPresenceBypassRecorded,
+// function:fenceKeyBypassed,
 // function:resolveChangeControl, function:memoryChangeControlDeclarations,
 // function:parseChangeControlStateLine, function:parseChangeControl,
 // function:formatChangeControl, function:scopeChangeControlDefault,
@@ -16,7 +18,7 @@
 // subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:scope-change,
 // subcommand:aidlc-orchestrate:next, audit:GUARD_POLICY_SET, audit:CHANGE_CONTROL_SET,
 // audit:GUARD_DISABLED, audit:GUARD_RESTORED
-// hook:aidlc-plan-approval-guard, audit:GUARD_STOOD_ASIDE
+// hook:aidlc-plan-approval-guard, hook:aidlc-session-start, audit:GUARD_STOOD_ASIDE
 //
 // t333 - Guard Policy (the setting formerly called Change Control) is one
 // setting with three values: strict, relaxed, and off. The resolved value is
@@ -74,6 +76,7 @@ import {
   readAuditShardEvents,
   resolveChangeControl,
   readGuardSwitchRequest,
+  recordSessionPresenceBypass,
   resolveFences,
   resolveGuardPolicy,
   scopeChangeControlDefault,
@@ -84,6 +87,7 @@ import {
   stateDigest,
   structuredField,
   writeActiveDirectiveMarker,
+  writeCurrentSessionId,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -1819,6 +1823,106 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     return readAuditShardEvents(proj, intent, space).filter((row) => row.event !== "ERROR_LOGGED");
   }
 
+  describe.each([
+    { context: "a resolved session", session: FENCE_SESSION },
+    { context: "an unresolved session after harness startup", session: undefined },
+  ])("a command-local presence bypass in $context", ({ session }) => {
+    test.each<{ operation: string; args: string[]; refusal: string }>([
+      {
+        operation: "the fence setter",
+        args: ["config-change", "--guard.plan-approval", "off"],
+        refusal: fenceRefusal,
+      },
+      {
+        operation: "the policy setter",
+        args: ["config-change", "--guard-policy", "off"],
+        refusal: policyRefusal.replaceAll("relaxed", "off"),
+      },
+      {
+        operation: "intent creation",
+        args: [
+          "intent-create", "--scope", "enterprise", "--arguments", "untrusted lowering",
+          "--label", "untrusted", "--guard-policy", "relaxed",
+        ],
+        refusal: createRefusal,
+      },
+    ])("does not authorize $operation or mutate workflow facts", ({ args, refusal }) => {
+      const { proj, state } = project("enterprise");
+      if (session === undefined) writeCurrentSessionId(proj, "harness-session");
+      const before = readFileSync(state, "utf-8");
+      const ledger = mutationRows(proj);
+      const intents = join(proj, "aidlc", "spaces", "default", "intents");
+      const registry = readFileSync(join(intents, "intents.json"), "utf-8");
+      const active = readFileSync(join(intents, "active-intent"), "utf-8");
+      const records = readdirSync(intents).sort();
+      const refused = run(UTILITY, args, proj, {
+        ...FENCE_ENV_CLEAR,
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+        AIDLC_SESSION_OVERRIDE: session,
+        AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+      });
+      expect(refused.status).toBe(1);
+      expect(JSON.parse(refused.stderr)).toEqual({
+        error: refusal + (session === undefined
+          ? " This command ran with no resolvable session, so no typed request can be matched to it."
+          : ""),
+      });
+      expect(readFileSync(state, "utf-8")).toBe(before);
+      expect(mutationRows(proj)).toEqual(ledger);
+      expect(readFileSync(join(intents, "intents.json"), "utf-8")).toBe(registry);
+      expect(readFileSync(join(intents, "active-intent"), "utf-8")).toBe(active);
+      expect(readdirSync(intents).sort()).toEqual(records);
+    });
+  });
+
+  test.each([
+    { origin: "sessionless fixture", session: undefined },
+    { origin: "harness-launch", session: FENCE_SESSION },
+  ])("the $origin presence bypass authorizes lowering without a typed request", ({ session }) => {
+    const { proj, state } = project("enterprise");
+    const env = {
+      ...FENCE_ENV_CLEAR,
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      AIDLC_SESSION_OVERRIDE: session,
+      AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+    };
+    if (session !== undefined) {
+      const started = Bun.spawnSync({
+        cmd: [BUN, join(AIDLC_SRC, "hooks", "aidlc-session-start.ts")],
+        cwd: proj,
+        env: { ...process.env, ...env, CLAUDE_PROJECT_DIR: proj },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "SessionStart", source: "startup", cwd: proj, session_id: session,
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(started.exitCode, started.stderr.toString()).toBe(0);
+    }
+    const fence = run(UTILITY, ["config-change", "--guard.plan-approval", "off"], proj, env);
+    expect(fence.status, fence.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("plan-approval (set by you)");
+    expect(rowsOf(proj, "GUARD_DISABLED").map((row) => auditBlockField(row.block, "Guard"))).toEqual(["plan-approval"]);
+
+    const policy = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, env);
+    expect(policy.status, policy.stderr).toBe(0);
+    const lowered = readFileSync(state, "utf-8");
+    expect(getField(lowered, GUARD_POLICY_FIELD)).toBe("off (set by you)");
+    expect(guardPolicyRows(proj).map((row) => auditBlockField(row.block, "New Value"))).toEqual(["off"]);
+
+    const created = run(UTILITY, [
+      "intent-create", "--scope", "enterprise", "--arguments", "trusted lowering",
+      "--label", "trusted", "--guard-policy", "relaxed",
+    ], proj, env);
+    expect(created.status, created.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const active = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const createdState = join(intents, active, "aidlc-state.md");
+    expect(createdState).not.toBe(state);
+    expect(getField(readFileSync(createdState, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
+    expect(readFileSync(state, "utf-8")).toBe(lowered);
+  });
+
   test("a fresh human turn alone does not authorize lowering a fence", () => {
     const { proj, state } = project("enterprise");
     freshHumanTurn(proj);
@@ -2207,6 +2311,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   ])("an unattended $operation cannot lower fences even with the presence bypass and a typed request", ({ prompt, args, refusal }) => {
     const { proj, state } = project("enterprise");
     recordHumanPrompt(proj, prompt);
+    recordSessionPresenceBypass(proj, FENCE_SESSION);
     const request = readGuardSwitchRequest(proj, FENCE_SESSION);
     expect(request).not.toBeNull();
     const before = readFileSync(state, "utf-8");

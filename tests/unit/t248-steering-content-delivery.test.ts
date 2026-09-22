@@ -83,6 +83,7 @@ type WireDirective = {
   rules_in_context?: string[];
   inline_context_paths?: string[];
   context_warnings?: string[];
+  change_notices?: string[];
   stage_validity?: {
     state?: string;
   };
@@ -123,6 +124,40 @@ function project(): string {
 function statefulProject(withState = "state-mid-ideation.md"): string {
   const proj = setupIntegrationProject({ withState });
   projects.push(proj);
+  return proj;
+}
+
+function statefulProjectWithDrift(): string {
+  const proj = statefulProject("state-operation.md");
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  const graphRaw = JSON.parse(
+    readFileSync(
+      join(proj, ".claude", "tools", "data", "stage-graph.json"),
+      "utf-8",
+    ),
+  ) as StageValidityNode[] | { stages: StageValidityNode[] };
+  const stages = Array.isArray(graphRaw) ? graphRaw : graphRaw.stages;
+  const requirements = stages.find(
+    (stage) => stage.slug === "requirements-analysis",
+  );
+  expect(requirements).toBeDefined();
+  const artifactDir = join(
+    seededRecordDir(proj),
+    "inception",
+    "requirements-analysis",
+  );
+  mkdirSync(artifactDir, { recursive: true });
+  const artifactPath = join(artifactDir, "requirements.md");
+  writeFileSync(artifactPath, "requirements-v1\n", "utf-8");
+  appendAuditEntry(
+    "STAGE_COMPLETED",
+    {
+      Stage: "requirements-analysis",
+      ...stageValidationAuditFields(proj, requirements!, state, stages),
+    },
+    proj,
+  );
+  writeFileSync(artifactPath, "requirements-v2\n", "utf-8");
   return proj;
 }
 
@@ -459,6 +494,57 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.final).not.toHaveProperty("rules_content");
   }, 30_000);
 
+  test("a retired policy notice tips a near-limit inline bundle into bounded steering parts", () => {
+    const proj = statefulProjectWithDrift();
+    const statePath = seededStateFile(proj);
+    const state = readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*:.*$/m,
+      "- **Guard Policy**: relaxed (from scope feature)",
+    );
+    writeFileSync(statePath, state, "utf-8");
+    appendFileSync(orgPath(proj), "\n## Inline boundary policy\n\n", "utf-8");
+    const baseline = invoke(proj, "next", []);
+    expect(baseline.directive.kind).toBe("run-stage");
+    expect(baseline.directive.rules_content).toBeArray();
+
+    // ASCII filler grows JSON by exactly one byte per character. Keep the
+    // finished directive one byte below the inline threshold, with its drift
+    // advisory already present, so only the migration notice tips delivery.
+    const inlineLimit = MAX_DIRECTIVE_BYTES - 1024;
+    const padding = inlineLimit - 1 - baseline.bytes;
+    expect(padding).toBeGreaterThan(0);
+    appendFileSync(orgPath(proj), "x".repeat(padding), "utf-8");
+    const inline = invoke(proj, "next", []);
+    expect(inline.directive.kind).toBe("run-stage");
+    expect(inline.directive.rules_content).toBeArray();
+    expect(inline.bytes).toBe(inlineLimit - 1);
+    expect(inline.directive.change_notices).toBeUndefined();
+    expect(inline.directive.stage_validity?.state).toBe("drifted");
+
+    writeFileSync(
+      statePath,
+      state.replace("- **Guard Policy**:", "- **Change Control**:"),
+      "utf-8",
+    );
+    const result = drive(proj, []);
+    expect(result.loads[0]?.kind).toBe("load-steering");
+    expect(result.final.kind).toBe("run-stage");
+    expect(result.final).not.toHaveProperty("rules_content");
+    expect(result.sizes.every((bytes) => bytes <= MAX_DIRECTIVE_BYTES)).toBe(true);
+    const notices = result.loads[0]?.change_notices;
+    expect(notices).toEqual([expect.stringContaining("retired Change Control")]);
+    for (const directive of [...result.loads, result.final]) {
+      expect(directive.change_notices).toEqual(notices);
+      expect(directive.stage_validity).toEqual(inline.directive.stage_validity);
+    }
+    expect(result.final.rules_in_context).toEqual(inline.directive.rules_in_context);
+    for (const path of result.final.rules_in_context ?? []) {
+      expect(reconstructed(result.contents, path)).toBe(
+        readFileSync(join(proj, path), "utf-8"),
+      );
+    }
+  }, 30_000);
+
   // Old and new property alike: chunk boundaries follow serialized size, so
   // JSON-escaped control characters still split into bounded parts.
   test("JSON-escaped control characters are chunked by serialized size", () => {
@@ -737,41 +823,7 @@ describe("t248 deterministic steering delivery", () => {
   // Old and new property alike: the drift advisory rides on every part and on
   // the closing run-stage; the chain is now continued by receipt.
   test("stage validity advisory survives every steering continuation", () => {
-    const proj = statefulProject("state-operation.md");
-    const state = readFileSync(seededStateFile(proj), "utf-8");
-    const graphRaw = JSON.parse(
-      readFileSync(
-        join(proj, ".claude", "tools", "data", "stage-graph.json"),
-        "utf-8",
-      ),
-    ) as StageValidityNode[] | { stages: StageValidityNode[] };
-    const stages = Array.isArray(graphRaw) ? graphRaw : graphRaw.stages;
-    const requirements = stages.find(
-      (stage) => stage.slug === "requirements-analysis",
-    );
-    expect(requirements).toBeDefined();
-    const artifactDir = join(
-      seededRecordDir(proj),
-      "inception",
-      "requirements-analysis",
-    );
-    mkdirSync(artifactDir, { recursive: true });
-    const artifactPath = join(artifactDir, "requirements.md");
-    writeFileSync(artifactPath, "requirements-v1\n", "utf-8");
-    appendAuditEntry(
-      "STAGE_COMPLETED",
-      {
-        Stage: "requirements-analysis",
-        ...stageValidationAuditFields(
-          proj,
-          requirements!,
-          state,
-          stages,
-        ),
-      },
-      proj,
-    );
-    writeFileSync(artifactPath, "requirements-v2\n", "utf-8");
+    const proj = statefulProjectWithDrift();
     writeFileSync(
       orgPath(proj),
       Array.from(

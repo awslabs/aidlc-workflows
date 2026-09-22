@@ -130,6 +130,15 @@ function readAudit(dir: string): string {
     .join("\n");
 }
 
+// A refusal is itself recorded (ERROR_LOGGED), so "nothing changed" means no
+// other row moved.
+function readAuditWithoutRefusals(dir: string): string {
+  return readAudit(dir)
+    .split(/\n(?=## )/)
+    .filter((block) => !block.includes("**Event**: ERROR_LOGGED"))
+    .join("\n");
+}
+
 function seedCodeGenerationDirective(dir: string, unit?: string): void {
   const statePath = seededStateFile(dir);
   const state = readFileSync(statePath, "utf-8").replace(
@@ -1055,9 +1064,13 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     ["next policy", "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy relaxed build the service"],
     ["next retired policy", ".kiro/tools/aidlc-orchestrate.ts next --change-control off build the service"],
     ["next terminal dispatch", "bun .kiro/tools/aidlc-orchestrate.ts next --status --guard-policy off"],
+    ["next quoted assignments without runner", `AIDLC_SKIP_HUMAN_PRESENCE_GUARD="1" _AIDLC_NOTE2='quoted value' ".kiro/tools/aidlc-orchestrate.ts" next --guard-policy off`],
+    ["next env assignments with quoted runner", `env AIDLC_SKIP_HUMAN_PRESENCE_GUARD='1' _AIDLC_NOTE2="quoted value" "bun" .kiro/tools/aidlc-orchestrate.ts next --guard-policy off`],
     ["utility policy", "BUN .KIRO/TOOLS/AIDLC-UTILITY.TS CONFIG-CHANGE --GUARD-POLICY OFF"],
     ["utility retired policy", "bun .kiro/tools/aidlc-utility.ts config-change --change-control relaxed"],
     ["utility plan approval", "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility inline bypass", "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility env bypass", "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
     ["utility review freeze", "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off"],
     ["utility state transition", "bun .kiro/tools/aidlc-utility.ts config-change --guard.state-transition off"],
     ["utility reviewer scope", "bun .kiro/tools/aidlc-utility.ts config-change --guard.reviewer-scope off"],
@@ -1148,6 +1161,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
 
   test.each([
     ["utility", "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility inline bypass", "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility env bypass", "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
     ["engine", "bun .kiro/tools/aidlc.ts engine config set guard.plan-approval off"],
   ])("8d4: a visible typed switch runs the %s setter under the payload session once", (_shape, command) => {
     const dir = scratchProject(true);
@@ -1175,6 +1190,34 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(duplicate.stderr).toBe(result.stderr);
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
       expect(readAudit(dir)).toBe(audit);
+      expect(readGuardSwitchRequest(dir, session)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1",
+    "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1",
+  ])("8d4a: %s cannot lower a fence without the person's typed request", (prefix) => {
+    const dir = scratchProject(true);
+    const session = "sess_prefixed_unrequested_switch";
+    try {
+      submitGuardSwitchTurn(dir, session, "Explain what the plan-approval check does");
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      const audit = readAuditWithoutRefusals(dir);
+      const result = preGuardSwitchCommand(
+        dir, session, `${prefix} bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off`,
+      );
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("already run inside the hook");
+      expect(result.stderr).toContain("OUTPUT (exit 1)");
+      expect(result.stderr).toContain("is the person's decision");
+      expect(result.stderr).not.toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAuditWithoutRefusals(dir)).toBe(audit);
+      expect(readAudit(dir)).toContain("**Event**: ERROR_LOGGED");
       expect(readGuardSwitchRequest(dir, session)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1220,8 +1263,12 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       const before = snapshotGuardSwitchState(join(dir, "aidlc"));
       for (const command of [
         "echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 echo bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
         "node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
         "node .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 node .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
         "node .kiro/tools/aidlc.ts engine config set guard-policy off",
         "bun .kiro/tools/aidlc-utility.ts config-get --guard-policy",
         "bun .kiro/tools/aidlc.ts engine config get guard.plan-approval",

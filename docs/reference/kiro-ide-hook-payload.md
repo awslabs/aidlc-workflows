@@ -89,6 +89,7 @@ chat session forwarded to the core human-turn hook. That core hook records
 typed requests when the prompt is non-empty; the setter still requires a
 matching request. `aidlc-orchestrate.ts next` only prints a dispatch and is
 not run as a lowering setter.
+Environment-prefixed invocations, including `NAME=value` assignments and `env NAME=value`, are recognized by both shell recognizers, but the assignments are not applied to in-hook execution.
 
 The adapter then refuses the model's shell call with exit 2 and both output
 streams plus the setter's exit code on stderr, telling the conductor to relay

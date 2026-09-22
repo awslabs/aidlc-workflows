@@ -779,7 +779,7 @@ function promptTerminalInvocation(prompt: string): TerminalInvocation {
 
 function toolTerminalInvocation(command: string): TerminalInvocation | null {
   const match = command.trim().match(
-    /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
+    /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
   );
   if (match === null) return null;
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
@@ -973,7 +973,7 @@ function loweringGuardInvocation(
   rawCommand: string,
 ): (TerminalInvocation & { toolPath: string }) | null {
   const match = rawCommand.trim().match(
-    /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
+    /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
   );
   if (match === null) return null;
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
@@ -1008,6 +1008,8 @@ function runLoweringGuardCommand(
   sessionId: string,
 ): TerminalResult {
   try {
+    // Recognize command-prefix assignments, but discard them: only the hook's
+    // trusted child environment may reach the setter, never a model's bypass.
     const result = Bun.spawnSync([process.execPath, invocation.toolPath, ...invocation.args], {
       cwd: projectDir,
       env: hookChildEnv(projectDir, sessionId),
