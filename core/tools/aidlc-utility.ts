@@ -3183,7 +3183,10 @@ export async function collectDoctorReport(
       const parsed = JSON.parse(raw) as unknown;
       const parsedSettings = isPlainObject(parsed) ? parsed : {};
       settingsHooks = parsedSettings.hooks;
-      customStatusLine = isCustomClaudeStatusLine(parsedSettings.statusLine);
+      customStatusLine = isCustomClaudeStatusLine(
+        parsedSettings.statusLine,
+        projectDir,
+      );
       const commands: string[] = [];
       const collectCommands = (value: unknown): void => {
         if (Array.isArray(value)) return void value.forEach(collectCommands);
@@ -3196,7 +3199,7 @@ export async function collectDoctorReport(
       collectCommands(parsed);
       const refs = new Set<string>();
       for (const command of commands) {
-        const target = aidlcDispatcherTarget(command, true);
+        const target = aidlcDispatcherTarget(command, true, projectDir);
         if (target === "statusline") refs.add("aidlc-statusline.ts");
         else if (target !== null) refs.add(`aidlc-${target}.ts`);
       }
@@ -3264,7 +3267,11 @@ export async function collectDoctorReport(
         );
         const ownedTargets = new Set(Object.keys(expectedHookHashes));
         if (ownedTargets.size > 0) {
-          const currentHookHashes = aidlcHookRegistrationHashes(settingsHooks, ownedTargets);
+          const currentHookHashes = aidlcHookRegistrationHashes(
+            settingsHooks,
+            ownedTargets,
+            projectDir,
+          );
           const drifted = [...ownedTargets].filter((target) =>
             currentHookHashes[target] !== expectedHookHashes[target]
           );

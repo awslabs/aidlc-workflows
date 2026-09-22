@@ -2370,6 +2370,37 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 60_000);
 
+  test("Codex refresh converts root dotted framework entries and preserves project keys", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const shipped = readFileSync(configPath, "utf-8");
+    const withoutTui = shipped.replace(/\[tui\][\s\S]*$/, "");
+    const firstTable = withoutTui.indexOf("[shell_environment_policy]");
+    writeFileSync(
+      configPath,
+      `${withoutTui.slice(0, firstTable)}` +
+        `tui.status_line = ["git-branch"]\n` +
+        `tui.project_note = "keep-me"\n\n` +
+        withoutTui.slice(firstTable),
+    );
+
+    const refreshed = run([
+      "config", "--project-dir", project, "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    const parsed = parseToml(after) as {
+      tui: { status_line: string[]; project_note: string };
+    };
+    const shippedParsed = parseToml(shipped) as { tui: { status_line: string[] } };
+    expect(parsed.tui.status_line).toEqual(shippedParsed.tui.status_line);
+    expect(parsed.tui.project_note).toBe("keep-me");
+    expect(after).toContain("[tui]");
+    expect(after).not.toContain("tui.status_line");
+    expect(after).not.toContain("tui.project_note");
+  }, 60_000);
+
   test("release changes to owned entries are not reported as local edits", () => {
     const env = runtimeEnv();
     const codex = install("codex");
@@ -2770,6 +2801,50 @@ describe("t294 config diagnostics CLI", () => {
     expect(after.statusLine.command).toBe("aidlc engine statusline");
   }, 60_000);
 
+  test("Claude refresh recognizes the installed dispatcher by absolute path", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const absoluteDispatcher = join(
+      project,
+      ".claude",
+      "tools",
+      "aidlc.ts",
+    ).replaceAll("\\", "/");
+    const absoluteGuard =
+      `bun "${absoluteDispatcher}" engine hook plan-approval-guard`;
+    const guardGroup = settings.hooks.PreToolUse.find(
+      (group: { hooks: Array<{ command: string }> }) =>
+        group.hooks.some((hook) =>
+          hook.command === "aidlc engine hook plan-approval-guard"
+        ),
+    );
+    guardGroup.hooks.find(
+      (hook: { command: string }) =>
+        hook.command === "aidlc engine hook plan-approval-guard",
+    ).command = absoluteGuard;
+    settings.statusLine.command =
+      `bun "${absoluteDispatcher}" engine statusline`;
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const commands = Object.values(after.hooks).flatMap(
+      (groups) => (groups as Array<{ hooks: Array<{ command: string }> }>)
+        .flatMap((group) => group.hooks.map((hook) => hook.command)),
+    );
+    expect(commands.filter((command) =>
+      command === "aidlc engine hook plan-approval-guard"
+    )).toHaveLength(1);
+    expect(commands).not.toContain(absoluteGuard);
+    expect(after.statusLine.command).toBe("aidlc engine statusline");
+  }, 60_000);
+
   test("Claude refresh treats an unchanged legacy hook installation as a clean migration", () => {
     const project = install("claude");
     const env = runtimeEnv();
@@ -2860,25 +2935,102 @@ describe("t294 config diagnostics CLI", () => {
     }
   }, 60_000);
 
+  test("Claude refresh reports actual drift in a legacy whole-hooks baseline", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    for (const groups of Object.values(settings.hooks)) {
+      for (const group of groups as Array<{ hooks: Array<{ command: string }> }>) {
+        for (const hook of group.hooks) {
+          const target = /^aidlc engine hook ([A-Za-z0-9_-]+)$/.exec(hook.command)?.[1];
+          if (target) {
+            hook.command =
+              `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`;
+          }
+        }
+      }
+    }
+    const manifestPath = join(
+      project,
+      ".claude",
+      "tools",
+      "data",
+      "aidlc-manifest.json",
+    );
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    const entries = manifest.entries[".claude/settings.json"];
+    for (const key of Object.keys(entries)) {
+      if (key === "hooksAidlc" || key.startsWith("hooksAidlc:")) delete entries[key];
+    }
+    entries.hooks = sha256Bytes(canonical(settings.hooks));
+    settings.hooks.PreToolUse[0].matcher = "TeamPolicy";
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain(
+      "restored the AI-DLC hook registrations in .claude/settings.json",
+    );
+  }, 60_000);
+
   test("Claude refresh retires attributable manifestless hooks and preserves project hooks", () => {
     const project = install("claude");
     const env = runtimeEnv();
     const settingsPath = join(project, ".claude", "settings.json");
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    const retiredTarget = "stop";
+    const retiredTarget = "mint-presence";
     const retiredCommand =
       `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${retiredTarget}.ts"`;
     const retiredPath = join(project, `.claude/hooks/aidlc-${retiredTarget}.ts`);
-    writeFileSync(
-      retiredPath,
-      `import { resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";\n` +
-        `resolveProjectDirFromHook(import.meta.url);\n`,
+    const releasedHook = `// UserPromptSubmit hook: record a HUMAN_TURN event (human-presence gate).
+//
+// On every real human prompt, append a HUMAN_TURN event to the active intent's
+// audit shard (the state machine's own append-only ledger). The approval /
+// interview gate (handleApprove / handleAnswer) refuses unless a HUMAN_TURN was
+// recorded since the last gate resolution, so a model under autopilot cannot
+// fabricate an approval with no human having acted this turn.
+//
+// Presence-only: the prompt text is irrelevant, so stdin is not read.
+// appendAuditEntry resolves the active intent from the on-disk cursor using only
+// the project dir (no payload needed). No workflow state on disk means nothing
+// to gate, so the hook exits without writing (same self-gate as
+// aidlc-session-start.ts) - otherwise every prompt in a project that carries the
+// harness shell but never ran the framework would scaffold and grow audit
+// shards. The gate fails open on an empty ledger, so skipping the mint there is
+// safe. The mint is fail-open (try/catch, exit 0): a mint failure must never
+// block the human's turn.
+import { existsSync } from "node:fs";
+import { resolveProjectDirFromHook, stateFilePath } from "../tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+
+try {
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  if (existsSync(stateFilePath(projectDir))) {
+    appendAuditEntry("HUMAN_TURN", {}, projectDir);
+  }
+} catch {
+  // Non-fatal — a mint failure must never block the human's turn.
+}
+
+process.exit(0);
+`;
+    expect(sha256Bytes(releasedHook)).toBe(
+      "sha256:ff7556c56f6bebe0bc447be6632ccc34d14bb68b11220ad8e36bfd0bc37d2b90",
     );
+    writeFileSync(retiredPath, releasedHook);
     const projectTarget = "dispatch-rules";
     const projectCommand =
       `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${projectTarget}.ts"`;
     const projectPath = join(project, `.claude/hooks/aidlc-${projectTarget}.ts`);
-    writeFileSync(projectPath, "console.log('project hook');\n");
+    const projectHook =
+      `import { resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";\n` +
+      `console.log(resolveProjectDirFromHook(import.meta.url));\n`;
+    writeFileSync(projectPath, projectHook);
     settings.hooks.Stop.push({
       matcher: "",
       hooks: [
@@ -2904,7 +3056,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(commands).not.toContain(retiredCommand);
     expect(existsSync(retiredPath)).toBe(false);
     expect(commands).toContain(projectCommand);
-    expect(readFileSync(projectPath, "utf-8")).toBe("console.log('project hook');\n");
+    expect(readFileSync(projectPath, "utf-8")).toBe(projectHook);
   }, 60_000);
 
   test("Claude refresh re-adds shipped allow entries before user entries and retains retired entries", () => {

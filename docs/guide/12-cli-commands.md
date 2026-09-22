@@ -677,7 +677,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Prerequisites | Self-contained binary, or `bun` on PATH for a copy install |
 | Installed runtime | Active machine version and installed harness distributions, when using the binary channel |
 | Project stamp | Project distribution/version compared with the selected engine |
-| Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 17 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
+| Hook presence | Every framework hook wired by `settings.json` exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. A valid custom non-AI-DLC `statusLine` intentionally leaves `aidlc-statusline.ts` unwired and is exempt. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |

@@ -82,14 +82,36 @@ export const AIDLC_HOOK_ENTRY_PREFIX = "hooksAidlc:";
 export function aidlcDispatcherTarget(
   command: string,
   allowTrailingContent = false,
+  projectDir?: string,
 ): string | null {
   const match = (allowTrailingContent ? AIDLC_HOOK_COMMAND_PREFIX : AIDLC_HOOK_COMMAND)
     .exec(command);
-  return match?.[1] ?? match?.[2] ?? null;
+  const target = match?.[1] ?? match?.[2];
+  if (target !== undefined) return target;
+  if (projectDir === undefined) return null;
+  const normalized = command.trim().replaceAll("\\", "/");
+  const dispatcherPath = join(projectDir, ".claude", "tools", "aidlc.ts")
+    .replaceAll("\\", "/");
+  const prefixes = [
+    `bun ${dispatcherPath}`,
+    `bun "${dispatcherPath}"`,
+    `bun '${dispatcherPath}'`,
+  ];
+  const prefix = prefixes.find((candidate) =>
+    normalized.startsWith(`${candidate} `)
+  );
+  if (prefix === undefined) return null;
+  const suffix = normalized.slice(prefix.length).trimStart();
+  const suffixMatch = new RegExp(
+    allowTrailingContent
+      ? String.raw`^engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))(?=\s|$)`
+      : String.raw`^engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))\s*$`,
+  ).exec(suffix);
+  return suffixMatch?.[1] ?? suffixMatch?.[2] ?? null;
 }
 
-export function aidlcHookTarget(command: string): string | null {
-  const dispatcher = aidlcDispatcherTarget(command);
+export function aidlcHookTarget(command: string, projectDir?: string): string | null {
+  const dispatcher = aidlcDispatcherTarget(command, false, projectDir);
   if (dispatcher !== null) return dispatcher;
   return legacyAidlcHookTarget(command);
 }
@@ -104,19 +126,23 @@ export function legacyAidlcHookTarget(command: string): string | null {
   return target !== undefined && LEGACY_AIDLC_HOOK_TARGETS.has(target) ? target : null;
 }
 
-export function isCustomClaudeStatusLine(value: unknown): boolean {
+export function isCustomClaudeStatusLine(
+  value: unknown,
+  projectDir?: string,
+): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const statusLine = value as Record<string, unknown>;
   return statusLine.type === "command" &&
     typeof statusLine.command === "string" &&
     statusLine.command.trim() !== "" &&
-    aidlcHookTarget(statusLine.command) !== "statusline";
+    aidlcHookTarget(statusLine.command, projectDir) !== "statusline";
 }
 
 /** Keep event, matcher, and item metadata while excluding project hook entries. */
 export function aidlcHookRegistrations(
   hooks: unknown,
   ownedTargets?: ReadonlySet<string>,
+  projectDir?: string,
 ): Record<string, unknown[]> {
   const registrations: Record<string, unknown[]> = {};
   if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return registrations;
@@ -130,7 +156,7 @@ export function aidlcHookRegistrations(
         item !== null && typeof item === "object" && "command" in item &&
         typeof item.command === "string" &&
         (() => {
-          const target = aidlcHookTarget(item.command);
+          const target = aidlcHookTarget(item.command, projectDir);
           return target !== null && (!ownedTargets || ownedTargets.has(target));
         })()
       );
@@ -156,6 +182,7 @@ function canonical(value: unknown): string {
 export function aidlcHookRegistrationHashes(
   hooks: unknown,
   ownedTargets?: ReadonlySet<string>,
+  projectDir?: string,
 ): Record<string, string> {
   const registrations = new Map<string, unknown[]>();
   if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return {};
@@ -172,7 +199,7 @@ export function aidlcHookRegistrationHashes(
         if (!hook || typeof hook !== "object" || Array.isArray(hook)) continue;
         const command = (hook as Record<string, unknown>).command;
         if (typeof command !== "string") continue;
-        const target = aidlcHookTarget(command);
+        const target = aidlcHookTarget(command, projectDir);
         if (target === null || (ownedTargets && !ownedTargets.has(target))) continue;
         const rows = registrations.get(target) ?? [];
         rows.push({ event, ...groupMetadata, hook });

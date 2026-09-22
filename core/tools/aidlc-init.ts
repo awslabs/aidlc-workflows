@@ -3741,6 +3741,38 @@ const CLAUDE_SHIPPED_KEYS = [
   "hooks",
 ];
 
+// Exact Claude dist bytes present in version tags before these direct hooks
+// were retired. A manifestless file is removable only when its hash is here;
+// names, imports, and other source heuristics never establish ownership.
+const RELEASED_LEGACY_CLAUDE_HOOK_HASHES: Readonly<Record<string, ReadonlySet<string>>> = {
+  "audit-logger": new Set([
+    "sha256:064eac85c2f71d9832fc93c65a36b22a0af795539b349c9400952d25c66647f7",
+    "sha256:3294da0207cf7d18e48872ffc2efbfb910baacbd4ba18392807a731e9cac801a",
+  ]),
+  "mint-presence": new Set([
+    "sha256:ff7556c56f6bebe0bc447be6632ccc34d14bb68b11220ad8e36bfd0bc37d2b90",
+  ]),
+  "runtime-compile": new Set([
+    "sha256:8a54c7bad431576d829597ecfa02447a74d13e09d0fb878fc37a69e0486efd6a",
+    "sha256:f1bb53cfefb4d9be8b238dbcd080001dc8d68a5a3c120459b0eb73670d63c965",
+    "sha256:fc754dd871fb86b94ca870b486dc0ed2f3bd842168ffa95655f6dfc2d93c7838",
+  ]),
+  "sensor-fire": new Set([
+    "sha256:c88f3c8817ad5864b895185858d9006fb81ebf50644ac3f160a8bbd10c0a0a51",
+    "sha256:fe4d6f041236d5a3f04c6dd7da78beb9afaef02c0543ba49e77853441a714d79",
+  ]),
+  stop: new Set([
+    "sha256:00cfdd6fb288ed3b1317dd0b1fd7b5850992683f9d1fea96b8eee3b3695d3cb5",
+    "sha256:3cdb0888452c13c1706490be0c9b4948ae0a73d0fdc09ff1aff8ee00b1158fe8",
+    "sha256:4aee4a7bc1d8b6bc9ad50513630e2f3d37ab44e7cea810d756a0355c881d07fa",
+    "sha256:71fb8ef269917355b6bbd37392df751947283e54af6fe437552e24d6c63253cc",
+  ]),
+  "sync-statusline": new Set([
+    "sha256:35a7c593e6f05768bc92ceaa9596f4112aecad8c8820a5e9f7b32eb090f9871e",
+    "sha256:549109978d1f335cc1ac530a1381f06b0d5dab29edbeff72565563d8cc66d682",
+  ]),
+};
+
 function preserveClaudeProviderFields(
   projectDir: string,
   stagedRoot: string,
@@ -3781,10 +3813,9 @@ function preserveClaudeProviderFields(
     if (prior !== null) return false;
     const hookPath = join(projectDir, hookRelative);
     if (!regularFile(hookPath)) return false;
-    const source = readFileSync(hookPath, "utf-8");
-    return /from\s+["']\.\.\/tools\/(?:aidlc-[^"']+|(?:lib|audit|state|graph))\.ts["']/.test(
-      source,
-    );
+    return RELEASED_LEGACY_CLAUDE_HOOK_HASHES[target]?.has(
+      sha256File(hookPath),
+    ) ?? false;
   });
   const ownedHookTargets = new Set([
     ...Object.keys(incomingHookHashes),
@@ -3802,12 +3833,16 @@ function preserveClaudeProviderFields(
   }
   // Start with the shipped object's key order so a pristine refresh is byte-identical.
   if (canonical(current.hooks) !== canonical(staged.hooks)) {
-    const currentOwnedHooks = aidlcHookRegistrations(current.hooks, ownedHookTargets);
+    const currentOwnedHooks = aidlcHookRegistrations(
+      current.hooks,
+      ownedHookTargets,
+      projectDir,
+    );
     const currentOwnedHash = sha256Bytes(canonical(currentOwnedHooks));
     const hadLocalHookDrift = priorEntries?.hooksAidlc !== undefined
       ? currentOwnedHash !== priorEntries.hooksAidlc
       : priorEntries?.hooks !== undefined
-      ? false
+      ? currentOwnedHash !== priorEntries.hooks
       : canonical(currentOwnedHooks) !==
         canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
     if (hadLocalHookDrift) {
@@ -3822,7 +3857,7 @@ function preserveClaudeProviderFields(
         if (!isRecord(group) || !Array.isArray(group.hooks)) return [group];
         const items = group.hooks.filter((item: unknown) =>
           !isRecord(item) || typeof item.command !== "string" ||
-          !ownedHookTargets.has(aidlcHookTarget(item.command) ?? "")
+          !ownedHookTargets.has(aidlcHookTarget(item.command, projectDir) ?? "")
         );
         return items.length > 0 ? [{ ...group, hooks: items }] : [];
       });
@@ -3852,7 +3887,7 @@ function preserveClaudeProviderFields(
     sha256Bytes(canonical(staged[key])) !== priorEntries[key];
   if (
     Object.hasOwn(current, "statusLine") &&
-    isCustomClaudeStatusLine(current.statusLine)
+    isCustomClaudeStatusLine(current.statusLine, projectDir)
   ) {
     if (shippedChanged("statusLine")) {
       notes.push(
@@ -3982,6 +4017,16 @@ function tomlEntryPath(text: string): string[] | null {
 function tomlEntryName(path: string[] | null): string | null {
   if (path === null) return null;
   return path.length === 1 ? path[0] : JSON.stringify(path);
+}
+
+function tomlNamePath(name: string): string[] {
+  return name.startsWith("[") ? JSON.parse(name) as string[] : [name];
+}
+
+function tomlKey(path: readonly string[]): string {
+  return path.map((component) =>
+    /^[A-Za-z0-9_-]+$/.test(component) ? component : JSON.stringify(component)
+  ).join(".");
 }
 
 function tomlTableHeader(line: string): { table: boolean; name: string | null } {
@@ -4137,6 +4182,45 @@ function codexSections(
   );
 }
 
+function codexTableWithProjectAssignments(
+  root: string,
+  incoming: string,
+  entries: readonly TomlTopLevelEntry[],
+): string {
+  const parsed = Bun.TOML.parse(incoming) as Record<string, unknown>;
+  const generatedRoot = isRecord(parsed[root]) ? parsed[root] : {};
+  const generatedKeys = new Set(Object.keys(generatedRoot));
+  const retained = new Map<string, string>();
+  const retain = (path: string[], text: string): void => {
+    if (
+      path.length === 0 ||
+      generatedKeys.has(path[0]) ||
+      CODEX_FRAMEWORK_TABLES.has(path[0])
+    ) {
+      return;
+    }
+    retained.set(JSON.stringify(path), `${tomlKey(path)}${text.slice(tomlAssignmentEquals(text))}`);
+  };
+  for (const entry of entries) {
+    if (entry.kind === "assignment" && entry.name !== null) {
+      const path = tomlNamePath(entry.name);
+      if (path[0] === root && path.length > 1) retain(path.slice(1), entry.text);
+      continue;
+    }
+    if (entry.kind !== "table" || entry.name !== root) continue;
+    const firstNewline = entry.text.indexOf("\n");
+    if (firstNewline < 0) continue;
+    const body = entry.text.slice(firstNewline + 1);
+    for (const assignment of tomlTopLevelEntries(body)) {
+      if (assignment.kind !== "assignment" || assignment.name === null) continue;
+      retain(tomlNamePath(assignment.name), assignment.text);
+    }
+  }
+  return retained.size === 0
+    ? incoming
+    : `${incoming.trimEnd()}\n${[...retained.values()].join("\n")}`;
+}
+
 function mergeCodexUserConfiguration(
   staged: string,
   current: string,
@@ -4163,7 +4247,22 @@ function mergeCodexUserConfiguration(
   ]);
   for (const name of ownedNames) {
     const incoming = generated.get(name);
-    const existing = tomlTopLevelEntries(merged).filter((entry) => entry.name === name);
+    const allEntries = tomlTopLevelEntries(merged);
+    const existing = allEntries.filter((entry) =>
+      entry.name === name ||
+      (
+        incoming?.kind === "table" &&
+        entry.kind === "assignment" &&
+        entry.name !== null &&
+        tomlNamePath(entry.name)[0] === name
+      )
+    );
+    const effectiveIncoming = incoming?.kind === "table"
+      ? {
+        ...incoming,
+        text: codexTableWithProjectAssignments(name, incoming.text, existing),
+      }
+      : incoming;
     const currentText = existing.map((entry) => entry.text).join("\n\n");
     const currentMatchesPrior = existing.length === 1 &&
       priorEntries?.[name] === sha256Bytes(currentText);
@@ -4172,38 +4271,42 @@ function mergeCodexUserConfiguration(
       : !currentMatchesPrior;
     if (
       locallyChanged &&
-      (incoming === undefined || existing.length !== 1 || currentText !== incoming.text)
+      (
+        effectiveIncoming === undefined ||
+        existing.length !== 1 ||
+        currentText !== effectiveIncoming.text
+      )
     ) {
-      const label = incoming?.kind === "table" ||
+      const label = effectiveIncoming?.kind === "table" ||
           existing.some((entry) => entry.kind === "table")
         ? `[${name}] table`
         : `${name} assignment`;
-      notes.push(incoming === undefined
+      notes.push(effectiveIncoming === undefined
         ? `removed the retired AI-DLC-owned ${label} from .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`
         : `restored the shipped ${label} in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`);
     }
     if (
-      incoming !== undefined &&
+      effectiveIncoming !== undefined &&
       existing.length === 1 &&
-      existing[0].kind === incoming.kind &&
-      currentText === incoming.text
+      existing[0].kind === effectiveIncoming.kind &&
+      currentText === effectiveIncoming.text
     ) {
       continue;
     }
-    const replaceInPlace = incoming !== undefined &&
-      existing.length > 0 &&
-      existing.every((entry) => entry.kind === incoming.kind);
+    const replaceInPlace = effectiveIncoming !== undefined && existing.length > 0;
     for (let index = existing.length - 1; index >= 0; index--) {
       const entry = existing[index];
       const replacement = replaceInPlace && index === 0
-        ? `${incoming!.text}${incoming!.kind === "table" ? "\n\n" : "\n"}`
+        ? `${effectiveIncoming!.text}${
+          effectiveIncoming!.kind === "table" ? "\n\n" : "\n"
+        }`
         : "";
       merged = merged.slice(0, entry.start) + replacement + merged.slice(entry.end);
     }
-    if (incoming !== undefined && !replaceInPlace) {
-      merged = incoming.kind === "assignment"
-        ? `${incoming.text}\n\n${merged.trimStart()}`
-        : `${merged.trimEnd()}\n\n${incoming.text}\n`;
+    if (effectiveIncoming !== undefined && !replaceInPlace) {
+      merged = effectiveIncoming.kind === "assignment"
+        ? `${effectiveIncoming.text}\n\n${merged.trimStart()}`
+        : `${merged.trimEnd()}\n\n${effectiveIncoming.text}\n`;
     }
   }
   const normalized = merged.endsWith("\n") ? merged : `${merged}\n`;
