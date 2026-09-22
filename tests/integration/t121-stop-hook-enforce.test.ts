@@ -120,6 +120,14 @@ const HOOK_TS = join(
   "hooks",
   "aidlc-continue-workflow.ts",
 );
+const ORCHESTRATE_TS = join(
+  REPO_ROOT,
+  "dist",
+  "claude",
+  ".claude",
+  "tools",
+  "aidlc-orchestrate.ts",
+);
 const UTILITY_TS = join(
   REPO_ROOT,
   "dist",
@@ -821,6 +829,27 @@ function terminalDepthDispatch(proj: string): string {
   expect(directive.message).toContain("config set depth extreme");
   expect(directive.message).toContain("then print its output verbatim and stop.");
   return result.stdout;
+}
+
+function retiredOnlyDispatch(proj: string): string {
+  const result = spawnSync(BUN, [
+    ORCHESTRATE_TS,
+    "next",
+    "--init",
+    "--force",
+    "--project-dir",
+    proj,
+  ], {
+    cwd: proj,
+    encoding: "utf-8",
+    env: { ...process.env, AIDLC_HARNESS_DIR: ".claude" },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  const directive = JSON.parse(result.stdout) as { kind?: string; message?: string };
+  expect(directive.kind, result.stdout).toBe("error");
+  expect(directive.message, result.stdout).toContain("are retired");
+  expect(directive.message, result.stdout).toContain("No workflow stage was run");
+  return result.stdout.trim();
 }
 
 /**
@@ -2204,6 +2233,21 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
+  test("(f2) MARKERS - a retired-only terminal error leaves engine touch unchanged and allows the stop", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    seedTurnMarkers(proj, { humanNewer: true });
+    const enginePath = join(seededRecordDir(proj), ".aidlc-engine/engine-touch");
+    const before = statSync(enginePath).mtimeMs;
+
+    retiredOnlyDispatch(proj);
+
+    expect(statSync(enginePath).mtimeMs).toBe(before);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
   test("(f2) MARKERS FAIL-CLOSED - a missing .aidlc-engine/engine-touch is 'no evidence', not 'the engine was never touched'", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
@@ -2442,6 +2486,54 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect(r.out).toBe(""); // allowed: read-only query is not engagement
+  }, 30000);
+
+  test("(h) retired-only terminal error allows the stop in both transcript formats", () => {
+    for (const format of ["claude", "codex"] as const) {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const output = retiredOnlyDispatch(proj);
+      const tp = seedTranscriptEntries(proj, format, [
+        { kind: "human", text: "restart this workflow" },
+        {
+          kind: "bash",
+          id: "retired-only",
+          command: "bun .claude/tools/aidlc-orchestrate.ts next --init --force",
+        },
+        { kind: "result", id: "retired-only", output },
+        { kind: "text" },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "run-stage",
+      );
+      expect(r.rc, format).toBe(0);
+      expect(r.out, format).toBe("");
+    }
+  }, 30000);
+
+  test("(h) retired flags combined with supported work remain workflow engagement", () => {
+    for (const format of ["claude", "codex"] as const) {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const tp = seedTranscriptEntries(proj, format, [
+        { kind: "human", text: "start a separate bugfix" },
+        {
+          kind: "bash",
+          command:
+            'bun .claude/tools/aidlc-orchestrate.ts next --init --new-intent --scope bugfix "fix login"',
+        },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "run-stage",
+      );
+      expect(r.rc, format).toBe(0);
+      expect((JSON.parse(r.out) as { decision?: string }).decision, format)
+        .toBe("block");
+    }
   }, 30000);
 
   test("(h) terminal workspace navigation through next allows the stop in both transcript formats", () => {

@@ -896,6 +896,7 @@ describe("t114 retired flags are consumed, not description text", () => {
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("intent create --scope bugfix");
     expect(out).not.toContain("--init");
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(true);
   });
 
   test("--force is likewise consumed", () => {
@@ -950,6 +951,7 @@ describe("t114 retired flags are consumed, not description text", () => {
     expect(out).toContain("--new-intent");
     expect(out).toContain("No workflow stage was run");
     expect(out).not.toContain('"kind":"run-stage"');
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
   });
 
   test("retired flags alone do not create or advance a fresh workspace", () => {

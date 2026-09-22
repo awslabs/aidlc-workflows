@@ -788,9 +788,31 @@ const VALUED_NEXT_FLAGS: ReadonlySet<string> = new Set([
   "--rhythm",
 ]);
 
+const RETIRED_NEXT_FLAGS: ReadonlySet<string> = new Set(["--init", "--force"]);
+
+// Retired initialization flags are terminal only when they are the whole
+// invocation. A literal delimiter with no following text does not add work;
+// any supported flag, command, or description keeps normal engagement.
+export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
+  let sawRetired = false;
+  let literal = false;
+  for (const arg of args) {
+    if (literal) return false;
+    if (arg === "--") {
+      literal = true;
+    } else if (RETIRED_NEXT_FLAGS.has(arg)) {
+      sawRetired = true;
+    } else {
+      return false;
+    }
+  }
+  return sawRetired;
+}
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(args: readonly string[]): boolean {
+  if (isRetiredOnlyNextArgv(args)) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;

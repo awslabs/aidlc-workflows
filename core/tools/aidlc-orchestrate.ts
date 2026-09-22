@@ -164,6 +164,7 @@ import {
   isPluginEnabled,
   isPerUnitStage,
   isReadOnlyEngineProbe,
+  isRetiredOnlyNextArgv,
   isRegularFile,
   isArchivedIntent,
   isRouteCheckProbe,
@@ -1825,10 +1826,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
   if (flags.release && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--release does not accept --team or --rhythm.";
   }
-  if (
-    flags.retiredFlags &&
-    Object.keys(flags).every((key) => key === "retiredFlags")
-  ) {
+  if (flags.retiredFlags && isRetiredOnlyNextArgv(args)) {
     flags.retiredOnly = true;
   }
   return flags;
@@ -4209,8 +4207,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // rather than the ledger (a conductor that ran `next` and then bailed is
   // invisible to the ledger but visible here). Read-only utility flags and the
   // workspace verbs are excluded: they carry no workflow intent, so a status
-  // query stays a conversational turn. So is `team-board`, a read-only board;
-  // `park` is not, because the park it names mutates workflow state.
+  // query stays a conversational turn. Retired-only initialization flags are
+  // also terminal guidance, while the same flags combined with supported work
+  // still engage normally. So is `team-board`, a read-only board; `park` is
+  // not, because the park it names mutates workflow state.
   //
   // DELIBERATELY BEFORE Branch 0 (the roll-forward latch) below, so a `next` the
   // latch swallows as a no-op still counts as engagement. That is the correct
@@ -4222,6 +4222,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (
     !flags.readOnly &&
     !flags.config &&
+    !flags.retiredOnly &&
     !flags.workspaceCommand &&
     flags.orchestratorVerb !== "team-board"
   ) {

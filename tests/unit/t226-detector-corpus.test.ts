@@ -1125,6 +1125,25 @@ describe("detector corpus", () => {
     }
   });
 
+  test("retired-only next is terminal while retired flags combined with work still engage", () => {
+    for (const command of [
+      "aidlc next --init",
+      "aidlc engine orchestrate next --init --force",
+      "bun .claude/tools/aidlc-orchestrate.ts next --force --init",
+      "bun .claude/tools/aidlc-orchestrate.ts next --init --",
+    ]) {
+      expect(d1(command), command).toBe(false);
+    }
+    for (const command of [
+      'aidlc next --init --new-intent --scope bugfix "fix login"',
+      "aidlc engine orchestrate next --force --stage intent-capture",
+      "bun .claude/tools/aidlc-orchestrate.ts next --init --depth minimal",
+      "bun .claude/tools/aidlc-orchestrate.ts next -- --init",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
   test("conditional configuration needs its exact authoritative dispatch output", () => {
     const command = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
     const directive = {
