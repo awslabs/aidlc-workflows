@@ -2636,7 +2636,7 @@ function delegationLedgerObstruction(sessionId: string): string | null {
   for (const part of relative(root, leaf).split(sep)) {
     if (part.length === 0) continue;
     cursor = join(cursor, part);
-    let entry;
+    let entry: ReturnType<typeof lstatSync> | undefined;
     try {
       entry = lstatSync(cursor);
     } catch {
