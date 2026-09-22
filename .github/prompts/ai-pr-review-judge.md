@@ -26,7 +26,8 @@ not the PR description:
   head expands beyond the accepted trigger or impact, or contradicts a later
   authoritative decision.
 - Honor `.ai-review-context/ledger.json`, the only authoritative record of
-  maintainer decisions. Do not restate a `rejected` or `accepted` finding whose
+  maintainer decisions. Both `findings` and `archivedDecisions` carry active
+  identities. Do not restate a `rejected` or `accepted` finding whose exact
   anchored lines and priority are unchanged; the publisher removes them
   deterministically and renders accepted risks from the ledger itself. Restate
   a still-`open` finding when it still holds so it keeps its identity; an open

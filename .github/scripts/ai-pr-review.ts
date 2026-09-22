@@ -15,7 +15,9 @@ import {
   headContainsAnchor,
   headFileSha256,
   isBlocking,
+  ledgerVerdict,
   lineAnchor,
+  loadLedgerComment,
   positionAnchor,
   quoteAnchor,
   readContextLine,
@@ -455,58 +457,102 @@ export function refreshVerdict(
     "pull request",
   );
   if (!pullIsEligible(pull, head)) return "moved";
-  // The bot's published review for the head is the gate, not the labels: during
-  // a review run the labels sit in the cleared "started" state.
-  const reviews = paginatedRecords(`repos/${repository}/pulls/${pullRequest}/reviews`, ghExecutable).filter(
-    review =>
-      record(review.user ?? {}, "review user").login === "github-actions[bot]" &&
-      text(review.commit_id) === head &&
-      text(review.body).startsWith("<!-- ai-pr-review context="),
-  );
-  if (reviews.length === 0) return "no-review";
-  reconcileReviewLabels(
-    repository,
-    pullRequest,
-    decision === "merge" ? "reviewed-merge" : "reviewed-change",
-    head,
-    ghExecutable,
-  );
-  const blocking = reviews.filter(review => text(review.state) === "CHANGES_REQUESTED");
-  if (decision === "merge") {
-    for (const review of blocking) {
+  const reviewsForHead = (): Record<string, unknown>[] =>
+    paginatedRecords(`repos/${repository}/pulls/${pullRequest}/reviews`, ghExecutable).filter(
+      review =>
+        record(review.user ?? {}, "review user").login === "github-actions[bot]" &&
+        text(review.commit_id) === head &&
+        text(review.body).startsWith("<!-- ai-pr-review context="),
+    );
+  const desiredLabels = decision === "merge" ? "reviewed-merge" : "reviewed-change";
+
+  // Converge the review gate first, then the derived labels. Each attempt
+  // verifies both surfaces after mutation, so interruption or a concurrent
+  // writer can be repaired by the same idempotent operation.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const reviews = reviewsForHead();
+    if (reviews.length === 0) return "no-review";
+    const blocking = reviews.filter(review => text(review.state) === "CHANGES_REQUESTED");
+    if (decision === "merge") {
+      for (const review of blocking) {
+        ghRaw(
+          [
+            "api",
+            "--method",
+            "PUT",
+            `repos/${repository}/pulls/${pullRequest}/reviews/${integer(review.id, "review id")}/dismissals`,
+            "--input",
+            "-",
+          ],
+          ghExecutable,
+          `${JSON.stringify({ message: `The decision for this head was re-derived as maintainer/merge from the findings ledger (${reason}).` })}\n`,
+        );
+      }
+    } else if (blocking.length === 0) {
+      const contextMatch = /<!-- ai-pr-review context=([0-9a-f]{64}) -->/.exec(text(reviews[0].body));
+      if (!contextMatch) return "no-review";
+      const body = [
+        `<!-- ai-pr-review context=${contextMatch[1]} -->`,
+        "<!-- ai-pr-review decision=author/change -->",
+        `The decision for \`${head}\` was re-derived as **author/change** from the findings ledger (${reason}). The open blocking findings are listed in the ledger comment; the earlier review body stays as the assessment of this head.`,
+        "",
+        "Reviewed by AIDA (AI-DLC Developer Agent).",
+        "",
+        `[AI-PR-REVIEWED] ${head}`,
+      ].join("\n");
       ghRaw(
-        [
-          "api",
-          "--method",
-          "PUT",
-          `repos/${repository}/pulls/${pullRequest}/reviews/${integer(review.id, "review id")}/dismissals`,
-          "--input",
-          "-",
-        ],
+        ["api", "--method", "POST", `repos/${repository}/pulls/${pullRequest}/reviews`, "--input", "-"],
         ghExecutable,
-        `${JSON.stringify({ message: `The decision for this head was re-derived as maintainer/merge from the findings ledger (${reason}).` })}\n`,
+        `${JSON.stringify({ commit_id: head, event: "REQUEST_CHANGES", body })}\n`,
       );
     }
-    return "applied";
+
+    const gateApplied = reviewsForHead().some(review => text(review.state) === "CHANGES_REQUESTED") ===
+      (decision === "change");
+    if (!gateApplied) continue;
+    if (!reconcileReviewLabels(repository, pullRequest, desiredLabels, head, ghExecutable)) {
+      return "moved";
+    }
+    const labelsApplied = currentReviewLabelOutcome(repository, pullRequest, head, ghExecutable) === desiredLabels;
+    const gateStillApplied = reviewsForHead().some(review => text(review.state) === "CHANGES_REQUESTED") ===
+      (decision === "change");
+    if (labelsApplied && gateStillApplied) return "applied";
   }
-  if (blocking.length > 0) return "applied";
-  const contextMatch = /<!-- ai-pr-review context=([0-9a-f]{64}) -->/.exec(text(reviews[0].body));
-  if (!contextMatch) return "no-review";
-  const body = [
-    `<!-- ai-pr-review context=${contextMatch[1]} -->`,
-    "<!-- ai-pr-review decision=author/change -->",
-    `The decision for \`${head}\` was re-derived as **author/change** from the findings ledger (${reason}). The open blocking findings are listed in the ledger comment; the earlier review body stays as the assessment of this head.`,
-    "",
-    "Reviewed by AIDA (AI-DLC Developer Agent).",
-    "",
-    `[AI-PR-REVIEWED] ${head}`,
-  ].join("\n");
-  ghRaw(
-    ["api", "--method", "POST", `repos/${repository}/pulls/${pullRequest}/reviews`, "--input", "-"],
-    ghExecutable,
-    `${JSON.stringify({ commit_id: head, event: "REQUEST_CHANGES", body })}\n`,
-  );
-  return "applied";
+  throw new Error("review gate and labels did not converge after 3 attempts");
+}
+
+export function convergeLedgerVerdict(
+  repository: string,
+  pullRequest: number,
+  head: string,
+  reason: string,
+  ghExecutable = "gh",
+): RefreshOutcome {
+  assertSha(head, "head");
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const before = loadLedgerComment(repository, pullRequest, ghExecutable);
+    const verdict = ledgerVerdict(before.ledger);
+    if (!verdict || verdict.head !== head) return "moved";
+    const outcome = refreshVerdict(
+      repository,
+      pullRequest,
+      head,
+      verdict.decision,
+      reason,
+      ghExecutable,
+    );
+    if (outcome !== "applied") return outcome;
+    const after = loadLedgerComment(repository, pullRequest, ghExecutable);
+    const afterVerdict = ledgerVerdict(after.ledger);
+    if (
+      after.digest === before.digest &&
+      afterVerdict?.head === head &&
+      afterVerdict.decision === verdict.decision
+    ) {
+      return "applied";
+    }
+  }
+  throw new Error("findings ledger verdict did not stabilize after 3 attempts");
 }
 
 export function currentReviewLabelOutcome(
@@ -1607,6 +1653,15 @@ function main(): void {
     )}\n`);
     return;
   }
+  if (command === "converge-verdict") {
+    process.stdout.write(`${convergeLedgerVerdict(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--pr")),
+      argValue(args, "--head"),
+      args.includes("--reason") ? argValue(args, "--reason") : "maintainer decision",
+    )}\n`);
+    return;
+  }
   if (command === "label-state") {
     const expectedHead = args.includes("--expected-head")
       ? argValue(args, "--expected-head")
@@ -1619,7 +1674,7 @@ function main(): void {
     return;
   }
   throw new Error(
-    "usage: ai-pr-review.ts build-discussion|build-context|validate|label-state|labels|refresh-verdict (run with --help in repository docs)",
+    "usage: ai-pr-review.ts build-discussion|build-context|validate|label-state|labels|refresh-verdict|converge-verdict (run with --help in repository docs)",
   );
 }
 

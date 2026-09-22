@@ -60,28 +60,22 @@ jobs:
           {
             echo "status=$(jq -r .status /tmp/aida-command.json)"
             echo "refresh_head=$(jq -r '.refresh.head // empty' /tmp/aida-command.json)"
-            echo "refresh_decision=$(jq -r '.refresh.decision // empty' /tmp/aida-command.json)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Refresh the published verdict without rerunning models
-        if: steps.command.outputs.status == 'applied' && steps.command.outputs.refresh_decision != ''
+        if: steps.command.outputs.status == 'applied' && steps.command.outputs.refresh_head != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           REFRESH_HEAD: ${{ steps.command.outputs.refresh_head }}
-          REFRESH_DECISION: ${{ steps.command.outputs.refresh_decision }}
         run: |
           set -euo pipefail
-          # The decision was re-derived by the script from persisted state under
-          # the SAME invariants the review validator uses (every open finding,
-          # readiness, risk, the stored decision), never from a blocker count
-          # alone. refresh-verdict applies it to the labels and the bot's review
-          # state for the reviewed head, and does nothing when the PR moved on.
-          refresh="$(bun .github/scripts/ai-pr-review.ts refresh-verdict \
+          # Re-read the live ledger until one stable verdict is reflected in the
+          # review gate and labels. This also repairs a prior interrupted refresh.
+          refresh="$(bun .github/scripts/ai-pr-review.ts converge-verdict \
             --repo "$REPO" \
             --pr "$PR_NUMBER" \
             --head "$REFRESH_HEAD" \
-            --decision "$REFRESH_DECISION" \
             --reason "maintainer /aida command")"
           echo "::notice::Verdict refresh: $refresh"

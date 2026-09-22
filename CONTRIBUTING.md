@@ -8,6 +8,9 @@ Please read through this document before submitting any issues or pull requests.
 
 This file covers the project-wide conventions (reporting, PR flow, security, licensing). The authoritative, hands-on contributor guide — prerequisites, the edit → regenerate → test loop, and step-by-step recipes for adding a stage, scope, agent, or utility handler — is [`docs/reference/11-contributing.md`](docs/reference/11-contributing.md). Read it before making code changes.
 
+For the path from PR review through nightly previews and stable publication,
+see [Development and Releases](DEVELOPERS.md).
+
 ## How this repository is built
 
 AI-DLC ships to many CLI harnesses (today Claude Code, Kiro CLI, Kiro IDE, Codex CLI, opencode, and GitHub Copilot) from a single hand-authored source. The layout has three zones:
@@ -136,8 +139,9 @@ AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
 id (`F1`, `F2`, …) anchored to the exact content of the lines it cites, so a
 follow-up review recognizes the same finding across commits instead of
 rediscovering it. A decision covers the evidence and severity it was made on:
-when a finding's cited lines grow or its priority rises, it is reopened as new
-evidence. Maintainers with repository write access act on findings by
+only the same exact cited-anchor set inherits it. Expanded evidence or a higher
+priority reopens the finding; a partial or ambiguous match is recorded as a new
+finding. Maintainers with repository write access act on findings by
 commenting on the PR. Commands go on the first lines of the comment, one per
 line, and a line may name several findings:
 
@@ -173,9 +177,13 @@ while a command is being applied re-checks the ledger before it ends and
 applies the same refresh. An open P0/P1 that a later review omits
 while at least one of its cited lines is provably unchanged is *retained*: it
 stays in the review and keeps the next action with the author until the code
-changes or a maintainer accepts it. A finding whose cited code is gone, or
-cannot be evaluated at the new head, resolves when a review no longer reports
-it.
+changes or a maintainer accepts it. It is also retained when a current,
+evaluable anchor has an unknown result. A finding resolves when all current,
+evaluable anchors are gone; legacy-only identity anchors do not keep it open.
+
+The active ledger holds up to 200 findings. When it is full, resolved entries
+are removed first; decided entries move to a bounded archive that keeps their
+ids, exact anchors, and maintainer decisions available for later reviews.
 
 The ledger comment carries a digest of its data. Do not edit it: AIDA refuses
 to run on an edited or unreadable ledger and says so. To recover, restore the

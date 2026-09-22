@@ -218,12 +218,14 @@ describe("t345 AIDA findings ledger", () => {
     expect(parseCommands("please\n/aida reject F1 hidden on line two")).toEqual([]);
     expect(parseCommands("```\n/aida reject F1\n```")).toEqual([]);
     // A malformed /aida line anywhere in the leading block fails the whole comment (all-or-nothing).
-    expect(() => parseCommands("/aida rejectF1 squashed")).toThrow("line 1: unrecognized command `/aida rejectF1 squashed`");
+    expect(() => parseCommands("/aida rejectF1 squashed")).toThrow("line 1: unrecognized command");
     expect(() => parseCommands("/aida delete F1")).toThrow("line 1: unrecognized command");
     expect(() => parseCommands("/aida full")).toThrow("line 1: unrecognized command");
-    expect(() => parseCommands("/aida accept F1 first\n/aida rejct F2 typo")).toThrow("line 2: unrecognized command `/aida rejct F2 typo`");
+    expect(() => parseCommands("/aida accept F1 first\n/aida rejct F2 typo")).toThrow("line 2: unrecognized command");
     expect(() => parseCommands(`/aida accept F1 ${"x".repeat(501)}`)).toThrow("line 1: the reason is 501 characters; the limit is 500");
     expect(parseCommands(`/aida accept F1 ${"x".repeat(500)}`)[0].reason).toHaveLength(500);
+    expect(() => parseCommands(`/aida accept F1 ${"😀".repeat(501)}`)).toThrow("line 1: the reason is 501 characters; the limit is 500");
+    expect([...parseCommands(`/aida accept F1 ${"😀".repeat(500)}`)[0].reason ?? ""]).toHaveLength(500);
     expect(parseCommands("Thanks! /aida accept F1 inline mention")).toEqual([]);
     expect(parseCommands("/aida accept F1 first\nthen prose\n/aida reject F2 not parsed")).toEqual([
       { kind: "accept", ids: ["F1"], reason: "first" },
@@ -278,6 +280,16 @@ describe("t345 AIDA findings ledger", () => {
     expect(() => parseLedgerComment(`${LEDGER_MARKER} -->\nno json`)).toThrow("no JSON block");
     expect(parseLedgerComment("just a comment")).toBeNull();
 
+    // Version 2 is verified under its original canonical shape, then upgraded
+    // without resetting authenticated maintainer decisions.
+    const { version: _version, ...previousFields } = ledger;
+    const previous = { version: 2, ...previousFields };
+    const previousDigest = sha256(JSON.stringify(previous, null, 2));
+    const upgraded = parseLedgerComment(
+      `${LEDGER_MARKER} v2 digest=${previousDigest} -->\n\`\`\`json\n${JSON.stringify(previous, null, 2)}\n\`\`\``,
+    );
+    expect(upgraded).toEqual({ ledger, migrated: false, digest: previousDigest });
+
     // A version-1 ledger (side-less anchors, other digest) migrates: ids survive, anchors become
     // position anchors (never evaluable, so never retained), decisions are reset.
     const legacy = {
@@ -291,7 +303,7 @@ describe("t345 AIDA findings ledger", () => {
     const migrated = parseLedgerComment(`<!-- aida-ledger v1 digest=${"1".repeat(64)} -->\n## AIDA findings ledger\n\n\`\`\`json\n${JSON.stringify(legacy)}\n\`\`\``, LATER);
     expect(migrated?.migrated).toBe(true);
     expect(migrated?.digest).toBe("1".repeat(64));
-    expect(migrated?.ledger.version).toBe(2);
+    expect(migrated?.ledger.version).toBe(LEDGER_VERSION);
     expect(migrated?.ledger.findings.map(item => item.id)).toEqual(["F1", "F2"]);
     expect(migrated?.ledger.findings[0]).toMatchObject({ status: "open", anchors: [{ kind: "position", path: PATH, sha256: "a".repeat(64) }] });
     expect(migrated?.ledger.findings[0].decision).toBeUndefined();
@@ -400,10 +412,12 @@ describe("t345 AIDA findings ledger", () => {
 
     const acceptedOnly: LoadedLedger = { ledger: ledgerWith(entry("F3", "P1", "accepted", [A42, A43], "risk owned")), commentId: 900, digest: null, migrated: false };
     const subset = reconcileLedger(acceptedOnly, [input("P1", [A42], "part of the accepted risk", "F3")], HEAD, AT, () => true);
-    expect(subset.restatedAccepted.map(item => item.ledgerId)).toEqual(["F3"]);
-    expect(subset.kept).toEqual([]);
+    expect(subset.restatedAccepted).toEqual([]);
+    expect(subset.kept.map(item => item.ledgerId)).toEqual(["F4"]);
+    expect(subset.ledger.findings[0].status).toBe("accepted");
     const escalatedAccepted = reconcileLedger(acceptedOnly, [input("P0", [A42], "now critical", "F3")], HEAD, AT, () => true);
-    expect(escalatedAccepted.reopenedIds).toEqual(["F3"]);
+    expect(escalatedAccepted.reopenedIds).toEqual([]);
+    expect(escalatedAccepted.kept.map(item => item.ledgerId)).toEqual(["F4"]);
     // An id that names a resolved or unknown entry falls back to a new finding.
     const unknownId = reconcileLedger(acceptedOnly, [input("P1", [A42], "typo in id", "F9")], HEAD, AT, () => true);
     expect(unknownId.kept.map(item => item.ledgerId)).toEqual(["F4"]);
@@ -417,6 +431,24 @@ describe("t345 AIDA findings ledger", () => {
     const noSharedAnchor = reconcileLedger(acceptedOnly, [input("P1", [lineAnchor(PATH, "RIGHT", "line 10")], "elsewhere", "F3")], HEAD, AT, () => true);
     expect(noSharedAnchor.restatedAccepted).toEqual([]);
     expect(noSharedAnchor.kept.map(item => item.ledgerId)).toEqual(["F4"]);
+    const ambiguousDecisions: LoadedLedger = {
+      ledger: ledgerWith(
+        entry("F3", "P1", "accepted", [A42], "risk owned"),
+        entry("F4", "P1", "accepted", [A42], "separately owned"),
+      ),
+      commentId: 900,
+      digest: null,
+      migrated: false,
+    };
+    const ambiguous = reconcileLedger(
+      ambiguousDecisions,
+      [input("P1", [A42], "ambiguous identity", "F3")],
+      HEAD,
+      AT,
+      () => true,
+    );
+    expect(ambiguous.restatedAccepted).toEqual([]);
+    expect(ambiguous.kept.map(item => item.ledgerId)).toEqual(["F5"]);
 
     // Open entries match by fingerprint (category + shared exact anchor) without a tag, and a
     // restatement never lowers an open finding's priority.
@@ -427,6 +459,19 @@ describe("t345 AIDA findings ledger", () => {
     const otherCategory = reconcileLedger(openBlocker, [{ priority: "P1", category: "security", title: "different defect, same line", anchors: [A42] }], HEAD, AT, () => true);
     expect(otherCategory.kept.map(item => item.ledgerId)).toEqual(["F2"]);
     expect(otherCategory.retained.map(item => item.id)).toEqual(["F1"]);
+
+    // Duplicate reports in one judge batch collapse before ids are allocated.
+    const duplicateBatch = reconcileLedger(
+      { ledger: emptyLedger(42), commentId: null, digest: null, migrated: false },
+      [input("P2", [A42], "first report"), input("P1", [A42], "higher-priority duplicate")],
+      HEAD,
+      AT,
+      () => true,
+    );
+    expect(duplicateBatch.kept).toHaveLength(1);
+    expect(duplicateBatch.kept[0]).toMatchObject({ ledgerId: "F1", priority: "P1", title: "higher-priority duplicate" });
+    expect(duplicateBatch.ledger.findings).toHaveLength(1);
+    expect(duplicateBatch.ledger.findings[0].anchors).toHaveLength(1);
   });
 
   test("omitted findings: gone or legacy-only resolve; present or unevaluated blockers are retained", () => {
@@ -478,9 +523,52 @@ describe("t345 AIDA findings ledger", () => {
     expect(result.ledger.nextId).toBe(9);
     expect(result.ledger.events.map(event => event.kind)).toEqual(["seen", "seen", "resolved", "seen", "resolved", "seen", "opened"]);
     expect(loaded.ledger.findings.find(item => item.id === "F3")?.status).toBe("open");
+
+    // A current restatement upgrades a matching legacy anchor. On a later
+    // omission the enriched anchor can resolve when its code is gone.
+    const legacyQuote = { kind: "quote" as const, sha256: quoteAnchor("payment validation").sha256 };
+    const enrichedQuote = quoteAnchor("payment validation");
+    const legacyLoaded: LoadedLedger = {
+      ledger: ledgerWith(entry("F1", "P1", "open", [legacyQuote])),
+      commentId: 900,
+      digest: null,
+      migrated: false,
+    };
+    const upgraded = reconcileLedger(
+      legacyLoaded,
+      [{ priority: "P1", category: "correctness", title: "metadata issue", anchors: [enrichedQuote] }],
+      HEAD,
+      AT,
+      () => true,
+    );
+    expect(upgraded.ledger.findings[0].anchors).toEqual([enrichedQuote]);
+    const omittedAfterUpgrade = reconcileLedger(
+      { ...legacyLoaded, ledger: upgraded.ledger },
+      [],
+      HEAD,
+      LATER,
+      () => false,
+    );
+    expect(omittedAfterUpgrade.resolvedIds).toEqual(["F1"]);
+
+    // False evaluable anchors are decisive even when legacy identity anchors
+    // remain. A genuinely unknown evaluable anchor still retains a blocker.
+    const mixed = ledgerWith(
+      entry("F1", "P1", "open", [lineAnchor(PATH, "RIGHT", "gone"), legacyQuote]),
+      entry("F2", "P1", "open", [lineAnchor(PATH, "RIGHT", "unknown"), legacyQuote]),
+    );
+    const mixedResult = reconcileLedger(
+      { ledger: mixed, commentId: 900, digest: null, migrated: false },
+      [],
+      HEAD,
+      AT,
+      anchor => anchor.sha256 === lineAnchor(PATH, "RIGHT", "gone").sha256 ? false : null,
+    );
+    expect(mixedResult.resolvedIds).toEqual(["F1"]);
+    expect(mixedResult.retained.map(item => item.id)).toEqual(["F2"]);
   });
 
-  test("the ledger never exceeds its capacity: the oldest resolved finding makes room, undecided ones never do", () => {
+  test("the ledger never exceeds active capacity: resolved entries drop and decided entries archive", () => {
     const full = ledgerWith(
       ...Array.from({ length: 200 }, (_, index) =>
         entry(`F${index + 1}`, "P3", index < 150 ? "resolved" : "open", [lineAnchor(PATH, "RIGHT", `line ${index + 1}`)])),
@@ -494,12 +582,53 @@ describe("t345 AIDA findings ledger", () => {
     expect(result.ledger.findings.at(-1)?.id).toBe("F201");
     expect(() => renderLedgerComment(result.ledger)).not.toThrow();
     for (const finding of full.findings) finding.status = "open";
-    expect(() => reconcileLedger({ ...loaded, ledger: full }, [next], HEAD, AT, () => true)).toThrow("holds 200 undecided findings");
+    expect(() => reconcileLedger({ ...loaded, ledger: full }, [next], HEAD, AT, () => true)).toThrow("holds 200 open findings");
     // A head that fixed an old finding frees its slot before the new one is allocated.
     const oneFixed = reconcileLedger({ ...loaded, ledger: full }, [next], HEAD, AT, anchor => anchor.sha256 !== lineAnchor(PATH, "RIGHT", "line 1").sha256);
     expect(oneFixed.resolvedIds).toEqual(["F1"]);
     expect(oneFixed.kept.map(item => item.ledgerId)).toEqual(["F201"]);
     expect(oneFixed.ledger.findings).toHaveLength(200);
+
+    const decided = ledgerWith(
+      ...Array.from({ length: 200 }, (_, index) =>
+        entry(`F${index + 1}`, "P2", "rejected", [lineAnchor(PATH, "RIGHT", `decided ${index + 1}`)])),
+    );
+    const archived = reconcileLedger(
+      { ledger: decided, commentId: 900, digest: null, migrated: false },
+      [next],
+      HEAD,
+      AT,
+      () => true,
+    );
+    expect(archived.ledger.findings).toHaveLength(200);
+    expect(archived.ledger.archivedDecisions?.map(item => item.id)).toEqual(["F1"]);
+    expect(archived.ledger.findings.at(-1)?.id).toBe("F201");
+    expect(validateLedger(JSON.parse(JSON.stringify(archived.ledger))).archivedDecisions?.[0]).toMatchObject({
+      id: "F1",
+      status: "rejected",
+      decision: { by: "maintainer" },
+    });
+    const restatedArchived = reconcileLedger(
+      { ledger: archived.ledger, commentId: 900, digest: null, migrated: false },
+      [{
+        priority: "P2",
+        category: "correctness",
+        title: "same archived defect",
+        anchors: [lineAnchor(PATH, "RIGHT", "decided 1")],
+        ledgerId: "F1",
+      }],
+      HEAD,
+      LATER,
+      () => true,
+    );
+    expect(restatedArchived.suppressed.map(item => item.ledgerId)).toEqual(["F1"]);
+    const reopenedArchived = applyCommands(
+      archived.ledger,
+      parseCommands("/aida reopen F1"),
+      { login: "maint", at: LATER },
+    ).ledger;
+    expect(reopenedArchived.findings.find(item => item.id === "F1")?.status).toBe("open");
+    expect(reopenedArchived.archivedDecisions?.map(item => item.id)).toEqual(["F2"]);
   });
 
   test("the verdict is re-derived from persisted state under the review's own rules", () => {
@@ -793,6 +922,17 @@ describe("t345 AIDA findings ledger", () => {
       const reaction = recorded.find(call => call.args.some(value => value.endsWith("/777/reactions")));
       expect(JSON.parse(reaction?.input ?? "{}")).toEqual({ content: "-1" });
       expect(recorded.some(call => call.args.some(value => value.endsWith("/collaborators/maint/permission")))).toBe(true);
+
+      rmSync(gh.log, { force: true });
+      const malformed = fakeGh(
+        root,
+        renderLedgerComment(ledgerWith(entry("F2", "P2", "open", [A43]))),
+        "read",
+        "/aida `@release-team` ::warning:: forged",
+      );
+      expect(runCommand("acme/repo", 42, 777, "maint", AT, malformed.path).status).toBe("denied");
+      const malformedCalls = calls(malformed.log);
+      expect(malformedCalls.some(call => call.args.includes("POST") && call.args.at(-3) === "repos/acme/repo/issues/42/comments")).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -823,9 +963,12 @@ describe("t345 AIDA findings ledger", () => {
       const typed = runCommand("acme/repo", 42, 777, "maint", AT, typo.path);
       expect(typed.status).toBe("rejected");
       expect(typed.message).toContain("line 2: unrecognized command");
+      expect(typed.message).not.toContain("rejct");
       const typoCalls = calls(typo.log);
       expect(typoCalls.some(call => call.args.includes("PATCH"))).toBe(false);
-      expect(JSON.parse(typoCalls.find(call => call.args.includes("POST") && call.args.at(-3) === "repos/acme/repo/issues/42/comments")?.input ?? "{}").body).toContain("line 2: unrecognized command");
+      const typoReply = JSON.parse(typoCalls.find(call => call.args.includes("POST") && call.args.at(-3) === "repos/acme/repo/issues/42/comments")?.input ?? "{}").body;
+      expect(typoReply).toContain("line 2: unrecognized command");
+      expect(typoReply).not.toContain("rejct");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -839,7 +982,7 @@ describe("t345 AIDA findings ledger", () => {
       const output = join(root, "ledger.json");
       const run = (args: string[]) => execFileSync(process.execPath, [".github/scripts/ai-pr-ledger.ts", ...args], { cwd: REPO_ROOT, encoding: "utf8", env });
       expect(run(["fetch", "--repo", "acme/repo", "--pr", "42", "--output", output]).trim()).toBe("new migrated=false");
-      expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ version: 2, pullRequest: 42, nextId: 1, findings: [], migrated: false, expectedDigest: null });
+      expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ version: LEDGER_VERSION, pullRequest: 42, nextId: 1, findings: [], migrated: false, expectedDigest: null });
 
       const snapshot = ledgerWith(entry("F1", "P1", "open", [A42]));
       writeFileSync(output, `${JSON.stringify({ ...snapshot, migrated: false, expectedDigest: null })}\n`);
@@ -879,23 +1022,63 @@ describe("t345 AIDA findings ledger", () => {
       const gh = (headSha: string, labels: string[], reviews: Array<{ id: number; state: string; body: string }>) => {
         const path = join(root, "gh");
         const log = join(root, "calls.jsonl");
+        const state = join(root, "state.json");
         rmSync(log, { force: true });
+        writeFileSync(state, JSON.stringify({
+          head: headSha,
+          labels,
+          nextReviewId: 100,
+          reviews: reviews.map(review => ({
+            ...review,
+            commit_id: headSha,
+            user: { login: "github-actions[bot]" },
+          })),
+        }));
         writeFileSync(path, `#!/usr/bin/env bun
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input }) + "\\n");
+const statePath = ${JSON.stringify(state)};
+const state = JSON.parse(readFileSync(statePath, "utf8"));
+const save = () => writeFileSync(statePath, JSON.stringify(state));
 const endpoint = args.find(value => value.startsWith("repos/"));
 if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
-  process.stdout.write(JSON.stringify({ state: "open", merged: false, head: { sha: ${JSON.stringify(headSha)} }, labels: ${JSON.stringify(labels.map(name => ({ name })))} }));
+  process.stdout.write(JSON.stringify({ state: "open", merged: false, head: { sha: state.head }, labels: state.labels.map(name => ({ name })) }));
 } else if (endpoint === "repos/acme/repo/pulls/42/reviews" && !args.includes("--method")) {
-  process.stdout.write(JSON.stringify([${JSON.stringify(reviews.map(review => ({ ...review, commit_id: headSha, user: { login: "github-actions[bot]" } })))}]));
+  process.stdout.write(JSON.stringify([state.reviews]));
+} else if (endpoint === "repos/acme/repo/pulls/42/reviews" && args.includes("POST")) {
+  const payload = JSON.parse(input);
+  state.reviews.push({
+    id: state.nextReviewId++,
+    state: payload.event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "COMMENTED",
+    body: payload.body,
+    commit_id: payload.commit_id,
+    user: { login: "github-actions[bot]" },
+  });
+  save();
+  process.stdout.write(JSON.stringify(state.reviews.at(-1)));
+} else if (endpoint?.includes("/dismissals") && args.includes("PUT")) {
+  const id = Number(endpoint.split("/").at(-2));
+  const review = state.reviews.find(item => item.id === id);
+  if (review) review.state = "DISMISSED";
+  save();
+  process.stdout.write("{}");
+} else if (endpoint === "repos/acme/repo/issues/42/labels" && args.includes("POST")) {
+  for (const label of JSON.parse(input).labels) if (!state.labels.includes(label)) state.labels.push(label);
+  save();
+  process.stdout.write("{}");
+} else if (endpoint?.startsWith("repos/acme/repo/issues/42/labels/") && args.includes("DELETE")) {
+  const label = decodeURIComponent(endpoint.split("/").at(-1));
+  state.labels = state.labels.filter(value => value !== label);
+  save();
+  process.stdout.write("{}");
 } else {
   process.stdout.write("{}");
 }
 `);
         chmodSync(path, 0o755);
-        return { path, log };
+        return { path, log, state };
       };
       const mergeLabels = ["aida:reviewed", "next:maintainer", "action:merge"];
       const changeLabels = ["aida:reviewed", "next:author", "action:change"];
@@ -909,6 +1092,9 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
       expect(JSON.parse(posted?.input ?? "{}").body.startsWith(`${marker}\n<!-- ai-pr-review decision=author/change -->`)).toBe(true);
       expect(JSON.parse(changeCalls.find(call => call.args.includes("POST") && call.args.includes("repos/acme/repo/issues/42/labels"))?.input ?? "{}")).toEqual({ labels: ["next:author", "action:change"] });
       expect(changeCalls.some(call => call.args.includes("DELETE") && call.args.some(value => value.endsWith("/labels/next%3Amaintainer")))).toBe(true);
+      expect(changeCalls.findIndex(call => call.args.includes("POST") && call.args.includes("repos/acme/repo/pulls/42/reviews"))).toBeLessThan(
+        changeCalls.findIndex(call => call.args.includes("POST") && call.args.includes("repos/acme/repo/issues/42/labels")),
+      );
 
       // accept → merge: the bot's blocking review for the head is dismissed; nothing is posted.
       const toMerge = gh(HEAD, changeLabels, [{ id: 7, state: "CHANGES_REQUESTED", body: `${marker}\n<!-- ai-pr-review decision=author/change -->` }]);
@@ -953,11 +1139,11 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(LEDGER_WORKFLOW).toContain("cancel-in-progress: false");
     expect(LEDGER_WORKFLOW).toContain("--state-output /tmp/aida-command.json");
     expect(LEDGER_WORKFLOW).toContain("Refresh the published verdict without rerunning models");
-    expect(LEDGER_WORKFLOW).toContain("steps.command.outputs.status == 'applied' && steps.command.outputs.refresh_decision != ''");
+    expect(LEDGER_WORKFLOW).toContain("steps.command.outputs.status == 'applied' && steps.command.outputs.refresh_head != ''");
     expect(LEDGER_WORKFLOW).toContain("refresh_head=$(jq -r '.refresh.head // empty'");
-    expect(LEDGER_WORKFLOW).toContain("ai-pr-review.ts refresh-verdict");
+    expect(LEDGER_WORKFLOW).toContain("ai-pr-review.ts converge-verdict");
     expect(LEDGER_WORKFLOW).toContain('--head "$REFRESH_HEAD"');
-    expect(LEDGER_WORKFLOW).toContain('--decision "$REFRESH_DECISION"');
+    expect(LEDGER_WORKFLOW).not.toContain("REFRESH_DECISION");
     expect(LEDGER_WORKFLOW).not.toContain("OPEN_BLOCKING");
     expect(LEDGER_WORKFLOW).not.toContain("/dismissals");
     expect(LEDGER_WORKFLOW).not.toContain("author_association");
@@ -979,16 +1165,19 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(publish.indexOf("ai-pr-ledger.ts publish")).toBeLessThan(publish.indexOf('published="$(gh api --method POST'));
     expect(publish.indexOf("ai-pr-ledger.ts publish")).toBeLessThan(publish.indexOf(": > .ai-pr-review-final/published"));
     expect(publish.split("ai-pr-ledger.ts publish")).toHaveLength(2);
-    // After the review is posted, a ledger that moved during publication refreshes the verdict.
-    expect(publish).toContain(`published_digest="\${ledger_published_record##*digest=}"`);
-    expect(publish.indexOf('published="$(gh api --method POST')).toBeLessThan(publish.indexOf("ai-pr-ledger.ts verdict"));
-    expect(publish).toContain('--decision "$live_decision" --reason "maintainer /aida command during publication"');
+    // After the review is posted, every path converges from the live ledger.
+    expect(publish.indexOf('published="$(gh api --method POST')).toBeLessThan(publish.indexOf("converge-verdict"));
+    expect(publish).toContain('--reason "review publication"');
     expect(publish).toContain('if [ "$refresh" != "applied" ]; then');
-    expect(publish).toContain("> .ai-pr-review-final/decision.json");
+    expect(publish).not.toContain("> .ai-pr-review-final/decision.json");
     // The existing-review path derives labels and the blocking state from the ledger's verdict.
     const finalize = REVIEW_WORKFLOW.slice(REVIEW_WORKFLOW.indexOf("      - name: Finalize existing SHA-bound review"), REVIEW_WORKFLOW.indexOf("      - name: Install pinned review CLIs"));
     expect(finalize).toContain("ai-pr-ledger.ts verdict");
+    expect(finalize).toContain("converge-verdict");
     expect(finalize).toContain('change) label_outcome="reviewed-change"; EXISTING_STATE="CHANGES_REQUESTED" ;;');
+    const finalLabels = REVIEW_WORKFLOW.slice(REVIEW_WORKFLOW.indexOf("      - name: Reconcile AIDA review labels"));
+    expect(finalLabels).toContain("converge-verdict");
+    expect(finalLabels).not.toContain(".ai-pr-review-final/decision.json");
     expect(publish).toContain(`BASE_SHA: \${{ steps.context.outputs.base }}`);
   });
 
@@ -1011,7 +1200,8 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(CONTRIBUTING).toContain("a reason over 500 characters");
     expect(CONTRIBUTING).toContain("it posts a blocking review for the head");
     expect(CONTRIBUTING).toContain("A resolved finding cannot be\n  reopened");
-    expect(CONTRIBUTING).toContain("cannot be evaluated at the new head, resolves");
+    expect(CONTRIBUTING).toContain("legacy-only identity anchors do not keep it open");
+    expect(CONTRIBUTING).toContain("decided entries move to a bounded archive");
     expect(CONTRIBUTING).toContain("/aida accept F3 F7 we own this launch risk");
     expect(CONTRIBUTING).toContain("all-or-nothing");
     expect(CONTRIBUTING).toContain("P0 and P1 findings can be accepted but not rejected");
