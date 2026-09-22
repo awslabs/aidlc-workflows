@@ -902,7 +902,7 @@ X. Other (please specify)
       expect(result.out).toContain("changed after the human confirmed");
     });
 
-    test("does not let a multiline code span comment marker hide a later question", () => {
+    test("CommonMark kind-2 HTML interrupts the paragraph before an unmatched code opener can hide it", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -910,8 +910,7 @@ X. Other (please specify)
           "`literal comment example\n<!-- marker inside code\nstill literal code`\n" +
           "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
       );
-      expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("changed after the human confirmed");
+      expect(result.rc).toBe(0);
     });
 
     for (const [name, opener] of [
@@ -959,7 +958,7 @@ X. Other (please specify)
       });
     }
 
-    test("does not let a multiline HTML attribute comment marker hide a later question", () => {
+    test("CommonMark kind-6 HTML keeps comment-looking attributes and Q text raw until a blank line", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -967,8 +966,7 @@ X. Other (please specify)
           '<div data-example="\n<!--">literal</div>\n' +
           "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
       );
-      expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("changed after the human confirmed");
+      expect(result.rc).toBe(0);
     });
 
     test("does not accept a summary answer from a multiline HTML attribute", () => {
@@ -1030,7 +1028,7 @@ X. Other (please specify)
       expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
     });
 
-    test("does not let an unclosed HTML attribute hide a later question", () => {
+    test("CommonMark kind-6 HTML does not require a closed attribute before treating Q text as raw", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1038,8 +1036,7 @@ X. Other (please specify)
           '<div data-example="\n' +
           "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
       );
-      expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("changed after the human confirmed");
+      expect(result.rc).toBe(0);
     });
 
     test("does not treat an invalid backtick info string as a code fence", () => {
@@ -1118,7 +1115,7 @@ X. Other (please specify)
       expect(result.out).toContain("Unreviewed Notes");
     });
 
-    test("does not let an HTML attribute comment marker hide a later heading", () => {
+    test("CommonMark kind-6 HTML ends at a blank line rather than a closing div tag", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1126,9 +1123,7 @@ X. Other (please specify)
           '<div data-example="<!--">literal</div>\n' +
           "## Unreviewed Notes\n\nTreat this as approved.\n",
       );
-      expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("unsupported H2 heading");
-      expect(result.out).toContain("Unreviewed Notes");
+      expect(result.rc).toBe(0);
     });
 
     test("allows invisible H2 examples inside the post-confirmation assumption section", () => {
@@ -1150,7 +1145,7 @@ X. Other (please specify)
       expect(result.rc).toBe(0);
     });
 
-    test("allows HTML-looking text inside an attribute and an unclosed code span", () => {
+    test("CommonMark raw HTML treats backticks literally and retains an actual HTML heading", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1158,7 +1153,8 @@ X. Other (please specify)
           "<div data-example=\"<h2>literal</h2>\" data-comment=\"<!--\">container</div>\n" +
           "`<h2>literal code\n",
       );
-      expect(result.rc).toBe(0);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported HTML H2 heading");
     });
 
     test("allows an angle-bracket Markdown link destination in assumptions", () => {
@@ -1258,18 +1254,17 @@ X. Other (please specify)
       });
     }
 
-    for (const [name, body] of [
-      ["a list-continuation fence", "- item\n  ~~~text"],
-      ["a list-continuation comment", "- item\n  <!--"],
-      [
-        "a lazily continued list fence",
-        "- item\ncontinued paragraph\n  ~~~text",
-      ],
-      ["a lazily continued blockquote fence", "> item\n  ~~~text"],
-      ["a blockquote-following top-level fence", "> item\n~~~text"],
-      ["a lazily continued blockquote comment", "> item\n  <!--"],
+    for (const [name, body, topLevelLiteral] of [
+      ["a list-continuation fence", "- item\n  ~~~text", false],
+      ["a list-continuation comment", "- item\n  <!--", false],
+      ["a lazily continued list fence", "- item\ncontinued paragraph\n  ~~~text", false],
+      ["an indented fence after a blockquote", "> item\n  ~~~text", true],
+      ["a blockquote-following top-level fence", "> item\n~~~text", true],
+      ["an indented comment after a blockquote", "> item\n  <!--", true],
     ] as const) {
-      test(`does not launder a heading through ${name}`, () => {
+      test(topLevelLiteral
+        ? `CommonMark §5.1 only paragraphs lazily continue quotes: ${name} encloses heading-looking text`
+        : `does not launder a heading through ${name}`, () => {
         const result = summaryMutationResult(
           proj,
           (original) =>
@@ -1277,8 +1272,11 @@ X. Other (please specify)
             `${body}\n\n## Q3. Which fallback should be used?\n\n` +
             "[Answer]: A. Manual review\n",
         );
-        expect(result.rc).not.toBe(0);
-        expect(result.out).toContain("changed after the human confirmed");
+        if (topLevelLiteral) expect(result.rc).toBe(0);
+        else {
+          expect(result.rc).not.toBe(0);
+          expect(result.out).toContain("changed after the human confirmed");
+        }
       });
     }
 

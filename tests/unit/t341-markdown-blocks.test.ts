@@ -97,8 +97,8 @@ describe("t341 Markdown block adapter", () => {
     const blocks = markdownBlocks("a `code\nspan` b\n\n[Q1]: /url");
     expect(blocks.lines.map((line) => line.kind)).toEqual(["paragraph", "paragraph", "blank", "definition"]);
     expect(blocks.lines.map((line) => line.invisible)).toEqual([
-      [{ start: 2, end: 7, kind: "codeText" }],
-      [{ start: 0, end: 5, kind: "codeText" }],
+      [{ start: 2, end: 7, kind: "codeText", tokenStartLine: 0, tokenEndLine: 1 }],
+      [{ start: 0, end: 5, kind: "codeText", tokenStartLine: 0, tokenEndLine: 1 }],
       [], [],
     ]);
     expect(blocks.definitions).toEqual([{ label: "Q1", startLine: 3, endLine: 3 }]);
@@ -127,8 +127,8 @@ describe("t341 Markdown block adapter", () => {
     const blocks = markdownBlocks("a <!-- hidden\nx --> <b>shown</b>");
     expect(blocks.lines.map((line) => line.kind)).toEqual(["paragraph", "paragraph"]);
     expect(blocks.lines.map((line) => line.invisible)).toEqual([
-      [{ start: 2, end: 13, kind: "htmlComment" }],
-      [{ start: 0, end: 5, kind: "htmlComment" }, { start: 6, end: 9, kind: "htmlText" }, { start: 14, end: 18, kind: "htmlText" }],
+      [{ start: 2, end: 13, kind: "htmlComment", tokenStartLine: 0, tokenEndLine: 1 }],
+      [{ start: 0, end: 5, kind: "htmlComment", tokenStartLine: 0, tokenEndLine: 1 }, { start: 6, end: 9, kind: "htmlText", tokenStartLine: 1, tokenEndLine: 1 }, { start: 14, end: 18, kind: "htmlText", tokenStartLine: 1, tokenEndLine: 1 }],
     ]);
   });
 
@@ -136,14 +136,24 @@ describe("t341 Markdown block adapter", () => {
     const blocks = markdownBlocks("> a `x\n> y` z");
     expect(blocks.lines.map((line) => line.contentStart)).toEqual([2, 2]);
     expect(blocks.lines.map((line) => line.invisible)).toEqual([
-      [{ start: 4, end: 6, kind: "codeText" }], [{ start: 2, end: 4, kind: "codeText" }],
+      [{ start: 4, end: 6, kind: "codeText", tokenStartLine: 0, tokenEndLine: 1 }], [{ start: 2, end: 4, kind: "codeText", tokenStartLine: 0, tokenEndLine: 1 }],
     ]);
+  });
+
+  test("distinguishes multiline HTML tags from adjacent same-line tags", () => {
+    const blocks = markdownBlocks('a <span title="one\ntwo">b</span>\n<i>x</i>');
+    expect(blocks.lines[1].invisible[0]).toEqual({
+      start: 0, end: 5, kind: "htmlText", tokenStartLine: 0, tokenEndLine: 1,
+    });
+    expect(blocks.lines[1].invisible[1]).toEqual({
+      start: 6, end: 13, kind: "htmlText", tokenStartLine: 1, tokenEndLine: 1,
+    });
   });
 
   test("tabs count as raw columns and sibling items receive distinct identities", () => {
     const blocks = markdownBlocks("-\t`a`\n- b\n\n  c");
     expect(blocks.lines[0].contentStart).toBe(2);
-    expect(blocks.lines[0].invisible).toEqual([{ start: 2, end: 5, kind: "codeText" }]);
+    expect(blocks.lines[0].invisible).toEqual([{ start: 2, end: 5, kind: "codeText", tokenStartLine: 0, tokenEndLine: 0 }]);
     expect(blocks.lines[1].containers).toEqual([
       { kind: "listItem", ordered: false, start: null, marker: "-", id: 6, contentIndent: 2 },
     ]);
