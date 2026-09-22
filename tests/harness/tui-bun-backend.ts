@@ -12,7 +12,7 @@ import { publishSupervisorStop, type SupervisorConfig, type SupervisorStatus, ty
 import { physicalTuiText, type TuiSnapshot, type TuiTextLayout, type TuiTextViews } from "./tui-screen.ts";
 import { acquireNativeLock, getNativeProcessIdentity } from "./tui-process-identity.ts";
 import {
-  type DirectoryIdentity, ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord,
+  assertDirectoryIdentity, type DirectoryIdentity, ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord,
 } from "./tui-record-file.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -27,7 +27,9 @@ interface SessionRecord {
   backend: "bun";
   session: string;
   token: string;
+  generation: string;
   endpoint: string;
+  rootIdentity: DirectoryIdentity;
   directoryIdentity: DirectoryIdentity;
   daemonPid?: number;
   daemonIdentity?: string;
@@ -205,7 +207,7 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
       validateSize(width, height);
       if (!command.length) throw new Error("native terminal requires a command");
       const paths = bunSessionPaths(session);
-      ensurePrivateRoot(paths.root);
+      ensurePrivateRoot(paths.root, process.env.AIDLC_TUI_BUN_ROOT ? "explicit" : "temporary");
       const rootIdentity = privateDirectoryIdentity(paths.root);
       // An OS-owned lock is released even when the start client is interrupted.
       const unlock = await acquireNativeLock(`${paths.directory}.lock`);
@@ -227,8 +229,8 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
         const prepared = process.platform === "win32" && options.windowsCommand
           ? options.windowsCommand(command) : { file: command[0], args: command.slice(1) };
         const record: SessionRecord = {
-          schema: 1, backend: "bun", session, token: randomUUID(), endpoint: paths.endpoint,
-          directoryIdentity,
+          schema: 1, backend: "bun", session, token: randomUUID(), generation: randomUUID(), endpoint: paths.endpoint,
+          rootIdentity, directoryIdentity,
           phase: "starting", cwd: resolve(cwd), command: [prepared.file, ...prepared.args],
           fixtureCwd: options.fixtureCwd(cwd, command), width, height,
           windowsVerbatimArguments: prepared.windowsVerbatimArguments,
@@ -238,7 +240,7 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
         const stderr = openSync(join(paths.directory, "daemon.log"), "a", 0o600);
         let spawnError: Error | undefined;
         try {
-          const child = spawn(nativeBun(), [fileURLToPath(import.meta.url), "--daemon", paths.directory], {
+          const child = spawn(nativeBun(), [fileURLToPath(import.meta.url), "--daemon", paths.directory, record.generation], {
             cwd: record.cwd, env: { ...process.env, TERM: "xterm-256color" },
             stdio: ["ignore", "ignore", stderr], detached: true,
           });
@@ -348,17 +350,20 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
   };
 }
 
-function readLaunchRecord(directory: string) {
+function readLaunchRecord(directory: string, expectedGeneration: string) {
   const record = readPrivateRecord<SessionRecord>(directory, join(directory, "session.json"));
   if (record?.backend !== "bun" || record.schema !== 1) throw new Error("invalid native terminal launch record");
   const paths = bunSessionPaths(record.session);
   if (paths.directory !== directory || paths.endpoint !== record.endpoint) throw new Error("native terminal launch path mismatch");
   if (typeof record.token !== "string" || record.token.length < 20) throw new Error("invalid native terminal launch token");
+  if (record.phase !== "starting") throw new Error(`native terminal launch phase must be starting, received ${record.phase}`);
+  if (!expectedGeneration || record.generation !== expectedGeneration) throw new Error("native terminal launch generation mismatch");
+  assertDirectoryIdentity(dirname(directory), privateDirectoryIdentity(dirname(directory)), record.rootIdentity);
   return { record, paths };
 }
 
 /** Daemon entrypoint. Only this process loads the emulator or creates a PTY. */
-export async function runBunDaemon(directory: string): Promise<void> {
+export async function runBunDaemon(directory: string, expectedGeneration: string): Promise<void> {
   directory = resolve(directory);
   const file = join(directory, "session.json");
   // Establish directory trust separately: a rejected record can leave a safe
@@ -366,7 +371,7 @@ export async function runBunDaemon(directory: string): Promise<void> {
   const rootIdentity = privateDirectoryIdentity(dirname(directory));
   const directoryIdentity = privateDirectoryIdentity(directory);
   const { record, paths } = (() => {
-    try { return readLaunchRecord(directory); }
+    try { return readLaunchRecord(directory, expectedGeneration); }
     catch (error) {
       privateDirectoryIdentity(dirname(directory), rootIdentity);
       publishTuiRecord(file, {
@@ -604,6 +609,10 @@ export async function runBunDaemon(directory: string): Promise<void> {
     }
     if (status()?.phase !== "ready") throw new Error("supervisor startup timed out");
     await publish();
+    // Pin both directories to the starter's record, after the handshake and all
+    // asynchronous setup, immediately before allowing the command to execute.
+    assertDirectoryIdentity(paths.root, privateDirectoryIdentity(paths.root), record.rootIdentity);
+    assertDirectoryIdentity(directory, privateDirectoryIdentity(directory), record.directoryIdentity);
     writeFileSync(paths.release, record.token, { mode: 0o600 });
     while (Date.now() < deadline) {
       const value = status();
@@ -657,8 +666,8 @@ export async function runBunDaemon(directory: string): Promise<void> {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv[2] !== "--daemon" || !process.argv[3]) throw new Error("usage: tui-bun-backend.ts --daemon <session-directory>");
-  runBunDaemon(process.argv[3]).catch((error) => {
+  if (process.argv[2] !== "--daemon" || !process.argv[3] || !process.argv[4]) throw new Error("usage: tui-bun-backend.ts --daemon <session-directory> <generation>");
+  runBunDaemon(process.argv[3], process.argv[4]).catch((error) => {
     try {
       const directory = process.argv[3];
       const file = join(directory, "session.json");

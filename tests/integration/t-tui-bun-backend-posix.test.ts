@@ -49,7 +49,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     mkdirSync(paths.directory, { mode: 0o700 });
     writeFileSync(paths.record, "untrusted bytes", { mode: 0o600 });
     chmodSync(paths.directory, 0o777);
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory], {
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory, randomUUID()], {
       env: childEnv, stdout: "pipe", stderr: "pipe", timeout: 5000,
     });
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
@@ -67,8 +67,8 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     const paths = bunSessionPaths(session, { ...env, ...childEnv });
     mkdirSync(paths.directory, { mode: 0o700 });
     publishTuiRecord(paths.record, {
-      schema: 1, backend: "bun", session, token: randomUUID(), endpoint: paths.endpoint,
-      directoryIdentity: privateDirectoryIdentity(paths.directory), phase: "running",
+      schema: 1, backend: "bun", session, token: randomUUID(), generation: randomUUID(), endpoint: paths.endpoint,
+      rootIdentity: privateDirectoryIdentity(privateRoot), directoryIdentity: privateDirectoryIdentity(paths.directory), phase: "running",
     });
     chmodSync(paths.record, 0o666);
     for (const args of [

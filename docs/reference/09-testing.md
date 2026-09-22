@@ -284,15 +284,22 @@ the current user with mode **0700** on POSIX, or on Windows a current-user
 owner SID and no allow ACEs for Everyone, BUILTIN\Users or Authenticated Users.
 Symlinks, junctions and other Windows reparse points are refused. The driver
 creates a missing root with private permissions; it refuses an unsafe existing
-root rather than changing its permissions. Remove an unsafe pre-created root
-or point `AIDLC_TUI_BUN_ROOT` at a private directory, and keep that setting
-consistent across commands.
+root rather than changing its permissions. On POSIX, every explicit-root ancestor
+must be owned by the current user or root, with no group/other write bits unless
+sticky; the implicit root's temporary parent must be current-user-owned or mode
+**1777**. Windows validates root/session owner and DACL, but does not yet validate
+ancestor ACL trust; the generation handshake below remains enforced. Remove an
+unsafe pre-created root or point `AIDLC_TUI_BUN_ROOT` at a private directory under
+trusted ancestors, and keep that setting consistent across commands.
 
-Launch records are private regular files pinned to the session directory's
-filesystem identity. Both clients and the daemon validate ownership, permissions
-and identity before trusting them; a replaced directory cannot authorize a
-command or redirect RPC credentials. The daemon refuses it before creating a
-PTY or supervisor, and never writes diagnostics into an untrusted directory.
+Launch records are private regular files pinned to the root and session
+directories' filesystem identities. Both clients and the daemon validate
+ownership, permissions and session identity before trusting them. The daemon
+also requires a **starting** record with the fresh generation supplied by the
+starter through argv, before creating a PTY or supervisor, and rechecks both
+recorded directory identities immediately before releasing the command. Replayed
+completed records cannot authorize a command; diagnostics are never written into
+an untrusted directory.
 
 Target exit status and PTY exit status are separate: Bun reports ordinary
 Linux slave-close EIO as PTY status `1`. The driver accepts that status after

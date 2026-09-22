@@ -137,8 +137,9 @@ describe.skipIf(!supported)("native launch namespace security", () => {
     const directoryIdentity = privateDirectoryIdentity(paths.directory);
     const marker = join(root, `${session}-executed`);
     const record = {
-      schema: 1, backend: "bun", session, token: randomUUID(), endpoint: paths.endpoint,
-      directoryIdentity, phase: "starting", cwd: root, fixtureCwd: null, width: 80, height: 16,
+      schema: 1, backend: "bun", session, token: randomUUID(), generation: randomUUID(), endpoint: paths.endpoint,
+      rootIdentity: privateDirectoryIdentity(privateRoot), directoryIdentity,
+      phase: "starting", cwd: root, fixtureCwd: null, width: 80, height: 16,
       command: [process.execPath, "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)},'executed')`],
     };
     publishTuiRecord(paths.record, record, directoryIdentity);
@@ -147,7 +148,7 @@ describe.skipIf(!supported)("native launch namespace security", () => {
     if (replaced === "parent") ensurePrivateRoot(privateRoot);
     ensurePrivateRoot(paths.directory);
     publishTuiRecord(paths.record, record, privateDirectoryIdentity(paths.directory));
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory], {
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory, record.generation], {
       env: childEnv, stdout: "pipe", stderr: "pipe", timeout: 5000,
     });
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);

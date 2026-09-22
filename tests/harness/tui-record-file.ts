@@ -97,8 +97,43 @@ export function privateDirectoryIdentity(path: string, expected?: DirectoryIdent
   return identity;
 }
 
+function validateRootAncestors(root: string, policy: "explicit" | "temporary"): void {
+  // The Windows private-path check requires current-user ownership and rejects
+  // public read ACEs too; it cannot validate system-owned drive/profile ancestors.
+  // Windows still enforces private root/session ACLs and the launch handshake.
+  if (process.platform === "win32") return;
+  const uid = process.getuid?.();
+  if (uid === undefined) throw unsafe(root, "cannot establish current uid for ancestor validation");
+  const parent = dirname(resolve(root));
+  if (policy === "temporary") {
+    const stat = fs.statSync(parent, { bigint: true });
+    if (!stat.isDirectory() || (stat.uid !== BigInt(uid) && (stat.mode & 0o1777n) !== 0o1777n)) {
+      throw unsafe(parent, "temporary ancestor must be current-user-owned or sticky world-writable (1777)");
+    }
+    return;
+  }
+  const ancestors = new Set([parent]);
+  for (const path of ancestors) {
+    ancestors.add(dirname(path));
+    let stat: fs.BigIntStats;
+    try { stat = fs.statSync(path, { bigint: true }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (!stat.isDirectory()) throw unsafe(path, "ancestor is not a directory");
+    if (stat.uid !== 0n && stat.uid !== BigInt(uid)) throw unsafe(path, "ancestor is not owned by current uid or uid 0");
+    if ((stat.mode & 0o022n) !== 0n && (stat.mode & 0o1000n) === 0n) {
+      throw unsafe(path, "ancestor is group/other-writable without the sticky bit");
+    }
+    // Also walk resolved ancestry: a symlink may cross into a different tree.
+    ancestors.add(fs.realpathSync(path));
+  }
+}
+
 /** Existing directories are verified, never chmod/ACL repaired. */
-export function ensurePrivateRoot(root: string): void {
+export function ensurePrivateRoot(root: string, ancestorPolicy?: "explicit" | "temporary"): void {
+  if (ancestorPolicy) validateRootAncestors(root, ancestorPolicy);
   fs.mkdirSync(dirname(resolve(root)), { recursive: true, mode: 0o700 });
   if (windowsSecurity) {
     try { windowsSecurity.createWindowsPrivateDirectory(root); }
@@ -122,6 +157,7 @@ $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'Ful
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   }
   privateDirectoryIdentity(root);
+  if (ancestorPolicy) validateRootAncestors(root, ancestorPolicy);
 }
 
 /** Validate the namespace before and after reading from one no-follow fd. */
