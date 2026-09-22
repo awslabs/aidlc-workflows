@@ -311,6 +311,50 @@ function reviewAuditExtras(
   };
 }
 
+// The fixture cleanup removes candidate checkouts even when an assertion fails.
+// Keep the pinned inputs and the original Git command outcomes in the test log
+// when landing unexpectedly rejects review evidence that pin and gate accepted.
+function reportPinnedReviewFailure(
+  projectDir: string,
+  pinnedOid: string,
+  tracePath: string,
+): void {
+  try {
+    const prefix = relative(projectDir, seededRecordDir(projectDir)).replaceAll("\\", "/");
+    const filesAt = (oid: string) => {
+      const paths = git(projectDir, ["ls-tree", "-r", "--name-only", oid, "--", prefix])
+        .split("\n").filter(Boolean);
+      return Object.fromEntries(paths.map((path) => {
+        const result = spawnSync("git", ["show", `${oid}:${path}`, "--"], {
+          cwd: projectDir,
+          encoding: "utf-8",
+        });
+        return [path, {
+          status: result.status,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          error: result.error?.message,
+        }];
+      }));
+    };
+    const landingHead = git(projectDir, ["rev-parse", "HEAD"]);
+    console.error(`t326 pinned review diagnostics:\n${JSON.stringify({
+      pinnedOid,
+      landingHead,
+      transaction: readUnitMergeTransaction(projectDir, "alpha"),
+      pinnedFiles: filesAt(pinnedOid),
+      landingFiles: filesAt(landingHead),
+    }, null, 2)}`);
+  } catch (error) {
+    console.error(`t326 pinned review diagnostics unavailable: ${String(error)}`);
+  }
+  try {
+    console.error(`t326 landing Git trace:\n${readFileSync(tracePath, "utf-8")}`);
+  } catch (error) {
+    console.error(`t326 landing Git trace unavailable: ${String(error)}`);
+  }
+}
+
 function prepareCandidate(
   remote: string,
   unit: string,
@@ -1633,7 +1677,19 @@ describe("t326 pinned team Unit merge", () => {
     git(conflict.seed, ["commit", "-m", "main conflict"]);
     const stateBefore = readFileSync(seededStateFile(conflict.seed), "utf-8");
     const headBefore = git(conflict.seed, ["rev-parse", "HEAD"]);
-    const landed = run(UNIT, ["land", "alpha", "--step", "git"], conflict.seed);
+    const traceDir = mkdtempSync(join(tmpdir(), "aidlc-inc3-landing-trace-"));
+    tempDirs.push(traceDir);
+    const tracePath = join(traceDir, "git-events.ndjson");
+    const landed = run(UNIT, ["land", "alpha", "--step", "git"], conflict.seed, false, {
+      GIT_TRACE2_EVENT: tracePath.replaceAll("\\", "/"),
+    });
+    if (landed.out.includes("reviewer READY receipts")) {
+      reportPinnedReviewFailure(
+        conflict.seed,
+        JSON.parse(conflictPin.stdout).pinned_oid,
+        tracePath,
+      );
+    }
     expect(landed.status).not.toBe(0);
     expect(landed.out).toContain("src/alpha.ts");
     expect(readFileSync(seededStateFile(conflict.seed), "utf-8")).toBe(stateBefore);

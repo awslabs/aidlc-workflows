@@ -5,7 +5,9 @@ workflows: `.github/workflows/release.yml` for stable tags and
 `.github/workflows/preview-release.yml` for scheduled or manually dispatched
 previews. Both use the repository-provided `GITHUB_TOKEN`. Neither requires a
 GitHub App, a personal access token, a second repository, or repository
-secrets.
+secrets for publication. Required live tests use the existing `ai-pr-review`
+environment's `AWS_AI_PR_REVIEW_ROLE_ARN` secret, resolved by the called
+workflow's live jobs without a caller-supplied secret.
 
 ## Release trigger
 
@@ -18,8 +20,18 @@ the release unless all of these conditions hold:
 - the tag equals `v` plus the version in `core/tools/aidlc-version.ts`;
 - a successful `preview-release.yml` run for the exact tag SHA, or a successful
   main-branch `workflow_dispatch` run of `full-suite.yml`, supplies a
-  `full-suite-result` artifact with that exact `.sha` and `.passed == true`
-  (declared exclusions are reported as warnings, not release blockers).
+  `full-suite-result` artifact with that exact `.sha`, the downloaded run's
+  `.runId`, `.coveragePolicy == "required-hosted-live-v1"`, `.passed == true`,
+  `.disabledLegs == []`, and every declared job in `.legs` equal to `success`.
+
+Old-policy, missing, expired, wrong-source/run, disabled-live or unsuccessful
+evidence blocks publication. Kiro ACP/TUI/IDE, Cursor and Copilot remain explicit
+documented exclusions and produce warnings; `.complete` remains false and is
+not a release requirement. Job readiness does not prove complete case coverage
+across OSes; see [Nightly full-suite matrix and provisioning](09-testing.md#nightly-full-suite-matrix-and-provisioning).
+Every authorized Full Suite run executes hosted live jobs through the existing
+environment; no separate live opt-in switch suppresses release coverage.
+The source-on-main authorization and credential isolation apply before live execution.
 
 Feature, fix, documentation, refactor, and test PRs do not update release
 metadata. The release-preparation PR summarizes the user-visible changes merged
@@ -29,10 +41,10 @@ files.
 
 ## Build and validation
 
-The workflow:
+After accepting the exact-commit Full Suite evidence, the stable workflow:
 
 1. regenerates every harness distribution and checks deterministic output;
-2. runs the project test suite, typecheck, lint, ShellCheck, and
+2. runs typecheck, lint, ShellCheck, and
    PSScriptAnalyzer;
 3. builds native binaries for Linux, macOS, and Windows;
 4. runs native and installer smoke tests;
@@ -40,6 +52,10 @@ The workflow:
    its `.sha256` sidecar, the manifest-listed native
    `aidlc-runtime-X.Y.Z.tar.gz`, installers, `version.json`, and `checksums.txt`;
 6. verifies the staged release inventory and checksums.
+
+The smoke, unit, integration and e2e source tiers are supplied by the accepted
+nightly evidence. Stable release does not run them again; its native binary,
+installer and lifecycle checks validate the newly built release assets.
 
 The release manifest records the tag ref and exact source commit. Both runtime
 archive names include the release version. Manual-copy users download
@@ -58,9 +74,11 @@ the staged assets. The exported provenance bundle is included as
 The preview workflow schedules `main` daily at 22:00 in `Europe/Lisbon` and
 accepts manual dispatch. Scheduled and manual runs serialize through the
 `release-preview` workflow concurrency group without cancelling the active run.
-Each later run re-reads the release list: the planner skips if the source commit
-is unchanged since the latest published preview. If `main` advances again on
-the same UTC date, another preview can publish with the next build counter.
+Each later run re-reads the release list: the planner skips the publication build
+chain if the source commit is unchanged since the latest published preview.
+Contract checks and Full Suite still run for that source, and the final result requires their
+success even when publication is deduplicated. If `main` advances again on the
+same UTC date, another preview can publish with the next build counter.
 
 The planner reads the current stable `x.y.z` from
 `core/tools/aidlc-version.ts` and allocates
@@ -71,8 +89,14 @@ ids, so retry planning and later same-day publications advance `N` past their
 occupied ids. Leftover `aidlc-staging-*` drafts still require inspection and
 removal before the publisher stages another candidate.
 
-The planner renders notes from changes since the previous preview. Callable
-CI gates the authorized commit before the normal release build chain.
+The planner renders notes from changes since the previous preview. Contract
+checks and Full Suite gate the authorized commit before the normal release
+build chain. Preview does not repeat the PR CI test matrix.
+PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
+with different matrices: Linux smoke/four unit shards/integration for PRs, and
+Linux/macOS/Windows smoke/four unit shards/deep for nightly coverage. Each call
+tests a fresh checkout of the supplied commit and retains sanitized evidence;
+no previous test result is substituted for a run.
 `AIDLC_BUILD_VERSION` stamps the preview id into projections, binaries,
 `version.json`, both versioned runtime archives, and the packaged installers
 while the source tree keeps its stable `x.y.z` version. A packaged installer
@@ -85,7 +109,7 @@ publishes the draft as a prerelease with `make_latest: false`; stable
 Stable and preview publication use the protected `release` and unattended
 `preview` environments respectively. The preview environment must keep the
 same `main` deployment policy but no required reviewers; merge approval plus
-callable CI are its human and deterministic gates. Stable runs use a separate
+contract checks and Full Suite are its human and deterministic gates. Stable runs use a separate
 concurrency group. The preview publisher stages and byte-verifies the complete
 candidate before publication and works with either mutable or immutable
 repository releases.
@@ -133,10 +157,15 @@ gate.
    - the matching `CHANGELOG.md` heading.
 2. Wait for (or dispatch) `preview-release.yml` on the intended release SHA while
    it is `main`'s tip, and confirm the `full-suite-result` artifact records that
-   exact SHA with `.passed == true`.
+   exact SHA, matching run ID, `.coveragePolicy == "required-hosted-live-v1"`,
+   `.passed == true`, `.disabledLegs == []`, and every declared job successful.
+   Required live jobs use the existing `ai-pr-review` environment's
+   `AWS_AI_PR_REVIEW_ROLE_ARN`; verify its OIDC/model permissions and six-hour
+   session support before running them.
    If its evidence is missing or expired, dispatch `full-suite.yml` on `main`
    with `ref=<sha>` to renew it without republishing an unchanged preview;
-   confirm the new artifact has the intended `.sha` and `.passed == true`.
+   confirm the new artifact meets the same policy. The tested source must
+   contain the current result policy; an old permissive artifact is insufficient.
 
    ```bash
    gh workflow run full-suite.yml --ref main -f 'ref=<intended-release-sha>'

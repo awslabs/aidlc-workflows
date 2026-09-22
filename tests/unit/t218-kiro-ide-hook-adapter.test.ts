@@ -3181,6 +3181,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     ["adapter", runIdeStdin],
     ["dispatcher", runIdeDispatcherStdin],
   ] as const)("N6c: %s retains real prompt session identities without a startup callback", (_name, invoke) => {
+    // Budget five sequential real hook invocations plus fixture setup and cleanup.
     const dir = scratchProject(true);
     const marker = join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session");
     const prompt = (session: string | undefined) => JSON.stringify({
@@ -3201,7 +3202,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   test("N7: a 0.12 payload target consumes USER_PROMPT without probing held-open stdin", async () => {
     // The #543 0.12 shape: USER_PROMPT carries the payload while stdin is opened

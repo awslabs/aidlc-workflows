@@ -1,16 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, type LiveFamily } from "../../scripts/ci-live-filter.ts";
-import { FULL_SUITE_JOBS, fullSuiteResult, type SuiteNeeds } from "../../scripts/ci-full-suite-result.ts";
+import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, fullSuiteResult, type SuiteNeeds } from "../../scripts/ci-full-suite-result.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { brokerChildEnvironment } from "../../scripts/ci-start-credential-broker.ts";
 import { sandboxEnvironment } from "../../scripts/ci-live-sandbox.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { setupCodexProject } from "../harness/exec-drive.ts";
+import { parseShardSpec, selectShard, type ShardConfig } from "../lib/test-sharding.ts";
 import { parse } from "smol-toml";
 
 interface Step {
@@ -27,17 +28,32 @@ interface Job {
   if?: string;
   needs?: string | string[];
   uses?: string;
-  "runs-on": string | string[];
+  "runs-on"?: string | string[];
   env?: Record<string, string>;
   environment?: string;
   permissions?: Record<string, string>;
-  strategy?: { matrix: { include?: Array<Record<string, string>>; family?: LiveFamily[] } };
-  steps: Step[];
+  strategy?: { matrix: {
+    include?: Array<Record<string, string>>;
+    family?: LiveFamily[];
+    runner?: string[] | string;
+    suite?: Array<{ name: string; tier: string; shard?: string }>;
+  } };
+  steps?: Step[];
+  with?: Record<string, string>;
 }
 const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
-  on: { workflow_call: { secrets: Record<string, { required: boolean }> } };
+  on: { workflow_call: { secrets?: Record<string, { required: boolean }> } };
   jobs: Record<string, Job>;
 };
+const deterministic = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf8")) as {
+  on: { workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string }> } };
+  permissions: Record<string, string>;
+  jobs: Record<string, Job>;
+};
+
+function steps(job: { steps?: Step[] }): Step[] {
+  return job.steps ?? [];
+}
 
 function aliases(file: string): string[] {
   const parts = file.split("/");
@@ -61,7 +77,7 @@ function rows(job: Job): Array<{ family: LiveFamily; platform: string }> {
     expect(row.platform).toBe(platform);
     return { family: row.family as LiveFamily, platform };
   });
-  return (matrix?.family ?? []).map((family) => ({ family, platform: platformOf(job["runs-on"]) }));
+  return (matrix?.family ?? []).map((family) => ({ family, platform: platformOf(job["runs-on"]!) }));
 }
 
 function allSuccess(): SuiteNeeds {
@@ -72,6 +88,169 @@ const excludedFamilies = Object.entries(FAMILIES).filter(([, family]) => family.
   .map(([name]) => name).sort();
 
 describe("t345 complete nightly coverage", () => {
+  test("PR and nightly deterministic tiers use one implementation with immutable caller refs", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+    const uses = "./.github/workflows/deterministic-tests.yml";
+    expect(ci.jobs.deterministic).toMatchObject({
+      uses, with: {
+        ref: `\${{ github.sha }}`, runner: `\${{ matrix.runner }}`,
+        tier: `\${{ matrix.suite.tier }}`, "unit-shard": `\${{ matrix.suite.shard || '' }}`,
+        "artifact-label": `ci-deterministic-\${{ matrix.suite.name }}`,
+      },
+    });
+    expect(ci.jobs.deterministic.steps).toBeUndefined();
+    expect(ci.jobs.deterministic["runs-on"]).toBeUndefined();
+    expect(ci.jobs.test.needs).toContain("deterministic");
+    expect(workflow.jobs.deterministic).toMatchObject({
+      needs: "plan", uses,
+      with: {
+        ref: `\${{ needs.plan.outputs.sha }}`, runner: `\${{ matrix.runner }}`,
+        tier: `\${{ matrix.suite.tier }}`, "unit-shard": `\${{ matrix.suite.shard || '' }}`,
+        "artifact-label": `full-suite-deterministic-\${{ matrix.suite.name }}`,
+      },
+    });
+    expect(workflow.jobs.deterministic.steps).toBeUndefined();
+    const aggregate = steps(ci.jobs.test)[0];
+    const passed = Object.fromEntries(Object.keys(aggregate.env!).map((key) => [key, "success"]));
+    const run = (env: Record<string, string>) => spawnSync("bash", ["-e", "-c", aggregate.run!], {
+      env: { ...process.env, ...env }, encoding: "utf8",
+    }).status;
+    expect(run(passed)).toBe(0);
+    for (const key of Object.keys(passed)) {
+      for (const status of ["failure", "cancelled", "skipped"]) {
+        expect(run({ ...passed, [key]: status }), `${key}=${status}`).toBe(1);
+      }
+    }
+    expect(aggregate.env?.DETERMINISTIC_RESULT).toBe(`\${{ needs.deterministic.result }}`);
+  }, 30_000);
+
+  test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
+    expect(Object.keys(deterministic.on)).toEqual(["workflow_call"]);
+    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "ref", "runner", "tier", "unit-shard"]);
+    expect(deterministic.permissions).toEqual({ contents: "read" });
+    const job = deterministic.jobs.test;
+    expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
+    const setup = steps(job);
+    const checkout = setup.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
+    const bind = setup.findIndex((step) => step.name === "Bind checkout to requested commit");
+    const install = setup.findIndex((step) => step.run === "bun install --frozen-lockfile");
+    const packageIndex = setup.findIndex((step) => step.run === "bun scripts/package.ts");
+    expect(setup[checkout].with).toEqual({ ref: `\${{ inputs.ref }}`, "persist-credentials": false });
+    expect(bind).toBeGreaterThan(checkout);
+    expect(bind).toBeLessThan(install);
+    expect(setup[bind].run).toContain('test "$(git rev-parse HEAD)" = "$TEST_REF"');
+    expect(packageIndex).toBeGreaterThan(install);
+    expect(packageIndex).toBeLessThan(setup.findIndex((step) => step.name === "Run deterministic tier"));
+    expect(setup.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"]).toBe("1.3.14");
+    const substrate = setup.find((step) => step.name === "Prepare unit test substrates")!;
+    expect(substrate.if).toBe("inputs.tier == 'unit' && runner.os != 'Windows'");
+    expect(substrate.run).toContain('command -v "$tool"');
+    expect(substrate.run).toContain("tmux zsh");
+    expect(substrate.run).toContain("sudo apt-get install");
+    expect(substrate.run).toContain("command -v tmux");
+    expect(substrate.run).toContain("brew install tmux");
+    expect(setup.indexOf(substrate)).toBeLessThan(setup.findIndex((step) => step.name === "Run deterministic tier"));
+    expect(job.env).toMatchObject({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.autocrlf", GIT_CONFIG_VALUE_0: "false" });
+  });
+
+  test("shared selection rejects mutable refs, unknown tiers and misplaced unit shards", () => {
+    const selection = steps(deterministic.jobs.test).find((step) => step.name === "Validate test selection")!;
+    const run = (extra: NodeJS.ProcessEnv) => spawnSync("bash", ["-c", selection.run!], {
+      encoding: "utf8",
+      env: { ...process.env, TEST_REF: identity.sha, TEST_TIER: "unit", UNIT_SHARD: "2/4", ARTIFACT_LABEL: "ci-unit-2", ...extra },
+    }).status;
+    expect(run({})).toBe(0);
+    for (const tier of ["smoke", "integration", "deep"]) {
+      expect(run({ TEST_TIER: tier, UNIT_SHARD: "" })).toBe(0);
+      expect(run({ TEST_TIER: tier })).not.toBe(0);
+    }
+    for (const extra of [{ TEST_REF: "main" }, { TEST_TIER: "unknown" }, { UNIT_SHARD: "" }, { ARTIFACT_LABEL: "../outside" }]) {
+      expect(run(extra)).not.toBe(0);
+    }
+  }, 30_000);
+
+  test("manual CI expands the shared matrix instead of repeating a second platform suite", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      on: { workflow_dispatch: { inputs: { platform_regressions: { type: string; default: boolean } } } };
+      jobs: Record<string, Job>;
+    };
+    expect(ci.on.workflow_dispatch.inputs.platform_regressions).toMatchObject({ type: "boolean", default: false });
+    const matrix = ci.jobs.deterministic.strategy!.matrix;
+    for (const [event, enabled, expanded] of [
+      ["pull_request", false, false], ["pull_request", true, false],
+      ["workflow_call", true, false], ["workflow_dispatch", false, false],
+      ["workflow_dispatch", true, true],
+    ] as const) {
+      // The selected GitHub expressions use only JS-compatible &&/|| and
+      // fromJSON; exercise the actual checked-in expressions for each trigger.
+      const evaluate = (value: string): unknown => {
+        const expression = value.match(/^\$\{\{([\s\S]+)\}\}$/)?.[1];
+        if (!expression) return value;
+        return new Function("github", "inputs", "fromJSON", `return (${expression});`)(
+          { event_name: event }, { platform_regressions: enabled }, JSON.parse,
+        );
+      };
+      const runners = evaluate(matrix.runner as string) as string[];
+      const suites = matrix.suite!.map((suite) => ({ ...suite, name: evaluate(suite.name), tier: evaluate(suite.tier) }));
+      expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
+      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", "unit", "unit", "unit", "unit", expanded ? "deep" : "integration"]);
+      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(["1/4", "2/4", "3/4", "4/4"]);
+      expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 18 : 6);
+      if (expanded) expect(suites).toEqual(workflow.jobs.deterministic.strategy!.matrix.suite!);
+    }
+    expect(steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")?.run).not.toContain("--filter");
+    const manual = steps(ci.jobs.test_native_terminal).find((step) => step.name === "Run Windows node-pty compatibility on manual dispatch")!;
+    expect(manual.if).toBe("github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'");
+    expect(manual.env).toEqual({ AIDLC_TUI_BACKEND: "node-pty" });
+    expect(manual.run).toContain("--filter '^t-tui-node-pty-compat$'");
+    expect(manual.run).toContain("sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}'");
+    expect(steps(ci.jobs.test_native_terminal).some((step) => step.name === "Run platform regressions on manual dispatch")).toBe(false);
+  });
+
+  for (const [tier, shard, expected] of [
+    ["smoke", "", ["--smoke"]],
+    ["unit", "3/4", ["--unit", "--shard", "3/4"]],
+    ["integration", "", ["--integration"]],
+    ["deep", "", ["--integration", "--e2e", "--isolated-e2e"]],
+  ] as const) {
+    test(`shared ${tier} execution preserves arguments, captured output and failure status`, () => {
+      const root = mkdtempSync(join(tmpdir(), "t345-shared-tier-"));
+      const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
+      try {
+        mkdirSync(join(root, "tests"));
+        writeFileSync(join(root, "tests/run-tests.sh"), [
+          "#!/bin/bash", "set -e",
+          'printf "%s\\0" "$@" > "$GITHUB_WORKSPACE/argv.bin"',
+          'stamp="$GITHUB_WORKSPACE/tests/logs/fixture"',
+          'mkdir -p "$stamp"',
+          // One write puts an outer and nested header in the capture before
+          // polling; only the outer run owns the required summary.
+          'printf "Verbose mode: logging to %s\\nVerbose mode: logging to %s/nested\\n" "$stamp" "$stamp"',
+          'echo "captured deterministic output"',
+          'if [ "$OMIT_SUMMARY" != 1 ]; then printf "Test files: 1\\n" > "$stamp/summary.txt"; fi',
+          'exit "$FIXTURE_EXIT"',
+        ].join("\n"));
+        for (const [exit, omit, expectedStatus] of [["0", "0", 0], ["7", "0", 7], ["0", "1", 1]] as const) {
+          rmSync(join(root, "tests/logs"), { recursive: true, force: true });
+          const result = spawnSync("bash", ["-c", step.run!], {
+            cwd: root, encoding: "utf8", timeout: 15_000,
+            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
+          });
+          expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
+          expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
+            .toEqual(["--debug", "-P", "8", "--no-llm", ...expected]);
+          expect(readFileSync(join(root, "tmp/ci-deterministic/run.log"), "utf8")).toContain("captured deterministic output");
+          expect(readFileSync(join(root, "tmp/ci-deterministic/stamp.txt"), "utf8").trim())
+            .toBe(`${root.replaceAll("\\", "/")}/tests/logs/fixture`);
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }, 60_000);
+  }
+
   test("native terminal CI selects only executable platform units across every runner alias", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, Job>;
@@ -104,21 +283,27 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("dependency preparation and OIDC-bearing jobs require explicit nightly live opt-in", () => {
+  test("authorized full-suite runs always prepare and execute isolated hosted live jobs", () => {
     const jobs = Object.entries(workflow.jobs);
     const oidcJobs = jobs.filter(([, job]) => job.permissions?.["id-token"] === "write").map(([name]) => name).sort();
     expect(oidcJobs).toEqual(["live_hosted", "live_windows"]);
-    const gatedJobs = jobs.filter(([, job]) => job.if === "vars.AIDLC_NIGHTLY_LIVE == '1'").map(([name]) => name).sort();
-    expect(gatedJobs).toEqual(["live_hosted", "live_prepare", "live_windows"]);
+    for (const name of ["live_prepare", ...oidcJobs]) {
+      expect(workflow.jobs[name].if).toBeUndefined();
+      const needs = workflow.jobs[name].needs;
+      expect(Array.isArray(needs) ? needs : [needs]).toContain("plan");
+    }
     expect(workflow.jobs.live_prepare.permissions).toEqual({ contents: "read" });
+    expect(workflow.jobs.live_prepare.environment).toBeUndefined();
+    expect(workflow.on.workflow_call.secrets).toBeUndefined();
     for (const name of oidcJobs) {
       const job = workflow.jobs[name];
+      expect(job.environment).toBe("ai-pr-review");
       expect(job.needs).toContain("live_prepare");
-      const download = job.steps.findIndex((step) => step.uses?.startsWith("actions/download-artifact@"));
-      const prepare = job.steps.findIndex((step) => step.name === "Prepare separate-user live runtime");
+      const download = steps(job).findIndex((step) => step.uses?.startsWith("actions/download-artifact@"));
+      const prepare = steps(job).findIndex((step) => step.name === "Prepare separate-user live runtime");
       expect(download).toBeGreaterThanOrEqual(0);
       expect(download).toBeLessThan(prepare);
-      for (const step of job.steps) {
+      for (const step of steps(job)) {
         expect(step.run ?? "").not.toMatch(/\b(bun|npm|npx|pnpm|yarn|pip|pip3|cargo)\s+(install|i|ci|add)\b/);
         expect(step.run ?? "").not.toContain("scripts/package.ts");
       }
@@ -147,16 +332,19 @@ describe("t345 complete nightly coverage", () => {
   test("Bedrock workflow hands credentials only to stdin broker startup, never a live step", () => {
     for (const name of ["live_hosted", "live_windows"]) {
       const job = workflow.jobs[name];
-      const assume = job.steps.find((step) => step.name === "Assume nightly Bedrock role")!;
-      expect(assume.with).toMatchObject({ "output-credentials": true, "output-env-credentials": false });
-      const startup = job.steps.find((step) => step.name === "Start credential-isolated Bedrock broker")!;
+      const assume = steps(job).find((step) => step.name === "Assume nightly Bedrock role")!;
+      expect(assume.with).toMatchObject({
+        "role-to-assume": `\${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}`,
+        "output-credentials": true, "output-env-credentials": false,
+      });
+      const startup = steps(job).find((step) => step.name === "Start credential-isolated Bedrock broker")!;
       expect(startup.run).toContain("ci-start-credential-broker.ts");
       expect(startup.env?.BROKER_ACCESS_KEY_ID).toBe(`\${{ steps.aws.outputs.aws-access-key-id }}`);
-      expect(job.steps.find((step) => step.name === "Assert live runner has no AWS credentials")).toBeDefined();
+      expect(steps(job).find((step) => step.name === "Assert live runner has no AWS credentials")).toBeDefined();
     }
     for (const [name, live] of Object.entries(workflow.jobs)) {
       if (!name.startsWith("live_")) continue;
-      for (const step of live.steps) {
+      for (const step of steps(live)) {
         for (const key of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AIDLC_BROKER_TOKEN"]) expect(step.env?.[key]).toBeUndefined();
         if (step.name !== "Start credential-isolated Bedrock broker") expect(JSON.stringify(step.env ?? {})).not.toContain("steps.aws.outputs.");
       }
@@ -171,22 +359,31 @@ describe("t345 complete nightly coverage", () => {
     expect(job.strategy?.matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
     expect(job.permissions?.["id-token"]).toBeUndefined();
     expect(ci.jobs.test.needs).toContain("test_live_isolation");
-    expect(job.steps.find((step) => step.name === "Prove POSIX isolation")?.run).toBe("bash .github/scripts/prepare-live-runtime.sh prove");
-    expect(job.steps.find((step) => step.name === "Prove Windows isolation")?.run).toBe(".github/scripts/prepare-live-runtime.ps1 -Mode prove");
-    expect(job.steps.find((step) => step.name === "Exercise POSIX isolated smoke command")?.run).toContain("prepare-live-runtime.sh smoke");
-    expect(job.steps.find((step) => step.name === "Exercise Windows isolated smoke command")?.run).toContain("prepare-live-runtime.ps1 -Mode smoke");
+    expect(steps(job).find((step) => step.name === "Prove POSIX isolation")?.run).toBe("bash .github/scripts/prepare-live-runtime.sh prove");
+    expect(steps(job).find((step) => step.name === "Prove Windows isolation")?.run).toBe(".github/scripts/prepare-live-runtime.ps1 -Mode prove");
+    expect(steps(job).find((step) => step.name === "Exercise POSIX isolated smoke command")?.run).toContain("prepare-live-runtime.sh smoke");
+    expect(steps(job).find((step) => step.name === "Exercise Windows isolated smoke command")?.run).toContain("prepare-live-runtime.ps1 -Mode smoke");
     expect(JSON.stringify(job)).not.toContain("secrets.");
   });
 
   test("all tests/logs uploads require successful sanitization even after test failure", () => {
     for (const job of Object.values(workflow.jobs)) {
-      for (const [index, step] of job.steps.entries()) {
+      for (const [index, step] of steps(job).entries()) {
         if (!step.uses?.startsWith("actions/upload-artifact@") || step.with?.path !== "tests/logs/") continue;
-        const sanitize = job.steps[index - 1];
+        const sanitize = steps(job)[index - 1];
         expect(sanitize).toMatchObject({ id: "sanitize", if: `\${{ always() }}`, run: "bun scripts/ci-sanitize-logs.ts tests/logs" });
         expect(step.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);
       }
     }
+    const sharedSteps = steps(deterministic.jobs.test);
+    const upload = sharedSteps.find((step) => step.uses?.startsWith("actions/upload-artifact@"))!;
+    const sanitize = sharedSteps.find((step) => step.id === "sanitize")!;
+    expect(sanitize.if).toBe(`\${{ always() }}`);
+    expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tests/logs");
+    expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tmp/ci-deterministic");
+    expect(upload.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);
+    expect(upload.with).toMatchObject({ "retention-days": 90, "include-hidden-files": true, "if-no-files-found": "error" });
+    expect(upload.with?.path).toBe("tests/logs/\ntmp/ci-deterministic/\n");
   });
 
   test("CI model allowlist and Codex profile preserve proxy routing without credential export", () => {
@@ -218,9 +415,9 @@ describe("t345 complete nightly coverage", () => {
   test("live families have every supported platform, opt-ins and strictness, without no-LLM", () => {
     const actual: string[] = [];
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
-      expect(job["runs-on"]).not.toContain("self-hosted");
+      expect(job["runs-on"] ?? []).not.toContain("self-hosted");
       if (!jobName.startsWith("live_") && jobName !== "release_contract_windows") continue;
-      for (const step of job.steps) {
+      for (const step of steps(job)) {
         expect(step.run ?? "").not.toMatch(/--(?:no-llm|unit|integration|e2e|isolated-e2e|bedrock-parallel|kiro-parallel|ide-parallel|require-coverage)\b/);
         expect(step.run ?? "").not.toContain("mapfile");
         expect(step.run ?? "").not.toContain(`\${ARGS`);
@@ -229,7 +426,7 @@ describe("t345 complete nightly coverage", () => {
         const family = FAMILIES[row.family];
         expect(family, row.family).toBeDefined();
         actual.push(`${row.family}:${row.platform}`);
-        const run = job.steps.find((step) => step.name === `Run ${row.family}`);
+        const run = steps(job).find((step) => step.name === `Run ${row.family}`);
         expect(run, `${jobName}/${row.family} command`).toBeDefined();
         expect({ ...job.env, ...run!.env }).toMatchObject(family.env);
         const command = run!.run!.replaceAll(`\${{ matrix.platform }}`, row.platform).trim();
@@ -237,14 +434,14 @@ describe("t345 complete nightly coverage", () => {
           expect(command).toContain("sudo -u aidlc-live -H env -i");
           expect(command).toContain('cd "$AIDLC_LIVE_ROOT" && exec "$@"');
           expect(command).toContain(`ci-live-sandbox.ts" ${row.family} ${row.platform}`);
-          const proof = job.steps.findIndex((step) => step.name === "Prove isolation");
+          const proof = steps(job).findIndex((step) => step.name === "Prove isolation");
           expect(proof).toBeGreaterThanOrEqual(0);
-          expect(proof).toBeLessThan(job.steps.indexOf(run!));
+          expect(proof).toBeLessThan(steps(job).indexOf(run!));
         } else if (jobName === "live_windows") {
           expect(command).toBe(`.github/scripts/prepare-live-runtime.ps1 -Mode run -Family ${row.family}`);
-          const proof = job.steps.findIndex((step) => step.name === "Prove isolation");
+          const proof = steps(job).findIndex((step) => step.name === "Prove isolation");
           expect(proof).toBeGreaterThanOrEqual(0);
-          expect(proof).toBeLessThan(job.steps.indexOf(run!));
+          expect(proof).toBeLessThan(steps(job).indexOf(run!));
         } else {
           expect(job.if).toBeUndefined();
           expect(command).toBe(`bun scripts/ci-live-filter.ts ${row.family} --platform ${row.platform} --run -- --debug -P 4`);
@@ -264,9 +461,9 @@ describe("t345 complete nightly coverage", () => {
       const env = sandboxEnvironment(family, "/home/aidlc-live", "/usr/local/lib/aidlc-live/bin:/usr/bin:/bin", inherited);
       expect(env.PATH).toBe("/usr/local/lib/aidlc-live/bin:/usr/bin:/bin");
       expect(env.HOME).toBe("/home/aidlc-live");
-      expect(env.TMPDIR).toBe("/home/aidlc-live/tmp");
-      expect(env.BUN_INSTALL).toBe("/home/aidlc-live/.bun");
-      expect(env.XDG_CACHE_HOME).toBe("/home/aidlc-live/.cache");
+      expect(env.TMPDIR).toBe(join("/home/aidlc-live", "tmp"));
+      expect(env.BUN_INSTALL).toBe(join("/home/aidlc-live", ".bun"));
+      expect(env.XDG_CACHE_HOME).toBe(join("/home/aidlc-live", ".cache"));
       expect(Object.keys(env).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key))).toEqual([]);
       expect(env).toMatchObject(FAMILIES[family].env);
     }
@@ -281,8 +478,8 @@ describe("t345 complete nightly coverage", () => {
       }
     }
     expect(workflow.jobs.live_cursor).toBeUndefined();
-    expect(workflow.on.workflow_call.secrets.KIRO_API_KEY).toBeUndefined();
-    expect(workflow.on.workflow_call.secrets.CURSOR_API_KEY).toBeUndefined();
+    expect(workflow.on.workflow_call.secrets?.KIRO_API_KEY).toBeUndefined();
+    expect(workflow.on.workflow_call.secrets?.CURSOR_API_KEY).toBeUndefined();
     for (const family of ["kiro-ide", "kiro-tui", "kiro-acp"] as const) {
       expect(FAMILIES[family]).toMatchObject({
         hosting: "excluded", platforms: [],
@@ -295,7 +492,7 @@ describe("t345 complete nightly coverage", () => {
   test("no workflow step or job exposes vendor API keys", () => {
     for (const job of Object.values(workflow.jobs)) {
       for (const value of Object.values(job.env ?? {})) expect(value).not.toContain("secrets.");
-      for (const step of job.steps) {
+      for (const step of steps(job)) {
         expect(step.env?.KIRO_API_KEY).toBeUndefined();
         expect(step.env?.CURSOR_API_KEY).toBeUndefined();
         expect(JSON.stringify(step)).not.toMatch(/secrets\.(?:KIRO_API_KEY|CURSOR_API_KEY)/);
@@ -305,17 +502,17 @@ describe("t345 complete nightly coverage", () => {
 
   test("every source-executing job depends on main-source authorization", () => {
     const plan = workflow.jobs.plan;
-    const authorization = plan.steps.find((step) => step.name === "Resolve immutable source")!;
-    expect(plan.steps[0].with?.["fetch-depth"]).toBe(0);
+    const authorization = steps(plan).find((step) => step.name === "Resolve immutable source")!;
+    expect(steps(plan)[0].with?.["fetch-depth"]).toBe(0);
     expect(authorization.run).toContain("git fetch --no-tags origin main");
     expect(authorization.run).toContain('git merge-base --is-ancestor "$sha" origin/main');
-    expect(plan.steps.indexOf(authorization)).toBeLessThan(plan.steps.findIndex((step) => step.run?.includes("bun install")));
+    expect(steps(plan).indexOf(authorization)).toBeLessThan(steps(plan).findIndex((step) => step.run?.includes("bun install")));
     for (const [name, job] of Object.entries(workflow.jobs)) {
       if (name === "plan") continue;
       expect(Array.isArray(job.needs) ? job.needs : [job.needs], name).toContain("plan");
     }
     expect(workflow.jobs.native_reconcile.if).toContain("needs.plan.result == 'success'");
-    for (const step of workflow.jobs.result.steps) {
+    for (const step of steps(workflow.jobs.result)) {
       if (step.with?.ref || step.uses?.startsWith("oven-sh/setup-bun@") || step.run?.includes("git rev-parse") || step.run?.includes("bun scripts/")) {
         expect(step.if).toBe(`\${{ needs.plan.result == 'success' }}`);
       }
@@ -366,11 +563,35 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.result.if).toBe(`\${{ always() }}`);
     expect([...(workflow.jobs.result.needs as string[])].sort()).toEqual(Object.keys(workflow.jobs).filter((name) => name !== "result").sort());
     expect(Object.keys(workflow.jobs).filter((name) => name !== "result").sort()).toEqual([...FULL_SUITE_JOBS].sort());
-    for (const job of Object.values(workflow.jobs)) {
-      for (const ref of [job.uses, ...job.steps.map((step) => step.uses)].filter((ref): ref is string => !!ref)) {
+    const production = steps(workflow.jobs.production_guards).find((step) => step.name === "Require production guard coverage")!.run!;
+    expect(production).toContain("--production-guards");
+    expect(production).toContain("--require-coverage");
+    expect(production).toContain("t-guard-recovery-production");
+    expect(steps(workflow.jobs.result).at(-1)?.with).toMatchObject({ name: "full-suite-result", "if-no-files-found": "error" });
+    for (const job of [...Object.values(workflow.jobs), ...Object.values(deterministic.jobs)]) {
+      for (const ref of [job.uses, ...steps(job).map((step) => step.uses)].filter((ref): ref is string => !!ref)) {
         expect(ref.startsWith("./") || /^[^@\s]+@[a-f0-9]{40}$/.test(ref), ref).toBe(true);
       }
     }
+  });
+
+  test("nightly unit shards cover every unit file exactly once on each supported OS", () => {
+    const job = workflow.jobs.deterministic;
+    const matrix = job.strategy!.matrix;
+    expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
+    const suites = matrix.suite!;
+    expect(suites.filter((suite) => suite.tier === "smoke")).toHaveLength(1);
+    expect(suites.filter((suite) => suite.tier === "deep")).toHaveLength(1);
+    expect(new Set(suites.map((suite) => suite.name)).size).toBe(suites.length);
+    const shards = suites.filter((suite) => suite.tier === "unit");
+    expect(shards.map((suite) => suite.shard)).toEqual(["1/4", "2/4", "3/4", "4/4"]);
+    const files = readdirSync(join(REPO_ROOT, "tests/unit")).filter((file) => /^t.*\.test\.ts$/.test(file)).sort();
+    const config = JSON.parse(readFileSync(join(REPO_ROOT, "tests/unit-shard-weights.json"), "utf8")) as ShardConfig;
+    const assignments = shards.map((suite) => selectShard(files, parseShardSpec(suite.shard!), config));
+    expect(assignments.every((files) => files.length > 0)).toBe(true);
+    expect(assignments.flat().sort()).toEqual(files);
+    expect(job.with?.["unit-shard"]).toBe(`\${{ matrix.suite.shard || '' }}`);
+    expect(job.with?.["artifact-label"]).toBe(`full-suite-deterministic-\${{ matrix.suite.name }}`);
   });
 
   test("discovery forms a disjoint partition with exact runner-alias filters", () => {
@@ -456,62 +677,64 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("disabled live lanes must be skipped and are not tested coverage", () => {
+  test("skipped live lanes block readiness even when every other job passes", () => {
     const needs = { ...allSuccess(), live_prepare: { result: "skipped" as const }, live_hosted: { result: "skipped" as const }, live_windows: { result: "skipped" as const } };
-    for (const live of [undefined, "", "0"]) {
-      expect(fullSuiteResult(needs, identity, { live })).toMatchObject({
-        passed: true, complete: false, disabledLegs: ["live_prepare", "live_hosted", "live_windows"], excluded: excludedFamilies,
-      });
-    }
-    for (const job of ["live_prepare", "live_hosted", "live_windows"]) {
-      for (const status of ["success", "failure", "cancelled"] as const) {
-        expect(fullSuiteResult({ ...needs, [job]: { result: status } }, identity, {})).toMatchObject({ passed: false, complete: false });
-      }
-      const missing: SuiteNeeds = { ...needs };
-      delete missing[job];
-      expect(fullSuiteResult(missing, identity, {})).toMatchObject({ passed: false, complete: false });
-    }
+    expect(fullSuiteResult(needs, identity)).toMatchObject({
+      coveragePolicy: FULL_SUITE_COVERAGE_POLICY,
+      passed: false, complete: false, disabledLegs: [], excluded: excludedFamilies,
+      legs: { live_prepare: "skipped", live_hosted: "skipped", live_windows: "skipped" },
+    });
   });
 
-  test("enabled live lanes and every other declared job must succeed", () => {
-    expect(fullSuiteResult(allSuccess(), identity, { live: "1" })).toMatchObject({
+  test("hosted live lanes and every other declared job must succeed", () => {
+    expect(fullSuiteResult(allSuccess(), identity)).toMatchObject({
+      ...identity, coveragePolicy: FULL_SUITE_COVERAGE_POLICY,
       passed: true, complete: false, disabledLegs: [], excluded: excludedFamilies,
     });
-    for (const job of ["live_prepare", "live_hosted", "live_windows", "release_contract_windows"]) {
+    for (const job of FULL_SUITE_JOBS) {
       for (const status of ["failure", "cancelled", "skipped"] as const) {
-        expect(fullSuiteResult({ ...allSuccess(), [job]: { result: status } }, identity, { live: "1" }))
+        expect(fullSuiteResult({ ...allSuccess(), [job]: { result: status } }, identity))
           .toMatchObject({ passed: false, complete: false });
       }
       const missing = allSuccess();
       delete missing[job];
-      expect(fullSuiteResult(missing, identity, { live: "1" })).toMatchObject({ passed: false, complete: false, legs: { [job]: "missing" } });
+      expect(fullSuiteResult(missing, identity)).toMatchObject({ passed: false, complete: false, legs: { [job]: "missing" } });
     }
-    expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" }, { live: "1" })).toMatchObject({ passed: false, complete: false });
+    expect(fullSuiteResult({ ...allSuccess(), future_job: { result: "skipped" } }, identity))
+      .toMatchObject({ passed: false, complete: false });
+    expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" })).toMatchObject({ passed: false, complete: false });
   });
 
-  test("result CLI warns about disabled lanes and excluded families but rejects missing jobs and configuration errors", () => {
+  test("result CLI fails skipped lanes, retains diagnostics, and accepts required jobs with explicit exclusions", () => {
     const root = mkdtempSync(join(tmpdir(), "full-suite-result-"));
     try {
       const needs: SuiteNeeds = { ...allSuccess(), live_prepare: { result: "skipped" }, live_hosted: { result: "skipped" }, live_windows: { result: "skipped" } };
       const env = {
-        ...process.env, AIDLC_NIGHTLY_LIVE: "", FULL_SUITE_NEEDS: JSON.stringify(needs), FULL_SUITE_SHA: identity.sha,
+        ...process.env, FULL_SUITE_NEEDS: JSON.stringify(needs), FULL_SUITE_SHA: identity.sha,
       };
       const output = join(root, "result.json");
       const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
       const result = spawnSync(process.execPath, [script, output], { encoding: "utf8", env });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain("::warning::Full suite ran with the live lanes disabled (AIDLC_NIGHTLY_LIVE unset): live_prepare, live_hosted, live_windows");
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(`::error::Incomplete full suite for ${identity.sha}`);
+      expect(result.stderr).toContain("live_hosted=skipped");
       expect(result.stderr).toContain(`::warning::Full suite excluded families: ${excludedFamilies.join(", ")}`);
       const report = JSON.parse(readFileSync(output, "utf8"));
-      expect(report).toMatchObject({ passed: true, complete: false, disabledLegs: ["live_prepare", "live_hosted", "live_windows"], excluded: excludedFamilies });
-      const unexpectedRun = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(allSuccess()) } });
-      expect(unexpectedRun.status).toBe(1);
-      expect(unexpectedRun.stderr).toContain("::error::Live-lane configuration error: AIDLC_NIGHTLY_LIVE is not '1' but these jobs ran: live_prepare=success, live_hosted=success, live_windows=success");
+      expect(report).toMatchObject({ coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: false, complete: false, disabledLegs: [], excluded: excludedFamilies });
       delete needs.native_reconcile;
       const missing = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(needs) } });
       expect(missing.status).toBe(1);
       expect(missing.stderr).toContain("native_reconcile=missing");
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ passed: false, complete: false, excluded: excludedFamilies });
+      const success = spawnSync(process.execPath, [script, output], {
+        encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(allSuccess()) },
+      });
+      expect(success.status, success.stderr).toBe(0);
+      expect(success.stderr).toContain(`::warning::Full suite excluded families: ${excludedFamilies.join(", ")}`);
+      expect(success.stderr).not.toContain("::error::");
+      expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
+        coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: true, complete: false, disabledLegs: [], excluded: excludedFamilies,
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -729,6 +729,7 @@ function windowsProcessQuery(
     "$json = $out | ConvertTo-Json -Compress",
     "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
   ].join("\n");
+  const startedAt = Date.now();
   const result = runBoundedCommand(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", script],
@@ -736,13 +737,14 @@ function windowsProcessQuery(
   );
   if (result.status === 3) return { status: "absent" };
   if (result.status !== 0) {
+    const timing = `context=${context}, budget=${timeoutMs}ms, elapsed=${Date.now() - startedAt}ms`;
     return {
       status: "error",
       message:
         result.timedOut
-          ? `process identity query timed out for pid ${pid}`
+          ? `process identity query timed out for pid ${pid} (${timing})`
           : `process identity query failed for pid ${pid}: ` +
-            `${result.stderr || result.errorCode || `exit ${result.status}`}`,
+            `${result.stderr || result.errorCode || `exit ${result.status}`} (${timing})`,
     };
   }
   try {
@@ -782,6 +784,7 @@ function windowsProcessFallbackQuery(
     "$json = $out | ConvertTo-Json -Compress",
     "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
   ].join("\n");
+  const startedAt = Date.now();
   const result = runBoundedCommand(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", script],
@@ -791,7 +794,10 @@ function windowsProcessFallbackQuery(
   if (result.status !== 0) {
     return {
       status: "error",
-      message: `fallback process identity query failed for pid ${pid}`,
+      message: `fallback process identity query ${result.timedOut ? "timed out" : "failed"} ` +
+        `for pid ${pid} (context=${context}, budget=${timeoutMs}ms, ` +
+        `elapsed=${Date.now() - startedAt}ms): ` +
+        `${result.stderr || result.errorCode || `exit ${result.status}`}`,
     };
   }
   try {
@@ -839,19 +845,21 @@ function windowsDirectChildrenQuery(
     "$json = ConvertTo-Json -InputObject $out -Depth 4 -Compress",
     "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
   ].join("\n");
+  const startedAt = Date.now();
   const result = runBoundedCommand(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", script],
     timeoutMs,
   );
   if (result.status !== 0) {
+    const timing = `context=${context}, budget=${timeoutMs}ms, elapsed=${Date.now() - startedAt}ms`;
     return {
       status: "error",
       message:
         result.timedOut
-          ? `descendant identity query timed out for parent pid ${parentPid}`
+          ? `descendant identity query timed out for parent pid ${parentPid} (${timing})`
           : `descendant identity query failed for parent pid ${parentPid}: ` +
-            `${result.stderr || result.errorCode || `exit ${result.status}`}`,
+            `${result.stderr || result.errorCode || `exit ${result.status}`} (${timing})`,
     };
   }
   try {
@@ -1245,7 +1253,11 @@ const TMUX_SOCKET = process.env.AIDLC_TUI_TMUX_SOCKET || "aidlc-tui";
 function tmux(args: string[]): { code: number; stdout: string; stderr: string } {
   // `-L <socket>` MUST precede the tmux command; it selects the private server.
   const r = spawnSync("tmux", ["-L", TMUX_SOCKET, ...args], { encoding: "utf-8" });
-  return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  return {
+    code: r.status ?? 1,
+    stdout: r.stdout ?? "",
+    stderr: r.stderr || r.error?.message || (r.signal ? `tmux terminated by ${r.signal}` : ""),
+  };
 }
 
 const tmuxBackend: Backend = {

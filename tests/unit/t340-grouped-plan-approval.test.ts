@@ -288,8 +288,12 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       row.event === "WORKTREE_CREATED" || row.event === "BOLT_STARTED")).toHaveLength(0);
   }, 60_000);
 
-  test("swarm PreToolUse refuses missing approvals and foreign Unit or project targets in both command forms", () => {
-    for (const condition of ["missing all", "missing beta", "foreign Unit", "foreign project"]) {
+  // Each condition needs its own authority, and the foreign-project condition
+  // needs two fixtures. Separate deadlines and cleanup avoid charging five Git
+  // projects, their approval flows, and 30 guard processes to one 90s test.
+  test.each(["missing all", "missing beta", "foreign Unit", "foreign project"] as const)(
+    "swarm PreToolUse refuses missing approvals and foreign Unit or project targets in both command forms: %s",
+    (condition) => {
       // Independent approvals leave alpha valid when beta's receipt is absent,
       // so prepare/finalize must inspect every named member.
       const pd = fixture({ grouped: condition !== "missing beta" });
@@ -339,8 +343,9 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
         }
       }
       expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
-    }
-  }, 90_000);
+    },
+    60_000,
+  );
 
   test("approved swarm admission excludes compound commands, redirections, preloads and project environment prefixes", () => {
     const pd = fixture();

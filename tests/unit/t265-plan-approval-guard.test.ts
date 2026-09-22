@@ -743,6 +743,8 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // Seven source CLI invocations plus Git-backed fixture setup and approval
+  // fingerprints exceed Bun's 5s default on hosted macOS.
   test("a handoff that quotes the plan's excluded review appendix is refused; the brief command hands off the body", () => {
     const proj = scratchProject();
     try {
@@ -864,7 +866,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("blocks the unplanned dispatch with exit 2 + a redirecting reason", () => {
     const proj = scratchProject();
@@ -1175,6 +1177,8 @@ describe("t265b hook lifecycle", () => {
   }, 30_000);
 
   for (const published of [false, true]) {
+    // Each publication state checks 72 commands in separate source-hook
+    // processes. Budget the whole matrix, preserving every admission check.
     test(`the shipped Bun entry point permits planning ${published ? "with pending approval" : "before directive publication"}`, () => {
       const proj = scratchProject();
       try {
@@ -1271,7 +1275,7 @@ describe("t265b hook lifecycle", () => {
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }
-    }, 30000);
+    }, 90_000);
   }
 
   test("a redundant absolute cd permits recovery without changing execution context", () => {
@@ -1397,6 +1401,8 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // This transition checks 53 hook invocations against the same authority
+  // before and after approval; its deadline covers the full process sequence.
   test("zero-unit inline generation is refused before approval and allowed after approval", () => {
     const proj = scratchProject();
     try {
@@ -1537,8 +1543,10 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30000);
+  }, 90_000);
 
+  // Keep real Git-backed authority/fingerprint checks and both hook processes;
+  // the aggregate fixture work can exceed Bun's 5s default on hosted macOS.
   test("a conductor-authored Approve Plan markdown answer has no authority receipt", () => {
     const proj = scratchProject();
     try {
@@ -1584,7 +1592,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("aidlc-log emits Plan Approval authority only after its prompt and a later human turn", () => {
     const proj = scratchProject();

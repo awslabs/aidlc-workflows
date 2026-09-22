@@ -5,9 +5,8 @@ on:
       ref:
         required: true
         type: string
-    secrets:
-      AWS_NIGHTLY_TEST_ROLE_ARN:
-        required: true
+    # AWS_AI_PR_REVIEW_ROLE_ARN belongs to the live jobs' ai-pr-review environment;
+    # callers do not pass an environment-only secret through workflow_call.
   workflow_dispatch:
     inputs:
       ref:
@@ -167,49 +166,66 @@ jobs:
           name: full-suite-native-result
           path: "${{ runner.temp }}/native-matrix-result.json"
   deterministic:
+    name: "Deterministic (${{ matrix.runner }}, ${{ matrix.suite.name }})"
     needs: plan
-    runs-on: "${{ matrix.runner }}"
-    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, macos-15, windows-latest]
-        tier: [smoke-unit, deep]
+        # Unit files deliberately stay serial inside a checkout because packaging
+        # tests rewrite dist/. Independent weighted shards provide parallelism.
+        suite:
+          - {name: smoke, tier: smoke}
+          - {name: unit-1, tier: unit, shard: "1/4"}
+          - {name: unit-2, tier: unit, shard: "2/4"}
+          - {name: unit-3, tier: unit, shard: "3/4"}
+          - {name: unit-4, tier: unit, shard: "4/4"}
+          - {name: deep, tier: deep}
+    uses: ./.github/workflows/deterministic-tests.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      runner: ${{ matrix.runner }}
+      tier: ${{ matrix.suite.tier }}
+      unit-shard: ${{ matrix.suite.shard || '' }}
+      artifact-label: full-suite-deterministic-${{ matrix.suite.name }}
+  production_guards:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
       - run: "bun install --frozen-lockfile"
       - run: "bun scripts/package.ts"
-      - name: "Install zsh completion substrate"
-        if: "runner.os == 'Linux' && matrix.tier == 'smoke-unit'"
-        run: "sudo apt-get update -qq && sudo apt-get install -y -qq zsh"
-      - name: "Run smoke and unit"
-        if: "matrix.tier == 'smoke-unit'"
-        run: "bun tests/run-tests.ts --smoke --unit"
-      - name: "Run deterministic deep tiers"
-        if: "matrix.tier == 'deep'"
-        run: "bun tests/run-tests.ts --debug -P 4 --integration --e2e --no-llm --isolated-e2e"
-      - name: "Sanitize diagnostic logs"
+      - name: "Require production guard coverage"
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/tmp/full-suite-production-guards"
+          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm \
+            --require-coverage --filter '^(t-runner-production-guards|t-guard-recovery-production)$' \
+            > "$GITHUB_WORKSPACE/tmp/full-suite-production-guards/production-run.log" 2>&1
+      - name: "Sanitize production guard evidence"
         id: sanitize
         if: "${{ always() }}"
-        env:
-          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
-        run: bun scripts/ci-sanitize-logs.ts tests/logs
-      - name: "Upload diagnostic logs"
+        run: |
+          bun scripts/ci-sanitize-logs.ts tests/logs
+          bun scripts/ci-sanitize-logs.ts tmp/full-suite-production-guards
+      - name: "Upload production guard evidence"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: "full-suite-deterministic-${{ matrix.tier }}-${{ runner.os }}"
-          path: tests/logs/
+          name: full-suite-production-guards
+          path: |
+            tests/logs/
+            tmp/full-suite-production-guards/
           include-hidden-files: true
   # Closes #1306: lifecycle installers have no OIDC capability; live lanes consume
-  # only validated prepared artifacts. AIDLC_NIGHTLY_LIVE remains explicit opt-in.
+  # only validated prepared artifacts. Every authorized full-suite run includes live jobs.
   live_prepare:
-    if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
     needs: plan
     permissions:
       contents: read
@@ -246,9 +262,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
   live_hosted:
-    if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
     needs: [plan, live_prepare]
-    environment: nightly-live
+    environment: ai-pr-review
     permissions:
       contents: read
       id-token: write
@@ -312,7 +327,7 @@ jobs:
         if: "matrix.family != 'release-contract'"
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
-          role-to-assume: "${{ secrets.AWS_NIGHTLY_TEST_ROLE_ARN }}"
+          role-to-assume: "${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}"
           role-session-name: "aidlc-nightly-${{ matrix.family }}-${{ runner.os }}"
           role-duration-seconds: 21600
           aws-region: "${{ env.AWS_REGION }}"
@@ -389,10 +404,9 @@ jobs:
           path: tests/logs/
           include-hidden-files: true
   live_windows:
-    if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
     needs: [plan, live_prepare]
     runs-on: windows-latest
-    environment: nightly-live
+    environment: ai-pr-review
     permissions:
       contents: read
       id-token: write
@@ -425,7 +439,7 @@ jobs:
         id: aws
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
-          role-to-assume: "${{ secrets.AWS_NIGHTLY_TEST_ROLE_ARN }}"
+          role-to-assume: "${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}"
           role-session-name: "aidlc-nightly-${{ matrix.family }}-Windows"
           role-duration-seconds: 21600
           aws-region: "${{ env.AWS_REGION }}"
@@ -515,7 +529,7 @@ jobs:
           include-hidden-files: true
   result:
     if: "${{ always() }}"
-    needs: [plan, native_terminal, native_reconcile, deterministic, live_prepare, live_hosted, live_windows, release_contract_windows]
+    needs: [plan, native_terminal, native_reconcile, deterministic, production_guards, live_prepare, live_hosted, live_windows, release_contract_windows]
     runs-on: ubuntu-latest
     steps:
       - name: "Reject unauthorized source without executing repository code"
@@ -540,7 +554,6 @@ jobs:
         env:
           FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
           FULL_SUITE_REF: "${{ inputs.ref }}"
-          AIDLC_NIGHTLY_LIVE: "${{ vars.AIDLC_NIGHTLY_LIVE }}"
         run: |
           bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
       - if: "${{ always() }}"
@@ -549,3 +562,4 @@ jobs:
           name: full-suite-result
           path: "${{ runner.temp }}/full-suite-result.json"
           retention-days: 90
+          if-no-files-found: error

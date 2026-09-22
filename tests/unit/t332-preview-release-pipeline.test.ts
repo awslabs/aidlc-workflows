@@ -1,11 +1,12 @@
 // t332: the preview publication pipeline. The publisher stages the same draft
 // as a stable release, then binds it to an annotated preview tag whose message
 // records the source commit, and publishes it as a prerelease that never
-// becomes "latest". The planner skips an unchanged main, permits multiple
+// becomes "latest". The planner skips publication for an unchanged main while
+// CI and full-suite coverage still run, permits multiple
 // changed sources on one UTC date, allocates the day's build counter from
 // occupied preview ids, and renders notes from the CHANGELOG sections (or
 // commit subjects) added since the previous preview's source commit. The
-// workflow contract pins the schedule/manual trigger, CI gate ordering, and
+// workflow contract pins the schedule/manual trigger, contract gate ordering, and
 // stamped build environment.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -29,6 +30,7 @@ import {
   readPreviewPlan,
 } from "../../scripts/preview-release.ts";
 import { publishRelease } from "../../scripts/publish-release.ts";
+import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, fullSuiteResult } from "../../scripts/ci-full-suite-result.ts";
 
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
 const STABLE_RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
@@ -368,7 +370,11 @@ async function runWorkflowStep(
 }
 
 describe("t332 preview publication pipeline", () => {
-  for (const scenario of ["preview", "renewal", "wrong-sha", "incomplete", "non-dispatch"] as const) {
+  for (const scenario of [
+    "preview", "renewal", "wrong-sha", "incomplete", "non-dispatch", "old-policy", "wrong-policy",
+    "disabled-live", "missing-disabled-legs", "wrong-run", "missing-exclusions", "no-jobs", "unexpected-skipped",
+    ...FULL_SUITE_JOBS.flatMap((job) => ["missing", "skipped", "failure", "cancelled"].map((status) => `${job}/${status}`)),
+  ]) {
     test(`stable release evidence: ${scenario}`, async () => {
       const workflow = Bun.YAML.parse(readFileSync(STABLE_RELEASE_WORKFLOW, "utf8")) as {
         jobs: { validate: { steps: Array<{ name?: string; run?: string }> } };
@@ -399,11 +405,31 @@ describe("t332 preview publication pipeline", () => {
         '  writeFileSync(join(flag("--dir")!, "full-suite-result.json"), JSON.stringify(record.artifact));',
         '} else process.exit(2);',
       ].join("\n"));
-      const evidence = {
-        sha: scenario === "wrong-sha" ? "b".repeat(40) : SOURCE_A,
-        passed: scenario !== "incomplete", complete: scenario !== "incomplete",
-        excluded: [], legs: { live_hosted: scenario === "incomplete" ? "failure" : "success" },
-      };
+      // Exercise the consumer with the producer's real current schema; a valid
+      // report still has complete:false because excluded providers did not run.
+      const evidence: Record<string, unknown> = { ...fullSuiteResult(
+        Object.fromEntries(FULL_SUITE_JOBS.map((job) => [job, { result: "success" as const }])),
+        { sha: SOURCE_A, runId: scenario === "preview" ? "1" : "2", runAttempt: "1" },
+      ) };
+      const legs = evidence.legs as Record<string, string>;
+      if (scenario === "wrong-sha") evidence.sha = "b".repeat(40);
+      if (scenario === "incomplete") evidence.passed = false;
+      if (scenario === "old-policy") delete evidence.coveragePolicy;
+      if (scenario === "wrong-policy") evidence.coveragePolicy = "optional-live";
+      if (scenario === "disabled-live") {
+        evidence.disabledLegs = ["live_prepare", "live_hosted", "live_windows"];
+        for (const job of evidence.disabledLegs as string[]) legs[job] = "skipped";
+      }
+      if (scenario === "missing-disabled-legs") delete evidence.disabledLegs;
+      if (scenario === "wrong-run") evidence.runId = "999";
+      if (scenario === "missing-exclusions") delete evidence.excluded;
+      if (scenario === "no-jobs") delete evidence.legs;
+      if (scenario === "unexpected-skipped") legs.future_job = "skipped";
+      if (scenario.includes("/")) {
+        const [job, status] = scenario.split("/");
+        if (status === "missing") delete legs[job];
+        else legs[job] = status;
+      }
       const records = [
         { id: 1, workflow: "preview-release.yml", headSha: SOURCE_A, branch: "main", event: "schedule", status: "success", artifact: scenario === "preview" ? evidence : null },
         // workflow_dispatch's head is today's main; its artifact binds the older inputs.ref.
@@ -414,10 +440,48 @@ describe("t332 preview publication pipeline", () => {
         FIXTURE_GH_SCRIPT: fakeGh, FIXTURE_RUNS: JSON.stringify(records), TAG_SHA: SOURCE_A, RUNNER_TEMP: root,
       });
       expect(result.status, result.stdout + result.stderr).toBe(scenario === "preview" || scenario === "renewal" ? 0 : 1);
+      if (scenario === "preview" || scenario === "renewal") {
+        expect(evidence.complete).toBe(false);
+        expect(result.stdout).toContain("::warning::Full-suite evidence");
+        expect(result.stdout).toContain('"copilot","cursor","kiro-acp","kiro-ide","kiro-tui"');
+      }
       if (scenario === "renewal") expect(result.stdout).toContain("missing or expired full-suite-result");
       if (scenario !== "preview" && scenario !== "renewal") expect(result.stdout).toContain(`full-suite.yml on main with ref=${SOURCE_A}`);
     }, 15_000);
   }
+
+  test("an unchanged preview requires successful nightly tests before recording a publication skip", async () => {
+    const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf8")) as {
+      jobs: Record<string, { if?: string; needs: string | string[]; steps?: Array<{ run?: string }> }>;
+    };
+    const jobs = workflow.jobs;
+    // These dependencies use GitHub's default success condition, independent
+    // of the planner's skip output, on both schedule and workflow_dispatch.
+    expect(jobs.gate).toMatchObject({ needs: "validate" });
+    expect(jobs.gate.if).toBeUndefined();
+    expect(jobs.full_suite.needs).toEqual(["validate", "gate"]);
+    expect(jobs.full_suite.if).toBeUndefined();
+    expect(jobs.verify).toBeUndefined();
+    expect(jobs["native-smoke"].if).toBe("needs.validate.outputs.skip != 'true'");
+    expect(jobs.test.if).toBe(`\${{ !cancelled() && needs.validate.result == 'success' }}`);
+    const testScript = jobs.test.steps![0].run!;
+    const resultScript = jobs["release-result"].steps![0].run!;
+    for (const fullSuite of ["success", "failure", "cancelled", "skipped"]) {
+      const tests = await runWorkflowStep(testScript, REPO_ROOT, { FULL_SUITE_RESULT: fullSuite });
+      expect(tests.status).toBe(fullSuite === "success" ? 0 : 1);
+      const result = await runWorkflowStep(resultScript, REPO_ROOT, {
+        VALIDATE_RESULT: "success", TEST_RESULT: tests.status === 0 ? "success" : "failure",
+        RELEASE_SKIP: "true", RELEASE_RESULT: "skipped",
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(fullSuite === "success" ? 0 : 1);
+    }
+    for (const release of ["success", "skipped", "failure"]) {
+      const result = await runWorkflowStep(resultScript, REPO_ROOT, {
+        VALIDATE_RESULT: "success", TEST_RESULT: "success", RELEASE_SKIP: "false", RELEASE_RESULT: release,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(release === "success" ? 0 : 1);
+    }
+  }, 15_000);
 
   test("the tag message binds a preview to its source commit and parses back", () => {
     const message = previewTagMessage({
@@ -1122,6 +1186,12 @@ describe("t332 preview publication pipeline", () => {
     });
     expect(stable.jobs.gate).toBeUndefined();
     expect(stable.jobs.verify.needs).toBe("validate");
+    for (const job of ["test_smoke", "test_unit", "test_deep", "test"]) {
+      expect(stable.jobs[job], `${job} must use existing nightly evidence`).toBeUndefined();
+    }
+    expect(stableText).not.toContain("tests/run-tests.");
+    expect(stable.jobs["native-smoke"].needs).toEqual(["validate", "verify"]);
+    expect(stable.jobs["native-smoke"].steps?.some((step) => step.run?.includes("t238-build-binaries"))).toBe(true);
     expect(stable.jobs.validate.outputs).toEqual({
       tag: `\${{ steps.validate.outputs.tag }}`,
       sha: `\${{ steps.validate.outputs.sha }}`,
@@ -1135,6 +1205,8 @@ describe("t332 preview publication pipeline", () => {
     const evidence = stable.jobs.validate.steps?.find((step) => step.name === "Require passing full-suite evidence");
     expect(evidence?.run).toContain("full-suite-result");
     expect(evidence?.run).toContain(".sha == $sha and .passed == true");
+    expect(evidence?.run).toContain(`.coveragePolicy == "${FULL_SUITE_COVERAGE_POLICY}"`);
+    expect(evidence?.run).toContain(".disabledLegs == []");
     expect(evidence?.run).toContain("::warning::");
     expect(evidence?.run).toContain(".excluded // []");
 
@@ -1149,40 +1221,48 @@ describe("t332 preview publication pipeline", () => {
     });
     expect(preview.jobs.gate).toMatchObject({
       needs: "validate",
-      uses: "./.github/workflows/ci.yml",
+      "runs-on": "ubuntu-latest",
     });
-    expect(preview.jobs.gate.if).toContain("needs.validate.outputs.skip");
-    expect(preview.jobs.verify.needs).toEqual(["validate", "gate"]);
+    expect(preview.jobs.gate.if).toBeUndefined();
+    expect(preview.jobs.gate.uses).toBeUndefined();
+    expect(preview.jobs.gate.steps?.filter((step) => step.run === "bun run check")).toHaveLength(1);
+    expect(preview.jobs.gate.steps?.some((step) => step.run?.includes("tests/run-tests"))).toBe(false);
+    expect(preview.jobs.gate.steps?.some((step) => step.run === "shellcheck scripts/install.sh")).toBe(true);
+    expect(previewText).not.toContain("./.github/workflows/ci.yml");
+    expect(preview.jobs.verify).toBeUndefined();
+    expect(preview.jobs["native-smoke"].needs).toEqual(["validate", "gate", "test"]);
+    expect(preview.jobs["native-smoke"].if).toBe("needs.validate.outputs.skip != 'true'");
     expect(preview.jobs.full_suite).toMatchObject({
       needs: ["validate", "gate"],
       uses: "./.github/workflows/full-suite.yml",
       with: { ref: `\${{ needs.validate.outputs.sha }}` },
-      secrets: "inherit",
     });
-    expect(preview.jobs.full_suite.if).toContain("needs.validate.outputs.skip");
+    expect(preview.jobs.full_suite.secrets).toBeUndefined();
+    expect(preview.jobs.full_suite.if).toBeUndefined();
     expect(preview.jobs.test.needs).toEqual(["validate", "full_suite"]);
     expect(preview.jobs.test.steps?.[0].env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.result }}`);
-    expect(preview.jobs.test.if).toContain("needs.validate.outputs.skip");
+    expect(preview.jobs.test.if).not.toContain("needs.validate.outputs.skip");
     expect(preview.jobs.release.environment).toBe("preview");
     expect(preview.jobs.release.permissions).toEqual({ contents: "write" });
 
     const dependencies = (job: WorkflowJob): string[] =>
       job.needs === undefined ? [] : Array.isArray(job.needs) ? job.needs : [job.needs];
-    for (const [name, job] of Object.entries(preview.jobs)) {
-      for (const dependency of dependencies(job)) {
-        expect(preview.jobs[dependency], `${name} needs ${dependency}`).toBeDefined();
+    for (const workflow of [preview, stable]) {
+      for (const [name, job] of Object.entries(workflow.jobs)) {
+        for (const dependency of dependencies(job)) {
+          expect(workflow.jobs[dependency], `${name} needs ${dependency}`).toBeDefined();
+        }
       }
     }
-    const ancestors = (name: string, seen = new Set<string>()): Set<string> => {
-      for (const dependency of dependencies(preview.jobs[name])) {
+    const ancestors = (name: string, jobs = preview.jobs, seen = new Set<string>()): Set<string> => {
+      for (const dependency of dependencies(jobs[name])) {
         if (seen.has(dependency)) continue;
         seen.add(dependency);
-        ancestors(dependency, seen);
+        ancestors(dependency, jobs, seen);
       }
       return seen;
     };
     for (const name of [
-      "verify",
       "full_suite",
       "test",
       "native-smoke",
@@ -1194,8 +1274,16 @@ describe("t332 preview publication pipeline", () => {
       "publish",
       "release",
     ]) {
-      expect(ancestors(name).has("gate"), `${name} must descend from the CI gate`).toBe(true);
+      expect(ancestors(name).has("gate"), `${name} must descend from the contract gate`).toBe(true);
     }
+    for (const name of ["build", "musl-smoke", "stage-release", "windows-lifecycle", "unix-lifecycle", "publish", "release"]) {
+      const required = ancestors(name, stable.jobs);
+      for (const dependency of ["validate", "verify", "native-smoke"]) {
+        expect(required.has(dependency), `stable ${name} must descend from ${dependency}`).toBe(true);
+      }
+    }
+    expect(stable.jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle"]);
+    expect(stable.jobs.release.needs).toEqual(["validate", "publish"]);
 
     for (const key of ["tag", "sha", "skip", "preview_version", "preview_plan"]) {
       expect(preview.jobs.validate.outputs?.[key], key).toBeDefined();
@@ -1216,7 +1304,7 @@ describe("t332 preview publication pipeline", () => {
       .toBe(stamp);
     expect(smoke.find((step) => step.run?.includes("t238-build-binaries"))?.env?.AIDLC_BUILD_VERSION)
       .toBe(stamp);
-    expect(preview.jobs.verify.env).toBeUndefined();
+    expect(preview.jobs.gate.env).toBeUndefined();
 
     const publish = preview.jobs.release.steps?.find(
       (step) => step.name === "Create preview GitHub Release",
@@ -1229,11 +1317,13 @@ describe("t332 preview publication pipeline", () => {
     expect(previewText).toContain(
       "awslabs/aidlc-workflows/.github/workflows/preview-release.yml",
     );
-    expect(preview.jobs["release-result"].needs).toEqual(["validate", "release"]);
+    expect(preview.jobs["release-result"].needs).toEqual(["validate", "test", "release"]);
     const result = preview.jobs["release-result"].steps?.find(
       (step) => step.name === "Require publication or an intentional preview skip",
     );
     expect(result?.run).toContain("[ \"$RELEASE_SKIP\" = true ]");
+    expect(result?.env?.TEST_RESULT).toBe(`\${{ needs.test.result }}`);
+    expect(result?.run?.indexOf('test "$TEST_RESULT" = success')).toBeLessThan(result!.run!.indexOf('[ "$RELEASE_SKIP" = true ]'));
     expect(result?.run).toContain("test \"$RELEASE_RESULT\" = success");
   });
 });

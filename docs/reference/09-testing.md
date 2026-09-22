@@ -58,7 +58,7 @@ Distribution coverage is split by contract:
   after a scheduled publication. Unchanged sources skip; drafts and orphan tags
   permit retry planning with unoccupied ids. Workflow assertions cover
   isolation of stable tags from scheduled/manual previews, shared
-  `release-preview` concurrency, CI gate ancestry, channel-specific provenance
+  `release-preview` concurrency, contract gate ancestry, channel-specific provenance
   signers, and build stamping.
 
 The test runner regenerates all projections under a process lock before test
@@ -446,20 +446,58 @@ from disk reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request | Deterministic gate | `ci.yml`: contract checks + smoke + unit shards + native-terminal units + credential-free live OS-isolation proofs on Linux/macOS/Windows + production guards | GitHub Actions |
-| Nightly preview / manual preview dispatch | Declared deep-tier matrix | `preview-release.yml` calls `full-suite.yml` for deterministic integration/e2e on Linux/macOS/Windows and enabled hosted live families; disabled legs and excluded families are reported | GitHub Actions |
-| Stable tag | Exact-source evidence | `release.yml` requires a successful preview or main-branch full-suite dispatch artifact with the tag SHA and `passed: true`; excluded families and disabled legs are warned | GitHub Actions |
+| Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, four unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, four unit shards and deep in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
+| Nightly preview / manual preview dispatch | Declared deep-tier matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
+| Stable tag | Exact-source evidence and release assets | `release.yml` requires passing Full Suite evidence for the exact tag SHA, then contract checks, builds and native/installer/lifecycle validation; it does not rerun the source test tiers | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
 By maintainer decision on 2026-09-21, `main` is not production: PR CI remains the
-fast gate listed above, while deterministic and enabled live deep tiers gate the preview
+fast gate listed above, while deterministic and required hosted live deep tiers gate the preview
 stage in `full-suite.yml`, called by `preview-release.yml`.
 
 Tag the SHA of a green nightly for a stable release, or dispatch `full-suite.yml`
 on `main` with `ref=<sha>` to produce or renew exact-SHA evidence. This also works
 when an unchanged preview would skip publication. A deterministic PR gate alone
 is not stable-release evidence.
+
+`ci.yml` and `full-suite.yml` call the same reusable
+`.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
+runner, tier, unit shard and artifact label. PR CI selects Linux smoke, four
+weighted unit shards, and integration; Full Suite selects smoke, the same four
+shards, and deep (integration plus isolated e2e) on Linux/macOS/Windows.
+Every call owns a fresh checkout, installs frozen dependencies under Bun 1.3.14,
+regenerates projections, and invokes the Bash wrapper with `--debug -P 8
+--no-llm`. Deep runs retain `--isolated-e2e`; smoke and unit remain serial within
+each checkout. Sharing the workflow shares the commands and setup, not previous
+test results.
+
+POSIX unit jobs require tmux: the shared setup first checks `command -v`, then
+uses apt on Linux or Homebrew on macOS only when it is missing. Linux unit jobs
+also install zsh when absent. Missing tools fail setup rather than skipping the
+compatibility cases.
+
+The shared workflow binds the checked-out commit to the caller's SHA. Full
+Suite still authorizes that SHA against `main` in its plan job before calling
+the shared workflow; PR CI can test its PR merge commit without receiving live
+credentials. Each run captures stdout/stderr in the checkout root's
+`tmp/ci-deterministic/run.log`, prints that path and the actual log stamp, and
+preserves both this capture and `tests/logs/` after successful sanitization.
+Artifacts use the caller's label plus the actual runner OS and retain evidence
+for 90 days.
+
+For platform verification before a nightly fix lands, dispatch
+`gh workflow run ci.yml --ref <branch> -f platform_regressions=true`. This expands
+the existing deterministic matrix to all three OSes and replaces integration
+with deep; it does not run the Linux pass first or append another broad
+regression slice. The full unit shards include the tmux, path, workspace-fixture,
+and macOS regressions, with t238/t249 kept in their weighted affinity group.
+They use the same POSIX provisioning and capture path as nightly tests.
+Windows additionally runs the distinct node-pty compatibility backend, retaining
+its sanitized evidence in `platform-node-pty-Windows`. Focused native, production
+guard, and OS-isolation checks remain required. Manual CI does not produce
+release evidence or make model calls.
 
 ## Stubs
 
@@ -704,7 +742,8 @@ bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration \
 
 The job creates that log directory and always uploads its logs and `tests/logs/`
 as `production-guard-evidence`. The existing `test` aggregate (`Tests (smoke +
-unit)`) requires `test_guards` to succeed alongside smoke, every unit shard,
+unit)`, retained as the required-check name) requires `test_guards` to succeed
+alongside smoke, every unit shard, deterministic integration,
 and the native-terminal matrix. The production-guard slice and native-terminal
 matrix are both part of the required CI gate.
 
@@ -713,7 +752,8 @@ Dropping `--production-guards` from this filtered command fails because
 profile. Passing runner unit tests cannot mask that missing coverage.
 The unfiltered deterministic deep jobs in the preview's `full-suite.yml` keep
 their deliberate fixture profile and report the production journey file as
-`SKIP`; the separate required PR production job exercises those journeys.
+`SKIP`; the required production jobs in PR CI and Full Suite exercise those
+journeys. Full Suite additionally requires complete coverage for that selection.
 
 ## Parallel Execution
 
@@ -730,7 +770,7 @@ their deliberate fixture profile and report the production journey file as
 
 All 8 parallel calls observed `cache_read=73789`. This historical help-command probe observed prompt-cache reuse without throttling or corruption; it does not establish capacity for concurrent full workflows.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each GitHub Actions job owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses four weighted unit shards on Linux and eight workers for integration. Full Suite uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration/E2E uses eight workers. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
 
@@ -1017,9 +1057,9 @@ a later passing receipt cannot erase an earlier failure. Explicitly excluded
 profile obligations appear as `NOT_REQUESTED`, never as fulfilled coverage.
 
 This profile verifies the terminal driver and retained compatibility controls.
-The scheduled preview now calls `full-suite.yml`, which reconciles native
-receipts and requires every enabled job before publishing; disabled live legs and
-excluded live families are not represented as tested coverage.
+The scheduled preview calls `full-suite.yml`, which reconciles native
+receipts and requires every declared job before publishing. Skipped live jobs
+fail readiness; documented excluded families remain untested.
 
 ### Nightly full-suite matrix and provisioning
 
@@ -1027,30 +1067,46 @@ excluded live families are not represented as tested coverage.
 (default `main`). Its plan job resolves that ref once and requires the SHA to
 already be an ancestor of `origin/main` before installing dependencies or
 dispatching source-executing jobs. All matrix legs check out the authorized
-immutable SHA. `preview-release.yml` calls it after the normal CI gate and cannot
-publish unless the result has `passed: true`. Stable releases download
+immutable SHA. Scheduled and manual `preview-release.yml` runs call it after
+packaging determinism, typecheck, lint, and installer shell checks, even when the
+source already has a published preview. Preview does not call the PR CI test
+matrix again; Full Suite owns its test coverage. An unchanged
+source skips the publication build chain, but the run still requires successful
+tests before reporting an intentional publication skip. Stable releases download
 `full-suite-result` from successful preview runs or main-branch `workflow_dispatch`
-runs of `full-suite.yml`, requiring the artifact's `sha` to equal the tag SHA and
-`passed: true`; declared exclusions and disabled live lanes warn but do not block publication. Missing,
-expired, wrong-source or failed evidence blocks publication. To renew evidence
-for an unchanged SHA, dispatch `full-suite.yml` on `main` with `ref=<sha>`; unlike
-the preview publisher, this always runs the suite even when a preview already
-exists. Release validation searches the newest 100 successful runs of each source.
+runs of `full-suite.yml`, requiring the artifact's `sha` to equal the tag SHA,
+`runId` to match the downloaded run, `coveragePolicy: "required-hosted-live-v1"`,
+`passed: true`, `disabledLegs: []`, and every declared job in `legs` to be
+`success`. Missing, expired, obsolete-policy, wrong-source/run or failed evidence
+blocks publication. To renew evidence for an unchanged SHA, dispatch
+`full-suite.yml` on `main` with `ref=<sha>`. The tested source must contain the
+current result policy; an older source's permissive report cannot qualify.
+Release validation searches the newest 100 successful runs of each source.
+Once it accepts exact-source evidence, stable release runs contract checks and
+validates the built native binaries, installers and lifecycle flows. It does not
+repeat the smoke/unit/integration/e2e source tiers. Preview also runs contract
+checks and Full Suite once, with publication deduplication applied only to the
+subsequent build and publication chain.
 
 `live_prepare` installs dependencies and packages projections on all three hosted
 OSes with contents-read permission only; POSIX pinned CLIs travel in the same
 validated archive, while Windows CLI installation stays inside its isolated user.
 This closes [#1306](https://github.com/awslabs/aidlc-workflows/issues/1306): installers
 never run with OIDC in scope, and credentialed lanes only validate and unpack
-prepared bytes. `AIDLC_NIGHTLY_LIVE=1` remains the deliberate enablement switch
-for preparation and live lanes. The credential-free
-Windows release-contract job remains enabled. Preview publication proceeds with
-`complete: false` when the disabled lanes are skipped and other jobs pass;
-stable promotion still requires `passed: true`.
+prepared bytes. Every authorized Full Suite run executes preparation and hosted
+live jobs using the existing `ai-pr-review` environment. There is no separate
+live opt-in switch in this release workflow. Missing prerequisites, skipped jobs
+or failed tests block preview and stable publication. The credential-free
+Windows release-contract job also runs.
 
 The declared coverage is:
 
-- Deterministic smoke/unit and isolated integration/e2e on Linux, macOS and Windows.
+- Deterministic smoke, four independent unit shards, and isolated integration/e2e
+  with eight workers on each of Linux, macOS and Windows. Every unit file is
+  assigned to one shard per OS; each shard retains its own debug logs and results.
+- A Linux production-guard slice selects `--production-guards` and
+  `--require-coverage` for the runner and recovery contracts. Those cases are
+  therefore exercised even though ordinary fixture-mode tiers skip them.
 - Source-bound native terminal obligations on Linux arm64/Bun and tmux,
   macOS arm64/Bun (`macos-15`), and Windows/Bun and node-pty. Hosted Windows
   supplies Node; Bun installs the pinned dependencies and native addon.
@@ -1072,6 +1128,15 @@ declares separately selectable Windows-only files; it never hides a skipped case
 inside a selected file. All live provider legs use `--require-coverage`;
 release-contract files retain platform-conditional cases and do not use that flag.
 
+Outside the native profile, deterministic and release-contract results are job
+outcomes, not proof that every individual case ran somewhere in the OS matrix.
+Their debug artifacts retain per-file case counts, skipped cases and JUnit.
+There is no source-bound inventory assigning all such cases to applicable OSes
+and reconciling those receipts across jobs. Applying `--require-coverage` to each
+whole tier would also reject legitimate platform-inapplicable cases; a green job
+does not convert those skips into passes. Full case coverage across OSes remains
+an explicit gap until that inventory and reconciliation exist.
+
 Add `--args` to print the complete runner arguments, one per line. The script
 owns tier selection: it emits only tiers with selected files, enables
 `--isolated-e2e` and resource limits only when e2e files exist, and applies each
@@ -1092,16 +1157,27 @@ skipped, without treating the deliberate skip as a prerequisite failure.
 
 Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
-`full-suite-deterministic-<tier>-<OS>`, `full-suite-live-<family>-<OS>`, and
+`full-suite-production-guards`,
+`full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
+`unit-4`, or `deep`), `full-suite-live-<family>-<OS>`, and
 `full-suite-result` (90-day retention). The final JSON records `sha`, `runId`,
-`runAttempt`, `passed`, `complete`, every job's result in `legs`, variable-disabled
-jobs in `disabledLegs`, and live families declared with `hosting: "excluded"` in the
-sorted `excluded` list. `passed` means every enabled job succeeded, disabled live
-legs were skipped, and `sha` is a 40-hex commit ID; `complete` additionally requires
-no exclusions or disabled legs. Exclusions and disabled legs warn without blocking
-preview/stable publication. A missing, failed, cancelled or unexpectedly skipped
-job still fails, as does a live job that ran without `AIDLC_NIGHTLY_LIVE=1`.
-Exclusions and disabled legs are not coverage.
+`runAttempt`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
+`disabledLegs: []`, and live families declared with `hosting: "excluded"` in the
+sorted `excluded` list. Under `required-hosted-live-v1`, `passed` means every
+declared job succeeded and `sha` is a 40-hex commit ID. A missing, failed,
+cancelled or skipped job fails. `disabledLegs` is retained so stable promotion
+can reject historical disabled-live reports. `complete` additionally requires
+no excluded families; it remains false with the documented Kiro/Cursor/Copilot
+exclusions and is not the publication predicate. Those exclusions warn without
+blocking publication; disabled required jobs block it. Neither job success nor
+this policy marker asserts full case coverage across OSes.
+
+Shared deterministic artifacts contain `tests/logs/<stamp>/` and
+`tmp/ci-deterministic/` (full stdout/stderr plus the literal stamp path). CI
+artifacts use `ci-deterministic-<suite>-<OS>`, where suite is smoke,
+unit-1 through unit-4, or integration (deep for the expanded manual matrix).
+An upload requires both log locations
+to pass sanitization, including after a failed test command.
 
 Kiro ACP/TUI/IDE live families are declared exclusions in the nightly full suite,
 printed as warnings and leaving `complete: false`. They need a dedicated isolated
@@ -1110,19 +1186,26 @@ Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
 `AIDLC_KIRO_IDE_LIVE=1` remain the coverage path. A follow-up issue tracks the
 hosted lane.
 
-Provision these repository/environment settings before enabling the live lanes:
+The live jobs use the existing `ai-pr-review` environment and role. Verify these
+prerequisites before running Full Suite:
 
-- Environment `nightly-live` holds secret `AWS_NIGHTLY_TEST_ROLE_ARN` (required).
+- Environment `ai-pr-review` supplies secret `AWS_AI_PR_REVIEW_ROLE_ARN`.
+  Both `live_hosted` and `live_windows` select that environment; the secret is
+  resolved inside those jobs. `workflow_call` requires no caller-supplied secret
+  and the preview caller does not use `secrets: inherit`.
   No Kiro/Cursor API-key workflow secret or hosted vendor-key leg is supported.
   The AWS role's OIDC trust must be scoped to
-  this repository's `environment:nightly-live` subject. Set `MaxSessionDuration`
-  to at least six hours; each assumption requests 21,600 seconds.
-- Grant Bedrock invoke/stream access to the CI-only model table in
+  this repository's `environment:ai-pr-review` subject. Its `MaxSessionDuration`
+  must support at least six hours; each assumption requests 21,600 seconds.
+- The role needs Bedrock invoke/stream access to the CI-only model table in
   `scripts/ci-credential-broker.ts`: Claude Fable 5, Opus 4.8, Sonnet 4.6 and
   Haiku 4.5 inference profiles in `us-east-1`, opencode's Sonnet 4.6 default in
   that region, and Codex `openai.gpt-5.5` through Bedrock Mantle in `us-east-2`.
   The table pins the broker allowlist and Claude client aliases; shipped user
   settings remain provider-neutral.
+
+Missing environment access, role trust, model permissions, or required live
+substrates fails readiness; the workflow does not create a new environment or role.
 
 Claude Code and opencode npm versions are pinned in the workflow; update those
 pins deliberately after verifying the registry and compatibility. CLI/authentication preflights fail

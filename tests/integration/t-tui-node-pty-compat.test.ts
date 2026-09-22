@@ -592,15 +592,35 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             ...shimArgs,
           ]);
           expect(started.rc, started.stderr).toBe(0);
-          expect(
-            await waitUntil(
-              () =>
-                identityFiles.every(existsSync) &&
-                existsSync(argsPath) &&
-                existsSync(ownershipPath),
-              20_000,
-            ),
-          ).toBe(true);
+          const requiredFiles = [...identityFiles, argsPath, ownershipPath];
+          const ready = await waitUntil(
+            () => requiredFiles.every(existsSync),
+            20_000,
+          );
+          let startupDiagnostic: string | undefined;
+          if (!ready) {
+            // Capture before finally tears down the session. A successful
+            // `start` only means the daemon was spawned; it does not prove the
+            // identity-gated wrapper was released or that the shim ran.
+            const artifacts = Object.fromEntries([
+              "pid", "child.pid", "wrapper.release", "target-spawn.json",
+              "target-exit.json", "daemon-error.txt", "grid.txt",
+            ].map((name) => {
+              try {
+                return [name, readFileSync(join(sessionDir, name), "utf8")];
+              } catch (error) {
+                return [name, { readError: (error as NodeJS.ErrnoException).code }];
+              }
+            }));
+            startupDiagnostic =
+              `Windows ${kind} shim startup did not publish required files within 20000ms\n` +
+              JSON.stringify({
+                missingFiles: requiredFiles.filter((path) => !existsSync(path)),
+                sessionDir,
+                artifacts,
+              }, null, 2);
+          }
+          expect(ready, startupDiagnostic).toBe(true);
 
           const rendered = legacyDrive([
             "wait",

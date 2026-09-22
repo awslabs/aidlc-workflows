@@ -88,19 +88,48 @@ function record(session: string) {
   return JSON.parse(readFileSync(bunSessionPaths(session, env).record, "utf8"));
 }
 
-async function request(session: string, body: string): Promise<string> {
+async function request(session: string, body: string, options: { allowReset?: boolean } = {}): Promise<string> {
   return new Promise((accept, reject) => {
     const socket = connect(record(session).endpoint);
     let response = "";
+    let settled = false;
+    let fragmentTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      clearTimeout(fragmentTimer);
+      socket.destroy();
+      if (error) reject(error);
+      else accept(response);
+    };
+    const deadline = setTimeout(() => finish(new Error("probe IPC timed out")), 5000);
+    const onError = (error: NodeJS.ErrnoException) => {
+      if (options.allowReset && response === "" && ["ECONNRESET", "EPIPE"].includes(error.code ?? "")) finish();
+      else finish(error);
+    };
     socket.setEncoding("utf8");
-    socket.setTimeout(5000, () => { socket.destroy(); reject(new Error("probe IPC timed out")); });
-    socket.on("error", reject);
-    socket.on("data", (data) => { response += data; });
-    socket.on("close", () => accept(response));
+    socket.on("error", onError);
+    socket.on("data", (data) => {
+      response += data;
+      // The protocol completes a reply at its newline, independently of socket teardown.
+      if (response.includes("\n")) finish();
+    });
+    socket.on("close", () => finish());
     socket.on("connect", () => {
-      const split = Math.floor(body.length / 2);
-      socket.write(body.slice(0, split));
-      setTimeout(() => socket.write(body.slice(split)), 10);
+      const size = Math.max(1, Math.min(Math.floor(body.length / 2), 16 * 1024));
+      let offset = 0;
+      const writeFragment = () => {
+        if (settled) return;
+        const fragment = body.slice(offset, offset + size);
+        offset += fragment.length;
+        // Bound queued output so a peer rejecting a large request can close promptly.
+        socket.write(fragment, (error) => {
+          if (error) onError(error);
+          else if (!settled && offset < body.length) fragmentTimer = setTimeout(writeFragment, 10);
+        });
+      };
+      writeFragment();
     });
   });
 }
@@ -446,7 +475,7 @@ setTimeout(() => process.exit(99), 30000);
       expect(refused.ok).toBe(false);
       expect(refused.error).toContain("ownership");
       expect(JSON.parse(await request(session, "{malformed}\n")).ok).toBe(false);
-      expect(await request(session, `${"x".repeat(300_000)}\n`)).toBe("");
+      expect(await request(session, `${"x".repeat(300_000)}\n`, { allowReset: true })).toBe("");
       expect((await frame(session)).text).toContain("READY protocol");
       const invalidResize = await drive(["resize", "--session", session, "--width", "1", "--height", "20"]);
       expect(invalidResize.code).not.toBe(0);

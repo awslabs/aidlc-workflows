@@ -1983,6 +1983,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
     const previewWorkflow = readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8");
     const fullSuiteWorkflow = readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf-8");
+    const deterministicWorkflow = readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
       permissions?: Record<string, string>;
       jobs: Record<string, {
@@ -1990,7 +1991,7 @@ describe("t244 Windows and completion release surfaces", () => {
       }>;
     };
     expect(parsed.permissions).toEqual({ contents: "read" });
-    expect(parsed.jobs.test_unit.strategy?.["fail-fast"]).toBe(false);
+    expect(parsed.jobs.test_unit).toBeUndefined();
     expect(parsed.jobs["native-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(parsed.jobs["musl-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(workflow).toContain("name: Validate release tag and source");
@@ -2014,7 +2015,7 @@ describe("t244 Windows and completion release surfaces", () => {
     // Third-party actions are pinned to a full commit SHA. A same-repository
     // reusable workflow (`./.github/workflows/...`) is referenced by path and
     // resolves to the commit already being run, so it carries no ref to pin.
-    const actionRefs = [workflow, previewWorkflow, fullSuiteWorkflow].flatMap(
+    const actionRefs = [workflow, previewWorkflow, fullSuiteWorkflow, deterministicWorkflow].flatMap(
       (workflowText) =>
         [...workflowText.matchAll(/^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm)]
           .map((match) => match[1]),
@@ -2025,7 +2026,8 @@ describe("t244 Windows and completion release surfaces", () => {
       expect(ref).toMatch(/^[^@\s]+@[a-f0-9]{40}$/);
     }
     expect(workflow).not.toMatch(/^\s*(?:-\s+)?uses:\s+[^@\s]+@v\d/m);
-    expect(actionRefs).toContain("./.github/workflows/ci.yml");
+    expect(actionRefs).toContain("./.github/workflows/deterministic-tests.yml");
+    expect(actionRefs).not.toContain("./.github/workflows/ci.yml");
     expect(workflow).toContain("shellcheck scripts/install.sh");
     expect(workflow).toContain("Invoke-ScriptAnalyzer -Path scripts/install.ps1");
     expect(workflow).toContain("unix-lifecycle:");
@@ -2049,40 +2051,17 @@ describe("t244 Windows and completion release surfaces", () => {
     );
     expect(verifyJob).toContain(regen);
     expect(verifyJob.indexOf(regen)).toBeLessThan(verifyJob.indexOf("- run: bun run check"));
-    const smokeTests = workflowJob(workflow, "test_smoke");
-    expect(smokeTests).toContain("needs: validate");
-    expect(smokeTests).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
-    expect(smokeTests).toContain(regen);
-    expect(smokeTests).toContain("bun tests/run-tests.ts --smoke");
-    const unitTests = workflowJob(workflow, "test_unit");
-    expect(unitTests).toContain("needs: validate");
-    expect(unitTests).toContain("shard: [1, 2, 3, 4]");
-    expect(unitTests).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
-    expect(unitTests).toContain(regen);
-    expect(unitTests).toContain("sudo apt-get install -y -qq zsh");
-    expect(unitTests).toContain(
-      `bun tests/run-tests.ts --unit --shard \${{ matrix.shard }}/4`,
-    );
-    const deepTests = workflowJob(workflow, "test_deep");
-    expect(deepTests).toContain("needs: validate");
-    expect(deepTests).toContain("timeout-minutes: 90");
-    expect(deepTests).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
-    expect(deepTests).toContain(regen);
-    expect(deepTests).toContain(
-      "bun tests/run-tests.ts --integration --e2e --no-llm --parallel 8",
-    );
-    const releaseTests = workflowJob(workflow, "test");
-    expect(releaseTests).toContain(`if: \${{ always() }}`);
-    expect(releaseTests).toContain("needs: [test_smoke, test_unit, test_deep]");
-    expect(releaseTests).toContain('test "$SMOKE_RESULT" = "success"');
-    expect(releaseTests).toContain('test "$UNIT_RESULT" = "success"');
-    expect(releaseTests).toContain('test "$DEEP_RESULT" = "success"');
+    for (const name of ["test_smoke", "test_unit", "test_deep", "test"]) {
+      expect(parsed.jobs[name], `stable source tests must consume nightly evidence: ${name}`).toBeUndefined();
+    }
+    expect(workflow).toContain("Require passing full-suite evidence");
+    expect(workflow).not.toContain("tests/run-tests.");
     const nativeSmokeJob = workflow.slice(
       workflow.indexOf("  native-smoke:"),
       workflow.indexOf("  build:"),
     );
     expect(nativeSmokeJob).toContain(regen);
-    expect(nativeSmokeJob).toContain("needs: [validate, verify, test]");
+    expect(nativeSmokeJob).toContain("needs: [validate, verify]");
     expect(nativeSmokeJob).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
     expect(nativeSmokeJob.indexOf(regen))
       .toBeLessThan(nativeSmokeJob.indexOf("t238-build-binaries.test.ts"));
@@ -2433,21 +2412,27 @@ describe("t244 Windows and completion release surfaces", () => {
   });
 
   test("CI test jobs build the projections before running their tiers", () => {
+    type Job = { uses?: string; steps?: Array<{ run?: string }> };
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       on: { pull_request: { branches: string[] } };
-      jobs: Record<string, { steps: Array<{ run?: string }> }>;
+      jobs: Record<string, Job>;
+    };
+    const shared = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
     };
     expect(ci.on.pull_request.branches).toContain("main");
     expect(ci.on.pull_request.branches).not.toContain("v2");
-    for (const name of ["test_smoke", "test_unit", "test_native_terminal"]) {
-      const steps = ci.jobs[name].steps;
+    expect(ci.jobs.deterministic.uses).toBe("./.github/workflows/deterministic-tests.yml");
+    for (const name of ["deterministic", "test_native_terminal"]) {
+      const job = ci.jobs[name];
+      const steps = job.uses ? shared.jobs.test.steps! : job.steps!;
       const build = steps.findIndex((step) => step.run?.trim().startsWith("bun scripts/package.ts"));
-      const run = steps.findIndex((step) => step.run?.includes("tests/run-tests.ts"));
+      const run = steps.findIndex((step) => /tests\/run-tests\.(sh|ts)/.test(step.run ?? ""));
       expect(build, `${name} must regenerate its projections`).toBeGreaterThanOrEqual(0);
       expect(run, `${name} must invoke the test runner`).toBeGreaterThanOrEqual(0);
       expect(build, `${name} must build before running its tier`).toBeLessThan(run);
     }
-    const isolation = ci.jobs.test_live_isolation.steps;
+    const isolation = ci.jobs.test_live_isolation.steps!;
     const build = isolation.findIndex((step) => step.run === "bun scripts/package.ts");
     expect(build).toBeGreaterThanOrEqual(0);
     for (const [index, step] of isolation.entries()) {

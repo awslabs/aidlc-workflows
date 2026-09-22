@@ -673,6 +673,9 @@ function createIsolatedGitConfig(): string {
     ["commit.gpgsign", "false"],
     ["tag.gpgsign", "false"],
   ];
+  // Isolated fixtures intentionally use deep worktree paths. Preserve Windows
+  // Git's long-path support without reading or changing the user's global config.
+  if (process.platform === "win32") entries.push(["core.longpaths", "true"]);
   for (const safeDirectory of [
     ...protectedGitConfigValues("--system", "safe.directory"),
     ...protectedGitConfigValues("--global", "safe.directory"),
@@ -1768,6 +1771,11 @@ try {
     // A full/unwritable result volume cannot publish a complete rollup. The
     // nonzero exit and original stderr remain authoritative; never emit PASS.
   }
-  appendFileSync(2, `${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+  const details = err instanceof Error ? err.stack ?? err.message : String(err);
+  // Some runtimes omit the message from Error.stack; retain the actionable cause.
+  const diagnostic = err instanceof Error && !details.includes(err.message)
+    ? `${err.message}\n${details}`
+    : details;
+  appendFileSync(2, `${diagnostic}\n`);
   process.exit(1);
 }

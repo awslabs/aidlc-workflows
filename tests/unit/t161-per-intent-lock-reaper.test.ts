@@ -334,6 +334,7 @@ describe("t161 per-intent lock independence", () => {
   });
 
   test("persistent retirement failure retains receipt and exit recovery ownership", () => {
+    // Initial release and pending-release retry both exhaust the production loop.
     const lockDir = auditLockDir(PD);
     _setAuditLockFaultHooksForTests({
       failReleaseRename: () => true,
@@ -347,7 +348,7 @@ describe("t161 per-intent lock independence", () => {
     releaseAuditLock(PD);
     expect(existsSync(lockDir)).toBe(false);
     expect(holdsAuditLock(PD)).toBe(false);
-  }, 5000);
+  }, 15_000);
 
   test("a retirement-path collision is bypassed with a fresh random destination", () => {
     const lockDir = auditLockDir(PD);
@@ -481,6 +482,8 @@ describe("t161 per-intent lock independence", () => {
   }, 5000);
 
   test("releasable gate retirement excludes successor publication for acquisition and doctor", () => {
+    // Two losing child processes exhaust native-gate retries before the final winner.
+    // Budget process startup and cleanup without shortening those production waits.
     const projectDir = `${PD}-releasable-cas`;
     const lockDir = auditLockDir(projectDir);
     const gateDir = `${lockDir}.reap`;
@@ -539,7 +542,7 @@ describe("t161 per-intent lock independence", () => {
       rmSync(`${lockDir}.gate-mutex`, { force: true });
       rmSync(driver, { force: true });
     }
-  }, 10000);
+  }, 30_000);
 
   test("malformed gate tokens and redirected releasable markers remain fail-closed", () => {
     const cases = [

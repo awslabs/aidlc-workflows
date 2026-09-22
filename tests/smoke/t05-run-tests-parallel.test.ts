@@ -294,7 +294,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     );
   }, PER_TEST_TIMEOUT);
 
-  test("unit shard CLI runs only the selected deterministic shard", () => {
+  test("shared CI flags run only the selected deterministic unit shard", () => {
     const file = "t68-version-changelog-sync.test.ts";
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((entry) => entry.endsWith(".test.ts"))
@@ -308,13 +308,18 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     });
 
     const r = run([
+      "--debug", "-P", "8", "--no-llm",
       "--unit",
       "--shard",
       `${selected}/4`,
       "--filter",
       "t68-version-changelog-sync",
     ]);
-    expect(r.status).toBe(0);
+    const stamp = r.out.match(/^Verbose mode: logging to (.+)$/m)?.[1].trim();
+    if (stamp) createdLogDirs.push(stamp);
+    expect(r.status, r.out).toBe(0);
+    expect(stamp).toBeDefined();
+    expect(r.out).toContain("--no-llm: forcing all live-model gates closed");
     expect(r.out).toContain(
       `## Unit Tests (single-component isolation) (shard=${selected}/4)`,
     );

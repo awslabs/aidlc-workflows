@@ -283,7 +283,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
       expect(rows).toContainEqual(expect.objectContaining({
         slug: "demo",
         branch: boltName(id8, "demo"),
-        worktree_path: worktreePath(p, id8, "demo"),
+        worktree_path: worktreePath(p, id8, "demo").replaceAll("\\", "/"),
         intent_id8: id8,
         legacy: false,
       }));

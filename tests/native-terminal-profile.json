@@ -292,6 +292,18 @@
             },
             {
               "classname": "native private namespace",
+              "name": "a private root replay in phase exited cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a private root replay in phase starting cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root below a group-writable non-sticky ancestor is rejected before spawn"
+            },
+            {
+              "classname": "native private namespace",
               "name": "unsafe roots and records are rejected, never chmod-repaired"
             }
           ]
@@ -1920,6 +1932,18 @@
             {
               "classname": "native private namespace",
               "name": "publication refuses a directory replaced after opening its temporary record"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a private root replay in phase exited cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a private root replay in phase starting cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root below a group-writable non-sticky ancestor is rejected before spawn"
             },
             {
               "classname": "native private namespace",

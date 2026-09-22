@@ -615,11 +615,14 @@ export function cleanupWorktreeFixture(proj: string | undefined): void {
 }
 
 function removeTreeWithRetry(path: string): void {
-  const attempts = process.platform === "win32" ? 10 : 1;
+  const attempts = process.platform === "win32" ? 10 : 3;
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
       rmSync(path, { recursive: true, force: true });
+      if (existsSync(path)) {
+        throw Object.assign(new Error(`fixture directory still exists after removal: ${path}`), { code: "ENOTEMPTY" });
+      }
       return;
     } catch (err) {
       lastErr = err;
