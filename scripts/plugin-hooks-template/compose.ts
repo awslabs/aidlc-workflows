@@ -841,7 +841,13 @@ const KIRO_WORKER_TOOLS = ["fs_read", "fs_write", "execute_bash", "thinking"] as
  *  persona instead of being guessed at. */
 type ToolGrants =
   | { kind: "absent" }
-  | { kind: "resolved"; tools: string[] }
+  /** `from`/`through` are the INCLUSIVE frontmatter line range the declaration occupies,
+   *  so the projection deletes exactly what the reader consumed instead of re-deciding
+   *  where the declaration ends. Two scans with two termination rules is what let a blank
+   *  line inside a block sequence resolve to the entries BEFORE it while the projection
+   *  kept the ones after it as orphans - a delegation grant hidden from the check and
+   *  invalid YAML in the same file. One scanner, one answer. */
+  | { kind: "resolved"; tools: string[]; from: number; through: number }
   | { kind: "unresolved"; reason: string };
 
 /** One plain or quoted YAML scalar, with a trailing comment removed the way YAML removes
@@ -894,7 +900,7 @@ function kiroToolGrants(content: string): ToolGrants {
       return { kind: "unresolved", reason: "declares a multiline `tools` flow sequence" };
     }
     const body = inline.slice(1, -1).trim();
-    if (body === "") return { kind: "resolved", tools: [] };
+    if (body === "") return { kind: "resolved", tools: [], from: index, through: index };
     const tools: string[] = [];
     for (const raw of body.split(",")) {
       const scalar = plainYamlScalar(raw);
@@ -906,16 +912,27 @@ function kiroToolGrants(content: string): ToolGrants {
       }
       tools.push(scalar);
     }
-    return { kind: "resolved", tools };
+    return { kind: "resolved", tools, from: index, through: index };
   }
   const tools: string[] = [];
-  for (const next of lines.slice(index + 1)) {
-    if (/^\s*#/.test(next)) continue;
+  // `through` trails the last line that actually BELONGS to the declaration, so trailing
+  // blank lines separating this key from the next one are not swallowed by the range.
+  let through = index;
+  for (let i = index + 1; i < lines.length; i++) {
+    const next = lines[i];
+    // A blank line does NOT end a YAML block sequence, and neither does a comment
+    // indented under the key. Treating either as the end is what hid a later `- subagent`
+    // from the delegation check.
+    if (next.trim() === "") continue;
+    if (/^[ \t]+#/.test(next)) {
+      through = i;
+      continue;
+    }
     const item = /^[ \t]+-([ \t]+.*)?$/.exec(next);
     if (item === null) {
-      // A new top-level key, or a blank line, ends the sequence. Anything else at this
-      // depth is a shape this reader does not model.
-      if (/^\S/.test(next) || next.trim() === "") break;
+      // A line at column 0 - the next key, or a top-level comment - ends the sequence.
+      // Anything else at this depth is a shape this reader does not model.
+      if (/^\S/.test(next)) break;
       return {
         kind: "unresolved",
         reason: `declares a \`tools\` block containing a line that is not a sequence entry: ${next.trim()}`,
@@ -929,8 +946,9 @@ function kiroToolGrants(content: string): ToolGrants {
       };
     }
     tools.push(scalar);
+    through = i;
   }
-  return { kind: "resolved", tools };
+  return { kind: "resolved", tools, from: index, through };
 }
 
 function projectKiroNativeAgent({ file, content }: CopyContext): string {
@@ -957,22 +975,19 @@ function projectKiroNativeAgent({ file, content }: CopyContext): string {
   const allowlist = `tools: [${tools.map((tool) => `"${tool}"`).join(", ")}]`;
   const out: string[] = [];
   let placed = false;
-  let inToolsBlock = false;
-  for (const line of m[1].split(/\r?\n/)) {
-    if (/^tools:/.test(line)) {
-      inToolsBlock = line.slice("tools:".length).trim() === "";
-      if (!placed) {
+  const lines = m[1].split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    // Remove the author's declaration by the RANGE the reader consumed, not by
+    // re-deciding where it ends here. The two scans disagreeing is what left orphaned
+    // sequence entries after the canonical line.
+    if (grants.kind === "resolved" && i >= grants.from && i <= grants.through) {
+      if (i === grants.from) {
         out.push(allowlist);
         placed = true;
       }
       continue;
     }
-    if (inToolsBlock) {
-      // Only the sequence entries and comments indented under the key belong to it.
-      if (/^[ \t]+-/.test(line) || /^[ \t]+#/.test(line)) continue;
-      inToolsBlock = false;
-    }
-    if (/^disallowedTools:/.test(line)) {
+    if (/^disallowedTools:/.test(lines[i])) {
       // The denial's own slot, so the restriction reads where the author wrote it.
       if (!placed) {
         out.push(allowlist);
@@ -980,7 +995,7 @@ function projectKiroNativeAgent({ file, content }: CopyContext): string {
       }
       continue;
     }
-    out.push(line);
+    out.push(lines[i]);
   }
   if (!placed) out.push(allowlist);
   return content.replace(m[0], () => `---\n${out.join("\n")}\n---\n`);

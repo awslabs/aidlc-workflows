@@ -2130,6 +2130,14 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         "declares a multiline `tools` flow sequence"],
       ["a duplicate tools key", [`tools: ["fs_read"]`, `tools: ["subagent"]`],
         "declares `tools` more than once"],
+      // A blank line does not end a YAML block sequence. The first cut of this reader
+      // treated it as the end and returned the entries BEFORE it as a resolved list, so
+      // the grant below was never seen by the delegation check at all.
+      ["a blank line before the grant", ["tools:", "  - fs_read", "", "  - subagent"],
+        "grants the subagent tool"],
+      ["an indented comment before the grant",
+        ["tools:", "  - fs_read", "  # still the same sequence", "  - subagent"],
+        "grants the subagent tool"],
     ] as const) {
       const plugin = `syn-bypass-${label.replace(/[^a-z]+/g, "-")}`;
       const run = composeSynthetic(
@@ -2170,6 +2178,39 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(composed).toMatch(/^tools: \["fs_read", "thinking"\]$/m);
     expect(composed).not.toMatch(/^ {2}- /m);
     expect(composed).not.toMatch(/keep me|quoted with a comment/);
+
+    // A VALID sequence broken up by a blank line and a comment must canonicalize whole.
+    // Reader and projection now agree on the declaration's line range, so no entry is
+    // dropped from the list and none is left behind as an orphan after the flow line -
+    // the shape that made the composed frontmatter invalid YAML, Kiro-only.
+    const separatedPlugin = "syn-separated";
+    const separated = composeSynthetic(
+      separatedPlugin,
+      {
+        [`agents/${separatedPlugin}-agent.md`]: persona(separatedPlugin, [
+          "tools:",
+          "  - fs_read",
+          "",
+          "  # a note in the middle of the sequence",
+          "  - execute_bash",
+          "",
+          "  - thinking",
+        ]),
+      },
+      ".kiro",
+    );
+    const separatedBody = readFileSync(
+      join(separated.proj, ".kiro", "agents", `${separatedPlugin}-agent.md`),
+      "utf-8",
+    );
+    expect(separatedBody).toMatch(
+      /^tools: \["fs_read", "execute_bash", "thinking"\]$/m,
+    );
+    expect(separatedBody).not.toMatch(/^ {2}- /m);
+    expect(separatedBody).not.toMatch(/a note in the middle/);
+    // Exactly one tools key, and the frontmatter's other keys are intact.
+    expect(separatedBody.match(/^tools:/gm)?.length).toBe(1);
+    expect(separatedBody).toMatch(/^plugin: syn-separated$/m);
   }, 240_000);
 
   test("Kiro rejects plugin-owned ensemble collaborators with a compose drop", () => {
