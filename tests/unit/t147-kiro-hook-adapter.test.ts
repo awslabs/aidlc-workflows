@@ -2348,6 +2348,85 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     },
   );
 
+  test.each([
+    [
+      "complete bucket deletion",
+      (ledger: string) => {
+        rmSync(dirname(ledger), { recursive: true, force: true });
+      },
+    ],
+    [
+      "valid-JSON replacement that drops the open",
+      (ledger: string) => {
+        // Every line parses and the file is not empty, so every OTHER check in the
+        // detector reads this as an honest ledger. Only the witness count outside the
+        // bucket says records went missing.
+        writeFileSync(
+          ledger,
+          `${JSON.stringify({ op: "close", agent: "x", key: "k", group: "g", ts: Date.now() })}\n`,
+          "utf-8",
+        );
+      },
+    ],
+  ])(
+    "5d14: %s is refused by BOTH authorization guards, not read as a session that never dispatched",
+    (_name, tamper) => {
+      // The two shapes the ledger could not see on its own. Deleting the bucket read
+      // exactly like a fresh session - the detector returned "no tamper" - and a
+      // replacement with valid JSON that simply omits the open records read as an honest
+      // ledger. Either way both consumers replayed nothing, omitted agent_type, and the
+      // delegate was processed as the conductor with the guard's restrictions skipped.
+      // A dispatch witness kept in a sibling subtree of the bucket is what tells these
+      // apart from a session that genuinely never dispatched.
+      for (const guard of ["reviewer-scope", "state-transition-guard"] as const) {
+        const dir = scratchProject(true);
+        try {
+          openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+          tamper(findDelegationLedger(dir));
+          const payload = guard === "reviewer-scope"
+            ? {
+                hook_event_name: "preToolUse",
+                cwd: dir,
+                tool_name: "read_file",
+                tool_input: { path: "construction/sibling-unit/design.md" },
+              }
+            : {
+                hook_event_name: "preToolUse",
+                cwd: dir,
+                tool_name: "execute_bash",
+                tool_input: {
+                  command: "bun .kiro/tools/aidlc-state.ts approve feasibility",
+                },
+              };
+          const r = runAdapter(dir, guard, payload);
+          expect(r.code, `${guard}: ${r.stdout}${r.stderr}`).toBe(2);
+          expect(r.stderr, guard).toContain("The delegation ledger cannot be trusted");
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  test("5d15: a session that never dispatched is NOT refused by the witness check", () => {
+    // The other half of the same contract, and the reason the witness is needed at all:
+    // the innocent case must stay innocent. With no dispatch there is no witness and no
+    // bucket, so the guard must still fall through rather than refuse every unattributed
+    // main-session call.
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "reviewer-scope", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "read_file",
+        tool_input: { path: "construction/sibling-unit/design.md" },
+      });
+      expect(r.stderr).not.toContain("The delegation ledger cannot be trusted");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("5g: reviewer-scope still enforces when another persona is inflight too", () => {
     // Regression: with two DIFFERENT personas inflight the adapter used to forward
     // an empty identity, so the core guard passed the call through - the exact gap

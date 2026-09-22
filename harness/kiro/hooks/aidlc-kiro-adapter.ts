@@ -2609,6 +2609,58 @@ function delegationLedgerPath(sessionId: string): string {
   return join(sessionsDir(projectDir), "kiro-delegation", key, "windows.ndjson");
 }
 
+/** A dispatch WITNESS, kept outside the ledger's own bucket.
+ *
+ *  The ledger used to be its own only witness, and that is what let two tampers through.
+ *  Deleting the bucket directory read exactly like a session that never dispatched, and
+ *  replacing `windows.ndjson` with valid JSON that simply omits the open records read as
+ *  an honest ledger - every line parsed, the file was not empty - so both consumers
+ *  replayed nothing, omitted `agent_type`, and processed the delegate as the conductor.
+ *
+ *  The witness records the `group` of every OPEN record appended, one per line. Group
+ *  identities rather than a count, because a count cannot see the shape that matters: a
+ *  replacement keeping the same number of lines passes a count and still drops the open.
+ *  The ledger is strictly append-only and never rotated, so an open that was witnessed
+ *  must still be present as an open - a legitimate close ADDS a line and never removes
+ *  one. The witness is written only after the append lands, so a crashed append leaves a
+ *  group unwitnessed rather than a witnessed group unfound, which is why a torn final
+ *  line stays legitimate.
+ *
+ *  It lives in a SIBLING subtree of `kiro-delegation/`, so removing a session's ledger
+ *  bucket does not remove the record that it existed. 🔴 What this still does not close: a
+ *  delegate that deletes the witness too, or that FORGES a close for its own witnessed
+ *  group - the open is then still present and the window closes as if it had reported.
+ *  Both need a delegate identity the project cannot write at all - i.e. host-owned state -
+ *  which is wider than this change. */
+function delegationWitnessPath(sessionId: string): string {
+  const key = createHash("sha256").update(sessionId).digest("hex");
+  return join(sessionsDir(projectDir), "kiro-delegation-witness", key);
+}
+
+/** The witnessed open groups, `null` when no dispatch was ever witnessed. */
+function readDelegationWitness(sessionId: string): string[] | null {
+  let raw: string;
+  try {
+    raw = readFileSync(delegationWitnessPath(sessionId), "utf-8");
+  } catch {
+    return null;
+  }
+  const groups = raw.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+  return groups.length === 0 ? null : groups;
+}
+
+function witnessDelegationOpens(sessionId: string, groups: string[]): boolean {
+  if (groups.length === 0) return true;
+  try {
+    const path = delegationWitnessPath(sessionId);
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${groups.join("\n")}\n`, "utf-8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // An APPEND-ONLY ledger, not a read-modify-write map. Two reasons, both measured
 // against the map this replaces:
 //
@@ -2695,7 +2747,15 @@ function appendDelegationRecords(sessionId: string, records: DelegationRecord[])
       `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
       "utf-8",
     );
-    return true;
+    // The witness is part of the append, not an extra: an open the ledger holds but
+    // nothing outside it names is an open a tamper can erase without trace. A witness
+    // that cannot be written therefore fails the append, which on the OPEN edge refuses
+    // the dispatch - the same cost as a ledger that cannot be written, for the same
+    // reason. A close-only batch witnesses nothing and cannot fail here.
+    return witnessDelegationOpens(
+      sessionId,
+      records.filter((record) => record.op === "open").map((record) => record.group),
+    );
   } catch {
     // The CALLER decides what a failure costs, because the two edges are not
     // symmetric. An OPEN that cannot be written must refuse the dispatch: the
@@ -2709,14 +2769,14 @@ function appendDelegationRecords(sessionId: string, records: DelegationRecord[])
     // is not caught HERE: `readDelegationLedger` still turns a read failure into `[]`
     // and skips unparseable rows, because a torn final line is a crashed append and
     // discarding the ledger over it would lose live windows. The refusal lives with
-    // the consumers instead - `delegationLedgerTamper` names the four shapes only a
-    // tamper produces (obstruction, deletion, truncation, a rewritten middle) and the
-    // reviewer-scope and state-transition guards fail closed on it. Refusing an empty
-    // agent_type in the two core guards is still not the answer: the main session's
-    // own lifecycle verbs are legitimately unattributed. What remains open is a
-    // delegate that removes the bucket DIRECTORY as well, which reads exactly like a
-    // session that never dispatched; telling those apart needs a delegate identity the
-    // project cannot write, i.e. host-owned, which is wider than this change.
+    // the consumers instead - `delegationLedgerTamper` names the shapes only a tamper
+    // produces and the reviewer-scope and state-transition guards fail closed on them.
+    // Refusing an empty agent_type in the two core guards is still not the answer: the
+    // main session's own lifecycle verbs are legitimately unattributed. Removal of the
+    // bucket DIRECTORY, and a replacement that drops records, are caught by the dispatch
+    // witness kept outside the bucket. What remains open is a delegate that deletes the
+    // witness too, or rewrites the ledger without shortening it; telling those apart
+    // needs a delegate identity the project cannot write, i.e. host-owned.
     return false;
   }
 }
@@ -2963,9 +3023,16 @@ function delegationLedgerTamper(sessionId: string): string | null {
   if (obstruction !== null) return obstruction;
   const path = delegationLedgerPath(sessionId);
   const bucket = dirname(path);
+  const witnessed = readDelegationWitness(sessionId);
   try {
     if (!statSync(bucket).isDirectory()) return `${bucket} is not a directory`;
   } catch {
+    // A missing bucket is only innocent when nothing was ever dispatched. The witness
+    // is what tells the two apart, and its absence is what made this case a hole: a
+    // delegate that removed its own bucket read exactly like a fresh session.
+    if (witnessed !== null) {
+      return `${bucket} is gone while ${witnessed.length} delegation window(s) were opened for this session`;
+    }
     return null; // No dispatch was ever recorded for this session.
   }
   let raw: string;
@@ -2977,6 +3044,27 @@ function delegationLedgerTamper(sessionId: string): string | null {
   const lines = raw.split("\n").filter((line) => line.trim() !== "");
   if (lines.length === 0) {
     return `${path} carries no record while its session directory exists`;
+  }
+  if (witnessed !== null) {
+    // Every open that was witnessed must still BE an open in the ledger. This is the
+    // check a line count cannot make: a replacement that keeps the same number of valid
+    // JSON records, but turns the open into something else, passes every other test here
+    // and still leaves the consumers with nothing to attribute. Append-only means a
+    // legitimate close adds a line and never removes the open it cancels.
+    const open = new Set<string>();
+    for (const line of lines) {
+      try {
+        const record = JSON.parse(line) as { op?: unknown; group?: unknown };
+        if (record.op === "open" && typeof record.group === "string") open.add(record.group);
+      } catch {
+        // Skipped here on purpose: an unreadable line is judged by the loop below, which
+        // distinguishes a torn final line from a rewritten middle.
+      }
+    }
+    const missing = witnessed.filter((group) => !open.has(group));
+    if (missing.length > 0) {
+      return `${path} no longer carries ${missing.length} delegation window(s) that were opened for this session`;
+    }
   }
   for (const line of lines.slice(0, -1)) {
     try {
