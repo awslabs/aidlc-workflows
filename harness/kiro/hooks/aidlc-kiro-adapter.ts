@@ -81,6 +81,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
+  activeSpace,
+  agentsDir,
   classifyTerminalCommand,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
@@ -134,6 +136,9 @@ import {
 } from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+// The agent-v1 hook's default max_output_size is 10 KiB, independently of
+// the shell tool's larger response budget. Count the complete UTF-8 packet.
+const PROMPT_HOOK_MAX_BYTES = 10 * 1024;
 
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
 // stdin { tool_name, tool_input, tool_response } or 0.12 camelCase USER_PROMPT
@@ -743,6 +748,95 @@ function processLegacyPlanApprovalWrite(
   return null;
 }
 
+/** The `resources` block sequence declared in a Kiro agent's Markdown frontmatter, or
+ *  null when the file has no frontmatter or no `resources:` key introducing a list.
+ *
+ *  This is a STRUCTURAL read, not a substring search, and the difference is the whole
+ *  point: a substring test over the frontmatter accepts the memory URI sitting in a
+ *  comment, in a `description`, under some other key, or as a scalar
+ *  `resources: file://...`, and it accepts malformed YAML -- so a worker whose preload
+ *  was never repointed would pass. It is deliberately narrow rather than a YAML parser,
+ *  because this runs on the hook path and that path carries no parser import.
+ *
+ *  Strict in one more way: collection stops at the first line in the block that is not a
+ *  `- item`, so a comment interleaved with the items ends the list early and the worker
+ *  reads as unconfigured. That errs toward refusing a dispatch rather than admitting one
+ *  on a shape this has not verified, and the generated files carry no such comment. */
+function frontmatterResources(raw: string): string[] | null {
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)?.[1];
+  if (frontmatter === undefined) return null;
+  const lines = frontmatter.split(/\r?\n/);
+  // `resources:` with nothing after the colon: a block sequence follows. A scalar
+  // `resources: <value>` is not the shape this contract uses and is not accepted.
+  const start = lines.findIndex((line) => /^resources:[ \t]*$/.test(line));
+  if (start === -1) return null;
+  const out: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const item = /^[ \t]+-[ \t]+(.*\S)[ \t]*$/.exec(line);
+    if (item === null) break;
+    out.push(item[1].replace(/^(['"])([\s\S]*)\1$/, "$2"));
+  }
+  return out;
+}
+
+function nativePreloadError(projectDir: string, agents: string[]): string | null {
+  // Match the shared delivery hook's installed roster, including plugin personas,
+  // and its composer exemption. A name using the aidlc- prefix without a roster
+  // file is outside that contract.
+  const rosterDir = agentsDir();
+  const workers = agents.filter((agent) =>
+    /^[a-z0-9][a-z0-9-]*-agent$/.test(agent) &&
+    agent !== "aidlc-composer-agent" &&
+    existsSync(join(rosterDir, `${agent}.md`))
+  );
+  if (workers.length === 0) return null;
+  // Use the same active-space cursor as repointHarnessIncludes. Validate the
+  // persisted result rather than repointing here: Kiro may already have read
+  // the config, and a skipped or failed repoint must not silently admit work.
+  const space = activeSpace(projectDir);
+  const pattern = `aidlc/spaces/${space}/memory/**/*.md`;
+  const expected = `file://${pattern}`;
+  // THIS ROW VALIDATES THE MARKDOWN CONFIG, not a per-agent JSON sibling. The
+  // upstream check read `<agent>.json` because that row shipped both surfaces;
+  // this one merged them and ships the Markdown config alone, so reading JSON
+  // here would fail for every worker and block every dispatch. The contract is
+  // unchanged: the same `resources` preload, in the same roster file the filter
+  // above already gates on, and the same string repointHarnessIncludes rewrites
+  // on a space switch (aidlc-includes.ts repointKiroAgentFrontmatter, which is a
+  // textual substitution over this exact glob -- so validating the text is
+  // validating what the repointer maintains).
+  const failure = (agent: string, reason: string) =>
+    `[aidlc] Worker dispatch blocked: ${join(rosterDir, `${agent}.md`)}: ${reason}. ` +
+    `Expected the frontmatter resources to include ${expected}, resolving to at least one existing Markdown file. ` +
+    // Plugin authoring reserves aidlc- for core; other roster namespaces have
+    // hand-authored configs that space switch and doctor cannot repair.
+    (agent.startsWith("aidlc-")
+      ? `Add or restore ${expected} in the worker's frontmatter resources and repair the memory files, ` +
+        `then rerun /aidlc space switch ${space} to repoint the resources and /aidlc --doctor before retrying.\n`
+      : `Add ${expected} to the resources in the plugin persona's Markdown frontmatter and repair the active-space memory files before retrying.\n`);
+  for (const agent of new Set(workers)) {
+    const file = join(rosterDir, `${agent}.md`);
+    try {
+      const declared = frontmatterResources(readFileSync(file, "utf-8"));
+      if (declared === null || !declared.includes(expected)) {
+        return failure(agent, "the active-space memory preload is absent or stale");
+      }
+    } catch (error) {
+      return failure(agent, `cannot read the worker config: ${String(error).replace(/[\r\n]+/g, " ")}`);
+    }
+  }
+  try {
+    for (const _file of new Bun.Glob(pattern).scanSync({
+      cwd: projectDir,
+      onlyFiles: true,
+      followSymlinks: false,
+    })) return null;
+    return failure(workers[0], "the active-space memory glob resolves to no Markdown files");
+  } catch (error) {
+    return failure(workers[0], `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`);
+  }
+}
+
 export async function run(
   target: string,
   input: string,
@@ -1249,13 +1343,15 @@ const PRE_DISPATCH_FLAGS = new Set([
   "--resume",
   "--depth",
   "--test-strategy",
-  "--single",
   "--new-intent",
   "--new-scope",
   "--report",
 ]);
 
 function shouldPreDispatchNext(args: string[]): boolean {
+  // A single-stage next owns its issuance/audit boundary. Let the conductor's
+  // exact first tool call issue it once, rather than issuing inside this hook.
+  if (args.includes("--single")) return false;
   if (args[0] === "compose") return true;
   if (args.some((arg) => PRE_DISPATCH_FLAGS.has(arg))) return true;
   // A scope choice is unambiguous only before a workflow exists. Over an active
@@ -1306,23 +1402,42 @@ if (target === "verb-intercept") {
     ) {
       const directive = preDispatchNext(invocation.args);
       if (directive !== null) {
-        clearForwardingLatch();
-        if (invocation.args[0] === "--config") {
-          writeReadOnlyLatch(
-            turn,
-            invocation.args.join(" ").replace(/^--/, ""),
-            "config-alias",
-          );
+        const packet = "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
+          "run the exact first `aidlc-orchestrate.ts next` invocation with " +
+          "every user argument preserved. Treat the JSON below as the " +
+          "authoritative directive and act on it now. Do NOT call `next` " +
+          "again for this invocation.\n\n" +
+          `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`;
+        // Publishing a small, non-steering directive here is safe; publishing
+        // steering is not. This channel can truncate the rules and their trailing
+        // continuation token even when the engine's own budget was met, and moving
+        // the token ahead of the rules so it survives truncation is exactly the
+        // wrong repair. So publish only a directive that is not steering and that
+        // fits whole; otherwise fall through to the forwarding latch below and
+        // publish neither, letting the rules arrive through the real tool channel.
+        let kind: string | null = null;
+        try {
+          const parsed: unknown = JSON.parse(directive);
+          if (
+            parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) &&
+            "kind" in parsed && typeof parsed.kind === "string"
+          ) kind = parsed.kind;
+        } catch { /* an unparseable directive is not publishable either */ }
+        if (
+          kind !== null && kind !== "load-steering" &&
+          Buffer.byteLength(packet, "utf-8") <= PROMPT_HOOK_MAX_BYTES
+        ) {
+          clearForwardingLatch();
+          if (invocation.args[0] === "--config") {
+            writeReadOnlyLatch(
+              turn,
+              invocation.args.join(" ").replace(/^--/, ""),
+              "config-alias",
+            );
+          }
+          process.stdout.write(packet);
+          return 0;
         }
-        process.stdout.write(
-          "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
-            "run the exact first `aidlc-orchestrate.ts next` invocation with " +
-            "every user argument preserved. Treat the JSON below as the " +
-            "authoritative directive and act on it now. Do NOT call `next` " +
-            "again for this invocation.\n\n" +
-            `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`,
-        );
-        return 0;
       }
     }
     // Kiro occasionally drops the entire expanded $ARGUMENTS vector and runs a
@@ -1926,9 +2041,29 @@ if (target === "reviewer-scope") {
 }
 
 
+// --- deliver-stage-rules: exact conductor-to-worker steering ---------------------
+//
+// Kiro exposes subagent arguments to preToolUse hooks but does not support
+// updated tool input, and a block-with-retry contract deadlocks live: the
+// conductor cannot reliably reproduce a multi-KB bundle byte-exactly, so
+// every retry re-blocks (observed on the ACP gate - zero dispatches
+// converged). Kiro's delegated agents instead preload the full active memory
+// tree via their `resources` glob. Check selected rule-delivery roster workers'
+// persisted preload before running the shared augmenter as an OBSERVER: complete and
+// preload-served incomplete briefs pass silently; the latter logs only through
+// opt-in hookDebug. Failed preloads and core exit 2 block with repair guidance;
+// exit 3 is advisory only after preload validation succeeds.
 if (target === "deliver-stage-rules") {
   const dispatch = kiroDispatch(kiro);
   if (dispatch === null) return 0;
+  const preloadError = nativePreloadError(projectDir, dispatch.agents);
+  if (preloadError !== null) {
+    process.stderr.write(preloadError);
+    hookDebug(projectDir, "kiro-adapter", "Native active-space memory preload failed", {
+      target, transport: "native-preload", error: preloadError.trim(),
+    });
+    return 2;
+  }
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "deliver-stage-rules"]
@@ -1965,10 +2100,15 @@ if (target === "deliver-stage-rules") {
     return 0;
   }
   if ((r.stdout?.toString().trim() ?? "") !== "") {
-    process.stderr.write(
-      "Advisory: the AIDLC subagent brief did not carry the active-stage rule bundle verbatim. " +
-        "The dispatch proceeded - Kiro agents preload the active memory tree natively - but keep " +
-        "briefs aligned with the delivered load-steering content.\n",
+    // Native preload IS the delivery channel here, so an incomplete brief is
+    // expected rather than a fault: it is recorded for opt-in inspection and
+    // never written to stderr, which a dispatch would surface as a warning the
+    // operator can do nothing about.
+    hookDebug(
+      projectDir,
+      "kiro-adapter",
+      "Incomplete brief served by native active-space memory preload",
+      { target, transport: "native-preload" },
     );
   }
   return 0;
@@ -2796,8 +2936,9 @@ function buildForward(): Forward {
     }
 
     case "record-human-turn": {
+      const eventSessionId = ide.sessionId?.trim();
       const sessionId =
-        ide.sessionId?.trim() ||
+        eventSessionId ||
         (() => {
           try {
             return legacyPlanApprovalSessionId();
@@ -2805,6 +2946,14 @@ function buildForward(): Forward {
             return rememberedKiroIdeSessionId();
           }
         })();
+      // Some IDE sessions submit real prompt events without a workspace
+      // SessionStart callback, and this row's SessionStart case is the only other
+      // writer of the current-session marker - so without this the latch, the
+      // inflight-delegate lookup and three forwarded payloads would all fall back
+      // to a manufactured identity for the whole session. Retain only an
+      // event-supplied identity; never write the legacy fallback back out as if it
+      // were the current session.
+      if (eventSessionId) rememberKiroIdeSessionId(eventSessionId);
       if (ide.channel === "legacy") {
         markKiroIdeLegacyPlanApprovalHost(projectDir, sessionId);
       }

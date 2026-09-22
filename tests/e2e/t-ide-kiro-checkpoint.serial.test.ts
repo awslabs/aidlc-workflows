@@ -19,8 +19,8 @@
 // holds every `t-tui*` e2e file behind the tmux `t-tui-preflight` capability gate;
 // a `t-tui-*` name would wrongly SKIP this CDP/no-tmux test on every tmux-less box.
 // The `t-ide-` prefix runs it in the first/non-TUI band, the same way
-// `t-exec-codex-*` and `t-acp-kiro-*` dodge the gate. `.serial.` pins it serial
-// (run-tests.ts:596) so one Kiro desktop app + one debug port run alone.
+// `t-exec-codex-*` and `t-acp-kiro-*` dodge the gate. Each IDE launch owns a
+// private profile and an OS-assigned debug port, including across worker copies.
 //
 // LIVE: uses real Kiro IDE (Bedrock credits). Gated behind AIDLC_KIRO_IDE_LIVE=1,
 // which does NOT auto-default (only AIDLC_TUI_LIVE self-defaults, run-tests.ts:
@@ -92,16 +92,12 @@ import {
   typeAndSubmit,
   waitForCdp,
   waitForChatInput,
+  withKiroIdeCleanup,
   watchMarkers,
 } from "../harness/kiro-ide-driver.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
-
-// TEST-GRADE: a per-process port so back-to-back runs never collide on a fixed
-// debug port (the spike hardcoded 9337/9340/9341). The runner pins this file serial
-// via the `.serial.` token, so one process => one port band is enough.
-const PORT = 9400 + (process.pid % 500);
 
 // Optional override: point AIDLC_KIRO_IDE_SEED at a developer-supplied user-data-dir.
 // Absent (the normal case), the test GENERATES a minimal onboarding-skip seed from
@@ -785,7 +781,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         'then run `bun .kiro/tools/aidlc.ts engine orchestrate report --stage code-generation --result approved --user-input "Approve"` in this same turn.';
 
       const seedDir = makeSeedDir();
-      const handle = launchKiroIde({ workspace: sandbox, seedProfile: seedDir, port: PORT });
+      const handle = await launchKiroIde({ workspace: sandbox, seedProfile: seedDir });
       const auditShard = seededAuditShard(sandbox);
       diagnostic("launched", {
         sandbox,
@@ -794,7 +790,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         port: handle.port,
         humanPresenceGuardBypass: process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD,
       });
-      try {
+      await withKiroIdeCleanup(async () => {
         expect(await waitForCdp(handle.port)).toBe(true);
         diagnostic("cdp-ready");
         // Poll for the chat input instead of a fixed settle sleep.
@@ -896,11 +892,11 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         // handleApprove error()'d before any mutation (and the preToolUse hook
         // hard-blocked the tool call besides). The next-stage gate never committed.
         expect(gateApprovedCountFor(sandbox, BLOCKED_SLUG)).toBe(0);
-      } finally {
-        teardown(handle);
+      }, async () => {
+        await teardown(handle);
         cleanupTuiProject(sandbox);
         removeSeedDir(seedDir);
-      }
+      });
     },
     TEST_TIMEOUT_MS,
   );
@@ -932,12 +928,11 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       // Observe all five PostToolUse results before evaluating the mint ratio.
       writeFileSync(join(sandbox, "aidlc", ".aidlc-hook-debug"), "");
       const seedDir = makeSeedDir();
-      const handle = launchKiroIde({
+      const handle = await launchKiroIde({
         workspace: sandbox,
         seedProfile: seedDir,
-        port: PORT + 1,
       });
-      try {
+      await withKiroIdeCleanup(async () => {
         expect(await waitForCdp(handle.port)).toBe(true);
         expect(await waitForChatInput(handle.port)).toBe(true);
         const startupDismissed = await assertChatSurfaceUnblocked(handle.port);
@@ -978,11 +973,11 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         // RATIO: exactly one human turn => exactly one HUMAN_TURN event, regardless of
         // how many model continuations / postToolUse firings happened in between.
         expect(humanTurnCount(sandbox)).toBe(1);
-      } finally {
-        teardown(handle);
+      }, async () => {
+        await teardown(handle);
         cleanupTuiProject(sandbox);
         removeSeedDir(seedDir);
-      }
+      });
     },
     TEST_TIMEOUT_MS,
   );

@@ -1,9 +1,10 @@
-// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv
+// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
 //
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as ffi from "bun:ffi";
 import * as childProcess from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,6 +26,7 @@ import {
   writeSessionBinding,
   writeSessionPidAncestry,
   writeSessionPidEntry,
+  windowsSessionProcessIdentity,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
@@ -366,6 +368,158 @@ describe("t318 session binding helpers", () => {
   test("the PID map is optional and missing entries preserve cursor fallback", () => {
     rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
     expect(resolveSessionIdFromAncestry(proj)).toBeNull();
+  });
+
+  test.skipIf(process.platform !== "win32")("native Windows identity agrees with Bun's self and parent PIDs", () => {
+    const self = windowsSessionProcessIdentity(process.pid);
+    const parent = windowsSessionProcessIdentity(process.ppid);
+    expect(self).not.toBeNull();
+    expect(parent).not.toBeNull();
+    expect(self!.ppid).toBe(process.ppid);
+    expect(self!.startTime).toMatch(/^win32:[0-9a-f]{16}$/);
+    expect(parent!.startTime).toMatch(/^win32:[0-9a-f]{16}$/);
+    expect(parent!.startTime! < self!.startTime!).toBe(true);
+    expect(windowsSessionProcessIdentity(process.pid)).toEqual(self);
+    expect(windowsSessionProcessIdentity(process.pid, Date.now())).toBeNull();
+    for (const pid of [0, 1, -1, 1.5, 0x100000000]) {
+      expect(windowsSessionProcessIdentity(pid)).toBeNull();
+    }
+  });
+
+  test("Windows edge fixture: a newer or equal-time parent keeps its existing PID record", () => {
+    // Deterministic edge metadata, not a claim that the OS recycled a live PID.
+    // Exercise the actual writer ordering and its subsequent GC exclusion.
+    process.env.AIDLC_TEST_SESSION_PLATFORM = "win32";
+    const pidDir = sessionPidMapDir(proj);
+    mkdirSync(pidDir, { recursive: true });
+    const path = join(pidDir, String(process.ppid));
+    for (const startTime of ["win32:0000000000000020", "win32:0000000000000010"]) {
+      const before = `${JSON.stringify({ sessionId: "unrelated-owner", startTime })}\n`;
+      writeFileSync(path, before);
+      const probes: number[] = [];
+      writeSessionPidAncestry(proj, "must-not-replace", (pid) => {
+        probes.push(pid);
+        return pid === process.pid
+          ? { ppid: process.ppid, startTime: "win32:0000000000000010" }
+          : { ppid: 1, startTime };
+      });
+      expect(probes).toEqual([process.pid, process.ppid]);
+      expect(readFileSync(path, "utf-8")).toBe(before);
+      expect(readdirSync(pidDir)).toEqual([String(process.ppid)]);
+    }
+  });
+
+  test("Windows edge fixture: unknown inspection or an expired budget leaves a null barrier", () => {
+    process.env.AIDLC_TEST_SESSION_PLATFORM = "win32";
+    const pidDir = sessionPidMapDir(proj);
+    mkdirSync(pidDir, { recursive: true });
+    const path = join(pidDir, String(process.ppid));
+    for (const failure of ["self", "parent", "deadline"]) {
+      writeFileSync(path, JSON.stringify({
+        sessionId: "previous-session",
+        startTime: "win32:0000000000000001",
+      }));
+      let now = 1000;
+      const clock = spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        writeSessionPidAncestry(proj, "unverified-session", (pid) => {
+          if (pid === process.pid) {
+            return failure === "self"
+              ? null
+              : { ppid: process.ppid, startTime: "win32:0000000000000010" };
+          }
+          if (failure === "deadline") now = 1051;
+          return failure === "parent"
+            ? null
+            : { ppid: 1, startTime: "win32:0000000000000001" };
+        });
+        expect(JSON.parse(readFileSync(path, "utf-8")), failure).toEqual({
+          sessionId: null,
+          startTime: null,
+        });
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("native Windows child identity expires on exit and its PID receipt is collected", async () => {
+    const child = Bun.spawn([
+      process.execPath,
+      "-e",
+      'process.stdout.write("ready\\n"); await new Response(Bun.stdin.stream()).text();',
+    ], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    let inputClosed = false;
+    try {
+      const reader = child.stdout.getReader();
+      try {
+        const ready = await reader.read();
+        expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
+      } finally {
+        reader.releaseLock();
+      }
+      const identity = windowsSessionProcessIdentity(child.pid);
+      expect(identity).not.toBeNull();
+      expect(identity!.ppid).toBe(process.pid);
+      writeSessionPidEntry(proj, child.pid, "native-child");
+      const receiptPath = join(sessionPidMapDir(proj), String(child.pid));
+      expect(JSON.parse(readFileSync(receiptPath, "utf-8"))).toEqual({
+        sessionId: "native-child",
+        startTime: identity!.startTime,
+      });
+      child.stdin.end();
+      inputClosed = true;
+      expect(await child.exited).toBe(0);
+      // PID reuse after exit may produce a new observation, never this generation.
+      expect(windowsSessionProcessIdentity(child.pid)?.startTime ?? null).not.toBe(identity!.startTime);
+      writeSessionPidAncestry(proj, "after-child-exit");
+      expect(existsSync(receiptPath)).toBe(false);
+    } finally {
+      if (!inputClosed) child.stdin.end();
+      await child.exited;
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("native Windows ancestry rejects another generation and unverified legacy receipts", () => {
+    writeSessionPidAncestry(proj, "far-session");
+    writeSessionPidEntry(proj, process.ppid, "near-session");
+    const path = join(sessionPidMapDir(proj), String(process.ppid));
+    const receipt = JSON.parse(readFileSync(path, "utf-8")) as {
+      sessionId: string;
+      startTime: string;
+    };
+    expect(receipt.startTime).toMatch(/^win32:[0-9a-f]{16}$/);
+    expect(resolveSessionIdFromAncestry(proj)).toBe("near-session");
+    const otherGeneration = BigInt(`0x${receipt.startTime.slice("win32:".length)}`) + 1n;
+    writeFileSync(path, JSON.stringify({
+      ...receipt,
+      startTime: `win32:${otherGeneration.toString(16).padStart(16, "0")}`,
+    }));
+    expect(resolveSessionIdFromAncestry(proj)).not.toBe("near-session");
+
+    // Re-publishing invalidates the negative cache before each changed receipt.
+    writeSessionPidEntry(proj, process.ppid, "near-session");
+    writeFileSync(path, JSON.stringify({ sessionId: "legacy-session", startTime: null }));
+    expect(resolveSessionIdFromAncestry(proj)).toBeNull();
+    writeSessionPidEntry(proj, process.ppid, "near-session");
+    writeFileSync(path, JSON.stringify({ sessionId: null, startTime: null }));
+    expect(resolveSessionIdFromAncestry(proj)).toBeNull();
+    writeSessionPidEntry(proj, process.ppid, "refreshed-session");
+    expect(resolveSessionIdFromAncestry(proj)).toBe("refreshed-session");
+  });
+
+  test.skipIf(process.platform === "win32")("a Windows test override cannot load native Windows APIs on another host", () => {
+    writeSessionPidEntry(proj, process.ppid, "native-host-session");
+    process.env.AIDLC_TEST_SESSION_PLATFORM = "win32";
+    const loader = spyOn(ffi, "dlopen");
+    try {
+      expect(windowsSessionProcessIdentity(process.pid)).toBeNull();
+      expect(resolveSessionIdFromAncestry(proj)).toBeNull();
+      writeSessionPidAncestry(proj, "unsupported-host-session");
+      expect(loader).not.toHaveBeenCalled();
+    } finally {
+      loader.mockRestore();
+    }
   });
 
   test("a payload override selects its binding when Darwin ps access is denied", () => {

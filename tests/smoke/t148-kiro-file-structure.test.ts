@@ -19,7 +19,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -276,17 +277,32 @@ describe("t148 dist/kiro file structure", () => {
   });
 
   test("doctor accepts the shipped shape", () => {
-    const r = spawnSync(
-      "bun",
-      [join(K, "tools", "aidlc.ts"), "doctor", "--project-dir", KIRO, "--verbose"],
-      { cwd: KIRO, encoding: "utf-8" },
-    );
-    const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
-    expect(out, out.slice(-400)).toContain("agents/aidlc.md present (conductor wiring)");
-    expect(out).toContain(
-      "settings/cli.json present (engine pin + default-agent activation)",
-    );
-    expect(out).toMatch(/\b0 problems\b/);
+    // A shape check must not validate the developer's global installed runtime:
+    // whatever version happens to be installed on this machine decides the
+    // problem count otherwise, and `0 problems` then means "this developer's box"
+    // rather than "the shipped projection". Upstream made exactly this fix to its
+    // own doctor shape test; that test belonged to the row this PR deletes, so the
+    // fix is carried here instead of being dropped with it.
+    const installRoot = mkdtempSync(join(tmpdir(), "t148-doctor-install-"));
+    try {
+      const r = spawnSync(
+        "bun",
+        [join(K, "tools", "aidlc.ts"), "doctor", "--project-dir", KIRO, "--verbose"],
+        {
+          cwd: KIRO,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_INSTALL_ROOT: installRoot },
+        },
+      );
+      const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+      expect(out, out.slice(-400)).toContain("agents/aidlc.md present (conductor wiring)");
+      expect(out).toContain(
+        "settings/cli.json present (engine pin + default-agent activation)",
+      );
+      expect(out).toMatch(/\b0 problems\b/);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
   });
 
   test("kiro skills carry the kiro tool prefix, never the claude one", () => {

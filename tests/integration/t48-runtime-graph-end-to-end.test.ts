@@ -226,7 +226,9 @@ beforeAll(() => {
   );
   mkdirSync(dirname(reviewArtifact), { recursive: true });
   writeFileSync(reviewArtifact, "# Requirements\n");
-  run(LOG, reviewArgs);
+  const requested = run(LOG, reviewArgs);
+  expect(requested.status, requested.out).toBe(0);
+  expect(requested.out).toContain('"emitted":"REVIEW_REQUESTED"');
   appendFileSync(
     reviewArtifact,
     [
@@ -240,11 +242,13 @@ beforeAll(() => {
       "",
     ].join("\n"),
   );
-  run(LOG, [
+  const reviewed = run(LOG, [
     ...reviewArgs,
     "--verdict",
     "READY",
   ]);
+  expect(reviewed.status, reviewed.out).toBe(0);
+  expect(reviewed.out).toContain('"emitted":"REVIEW_COMPLETED"');
   const gate = run(
     ORCHESTRATE,
     [

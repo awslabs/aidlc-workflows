@@ -700,18 +700,34 @@ the cursors remain the write-through fallback. The engine passes its resolved
 identity to child tools through `AIDLC_SESSION_OVERRIDE`, which is also the
 headless automation seam when set on the harness process.
 
-SessionStart retires each visited PID's previous session before checking its
-process identity. Until that check succeeds, a record with `sessionId: null`
-stops ancestry fallback at that PID. A failed or timed-out refresh therefore
+SessionStart retires each visited PID's previous session with a record whose
+`sessionId` is null until its identity is verified. POSIX writes that barrier
+before lookup. Windows first checks the parent edge: a verified newer or
+equal-time parent is rejected without changing its PID record, including during
+GC. If inspection is unavailable, Windows still retires the known parent slot
+and stops; it does not publish an unverified session. A failed or timed-out
+refresh therefore
 cannot restore the previous session when process inspection recovers; explicit
 payload identity, environment identity, and the shared-cursor fallback still
 apply. A later successful SessionStart replaces the null record.
 
 The Codex adapter additionally pins its validated payload identity into every
 POSIX Bash command and core-hook child, so sandboxed macOS does not depend on
-`ps` ancestry. Windows ancestry is unavailable and the POSIX command rewrite
-does not apply there; multiple Kiro IDE chats can also share one process.
-Spawned tools in those cases use shared-cursor behavior unless the harness
+`ps` ancestry. Windows x64/arm64 ancestry uses a stable `OpenProcess` handle for
+`NtQueryInformationProcess(ProcessBasicInformation)`, `GetProcessTimes`, and
+zero-time process-object liveness checks. The native 48-byte structure's returned
+length and PID are validated; process handles are closed on every path.
+Creation times stay lossless in PID receipts. Each parent must predate its child,
+so a recycled parent PID cannot join the walk to a newer process. Receipts
+without a verified Windows creation time do not establish session ownership.
+Lookup failure, an ambiguous parent edge, or exhaustion of the existing
+50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
+negative cache retain their existing behavior. Linux and macOS lookups are unchanged.
+
+The POSIX command rewrite does not apply on Windows. Multiple Kiro IDE chats
+and opencode sessions can still share one process; process ancestry cannot
+distinguish those conversations. Spawned tools with unavailable or ambiguous
+ancestry use shared-cursor behavior unless a payload-bearing hook or the harness
 process supplies `AIDLC_SESSION_OVERRIDE`.
 
 Project-aware path helpers resolve through the same selection ladder: an

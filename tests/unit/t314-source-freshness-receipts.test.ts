@@ -2671,6 +2671,13 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
   function makeFixture(): string {
     const proj = setupWorktreeFixture();
     fixtures.push(proj);
+    if (process.platform === "win32") {
+      // Fresh fixture repositories do not inherit the runner checkout's local
+      // config. Deep review records need Git's long-path support, and checkout
+      // must preserve the real symlinks that these source-binding cases create.
+      git(proj, ["config", "core.longpaths", "true"]);
+      git(proj, ["config", "core.symlinks", "true"]);
+    }
     git(proj, ["config", "user.email", "t@test"]);
     git(proj, ["config", "user.name", "t"]);
     // The fixture ships with a pre-populated `Bolt Refs: [foo]` for its own
@@ -2720,7 +2727,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     proj: string,
     args: string[],
     extraEnv?: Record<string, string>,
-  ): { rc: number; out: string } {
+  ): { rc: number; out: string; stderr: string; diagnostic: string } {
     if (args[0] === "prepare") {
       const unitsIndex = args.indexOf("--units");
       if (unitsIndex !== -1 && args[unitsIndex + 1]) {
@@ -2732,7 +2739,15 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       encoding: "utf-8",
       env: { ...process.env, ...extraEnv },
     });
-    return { rc: r.status ?? -1, out: r.stdout ?? "" };
+    return {
+      rc: r.status ?? -1,
+      out: r.stdout ?? "",
+      stderr: r.stderr ?? "",
+      // Keep stdout parseable for existing callers while retaining failures
+      // which the CLI reports only on stderr (including spawn errors).
+      diagnostic: [r.stdout, r.stderr, r.error?.message, r.signal && `signal: ${r.signal}`]
+        .filter(Boolean).join("\n"),
+    };
   }
 
   function addNestedSubmodule(
@@ -3800,82 +3815,191 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     ).toContain("recovery proof cap exceeded (1 per finalize)");
   }, 120000);
 
-  test("new-submodule recovery obeys the remaining aggregate deadline", () => {
+  test("new-submodule recovery obeys the remaining aggregate deadline", async () => {
     const proj = makeFixture();
     ensureDagUnit(proj, "proof-deadline");
     const origin = mkdtempSync(
       join(tmpdir(), "aidlc-t304-proof-deadline-origin-"),
     );
-    const shimDir = mkdtempSync(
-      join(tmpdir(), "aidlc-t304-proof-deadline-bin-"),
+    const remoteDir = mkdtempSync(
+      join(tmpdir(), "aidlc-t304-proof-deadline-remote-"),
     );
-    extraDirs.push(origin, shimDir);
+    extraDirs.push(origin, remoteDir);
     seedGitRepo(origin);
-    const realGit = spawnSync("sh", ["-c", "command -v git"], {
-      encoding: "utf-8",
-    }).stdout.trim();
-    expect(realGit).not.toBe("");
+    const ready = join(remoteDir, "ready.json");
+    const delay = join(remoteDir, "delay");
+    const trace = join(remoteDir, "requests.ndjson");
+    const serverScript = join(remoteDir, "remote.ts");
+    // A separate process must serve the remote: runSwarm uses spawnSync, which
+    // would otherwise block this test's event loop and manufacture the stall.
+    // The advertisement comes from real Git. A successful control ls-remote
+    // proves that the protocol works before only its response is delayed.
     writeFileSync(
-      join(shimDir, "git"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "ls-remote" ]; then sleep 1; fi',
-        `exec ${JSON.stringify(realGit)} "$@"`,
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
+      serverScript,
+      `
+import { appendFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
+const ready = ${JSON.stringify(ready)};
+const delay = ${JSON.stringify(delay)};
+const trace = ${JSON.stringify(trace)};
+const log = (event) => appendFileSync(trace, JSON.stringify({ at: Date.now(), ...event }) + "\\n");
+const advertised = Bun.spawnSync(
+  ["git", "upload-pack", "--stateless-rpc", "--advertise-refs", ${JSON.stringify(origin)}],
+  { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_PROTOCOL: "version=0" }, timeout: 5000 },
+);
+if (advertised.exitCode !== 0) throw new Error(advertised.stderr.toString());
+const service = Buffer.from("# service=git-upload-pack\\n");
+const body = Buffer.concat([
+  Buffer.from((service.length + 4).toString(16).padStart(4, "0")),
+  service, Buffer.from("0000"), advertised.stdout,
+]);
+const server = Bun.serve({
+  hostname: "127.0.0.1", port: 0,
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (request.method !== "GET" || url.pathname !== "/repo.git/info/refs" ||
+        url.searchParams.get("service") !== "git-upload-pack") {
+      log({ event: "unexpected-request", method: request.method, path: url.pathname });
+      return new Response("not found", { status: 404 });
+    }
+    const delayed = existsSync(delay);
+    log({ event: "advertisement-request", delayed });
+    request.signal.addEventListener("abort", () => log({ event: "request-aborted", delayed }), { once: true });
+    if (delayed) await Bun.sleep(1000);
+    log({ event: "advertisement-response", delayed, aborted: request.signal.aborted });
+    return new Response(body, {
+      headers: { "Content-Type": "application/x-git-upload-pack-advertisement", "Cache-Control": "no-cache" },
+    });
+  },
+});
+writeFileSync(ready + ".new", JSON.stringify({ url: "http://127.0.0.1:" + server.port + "/repo.git" }));
+renameSync(ready + ".new", ready);
+process.stdin.resume();
+process.stdin.on("end", () => server.stop(true));
+`,
     );
-    runSwarm(proj, [
-      "prepare",
-      "--batch",
-      "1",
-      "--units",
-      "proof-deadline",
-      "--base",
-      "main",
-    ]);
-    const wt = wtPath(proj, "proof-deadline");
-    git(wt, [
-      "-c",
-      "protocol.file.allow=always",
-      "submodule",
-      "add",
-      "-q",
-      origin,
-      "declared",
-    ]);
-    recordReview(wt, "code-generation", REVIEWER, "proof-deadline");
-
-    const started = Date.now();
-    const finalized = runSwarm(
-      proj,
-      [
-        "finalize",
+    const remote = Bun.spawn([BUN, serverScript], {
+      stdin: "pipe", stdout: "ignore", stderr: "pipe",
+    });
+    const remoteStderr = new Response(remote.stderr).text();
+    const requests = (): Array<{ event: string; delayed?: boolean }> =>
+      existsSync(trace)
+        ? readFileSync(trace, "utf-8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+        : [];
+    const failures: unknown[] = [];
+    try {
+      const startupDeadline = Date.now() + 10_000;
+      while (!existsSync(ready) && remote.exitCode === null && Date.now() < startupDeadline) {
+        await Bun.sleep(20);
+      }
+      expect(existsSync(ready), remote.exitCode === null
+        ? "loopback Git server did not become ready"
+        : await remoteStderr).toBe(true);
+      const endpoint = (JSON.parse(readFileSync(ready, "utf-8")) as { url: string }).url;
+      const prepared = runSwarm(proj, [
+        "prepare",
         "--batch",
         "1",
         "--units",
         "proof-deadline",
-        "--claimed",
-        "proof-deadline",
-        "--check-cmd",
-        `"${process.execPath}" -e "require('fs').accessSync('declared/app.ts')"`,
-      ],
-      {
-        AIDLC_TEST_NEW_GITLINK_RECOVERY_BUDGET_MS: "100",
-        AIDLC_TEST_NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS: "1000",
-        PATH: `${shimDir}:${process.env.PATH ?? ""}`,
-      },
-    );
-    expect(Date.now() - started).toBeLessThan(5000);
-    expect(finalized.rc).toBe(2);
-    const row = (
-      JSON.parse(finalized.out) as {
-        units: Array<{ detail?: string; unit: string }>;
+        "--base",
+        "main",
+      ]);
+      expect(prepared.rc, prepared.diagnostic).toBe(0);
+      const wt = wtPath(proj, "proof-deadline");
+      git(wt, [
+        "-c", "protocol.file.allow=always", "submodule", "add", "-q", origin, "declared",
+      ]);
+      // Clone from the local origin, then record the real recovery URL before
+      // review. The delay marker lives outside both source trees.
+      git(wt, ["config", "-f", ".gitmodules", "submodule.declared.url", endpoint]);
+      git(wt, ["submodule", "sync", "--", "declared"]);
+      recordReview(wt, "code-generation", REVIEWER, "proof-deadline");
+      const head = spawnSync("git", ["-C", origin, "rev-parse", "HEAD"], { encoding: "utf-8" });
+      expect(head.status, head.stderr).toBe(0);
+      const remoteEnv = {
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ALLOW_PROTOCOL: "file:http",
+        NO_PROXY: "127.0.0.1",
+        no_proxy: "127.0.0.1",
+      };
+      const control = spawnSync(
+        "git", ["ls-remote", endpoint, "HEAD", "refs/heads/*", "refs/tags/*"],
+        { cwd: proj, env: { ...process.env, ...remoteEnv }, encoding: "utf-8", timeout: 5000 },
+      );
+      expect(control.status, `${control.stdout}${control.stderr}${control.error ?? ""}`).toBe(0);
+      expect(control.stdout).toContain(`${head.stdout.trim()}\tHEAD`);
+      expect(requests().some((row) => row.event === "advertisement-response" && row.delayed === false)).toBe(true);
+
+      writeFileSync(delay, "delay ref advertisement by 1000ms\n");
+      const started = Date.now();
+      const finalized = runSwarm(
+        proj,
+        [
+          "finalize", "--batch", "1", "--units", "proof-deadline", "--claimed", "proof-deadline",
+          // Native Git reads the same file without quoting a Bun executable
+          // path through cmd.exe. hash-object without -w does not write objects.
+          "--check-cmd", "git -C declared hash-object -- app.ts",
+        ],
+        {
+          ...remoteEnv,
+          AIDLC_TEST_NEW_GITLINK_RECOVERY_BUDGET_MS: "100",
+          AIDLC_TEST_NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS: "1000",
+        },
+      );
+      const elapsed = Date.now() - started;
+      appendFileSync(trace, `${JSON.stringify({ at: Date.now(), event: "finalize-result", elapsed, rc: finalized.rc })}\n`);
+      const observed = requests();
+      const diagnostic = `${finalized.diagnostic}\nloopback Git requests: ${JSON.stringify(observed)}`;
+      expect(elapsed, diagnostic).toBeLessThan(5000);
+      expect(finalized.rc, diagnostic).toBe(2);
+      const row = (
+        JSON.parse(finalized.out) as {
+          units: Array<{ detail?: string; unit: string }>;
+        }
+      ).units.find((unit) => unit.unit === "proof-deadline");
+      expect(row?.detail, diagnostic).toContain(
+        "recovery deadline exceeded (100ms cumulative per finalize)",
+      );
+      expect(
+        observed.some((row) => row.event === "advertisement-request" && row.delayed === true),
+        "the recovery deadline must be exercised by the delayed remote, not by unrelated startup latency",
+      ).toBe(true);
+    } catch (error) {
+      failures.push(error);
+    }
+    // Always stop the server after the case, retaining both case and cleanup
+    // errors instead of letting a throw in finally replace the first failure.
+    // EOF stops the owned server on Windows too; signal handlers alone do not.
+    const stopDeadline = setTimeout(() => remote.kill("SIGKILL"), 5000);
+    try {
+      if (remote.exitCode === null) {
+        try { await remote.stdin.end(); }
+        catch (error) {
+          failures.push(error);
+          remote.kill("SIGKILL");
+        }
       }
-    ).units.find((unit) => unit.unit === "proof-deadline");
-    expect(row?.detail).toContain(
-      "recovery deadline exceeded (100ms cumulative per finalize)",
-    );
+      const code = await remote.exited;
+      expect(code, await remoteStderr).toBe(0);
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      clearTimeout(stopDeadline);
+      try {
+        if (existsSync(trace) && process.env.AIDLC_TEST_LOG_DIR) {
+          writeFileSync(
+            join(process.env.AIDLC_TEST_LOG_DIR, `t314-recovery-deadline-${process.pid}.ndjson`),
+            readFileSync(trace),
+          );
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "recovery deadline fixture and cleanup failures");
+    }
   }, 120000);
 
   test("new submodule with gitmodules recovery metadata finalizes normally", () => {

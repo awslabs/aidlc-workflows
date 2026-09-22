@@ -114,9 +114,17 @@ function powershellPatterns(): { parameter: string; manifest: string } {
 }
 
 function grepMatches(pattern: string, value: string): boolean {
-  const result = spawnSync("sh", ["-c", 'printf "%s\\n" "$1" | grep -Eq "$2"', "sh", value, pattern], {
+  // Keep the grammar and candidate out of native Windows -> sh argument
+  // quoting. The same grep -E engine receives the exact pattern and input.
+  const result = spawnSync("sh", ["-c", 'grep -Eq "$AIDLC_TEST_VERSION_PATTERN"'], {
+    input: `${value}\n`,
     encoding: "utf-8",
+    env: { ...process.env, AIDLC_TEST_VERSION_PATTERN: pattern },
   });
+  if (result.error) throw result.error;
+  if (result.status !== 0 && result.status !== 1) {
+    throw new Error(`version grammar grep failed (${result.status}): ${result.stderr}`);
+  }
   return result.status === 0;
 }
 

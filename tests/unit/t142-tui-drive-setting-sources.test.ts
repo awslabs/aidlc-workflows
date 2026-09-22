@@ -943,6 +943,28 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.confirmedSummaries.size).toBe(1);
   });
 
+  test("an answered summary retained in a tool diff cannot hide assumption confirmation", () => {
+    const state = createKiroNumberedProseAnswerState();
+    const summary = "Does this all look correct before I generate the intent artifacts?\n1. Looks correct\n2. Request changes";
+    expect(nextKiroNumberedProseAnswer(summary, state)).toBe("Looks correct");
+    const screen = [
+      "Q8: An earlier question retained above the answered summary",
+      summary,
+      "95   - Looks correct",
+      "96   - Request changes",
+      "100+  ## Assumption Confirmation",
+      "107+  - A. Accept assumptions",
+      "108+  - B. Convert to follow-up questions",
+      "How would you like to handle these?",
+      "1. Accept assumptions — keep them recorded as assumptions and move on",
+      "2. Convert to follow-up questions — ask about them now",
+      "3. Other — something else",
+    ].join("\n");
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBe("Accept assumptions");
+    expect(state.answeredQuestions.size).toBe(0);
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBeNull();
+  });
+
   test("recognizes Kiro's Question N of M guide rendering", () => {
     const state = createKiroNumberedProseAnswerState();
     expect(
@@ -983,6 +1005,14 @@ describe("Kiro numbered-prose answer classification", () => {
       ),
     ).toBe("Q1: 1");
     expect(state.answeredQuestions).toEqual(new Set([1, 2, 3, 4]));
+  });
+
+  test("recognizes the Q1 of N rendering without treating source diffs as questions", () => {
+    const state = createKiroNumberedProseAnswerState();
+    const screen = " 54+ ## Q4: historical source\nGuided mode. Here's the first question.\n  Q1 of 4 — What counts as a duplicate?\n1. Prevent double-submit\n2. Block same titles";
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBe("Q1: 1");
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBeNull();
+    expect(state.answeredQuestions.has(4)).toBe(false);
   });
 
   test("recognizes restated summary and approval choices after an unmatched reply", () => {
@@ -1027,6 +1057,59 @@ describe("Kiro numbered-prose answer classification", () => {
       "- A. Browser localStorage\n" +
       "- B. A server with accounts";
     expect(nextKiroNumberedProseAnswer(second, state)).toBe("A");
+  });
+
+  test("answers the current numbered reconciliation once without repeating the original question", () => {
+    const state = createKiroNumberedProseAnswerState();
+    for (const id of [1, 2, 3, 4]) state.answeredQuestions.add(id);
+    const menu = [
+      "Q3: you picked option 1, but that conflicts with your Q1 answer.",
+      "Q4 is clear: Vitest + React Testing Library.",
+      "On Q3 — two ways to reconcile:",
+      "  1. Keep Q1 as-is (only stop accidental double-submits).",
+      "  2. Change Q1 to also block same-title duplicates.",
+      "Which did you mean — 1 (keep it to accidental double-submits) or 2 (also block same-title items)?",
+    ].join("\n");
+    expect(nextKiroNumberedProseAnswer(menu, state)).toBe("1");
+    expect(nextKiroNumberedProseAnswer(menu, state)).toBeNull();
+    const later = `${menu}\nQ5: Which test command should run?\n1. bun test\n2. npm test`;
+    expect(nextKiroNumberedProseAnswer(later, state)).toBe("Q5: 1");
+    expect(nextKiroNumberedProseAnswer(later, state)).toBeNull();
+  });
+
+  test("does not answer an incomplete reconciliation or a retained menu before a newer question", () => {
+    const state = createKiroNumberedProseAnswerState();
+    for (const id of [3, 5]) state.answeredQuestions.add(id);
+    const options = "On Q3 — two ways to reconcile:\n1. Keep the original scope\n2. Broaden it";
+    expect(nextKiroNumberedProseAnswer(options, state)).toBeNull();
+    const old = `${options}\nWhich did you mean — 1 or 2?\nQ5: A later question already answered`;
+    expect(nextKiroNumberedProseAnswer(old, state)).toBeNull();
+  });
+
+  test("answers a current unlabelled numbered clarification after a completed question batch", () => {
+    const state = createKiroNumberedProseAnswerState();
+    for (let id = 1; id <= 8; id++) state.answeredQuestions.add(id);
+    const menu = [
+      "Q7: 1, Q8: 1",
+      "All 8 answered. Now the mandatory contradiction check.",
+      "Q1 says personal task tracking; Q2 says external end users.",
+      "Which best describes it?",
+      "1. A public product where each individual manages their own personal tasks",
+      "2. A personal tool primarily for my own use",
+      "3. Other — describe what you want instead",
+    ].join("\n");
+    expect(nextKiroNumberedProseAnswer(menu, state)).toBe("1");
+    expect(nextKiroNumberedProseAnswer(menu, state)).toBeNull();
+    const later = `${menu}\nQ9: Which runtime?\n1. Browser\n2. Desktop`;
+    expect(nextKiroNumberedProseAnswer(later, state)).toBe("Q9: 1");
+    expect(nextKiroNumberedProseAnswer(later, state)).toBeNull();
+  });
+
+  test("a partial numbered clarification never substitutes for a complete question", () => {
+    const state = createKiroNumberedProseAnswerState();
+    state.answeredQuestions.add(1);
+    expect(nextKiroNumberedProseAnswer("Which best describes it?\n1. Public product", state)).toBeNull();
+    expect(nextKiroNumberedProseAnswer("1. Public product\n2. Personal tool", state)).toBeNull();
   });
 
   test("accepts a surfaced assumption menu once", () => {

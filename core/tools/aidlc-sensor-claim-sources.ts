@@ -30,6 +30,7 @@ interface ClaimBlock {
 
 interface SourceUniverse {
 	registered: Set<string>;
+	canonicalScopeDeclaration?: string;
 	answeredQuestions: Set<string>;
 	assumptionsAccepted: boolean;
 	acceptedAssumptions: Set<string>;
@@ -367,6 +368,7 @@ function parseSourceUniverse(
 	const authority = loadRecordAuthority(stageDir);
 	findings.push(...authority.findings);
 	const registered = new Set<string>();
+	let canonicalScopeDeclaration: string | undefined;
 	const seenSources = new Set<string>();
 	const sourceSections = sectionsNamed(lines, "Sources");
 	if (sourceSections.length === 0) {
@@ -415,6 +417,7 @@ function parseSourceUniverse(
 					);
 				} else {
 					valid = true;
+					canonicalScopeDeclaration = `- [scope] Workflow-selected scope: \`${scope}\`.`;
 				}
 			} else {
 				valid = memoryRuleMatches(id, value, authority, findings);
@@ -486,6 +489,9 @@ function parseSourceUniverse(
 
 	return {
 		registered,
+		...(findings.length === 0 && canonicalScopeDeclaration !== undefined
+			? { canonicalScopeDeclaration }
+			: {}),
 		answeredQuestions,
 			assumptionsAccepted:
 				assumptionAnswer.trim() === ACCEPT_ASSUMPTIONS_ANSWER,
@@ -1511,6 +1517,18 @@ function inspectDeliverable(
 	for (const block of parsed.blocks) {
 		const location = `${basename(path)}${block.section ? ` ## ${block.section}` : ""}`;
 		const tags = sourceTags(block.text, labels);
+
+		// A validated source declaration names the source; it is not a claim
+		// grounded by that source. Match the whole canonical block and require
+		// a visible literal label so extra prose or a Markdown link cannot hide.
+		if (
+			block.section === "Sources" &&
+			universe.registered.has("scope") &&
+			block.text === universe.canonicalScopeDeclaration &&
+			tags.length === 1 && tags[0] === "scope"
+		) {
+			continue;
+		}
 
 		if (block.inAssumptions) {
 			if (isNoneBlock(block.text)) continue;
