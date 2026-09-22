@@ -132,8 +132,11 @@ PRs produced by AI coding agents are welcome and follow the same process. Start 
 AIDA's PR review ends with an advisory next decision. `author/change` means the
 author should address the reported gaps. `maintainer/merge` means the review
 found no blocking issue and considers the PR ready for a maintainer's merge
-decision; AIDA does not approve or merge the PR. The merge decision requires no
-P0 or P1 finding, readiness of at least 4/5, and risk of at most 2/5.
+decision; AIDA does not approve or merge the PR. The next action follows
+finding severity alone: any open P0 or P1 finding means `author/change`; only
+P2/P3 findings, or none, means `maintainer/merge`. Readiness and risk scores
+explain the assessment to the maintainer and never change the action, so a P3
+can never block a PR.
 
 AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
 id (`F1`, `F2`, …) anchored to the exact content of the lines it cites, so a

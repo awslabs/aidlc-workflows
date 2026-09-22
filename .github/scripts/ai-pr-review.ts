@@ -1185,6 +1185,9 @@ export function decisionInvariantError(
   decision: PullRequestDecision,
   retainedBlocking = 0,
 ): string | null {
+  // Severity-only contract: the next action follows open P0/P1 findings and
+  // nothing else. Readiness and risk (`assessment`) inform the maintainer.
+  void assessment;
   const blocking = findings.some(
     finding => finding.priority === "P0" || finding.priority === "P1",
   );
@@ -1194,20 +1197,8 @@ export function decisionInvariantError(
   if (decision.action === "merge" && retainedBlocking > 0) {
     return "decision maintainer/merge is invalid while retained open blocking findings remain";
   }
-  if (decision.action === "change" && retainedBlocking > 0) return null;
-  if (
-    decision.action === "merge" &&
-    (assessment.readiness.score < 4 || assessment.risk.score > 2)
-  ) {
-    return "decision maintainer/merge requires readiness at least 4 and risk at most 2";
-  }
-  if (
-    decision.action === "change" &&
-    findings.length === 0 &&
-    assessment.readiness.score >= 4 &&
-    assessment.risk.score <= 2
-  ) {
-    return "decision author/change requires a finding, readiness below 4, or risk above 2";
+  if (decision.action === "change" && !blocking && retainedBlocking === 0) {
+    return "decision author/change requires an open P0 or P1 finding";
   }
   return null;
 }
@@ -1458,17 +1449,24 @@ export function parseStructuredReview(
 
   const decisionCandidate = record(candidate.decision, "decision");
   const rationale = requiredText(decisionCandidate.rationale, "decision.rationale", 1000);
-  let decision: PullRequestDecision;
-  if (decisionCandidate.actor === "author" && decisionCandidate.action === "change") {
-    decision = { actor: "author", action: "change", rationale };
-  } else if (
-    decisionCandidate.actor === "maintainer" &&
-    decisionCandidate.action === "merge"
-  ) {
-    decision = { actor: "maintainer", action: "merge", rationale };
-  } else {
-    throw new Error("decision must be author/change or maintainer/merge");
-  }
+  const validPair =
+    (decisionCandidate.actor === "author" && decisionCandidate.action === "change") ||
+    (decisionCandidate.actor === "maintainer" && decisionCandidate.action === "merge");
+  if (!validPair) throw new Error("decision must be author/change or maintainer/merge");
+  // The publisher derives the next action from finding severity; the judge's
+  // rationale is kept, its actor/action pair is not trusted to decide.
+  const derivedAction = deriveDecision(findings.filter(finding => finding.priority === "P0" || finding.priority === "P1").length);
+  const decision: PullRequestDecision =
+    derivedAction === "change"
+      ? { actor: "author", action: "change", rationale }
+      : {
+          actor: "maintainer",
+          action: "merge",
+          rationale:
+            decisionCandidate.action === "change"
+              ? `${rationale} No P0 or P1 finding survives, so the next action is the maintainer's merge decision; readiness and risk above inform it.`
+              : rationale,
+        };
 
   // Dispositions of open ledger entries. A still-open disposition with an index
   // binds that finding to the ledger id (the judge does not have to carry ids
@@ -1551,13 +1549,7 @@ export function parseStructuredReview(
   if (deferred.length > 0) {
     review.findings = kept;
     if (decisionInvariantError(kept, assessment, decision) !== null) {
-      const derived = deriveDecision(
-        decision.action,
-        kept.filter(finding => finding.priority === "P0" || finding.priority === "P1").length,
-        kept.length,
-        assessment.readiness.score,
-        assessment.risk.score,
-      );
+      const derived = deriveDecision(kept.filter(finding => finding.priority === "P0" || finding.priority === "P1").length);
       const plural = deferred.length === 1 ? "" : "s";
       review.decision =
         derived === "merge"
@@ -1668,13 +1660,7 @@ export function applyLedgerToReview(
   if (retainedBlocking.length > 0 || removed > 0) {
     // Same rule a later /aida command applies from persisted state (deriveDecision).
     const openBlocking = retainedBlocking.length + kept.filter(finding => isBlocking(finding.priority)).length;
-    const derived = deriveDecision(
-      review.decision.action,
-      openBlocking,
-      retained.length + kept.length,
-      review.assessment.readiness.score,
-      review.assessment.risk.score,
-    );
+    const derived = deriveDecision(openBlocking);
     if (derived !== review.decision.action) {
       decisionAdjusted = true;
       decision =
@@ -1693,7 +1679,7 @@ export function applyLedgerToReview(
               action: "merge",
               rationale: `${review.decision.rationale} Re-derived after applying ${removed} maintainer ledger decision${
                 removed === 1 ? "" : "s"
-              }: no blocking finding remains and the assessment permits a merge decision.`,
+              }: no blocking finding remains.`,
             };
     }
   }
@@ -1815,7 +1801,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     "## Final Assessment",
     "",
-    "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores do not approve or merge the PR.",
+    "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores inform the maintainer; the next action below follows finding severity (any open P0/P1 → author/change) and does not approve or merge the PR.",
     "",
     `Readiness: **${review.assessment.readiness.score}/5** — ${
       markdownText(review.assessment.readiness.rationale)

@@ -304,15 +304,17 @@ describe("t346 AIDA incremental review scope", () => {
     expect(sole.decision.action).toBe("merge");
     expect(sole.decision.rationale).toContain("Re-derived: 1 finding outside the incremental review scope was deferred and no blocking finding remains.");
     expect(renderReview(sole, CONTEXT_ID).event).toBe("COMMENT");
-    // Low scores keep author/change even with nothing left to report: the decision is still
-    // valid under the invariants, so it is not rewritten.
+    // Scores never decide: with nothing left to report the action is the maintainer's merge decision
+    // even at low readiness and high risk, and the scores stay visible to inform it.
     const low = parseStructuredReview(review([{ priority: "P1", category: "correctness", evidence: [diffLine(42)] }], { readiness: 2, risk: 4 }, CHANGE), BASE, HEAD, MANIFEST, METADATA, INCREMENTAL);
-    expect(low.decision).toEqual(CHANGE);
+    expect(low.decision.action).toBe("merge");
     expect(low.deferred).toHaveLength(1);
-    // A merge that leaned on nothing but an out-of-scope P1 becomes a change once the scores say so.
-    const invalidMerge = parseStructuredReview(review([{ priority: "P2", category: "correctness", evidence: [diffLine(42)] }, { priority: "P2", category: "contracts", evidence: [diffLine(43)] }], { readiness: 3, risk: 2 }, MERGE), BASE, HEAD, MANIFEST, METADATA, INCREMENTAL);
-    expect(invalidMerge.decision.action).toBe("change");
-    expect(invalidMerge.decision.rationale).toContain("Re-derived after deferring 1 finding outside the incremental review scope.");
+    expect(renderReview(low, CONTEXT_ID).body).toContain("Readiness: **2/5**");
+    // P2-only findings never block, deferred or not.
+    const advisoryOnly = parseStructuredReview(review([{ priority: "P2", category: "correctness", evidence: [diffLine(42)] }, { priority: "P2", category: "contracts", evidence: [diffLine(43)] }], { readiness: 3, risk: 2 }, CHANGE), BASE, HEAD, MANIFEST, METADATA, INCREMENTAL);
+    expect(advisoryOnly.decision.action).toBe("merge");
+    expect(advisoryOnly.findings).toHaveLength(1);
+    expect(advisoryOnly.deferred).toHaveLength(1);
 
     // Full mode defers nothing and says why the head was reviewed in full.
     const full = parseStructuredReview(review([{ priority: "P1", category: "correctness", evidence: [diffLine(42)] }], { readiness: 2, risk: 4 }, CHANGE), BASE, HEAD, MANIFEST, METADATA, FULL);

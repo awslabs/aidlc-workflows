@@ -223,8 +223,9 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       const advisory = ledgerWith(entry("F1", "P2", [A42]));
       const kept = applyLedgerToReview(parseStructuredReview(review([], [{ id: "F1", disposition: "still-open", findingIndex: null }]), BASE, HEAD, MANIFEST, METADATA), advisory, root, root, AT);
       expect(kept.review.ledger?.retained.map(item => item.id)).toEqual(["F1"]);
-      // Not blocking: the decision is untouched and the blocking event is not raised.
-      expect(kept.review.decision.rationale).toBe("The finding must be corrected.");
+      // Not blocking: the action is the maintainer's merge decision and no blocking event is raised.
+      expect(kept.review.decision.action).toBe("merge");
+      expect(kept.review.decision.rationale).toContain("No P0 or P1 finding survives, so the next action is the maintainer's merge decision");
       expect(renderReview(kept.review, CONTEXT_ID).event).toBe("COMMENT");
       const advisoryBody = renderReview(kept.review, CONTEXT_ID).body;
       expect(advisoryBody).toContain("## Retained advisory findings");
