@@ -1221,6 +1221,129 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("the selected Request Changes answer is admitted once the human supplies it", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj);
+      publishRestartRecovery(proj);
+      const reject =
+        'aidlc engine state reject code-generation --user-input "Request Changes" ' +
+        '--reason "Rework the payload contract."';
+      // Issued, then selected, then answered. Only the last state is the human's
+      // own words, so only it admits the reject that carries them.
+      expect(runHook(proj, BASH(reject)).code).toBe(2);
+      recordRecoverySelection(proj, "Request Changes");
+      expect(runHook(proj, BASH(reject)).code).toBe(2);
+      recordRecoverySelection(proj, "Rework the payload contract.");
+      const admitted = runHook(proj, BASH(reject));
+      expect(admitted.code, admitted.stderr).toBe(0);
+
+      // Admitting the answer is not admitting generation.
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      expect(runHook(proj, BASH("printf code > src/inline.ts")).code).toBe(2);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("the admitted reject carries the recorded words and nothing that writes or wraps", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj);
+      publishRestartRecovery(proj);
+      recordRecoverySelection(proj, "Request Changes");
+      recordRecoverySelection(proj, "Rework the payload contract.");
+      const reject =
+        'aidlc engine state reject code-generation --user-input "Request Changes" ' +
+        '--reason "Rework the payload contract."';
+      for (const changed of [
+        reject.replace("Rework the payload contract.", "Rework something else."),
+        reject.replace("code-generation", "build-and-test"),
+        reject.replace("state reject", "state approve"),
+        `${reject} --unit todo-core`,
+        `${reject} --reject-finding F1`,
+        `${reject} --force`,
+        `${reject}; printf code > src/inline.ts`,
+        `${reject} > src/inline.ts`,
+        // The admitted reject must be the whole program, not merely its head.
+        `${reject} && pwd`,
+        `${reject}; true`,
+        `${reject} &`,
+        `pwd && ${reject}`,
+        `bash -c '${reject}'`,
+        `env ${reject}`,
+        `sudo ${reject}`,
+        `PATH=. ${reject}`,
+      ]) {
+        const result = runHook(proj, BASH(changed));
+        expect(result.code, `${changed}\n${result.stderr}`).toBe(2);
+      }
+      expect(runHook(proj, BASH(reject)).code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("a tampered recovery marker cannot fake the human's Request Changes answer", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj);
+      publishRestartRecovery(proj);
+      recordRecoverySelection(proj, "Request Changes");
+      recordRecoverySelection(proj, "Rework the payload contract.");
+      const reject =
+        'aidlc engine state reject code-generation --user-input "Request Changes" ' +
+        '--reason "Rework the payload contract."';
+      const markerPath = join(proj, RECORD_REL, ".aidlc-engine", "active-directive.json");
+      const issued = JSON.parse(readFileSync(markerPath, "utf-8"));
+      expect(runHook(proj, BASH(reject)).code).toBe(0);
+
+      // The answer is admitted by the recorded human turns, not by a marker that
+      // merely carries the digest: rewinding either half withdraws admission.
+      for (const forged of [
+        { ...issued, delivery: "issued" },
+        { ...issued, delivery: "delivered" },
+        {
+          ...issued,
+          guard_recovery_response: {
+            ...issued.guard_recovery_response,
+            status: "awaiting-feedback",
+          },
+        },
+        {
+          ...issued,
+          guard_recovery_response: {
+            ...issued.guard_recovery_response,
+            selected_op: "redo-jump",
+          },
+        },
+      ]) {
+        writeFileSync(markerPath, `${JSON.stringify(forged, null, 2)}\n`, "utf-8");
+        const result = runHook(proj, BASH(reject));
+        expect(result.code, `${JSON.stringify(forged)}\n${result.stderr}`).toBe(2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("a different selected remedy does not admit the Request Changes answer", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj);
+      publishRestartRecovery(proj);
+      recordRecoverySelection(proj, "Restart code-generation.");
+      recordRecoverySelection(proj, "Rework the payload contract.");
+      const reject =
+        'aidlc engine state reject code-generation --user-input "Request Changes" ' +
+        '--reason "Rework the payload contract."';
+      expect(runHook(proj, BASH(reject)).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   for (const published of [false, true]) {
     // Each publication state checks 72 commands in separate source-hook
     // processes. Budget the whole matrix, preserving every admission check.

@@ -272,3 +272,49 @@ export function isGuardRecoveryEngineInvocation(args: readonly string[]): boolea
   const expected = ["engine", invocation.route, ...invocation.args];
   return expected.length === args.length && expected.every((value, index) => value === args[index]);
 }
+
+export interface GuardRequestChangesContinuation {
+  stage: string;
+  unit?: string;
+  reason: string;
+}
+
+// Request Changes is the one offered remedy whose answer is a reject rather
+// than a command, so it has no guardOperationInvocation to match. Parse the
+// reject argv the conductor submits after the human supplies their words. The
+// admitted form carries the reason and nothing that could reach the workspace:
+// an unknown flag, a repeated flag or a stray operand is not this answer.
+export function parseGuardRequestChangesContinuation(
+  args: readonly string[],
+): GuardRequestChangesContinuation | null {
+  if (args[0] !== "engine" || args[1] !== "state" || args[2] !== "reject") {
+    return null;
+  }
+  if (!identifier(args[3])) return null;
+  let unit: string | undefined;
+  let reason: string | undefined;
+  let decided = false;
+  for (let i = 4; i < args.length; i += 2) {
+    const value = args[i + 1];
+    if (value === undefined) return null;
+    switch (args[i]) {
+      case "--unit":
+        if (unit !== undefined || !identifier(value)) return null;
+        unit = value;
+        break;
+      case "--reason":
+      case "--feedback":
+        if (reason !== undefined) return null;
+        reason = value;
+        break;
+      case "--user-input":
+        if (decided) return null;
+        decided = true;
+        break;
+      default:
+        return null;
+    }
+  }
+  if (reason === undefined) return null;
+  return { stage: args[3], reason, ...(unit === undefined ? {} : { unit }) };
+}
