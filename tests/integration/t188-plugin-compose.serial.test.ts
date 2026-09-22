@@ -2313,6 +2313,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "name: syn-kiro-upgrade-agent",
       "display_name: Synthetic Kiro Upgrade Agent",
       "plugin: syn-kiro-upgrade",
+      'tools: ["fs_read", "thinking"]',
       "disallowedTools: Task",
       "---",
       "",
@@ -2334,7 +2335,41 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "utf-8",
     );
     expect(migratedBody).not.toMatch(/^disallowedTools:/m);
+    // The author's own allowlist governs and survives the migration; the denial is
+    // translated away rather than replaced by the composer's default.
+    expect(migratedBody).toMatch(/^tools: \["fs_read", "thinking"\]$/m);
     expect(migrated.drops).not.toContain("collides with an existing file");
+
+    // A persona ALREADY installed with no allowlist IS migrated - refusing it would
+    // demand a `tools:` declaration a cross-harness plugin cannot make - but the
+    // narrowing is STATED, with the resulting tools named, so the capability it loses is
+    // readable instead of silent. The notice is advisory, because the migration did what
+    // it was asked to do; doctor's failure count reads `[degraded]` lines only.
+    const bare = agent.replaceAll("syn-kiro-upgrade", "syn-kiro-bare-upgrade")
+      .replace('tools: ["fs_read", "thinking"]\n', "");
+    const bareRel = join("agents", "syn-kiro-bare-upgrade-agent.md");
+    const bareRun = composeSynthetic(
+      "syn-kiro-bare-upgrade",
+      { "agents/syn-kiro-bare-upgrade-agent.md": bare },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, bareRel), bare);
+      },
+    );
+    const bareBody = readFileSync(join(bareRun.proj, ".kiro", bareRel), "utf-8");
+    expect(bareBody).toMatch(
+      /^tools: \["fs_read", "fs_write", "execute_bash", "thinking"\]$/m,
+    );
+    expect(bareBody).not.toMatch(/^disallowedTools:/m);
+    expect(bareRun.drops).toContain("had been inheriting the session toolset");
+    // The notice must NAME the tools it narrowed to, not just say that it narrowed.
+    expect(bareRun.drops).toContain("fs_read, fs_write, execute_bash, thinking");
+    // Advisory, so doctor's degraded count is untouched by a migration that succeeded.
+    expect(bareRun.drops).toContain("[advisory]");
+    expect(bareRun.drops).not.toMatch(
+      /\[degraded\][^\n]*syn-kiro-bare-upgrade-agent\.md/,
+    );
 
     const editedAgent = `${agent}\n<!-- user-owned edit -->\n`;
     const edited = composeSynthetic(

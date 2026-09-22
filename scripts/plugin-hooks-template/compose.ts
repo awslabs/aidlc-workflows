@@ -1062,22 +1062,52 @@ function migrateExistingKiroAgent(
   ) {
     return "compare";
   }
+  const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
+  const grants = kiroToolGrants(ctx.content);
+  if (grants.kind === "unresolved") {
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed and ${grants.reason}, so its delegation boundary cannot be validated; fix the plugin source, remove "${installedRel}", and re-run compose`,
+    );
+    return "handled";
+  }
   const disallowed = disallowedToolsValues(ctx.content);
-  // Nothing to project only when the source already governs itself: its own `tools:`
-  // allowlist and no denial to translate. A source declaring NEITHER still needs the
-  // allowlist, which is the wider half of the same hole.
-  if (disallowed.length === 0 && /^tools:/m.test(frontmatter(ctx.content))) {
-    return "compare";
+  // Nothing to project when the source already governs itself: its own allowlist, and
+  // no denial to translate into one.
+  if (disallowed.length === 0 && grants.kind === "resolved") return "compare";
+  if (grants.kind === "absent") {
+    // MIGRATE, but not silently. This persona has been running with the inherited
+    // session toolset, and this projection cannot know which of those tools it used -
+    // only that it had them - so the rewrite below may withdraw an MCP or web
+    // capability it depended on.
+    //
+    // Refusing the migration instead was tried and rejected: the repair it would demand
+    // - "declare an explicit `tools:` allowlist" - is not applicable to a cross-harness
+    // plugin. A plugin ships ONE `agents/` tree (only Cursor reads a separate
+    // `aidlc/agents`), `copilotNativeAgentPrecheck` refuses a persona that declares both
+    // `tools:` and `disallowedTools:` while also requiring the denial, and the two grant
+    // vocabularies are disjoint - Copilot grants `read`/`edit`/`search`/`execute`, Kiro
+    // grants `fs_read`/`fs_write`/`execute_bash`. One authored list cannot serve both,
+    // so the refusal would have been un-actionable guidance for exactly the plugins the
+    // reference tree ships.
+    //
+    // So behaviour continuity is kept and the NARROWING is stated instead, with the
+    // resulting tools named - which is what the finding's own problem statement asked
+    // for: the capabilities disappeared "without an error or migration notice".
+    // ADVISORY, not degraded: doctor counts `[degraded]` lines for its failure total
+    // (`aidlc-doctor-bundle.ts`), and a migration that did what it was asked to do is
+    // not a failure - it is a change the operator has to be able to read.
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" declared no \`tools:\` allowlist, so it had been inheriting the session toolset; re-compose narrowed it to ${KIRO_WORKER_TOOLS.join(", ")} so that delegation is excluded. Any MCP or web tool it relied on is no longer granted - declare an explicit \`tools:\` allowlist in the plugin source to keep one, then remove "${installedRel}" and re-run compose`,
+      "advisory",
+    );
   }
   if (disallowed.length > 1) {
-    const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
     recordDrop(
       `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed with multiple disallowedTools lines; fix the plugin source, remove "${installedRel}", and re-run compose`,
     );
     return "handled";
   }
   if (disallowed.length === 1 && !/^Task$/i.test(disallowed[0])) {
-    const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
     recordDrop(
       `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed with unsupported disallowedTools "${disallowed[0]}"; fix the plugin source, remove "${installedRel}", and re-run compose`,
     );
