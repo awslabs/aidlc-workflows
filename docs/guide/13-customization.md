@@ -248,7 +248,7 @@ Asking every approval question is a conductor prose obligation, not something a 
 
 No shipped scope defaults to `off`; use a composed scope that declares it. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
 
-Intent creation reads Guard Policy from that scope file. The conductor passes `--guard-policy` only for `strict`. A matched stock scope cannot be flipped to `relaxed` or `off` after creation through chat; create or select a scope that already declares the intended value. The composer never changes an in-flight intent's value.
+Intent creation reads Guard Policy from that scope file. The conductor passes `--guard-policy` only for `strict`. A matched stock scope cannot be flipped to `relaxed` or `off` after creation through chat; flip it at the compose gate instead, which turns the proposal into a custom scope declaring that value, or create or select a scope that already declares the intended value. The composer never changes an in-flight intent's value.
 
 #### Where to set it
 

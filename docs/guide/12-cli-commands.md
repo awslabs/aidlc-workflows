@@ -1151,10 +1151,10 @@ Compose creation reads Guard Policy from the scope file. An approved custom
 scope contains `guard_policy: <value>`; a matched stock scope retains its own
 default and no scope file is written. The conductor passes `--guard-policy`
 only for `strict`. If you flip a matched scope to `relaxed` or `off` at the
-compose gate, the conductor creates the intent from the matched scope first,
-then tells you to type `/aidlc --guard-policy <value>` after the intent exists
-(`$aidlc --guard-policy <value>` on Codex). The composer never changes an
-in-flight intent's value.
+compose gate, the composer treats it as an edit: the proposal becomes a custom
+scope that declares `guard_policy: <value>`, and the intent is created from
+that scope. Nothing is left for you to type afterwards. The composer never
+changes an in-flight intent's value.
 
 No value removes a gate: the conductor must still ask every approval question;
 a lowered fence does not enforce that prose obligation. A reviewer's verdict

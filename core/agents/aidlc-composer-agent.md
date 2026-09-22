@@ -677,10 +677,12 @@ row so the human can flip it before approving. Store the approved custom
 scope's value as `guard_policy: <value>` in its frontmatter; a matched stock
 scope keeps its own default and no scope file is written. Intent creation
 reads Guard Policy from that scope file; the conductor passes
-`--guard-policy` only for `strict`. If the human flips a matched scope to
-`relaxed` or `off` at the compose gate, create the intent from the matched
-scope first, then tell the person to type `/aidlc --guard-policy <value>`
-after the intent exists (Codex uses `$aidlc --guard-policy <value>`).
+`--guard-policy` only for `strict`. A Guard Policy flip on a matched
+proposal is an edit like any other grid change: convert it to `mode:
+"custom"` with a custom `scopeName`, persist `guard_policy: <value>` in that
+scope file at Step 10, and let intent creation read it from there. Never
+create from the stock scope and defer the value to a setter: lowering Guard
+Policy from chat is refused, so that value would never be applied.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.

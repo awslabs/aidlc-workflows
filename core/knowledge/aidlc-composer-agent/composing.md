@@ -93,11 +93,10 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   validator and the intent-create command both refuse a relaxed or off value
   under it.
 - Intent creation reads Guard Policy from the scope file; the conductor
-  passes `--guard-policy` only for `strict`. If the human flips a matched
-  scope to `relaxed` or `off` at the compose gate, create the intent from the
-  matched scope first, then tell the person to type
-  `/aidlc --guard-policy <value>` after the intent exists (Codex uses
-  `$aidlc --guard-policy <value>`).
+  passes `--guard-policy` only for `strict`. A flip to `relaxed` or `off` on
+  a matched proposal is an edit: convert it to a custom scope that declares
+  `guard_policy: <value>` and create the intent from that scope. Lowering
+  from chat is refused, so a value deferred to a setter would never apply.
 
 ## Rationale quality
 

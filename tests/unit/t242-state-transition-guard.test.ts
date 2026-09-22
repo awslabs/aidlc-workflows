@@ -580,16 +580,16 @@ describe("t242 state-transition ownership guard", () => {
       `bun -e 'import("./.claude/hooks/aidlc-record-human-turn.ts")'`,
       `bun -e 'const p = ["./.claude/hooks", "aidlc-record-human-turn.ts"].join("/"); await import(p)'`,
       `bun --eval 'const p = "aidlc-guard-switch"; await import(p)'`,
-      `node -e 'applyIntentSettings({ requested: {} })'`,
+      `node -e 'require("./.claude/tools/aidlc-guard-switch.ts")'`,
       `python -c 'print("aidlc-guard-switch")'`,
-      `sh -c 'printf applyIntentSettings'`,
+      `sh -c 'bun .claude/hooks/aidlc-record-human-turn.ts'`,
       `bash -c "$(printf '%s' 'aidlc-record-human-turn')"`,
-      `zsh -c 'printf applyIntentSettings'`,
+      `zsh -c 'printf aidlc-guard-switch'`,
       `alias h='bun .claude/hooks/aidlc-record-human-turn.ts'`,
-      `alias h='bun -e applyIntentSettings'`,
-      `function h { bun -e 'applyIntentSettings()'; }`,
+      `alias h='bun -e "import(\\"./.claude/tools/aidlc-guard-switch.ts\\")"'`,
+      `function h { bun -e 'import("aidlc-guard-switch")'; }`,
       `h() { bun -e 'import("aidlc-guard-switch")'; }`,
-      `bun <<'EOF'\napplyIntentSettings()\nEOF`,
+      `bun <<'EOF'\nawait import("./.claude/hooks/aidlc-record-human-turn.ts")\nEOF`,
     ]) {
       const r = spawnSync(process.execPath, [HOOK], {
         input: JSON.stringify({
@@ -609,7 +609,7 @@ describe("t242 state-transition ownership guard", () => {
     const project = createTestProject();
     projects.push(project);
     writeFileSync(join(project, "wrapper.ts"), 'import "./.claude/tools/aidlc-guard-switch.ts";\n');
-    writeFileSync(join(project, "wrapper"), 'bun -e "applyIntentSettings()"\n');
+    writeFileSync(join(project, "wrapper"), 'bun .claude/hooks/aidlc-record-human-turn.ts\n');
     for (const command of [
       `bun "${join(project, "wrapper.ts")}"`,
       "node wrapper.ts",
@@ -637,7 +637,7 @@ describe("t242 state-transition ownership guard", () => {
   test("runtime integrity bounds wrapper reads and ignores unavailable script files", () => {
     const project = createTestProject();
     projects.push(project);
-    const content = "// applyIntentSettings\n";
+    const content = "// aidlc-guard-switch\n";
     writeFileSync(join(project, "at-limit.ts"), content.padEnd(1024 * 1024, " "));
     writeFileSync(join(project, "over-limit.ts"), content.padEnd(1024 * 1024 + 1, " "));
     mkdirSync(join(project, "directory.ts"));
@@ -734,7 +734,6 @@ describe("t242 state-transition ownership guard", () => {
       ["MultiEdit", { file_path: "scripts/x.ts", edits: [{ new_string: content }] }],
       ["MultiEdit", { edits: [{ file_path: ".claude/tools/x.ts", new_string: content }, { file_path: "scripts/x.ts", new_string: content }] }],
       ["NotebookEdit", { notebook_path: "analysis.ipynb", new_source: content }],
-      ["Write", { file_path: "docs/notes.md", content: "The applyIntentSettings helper is for hooks." }],
     ] as const) {
       const r = spawnSync(process.execPath, [HOOK], {
         cwd: project,
@@ -756,7 +755,7 @@ describe("t242 state-transition ownership guard", () => {
     for (const tool of ["aidlc.ts", "aidlc-utility.ts"]) {
       writeFileSync(join(project, ".claude", "tools", tool), 'import "./aidlc-guard-switch.ts";\n');
     }
-    const content = "The applyIntentSettings helper is for hooks.";
+    const content = 'import "./.claude/tools/aidlc-guard-switch.ts";';
     for (const [tool_name, tool_input, status] of [
       ["Bash", { command: "bun .claude/tools/aidlc.ts engine orchestrate next" }, 0],
       ["Bash", { command: "bun .claude/tools/aidlc-utility.ts config-change --guard-policy strict" }, 0],
@@ -798,6 +797,11 @@ describe("t242 state-transition ownership guard", () => {
       ["Edit", { file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }],
       ["MultiEdit", { edits: [{ file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }] }],
       ["NotebookEdit", { notebook_path: "aidlc/analysis.ipynb" }],
+      // Prose that names a hook, a helper, or the engine hook route is ordinary
+      // project content; only a concrete import or execution is a reference.
+      ["Write", { file_path: "docs/notes.md", content: "The applyIntentSettings helper and the engine hook route are for hooks; see .claude/hooks/aidlc-record-human-turn.ts and aidlc-guard-switch.ts." }],
+      ["Edit", { file_path: "src/notes.ts", new_string: 'const hooks = ["aidlc-record-human-turn", "aidlc-guard-switch"]; // engine hook names' }],
+      ["Bash", { command: "echo 'engine hook' > notes.md" }],
     ] as const) {
       const r = spawnSync(process.execPath, [HOOK], {
         input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input }),
