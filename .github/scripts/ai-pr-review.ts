@@ -8,6 +8,24 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import {
+  acceptedRisks,
+  deriveDecision,
+  fileAnchor,
+  headContainsAnchor,
+  headFileSha256,
+  isBlocking,
+  lineAnchor,
+  positionAnchor,
+  quoteAnchor,
+  readContextLine,
+  readLedgerFile,
+  reconcileLedger,
+  type LedgerAnchor,
+  type LedgerFinding,
+  type LoadedLedger,
+  writeLedgerFile,
+} from "./ai-pr-ledger.ts";
 
 const MAX_CHANGED_FILES = 500;
 const MAX_REVIEW_BYTES = 100_000;
@@ -164,6 +182,7 @@ export interface Finding {
   problem: string;
   impact: string;
   requiredCorrection: string;
+  ledgerId?: string;
 }
 
 export interface UserExperienceAssessment {
@@ -197,6 +216,18 @@ export interface StructuredReview {
   decision: PullRequestDecision;
   findings: Finding[];
   residualRisk: string;
+  ledger?: ReviewLedgerSummary;
+}
+
+export interface ReviewLedgerSummary {
+  accepted: LedgerFinding[];
+  retained: LedgerFinding[];
+  suppressed: number;
+  reopened: number;
+  resolvedIds: string[];
+  open: number;
+  migrated: boolean;
+  decisionAdjusted: boolean;
 }
 
 export interface ReviewPayload {
@@ -744,7 +775,61 @@ function isChangedLine(file: ChangedFile, evidence: DiffEvidence): boolean {
   return ranges.some(range => evidence.line >= range.start && evidence.line <= range.end);
 }
 
+export function decisionInvariantError(
+  findings: Finding[],
+  assessment: StructuredReview["assessment"],
+  decision: PullRequestDecision,
+  retainedBlocking = 0,
+): string | null {
+  const blocking = findings.some(
+    finding => finding.priority === "P0" || finding.priority === "P1",
+  );
+  if (decision.action === "merge" && blocking) {
+    return "decision maintainer/merge is invalid while P0 or P1 findings remain";
+  }
+  if (decision.action === "merge" && retainedBlocking > 0) {
+    return "decision maintainer/merge is invalid while retained open blocking findings remain";
+  }
+  if (decision.action === "change" && retainedBlocking > 0) return null;
+  if (
+    decision.action === "merge" &&
+    (assessment.readiness.score < 4 || assessment.risk.score > 2)
+  ) {
+    return "decision maintainer/merge requires readiness at least 4 and risk at most 2";
+  }
+  if (
+    decision.action === "change" &&
+    findings.length === 0 &&
+    assessment.readiness.score >= 4 &&
+    assessment.risk.score <= 2
+  ) {
+    return "decision author/change requires a finding, readiness below 4, or risk above 2";
+  }
+  return null;
+}
+
+export function enforceDecision(review: StructuredReview): StructuredReview {
+  const error = decisionInvariantError(
+    review.findings,
+    review.assessment,
+    review.decision,
+    review.ledger?.retained.length ?? 0,
+  );
+  if (error) throw new Error(error);
+  return review;
+}
+
 export function validateStructuredReview(
+  raw: string,
+  expectedBase: string,
+  expectedHead: string,
+  manifest: ChangedFileManifest,
+  metadata: ReviewMetadata,
+): StructuredReview {
+  return enforceDecision(parseStructuredReview(raw, expectedBase, expectedHead, manifest, metadata));
+}
+
+export function parseStructuredReview(
   raw: string,
   expectedBase: string,
   expectedHead: string,
@@ -967,30 +1052,6 @@ export function validateStructuredReview(
   } else {
     throw new Error("decision must be author/change or maintainer/merge");
   }
-  const blocking = findings.some(
-    finding => finding.priority === "P0" || finding.priority === "P1",
-  );
-  if (decision.action === "merge" && blocking) {
-    throw new Error("decision maintainer/merge is invalid while P0 or P1 findings remain");
-  }
-  if (
-    decision.action === "merge" &&
-    (assessment.readiness.score < 4 || assessment.risk.score > 2)
-  ) {
-    throw new Error(
-      "decision maintainer/merge requires readiness at least 4 and risk at most 2",
-    );
-  }
-  if (
-    decision.action === "change" &&
-    findings.length === 0 &&
-    assessment.readiness.score >= 4 &&
-    assessment.risk.score <= 2
-  ) {
-    throw new Error(
-      "decision author/change requires a finding, readiness below 4, or risk above 2",
-    );
-  }
 
   const residualRisk = requiredText(candidate.residualRisk, "residualRisk", 1000);
   return {
@@ -1004,6 +1065,120 @@ export function validateStructuredReview(
     findings,
     residualRisk,
   };
+}
+
+export function findingAnchors(
+  finding: Finding,
+  contextDir: string,
+  repoDir: string,
+): LedgerAnchor[] {
+  const anchors: LedgerAnchor[] = [];
+  for (const item of finding.evidence) {
+    if (item.source === "DIFF") {
+      const lineText = readContextLine(contextDir, repoDir, item.path, item.line, item.side);
+      anchors.push(
+        lineText === null
+          ? positionAnchor(item.path, item.line, item.side)
+          : lineAnchor(item.path, item.side, lineText),
+      );
+    } else if (item.source === "DIFF_FILE") {
+      anchors.push(fileAnchor(item.path, headFileSha256(contextDir, item.path) ?? "deleted"));
+    } else {
+      anchors.push(quoteAnchor(item.quote));
+    }
+  }
+  return anchors;
+}
+
+// Applies maintainer decisions recorded in the ledger to a parsed review.
+//
+// Decision rules are the SAME invariants the validator already enforces; only
+// their inputs change: rejected findings with unchanged evidence are removed,
+// accepted ones are set aside, and open blockers the judge omitted but whose
+// cited code is unchanged are RETAINED and keep the next action with the author.
+// A removed finding that was the sole reason for `author/change` leaves that
+// decision without a valid reason under the invariants, so the consistent
+// outcome is `maintainer/merge`, and the rationale says so.
+export function applyLedgerToReview(
+  review: StructuredReview,
+  loaded: LoadedLedger,
+  contextDir: string,
+  repoDir: string,
+  at = new Date().toISOString(),
+): { review: StructuredReview; ledger: LoadedLedger["ledger"] } {
+  const presence = (anchor: LedgerAnchor): boolean | null => headContainsAnchor(contextDir, anchor);
+  const inputs = review.findings.map(finding => ({
+    priority: finding.priority,
+    category: finding.category,
+    title: finding.title,
+    anchors: findingAnchors(finding, contextDir, repoDir),
+    finding,
+  }));
+  const result = reconcileLedger(loaded, inputs, review.head, at, presence);
+  // The ledger's effective priority wins: a restatement never lowers an open
+  // finding's priority.
+  const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, ledgerId: entry.ledgerId }));
+  const retained = result.retained.filter(entry => isBlocking(entry.priority));
+  const accepted = acceptedRisks(result.ledger, presence);
+  const removed = result.restatedAccepted.length + result.suppressed.length;
+  let decision = review.decision;
+  let decisionAdjusted = false;
+  if (retained.length > 0 || removed > 0) {
+    // Same rule a later /aida command applies from persisted state (deriveDecision).
+    const openBlocking = retained.length + kept.filter(finding => isBlocking(finding.priority)).length;
+    const derived = deriveDecision(
+      review.decision.action,
+      openBlocking,
+      retained.length + kept.length,
+      review.assessment.readiness.score,
+      review.assessment.risk.score,
+    );
+    if (derived !== review.decision.action) {
+      decisionAdjusted = true;
+      decision =
+        derived === "change"
+          ? {
+              actor: "author",
+              action: "change",
+              rationale: `${review.decision.rationale} Re-derived from the ledger: ${retained.length} open blocking finding${
+                retained.length === 1 ? "" : "s"
+              } (${retained.map(entry => entry.id).join(", ")}) ${
+                retained.length === 1 ? "was" : "were"
+              } not restated this run and the cited code is unchanged, so the author still needs to act.`,
+            }
+          : {
+              actor: "maintainer",
+              action: "merge",
+              rationale: `${review.decision.rationale} Re-derived after applying ${removed} maintainer ledger decision${
+                removed === 1 ? "" : "s"
+              }: no blocking finding remains and the assessment permits a merge decision.`,
+            };
+    }
+  }
+  // Persist this head's verdict so a later /aida command re-derives the decision
+  // under the same invariants without rerunning models.
+  result.ledger.review = {
+    head: review.head,
+    readiness: review.assessment.readiness.score,
+    risk: review.assessment.risk.score,
+    decision: decision.action,
+  };
+  const adjusted: StructuredReview = {
+    ...review,
+    findings: kept,
+    decision,
+    ledger: {
+      accepted,
+      retained,
+      suppressed: result.suppressed.length,
+      reopened: result.reopenedIds.length,
+      resolvedIds: result.resolvedIds,
+      open: result.ledger.findings.filter(entry => entry.status === "open").length,
+      migrated: loaded.migrated,
+      decisionAdjusted,
+    },
+  };
+  return { review: enforceDecision(adjusted), ledger: result.ledger };
 }
 
 function escapeWorkflowCommand(value: string): string {
@@ -1107,7 +1282,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
   const appendFinding = (finding: Finding): void => {
     lines.push(
       "",
-      `**${finding.priority}: ${markdownText(finding.title)}**`,
+      `**${finding.priority}${finding.ledgerId ? ` [${finding.ledgerId}]` : ""}: ${markdownText(finding.title)}**`,
       "",
       `Evidence: ${finding.evidence
         .map(item => {
@@ -1139,6 +1314,19 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     `Findings: ${blocking} blocking, ${advisory} advisory.`,
   );
+  if (review.ledger) {
+    const summary = review.ledger;
+    lines.push(
+      "",
+      `Ledger: ${summary.open} open, ${summary.retained.length} retained blocking, ${summary.accepted.length} accepted, ${summary.suppressed} suppressed as rejected by a maintainer${
+        summary.reopened > 0 ? `, ${summary.reopened} reopened on new evidence` : ""
+      }${summary.resolvedIds.length > 0 ? `, resolved ${summary.resolvedIds.join(", ")}` : ""}.${
+        summary.decisionAdjusted ? " The next decision was re-derived from the ledger." : ""
+      }${
+        summary.migrated ? " The ledger was migrated from schema v1; earlier decisions were reset." : ""
+      } Maintainers act on findings with \`/aida\` commands in the ledger comment.`,
+    );
+  }
   if (review.findings.length === 0) lines.push("", "No findings.");
   const populatedCategories = FINDING_CATEGORIES
     .map((category, categoryOrder) => ({
@@ -1180,6 +1368,35 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       appendFinding(finding);
     }
   }
+  if (review.ledger && review.ledger.retained.length > 0) {
+    lines.push(
+      "",
+      "## Retained blocking findings",
+      "",
+      "Open P0/P1 findings from the ledger that this review did not restate and whose cited code is unchanged. They keep the next action with the author until the code changes or a maintainer accepts them.",
+    );
+    for (const entry of review.ledger.retained) {
+      const paths = [...new Set(entry.anchors.map(anchor => anchor.path).filter((path): path is string => Boolean(path)))];
+      lines.push(
+        "",
+        `**${entry.priority} [${entry.id}]: ${markdownText(entry.title)}** — first reported at \`${entry.firstSeen.head.slice(0, 8)}\`${
+          paths.length > 0 ? `; cited: ${paths.map(path => `<code>${codeText(path)}</code>`).join(", ")}` : ""
+        }.`,
+      );
+    }
+  }
+  if (review.ledger && review.ledger.accepted.length > 0) {
+    lines.push("", "## Accepted risks");
+    for (const entry of review.ledger.accepted) {
+      const decision = entry.decision;
+      lines.push(
+        "",
+        `**${entry.priority} [${entry.id}]: ${markdownText(entry.title)}** — accepted by @${
+          markdownText(decision?.by ?? "unknown")
+        } on ${markdownText((decision?.at ?? "").slice(0, 10))}: ${markdownText(decision?.reason ?? "")}`,
+      );
+    }
+  }
   lines.push(
     "",
     `Residual risk: ${markdownText(review.residualRisk)}`,
@@ -1188,7 +1405,9 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     `[AI-PR-REVIEWED] ${review.head}`,
   );
-  const event = review.findings.some(item => item.priority === "P0" || item.priority === "P1")
+  const retainedBlocking = (review.ledger?.retained.length ?? 0) > 0;
+  const event = retainedBlocking ||
+      review.findings.some(item => item.priority === "P0" || item.priority === "P1")
     ? "REQUEST_CHANGES"
     : "COMMENT";
   return { commit_id: review.head, body: lines.join("\n"), event };
@@ -1228,13 +1447,30 @@ function main(): void {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ChangedFileManifest;
     const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as ReviewMetadata;
     lastValidateInput = readFileSync(input, "utf8");
-    const review = validateStructuredReview(
-      lastValidateInput,
-      base,
-      head,
-      manifest,
-      metadata,
-    );
+    let review: StructuredReview;
+    if (args.includes("--ledger")) {
+      const ledgerFile = readLedgerFile(argValue(args, "--ledger"));
+      const loaded: LoadedLedger = {
+        ledger: ledgerFile.ledger,
+        commentId: null,
+        digest: ledgerFile.expectedDigest,
+        migrated: ledgerFile.migrated,
+      };
+      const applied = applyLedgerToReview(
+        parseStructuredReview(lastValidateInput, base, head, manifest, metadata),
+        loaded,
+        argValue(args, "--context-dir"),
+        args.includes("--repo-dir") ? argValue(args, "--repo-dir") : process.cwd(),
+      );
+      review = applied.review;
+      if (args.includes("--ledger-output")) {
+        // Transport fields ride along: the migration note and the live digest for
+        // the publish-time compare-and-swap.
+        writeLedgerFile(argValue(args, "--ledger-output"), applied.ledger, loaded.migrated, loaded.digest);
+      }
+    } else {
+      review = validateStructuredReview(lastValidateInput, base, head, manifest, metadata);
+    }
     const payload = renderReview(review, contextId);
     writeFileSync(output, `${JSON.stringify(payload, null, 2)}\n`);
     if (args.includes("--decision-output")) {

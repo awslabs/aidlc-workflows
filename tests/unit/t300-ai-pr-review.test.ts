@@ -1322,7 +1322,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/",
     );
     const scriptSnapshot = WORKFLOW.indexOf(
-      "cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh",
+      "cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts",
     );
     expect(controlsSha).toBeGreaterThan(-1);
     expect(selfReviewCheckout).toBeGreaterThan(controlsSha);
@@ -1409,14 +1409,14 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(modelStep).toContain('"sol" \\\n            "Prompt-injection review"');
     expect(modelStep).toContain('"sol" \\\n            "Security review"');
     expect(modelStep).toContain('"sol" \\\n            "AIDLC technical review"');
-    expect(modelStep).toContain('"fable" \\\n            "User-experience review"');
-    expect(modelStep).toContain('"fable" \\\n            "Direction review"');
+    expect(modelStep).toContain('"sol" \\\n            "User-experience review"');
+    expect(modelStep).toContain('"sol" \\\n            "Direction review"');
     expect(modelStep).toContain('"sol" \\\n            "Final review judge"');
     expect(modelStep).toContain(
-      '"fable" \\\n            "User-experience review" \\\n            "high"',
+      '"sol" \\\n            "User-experience review" \\\n            "high"',
     );
     expect(modelStep).toContain(
-      '"fable" \\\n            "Direction review" \\\n            "high"',
+      '"sol" \\\n            "Direction review" \\\n            "high"',
     );
     expect(modelStep).toContain(
       '"sol" \\\n            "Final review judge" \\\n            "high"',
