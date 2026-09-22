@@ -317,5 +317,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(workshop.stage).toBe("requirements-analysis");
     expect(workshop.reviewer).toBeUndefined();
     expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("none");
-  }, 10_000); // Config/scope changes plus three next handshakes: 5.9s macOS, 5.3s Windows.
+    // Keep the complete override history together. Hosted Windows exhausted
+    // the former 10s cap at the final next handshake; ordinary runs stay fast.
+  }, process.platform === "win32" ? 30_000 : 10_000);
 });
