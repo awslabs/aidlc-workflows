@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1071,
+    "total": 1073,
     "enumeratedByClass": {
-      "function": 751,
+      "function": 753,
       "audit": 102,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 448,
+      "function": 450,
       "audit": 63,
       "scope": 11,
       "stage": 11,
@@ -5222,6 +5222,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseLiteralShellInvocation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t226-detector-corpus.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseMemoryEntries",
       "minMechanism": "none",
       "coveredBy": [
@@ -8632,6 +8644,18 @@
         {
           "file": "tests/unit/t344-visible-markdown-goldens.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:windowsSessionProcessIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
