@@ -2427,6 +2427,69 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
+  test("5d16: an obstructed witness refuses the dispatch, and repair-retry is admitted and witnessed", () => {
+    // Coverage for the obstruction -> refusal -> repair -> retry -> completion path the
+    // review asks for. 🔴 It is a REGRESSION GUARD, not a defect proof: it passes at its
+    // parent too. The defect it accompanies - a refused dispatch whose already-appended
+    // open stays replayable and is attributed as an active delegate - has no observable I
+    // could find from the adapter's own surface, because whether a forwarded `agent_type`
+    // changes the core guard's verdict depends on the core hook rather than on this file.
+    // The fix (an open is live only once witnessed) is structural; this test pins the
+    // surrounding behaviour so a future change cannot break the repair path silently.
+    const dir = scratchProject(true);
+    try {
+      const witnessRoot = join(
+        dir,
+        "aidlc",
+        ".aidlc-sessions",
+        "kiro-delegation-witness",
+      );
+      // OBSTRUCTION: a file where the witness directory must be, so mkdir fails.
+      mkdirSync(dirname(witnessRoot), { recursive: true });
+      writeFileSync(witnessRoot, "obstruction\n", "utf-8");
+
+      // REFUSAL: the dispatch does not proceed.
+      const refused = runAdapter(dir, "log-subagent", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "subagent_aidlc-architecture-reviewer-agent",
+        tool_input: { prompt: "delegate" },
+      });
+      expect(refused.code, `refused: ${refused.stdout}${refused.stderr}`).not.toBe(0);
+
+      // NO PHANTOM: the conductor's own lifecycle call still runs. Before the witness
+      // gate this was refused, because the replayable open was read as an active delegate.
+      const lifecycle = runAdapter(dir, "state-transition-guard", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-state.ts approve feasibility" },
+      });
+      expect(lifecycle.stderr).not.toContain("delegation ledger cannot be trusted");
+      expect(lifecycle.stderr).not.toContain("architecture-reviewer");
+
+      // REPAIR, then RETRY: with the obstruction gone the same dispatch is admitted
+      // (openDelegationWindow asserts exit 0 itself).
+      rmSync(witnessRoot, { force: true });
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+
+      // COMPLETION: prove the retry's open really was WITNESSED, by the only observable
+      // that depends on it - deleting the bucket is now detected as tamper. An
+      // unwitnessed open would leave nothing to miss, so this would stay silent.
+      rmSync(dirname(findDelegationLedger(dir)), { recursive: true, force: true });
+      const afterTamper = runAdapter(dir, "state-transition-guard", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-state.ts approve feasibility" },
+      });
+      expect(afterTamper.code, `${afterTamper.stdout}${afterTamper.stderr}`).toBe(2);
+      expect(afterTamper.stderr).toContain("The delegation ledger cannot be trusted");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("5g: reviewer-scope still enforces when another persona is inflight too", () => {
     // Regression: with two DIFFERENT personas inflight the adapter used to forward
     // an empty identity, so the core guard passed the call through - the exact gap

@@ -854,12 +854,21 @@ const KIRO_TOOLS_KEY_RE = /^(kiro_tools|tools):/;
 
 type ToolGrants =
   | { kind: "absent" }
-  /** `from`/`through` are the INCLUSIVE frontmatter line range the declaration occupies,
-   *  so the projection deletes exactly what the reader consumed instead of re-deciding
-   *  where the declaration ends. Two scans with two termination rules is what let a blank
-   *  line inside a block sequence resolve to the entries BEFORE it while the projection
-   *  kept the ones after it as orphans - a delegation grant hidden from the check and
-   *  invalid YAML in the same file. One scanner, one answer. */
+  /** `ranges` are the INCLUSIVE frontmatter line ranges the declaration(s) occupy, so the
+   *  projection deletes exactly what the reader consumed instead of re-deciding where a
+   *  declaration ends. Two scans with two termination rules is what let a blank line
+   *  inside a block sequence resolve to the entries BEFORE it while the projection kept
+   *  the ones after it as orphans - a delegation grant hidden from the check and invalid
+   *  YAML in the same file. One scanner, one answer.
+   *
+   *  It is a LIST because a cross-harness persona legitimately carries two: a generic
+   *  `tools:` for another harness and `kiro_tools:` as the Kiro override. Both are
+   *  consumed, so the canonical output carries neither key verbatim. */
+  | { kind: "resolved"; tools: string[]; ranges: Array<{ from: number; through: number }> }
+  | { kind: "unresolved"; reason: string };
+
+/** One declaration's own result, before the two keys are reconciled. */
+type OneDeclaration =
   | { kind: "resolved"; tools: string[]; from: number; through: number }
   | { kind: "unresolved"; reason: string };
 
@@ -895,29 +904,44 @@ function kiroToolGrants(content: string): ToolGrants {
     .map((line, index) => ({ line, index }))
     .filter(({ line }) => KIRO_TOOLS_KEY_RE.test(line));
   if (keys.length === 0) return { kind: "absent" };
-  const named = new Set(
-    keys.map(({ line }) => KIRO_TOOLS_KEY_RE.exec(line)?.[1] ?? ""),
-  );
-  if (keys.length > 1 && named.size === 1) {
-    // YAML takes the last of two identical keys and most parsers call the document
-    // malformed. Either way a reader that takes the first can be aimed at the wrong list.
-    return {
-      kind: "unresolved",
-      reason: `declares \`${[...named][0]}\` more than once`,
-    };
+  const seen = new Map<string, number>();
+  for (const { line, index } of keys) {
+    const key = KIRO_TOOLS_KEY_RE.exec(line)?.[1] ?? "tools";
+    if (seen.has(key)) {
+      // YAML takes the last of two identical keys and most parsers call the document
+      // malformed. Either way a reader that takes the first can be aimed at the wrong list.
+      return { kind: "unresolved", reason: `declares \`${key}\` more than once` };
+    }
+    seen.set(key, index);
   }
-  if (named.size > 1) {
-    // Both keys present. Picking one silently would leave the other in the output for a
-    // later reader to act on, and deleting both would need a second scan - the defect
-    // this reader was just rebuilt to remove. Make the author say which one governs.
-    return {
-      kind: "unresolved",
-      reason:
-        "declares both `kiro_tools` and `tools`; declare exactly one (use `kiro_tools` when the persona is also projected to another harness)",
-    };
+  // `kiro_tools` is the KIRO OVERRIDE, not an alternative spelling. A cross-harness
+  // persona needs a generic `tools:` for the harness that reads that key AND a Kiro-scoped
+  // one here, which is the whole reason the scoped key exists - so treating the two as
+  // mutually exclusive rejected exactly the plugins it was introduced to serve. Both
+  // declarations are read: the override supplies the tools, and BOTH ranges are consumed
+  // so the canonical output cannot carry a stale key for a later reader to act on.
+  const ranges: Array<{ from: number; through: number }> = [];
+  let tools: string[] | null = null;
+  for (const key of ["tools", "kiro_tools"] as const) {
+    const index = seen.get(key);
+    if (index === undefined) continue;
+    const one = readToolDeclaration(lines, index, key);
+    if (one.kind === "unresolved") return one;
+    ranges.push({ from: one.from, through: one.through });
+    // Later in this loop order wins, so `kiro_tools` overrides `tools`.
+    tools = one.tools;
   }
-  const { line, index } = keys[0];
-  const key = KIRO_TOOLS_KEY_RE.exec(line)?.[1] ?? "tools";
+  if (tools === null) return { kind: "absent" };
+  ranges.sort((left, right) => left.from - right.from);
+  return { kind: "resolved", tools, ranges };
+}
+
+function readToolDeclaration(
+  lines: string[],
+  index: number,
+  key: "tools" | "kiro_tools",
+): OneDeclaration {
+  const line = lines[index];
   const inline = line.slice(`${key}:`.length).trim();
   if (key === "kiro_tools" && inline === "") {
     // `kiro_tools` is ONE LINE by definition. A block form would have to be deleted from
@@ -965,18 +989,17 @@ function kiroToolGrants(content: string): ToolGrants {
   let through = index;
   for (let i = index + 1; i < lines.length; i++) {
     const next = lines[i];
-    // A blank line does NOT end a YAML block sequence, and neither does a comment
-    // indented under the key. Treating either as the end is what hid a later `- subagent`
-    // from the delegation check.
-    if (next.trim() === "") continue;
-    if (/^[ \t]+#/.test(next)) {
-      through = i;
-      continue;
-    }
+    // Neither a blank line nor a comment ends a YAML block sequence, at ANY indentation:
+    // both are presentation. Treating an indented comment as the end hid a later
+    // `- subagent` from the delegation check, and treating a COLUMN-ZERO comment as the
+    // end left the entries after it orphaned beneath the emitted flow line. Neither
+    // advances `through`, so a comment trailing the last entry stays outside the range
+    // and survives into the output instead of being swallowed with it.
+    if (next.trim() === "" || /^\s*#/.test(next)) continue;
     const item = /^[ \t]+-([ \t]+.*)?$/.exec(next);
     if (item === null) {
-      // A line at column 0 - the next key, or a top-level comment - ends the sequence.
-      // Anything else at this depth is a shape this reader does not model.
+      // A non-comment line at column 0 is the next key: the sequence ended. Anything
+      // else at this depth is a shape this reader does not model.
       if (/^\S/.test(next)) break;
       return {
         kind: "unresolved",
@@ -1022,11 +1045,15 @@ function projectKiroNativeAgent({ file, content }: CopyContext): string {
   let placed = false;
   const lines = m[1].split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    // Remove the author's declaration by the RANGE the reader consumed, not by
-    // re-deciding where it ends here. The two scans disagreeing is what left orphaned
-    // sequence entries after the canonical line.
-    if (grants.kind === "resolved" && i >= grants.from && i <= grants.through) {
-      if (i === grants.from) {
+    // Remove the author's declaration(s) by the RANGES the reader consumed, not by
+    // re-deciding where they end here. The two scans disagreeing is what left orphaned
+    // sequence entries after the canonical line. A cross-harness persona has TWO ranges -
+    // its generic `tools:` and the `kiro_tools:` override - and both go.
+    if (
+      grants.kind === "resolved" &&
+      grants.ranges.some((range) => i >= range.from && i <= range.through)
+    ) {
+      if (i === grants.ranges[0].from) {
         out.push(allowlist);
         placed = true;
       }

@@ -3102,9 +3102,20 @@ function liveDelegationOpens(
   // running delegate from every consumer. Distinguishing "the same event twice"
   // from "two identical events" needs an id this payload does not carry, so the
   // accounting must not depend on one.
+  //
+  // An open is live only once it is WITNESSED. The ledger append lands BEFORE the witness
+  // write, so a witness failure used to refuse the dispatch while leaving the open
+  // replayable - a delegate that never started, attributed as active until a sweep or the
+  // TTU, blocking the conductor's own lifecycle calls and any same-turn retry. Gating on
+  // the witness makes that window harmless by construction rather than needing a
+  // cancelling append, which would itself be a write that can fail. A group the witness
+  // does not name is a delegation that was never admitted, so there is nothing to
+  // attribute to it.
+  const witnessed = new Set(readDelegationWitness(sessionId) ?? []);
   for (const record of readDelegationLedger(sessionId)) {
     if (record.op === "open") {
       if (now - record.ts > DELEGATION_TTL_MS) continue;
+      if (!witnessed.has(record.group)) continue;
       opens.push({ agent: record.agent, key: record.key, group: record.group, ts: record.ts });
       continue;
     }

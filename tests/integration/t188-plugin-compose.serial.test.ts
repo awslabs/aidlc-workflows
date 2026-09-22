@@ -2144,6 +2144,11 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       ["an indented comment before the grant",
         ["tools:", "  - fs_read", "  # still the same sequence", "  - subagent"],
         "grants the subagent tool"],
+      // A comment at COLUMN ZERO between entries is valid YAML presentation, not the end
+      // of the sequence. Treating it as the end hid this grant and orphaned the entry.
+      ["a column-zero comment before the grant",
+        ["tools:", "  - fs_read", "# a note at column zero", "  - subagent"],
+        "grants the subagent tool"],
     ] as const) {
       const plugin = `syn-bypass-${label.replace(/[^a-z]+/g, "-")}`;
       const run = composeSynthetic(
@@ -2199,6 +2204,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           "",
           "  # a note in the middle of the sequence",
           "  - execute_bash",
+          "# and one at column zero, which is also presentation",
           "",
           "  - thinking",
         ]),
@@ -2213,10 +2219,39 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       /^tools: \["fs_read", "execute_bash", "thinking"\]$/m,
     );
     expect(separatedBody).not.toMatch(/^ {2}- /m);
-    expect(separatedBody).not.toMatch(/a note in the middle/);
+    expect(separatedBody).not.toMatch(/a note in the middle|column zero/);
     // Exactly one tools key, and the frontmatter's other keys are intact.
     expect(separatedBody.match(/^tools:/gm)?.length).toBe(1);
     expect(separatedBody).toMatch(/^plugin: syn-separated$/m);
+
+    // DUAL DECLARATION, which is the case `kiro_tools` exists for: a cross-harness persona
+    // carries a generic `tools:` in another harness's vocabulary AND the Kiro override.
+    // Treating the two as mutually exclusive rejected exactly those plugins. The override
+    // supplies the list and BOTH source keys are consumed, so no stale key survives for a
+    // later reader.
+    const dualPlugin = "syn-dual";
+    const dual = composeSynthetic(
+      dualPlugin,
+      {
+        [`agents/${dualPlugin}-agent.md`]: persona(dualPlugin, [
+          "tools:",
+          "  - read",
+          "  - edit",
+          `kiro_tools: ["fs_read", "@context7"]`,
+        ]),
+      },
+      ".kiro",
+    );
+    const dualBody = readFileSync(
+      join(dual.proj, ".kiro", "agents", `${dualPlugin}-agent.md`),
+      "utf-8",
+    );
+    expect(dualBody).toMatch(/^tools: \["fs_read", "@context7"\]$/m);
+    expect(dualBody).not.toMatch(/^kiro_tools:/m);
+    expect(dualBody.match(/^tools:/gm)?.length).toBe(1);
+    // The other harness's vocabulary is gone from the Kiro projection, entries included.
+    expect(dualBody).not.toMatch(/^ {2}- (read|edit)$/m);
+    expect(dual.drops).not.toContain("syn-dual-agent.md");
   }, 240_000);
 
   test("Kiro rejects plugin-owned ensemble collaborators with a compose drop", () => {
