@@ -31,6 +31,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -1189,6 +1190,60 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     try {
       const r = runAdapter(dir, "rebuild-stage-graph", withCwd(FIXTURES.postToolUse_exec as Record<string, unknown>, dir));
       expect(r.code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // PR #996 review 5248693673 finding 3 / DEVIN-07: `.devin` was missing from
+  // KNOWN_HARNESS_DIRS, so the core classifier returned `pass` for every
+  // .devin engine command and runtime-graph.json was never compiled on Devin.
+  // Prove the whole chain end-to-end: exec PostToolUse → exec→Bash rewrite →
+  // command gate fires → audit tail carries a transition → `aidlc-runtime.ts
+  // compile` writes <record>/runtime-graph.json.
+  test("14a: rebuild-stage-graph fires for .devin engine commands and compiles runtime-graph.json", () => {
+    const dir = scratchProject(true);
+    try {
+      // A WORKFLOW_STARTED + STAGE_STARTED tail so the hook's last-3-block
+      // window sees a transition and compile builds a real header.
+      appendFileSync(
+        join(seededAuditDir(dir), pinnedShardName()),
+        [
+          "",
+          "## Workflow Started",
+          "**Timestamp**: 2026-09-22T00:00:00Z",
+          "**Event**: WORKFLOW_STARTED",
+          "**Workflow ID**: t332-devin-rebuild",
+          "**Scope**: feature",
+          "",
+          "---",
+          "",
+          "## Stage Started",
+          "**Timestamp**: 2026-09-22T00:01:00Z",
+          "**Event**: STAGE_STARTED",
+          "**Stage**: units-generation",
+          "**Agent**: aidlc-architect-agent",
+          "",
+          "---",
+          "",
+        ].join("\n"),
+      );
+      const graph = join(seededRecordDir(dir), "runtime-graph.json");
+      expect(existsSync(graph)).toBe(false);
+      for (const command of [
+        // The reviewer's reproduction shape (direct tool path) and the
+        // dispatcher form the SKILL.md instructs the model to run.
+        "bun .devin/tools/aidlc-orchestrate.ts report --result approved",
+        "bun .devin/tools/aidlc.ts engine orchestrate report --result approved",
+      ]) {
+        rmSync(graph, { force: true });
+        const r = runAdapter(dir, "rebuild-stage-graph", withCwd({
+          ...(FIXTURES.postToolUse_exec as Record<string, unknown>),
+          tool_input: { command },
+        }, dir));
+        expect(r.code, `${command}\n${r.stderr}`).toBe(0);
+        expect(existsSync(graph), command).toBe(true);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
