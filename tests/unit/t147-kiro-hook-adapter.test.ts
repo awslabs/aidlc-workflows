@@ -762,15 +762,23 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stderr).toBe("");
-      expect(r.stdout).toContain("Unicode: ─ ✓ █▒ ⇄");
-      expect(r.stdout).toContain("Path: C:\\work\\file.txt");
-      expect(r.stdout).toContain("literal: \\\\x1b[31m");
-      expect(r.stdout).toContain("red");
-      expect(r.stdout).toContain("after-osc");
-      expect(r.stdout).toContain("stderr: → preserved");
-      expect(r.stdout).not.toContain("\u001b");
-      expect(r.stdout).not.toContain("\u0008");
-      expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
+      // The output no longer travels in the prompt -- it is parked in the session's
+      // own directory and the prompt carries the path -- so the sanitizer's contract
+      // is asserted where the bytes actually are.
+      const relayRoot = join(dir, "aidlc", ".aidlc-sessions", "kiro-terminal");
+      const buckets = readdirSync(relayRoot);
+      expect(buckets.length, `exactly one terminal bucket under ${relayRoot}`).toBe(1);
+      const relayed = readFileSync(join(relayRoot, buckets[0], "last-output.txt"), "utf-8");
+      expect(r.stdout).toContain("last-output.txt");
+      expect(relayed).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(relayed).toContain("Path: C:\\work\\file.txt");
+      expect(relayed).toContain("literal: \\\\x1b[31m");
+      expect(relayed).toContain("red");
+      expect(relayed).toContain("after-osc");
+      expect(relayed).toContain("stderr: → preserved");
+      expect(relayed).not.toContain("\u001b");
+      expect(relayed).not.toContain("\u0008");
+      expect(relayed).not.toContain("Cwd=C:\\shell\\noise");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2278,6 +2286,52 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test.each([
+    ["deletion", (ledger: string) => { rmSync(ledger); }],
+    ["truncation", (ledger: string) => { writeFileSync(ledger, "", "utf-8"); }],
+    [
+      "a rewritten middle",
+      (ledger: string) => {
+        // A malformed line with valid lines AFTER it. A torn FINAL line stays
+        // legitimate -- that is a crashed append -- so the distinction is asserted by
+        // where the damage sits, not merely that there is damage.
+        writeFileSync(ledger, `not json\n${readFileSync(ledger, "utf-8")}`, "utf-8");
+      },
+    ],
+    [
+      "replacement after opening",
+      (ledger: string) => {
+        rmSync(ledger);
+        mkdirSync(ledger);
+      },
+    ],
+  ])(
+    "5d13: %s of the delegation ledger refuses instead of dropping the identity",
+    (_name, tamper) => {
+      // The authorization bypass this closes: the ledger sits under a
+      // project-writable path, so a delegate running repository code could erase its
+      // own window between two of its own calls. The next call then carried no
+      // agent_type, and both persona guards return 0 on an empty one -- so it ran as
+      // if it were the main session, with the read scope and the lifecycle
+      // restrictions skipped.
+      const dir = scratchProject(true);
+      try {
+        openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+        tamper(findDelegationLedger(dir));
+        const r = runAdapter(dir, "reviewer-scope", {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: "read_file",
+          tool_input: { path: "construction/sibling-unit/design.md" },
+        });
+        expect(r.code, r.stdout + r.stderr).toBe(2);
+        expect(r.stderr).toContain("The delegation ledger cannot be trusted");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("5g: reviewer-scope still enforces when another persona is inflight too", () => {
     // Regression: with two DIFFERENT personas inflight the adapter used to forward
