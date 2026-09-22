@@ -1,4 +1,5 @@
 // covers: file:core/tools/aidlc-lib.ts
+// covers: function:markdownBlocks
 import { describe, expect, test } from "bun:test";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
