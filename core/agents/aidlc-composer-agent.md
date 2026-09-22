@@ -673,9 +673,8 @@ return the running intent's current value unchanged (read `Guard Policy` from
 before the rename); the composer never flips it. Mark that row read-only in
 the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
 so a policy edit there would be discarded. Name the routes instead: raise or
-lower by typing `/aidlc --guard-policy <value>` (`$aidlc` on Codex), or change
-to a scope whose `guard_policy` declares the value (name that value beside
-`--scope` when it was raised by hand).
+lower by typing `/aidlc --guard-policy <value>` (`$aidlc` on Codex), then
+change scope if needed. Changing scope alone never lowers the running policy.
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
 validator checks it with the grid. For a front composition the conductor
 renders it as its own gate row so the human can flip it before approving.

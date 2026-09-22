@@ -8363,20 +8363,6 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const oldScope = getField(contentBefore, "Scope");
     if (!oldScope) die("Cannot read current Scope from state file.");
     const requested = intentSettingsFromFlags(flags);
-    // Naming the selected scope's own Guard Policy default takes that scope's
-    // policy back. It is scope-derived, not a chat lowering, so a line once
-    // raised to strict by hand can return to the scope's value here instead of
-    // through a hand edit of the state file. A memory layer holding strict
-    // still answers the typed value with its own refusal, naming the file.
-    const scopeDefault = newScopeDef.guardPolicy ?? "strict";
-    if (
-      requested["guard-policy"]?.source === "you" &&
-      scopeDefault !== "strict" &&
-      parseGuardPolicy(requested["guard-policy"].value) === scopeDefault &&
-      !memoryGuardPolicyDeclarations(projectDir, { space }).some((declaration) => declaration.value === "strict")
-    ) {
-      requested["guard-policy"] = { value: scopeDefault, source: `scope ${newScope}` };
-    }
     if (oldScope !== newScope) {
       const source = `scope ${newScope}`;
       requested.depth ??= { value: newScopeDef.depth, source };
@@ -8388,7 +8374,14 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         previousField === null ? null : getField(contentBefore, previousField),
       );
       if (previousCC?.source.startsWith("scope ")) {
-        requested["guard-policy"] ??= { value: newScopeDef.guardPolicy ?? "strict", source };
+        const strictness = { off: 0, relaxed: 1, strict: 2 } as const;
+        const nextPolicy = newScopeDef.guardPolicy ?? "strict";
+        // Scope changes may raise the policy automatically, but never lower it.
+        // The person must type a lowering switch first, matching the authority
+        // required by a direct Guard Policy change.
+        if (strictness[nextPolicy] >= strictness[previousCC.value]) {
+          requested["guard-policy"] ??= { value: nextPolicy, source };
+        }
       }
       for (const key of CEREMONY_KEYS) {
         const previous = parseCeremonyStateLine(getField(contentBefore, CEREMONY_FIELDS[key]));

@@ -374,22 +374,6 @@ describe("t283 engine-owned continuation cursor", () => {
 
       const results = await raceReceipt(installed, first, harness.name);
 
-      if (harness.name === "kiro-ide") {
-        // Kiro IDE never re-answers from the marker (its legacy Plan Approval
-        // choices are rotated by publication), so the loser there is answered
-        // as a bare `next` that restarts delivery at part 1.
-        expect(
-          results.map((result) => result.directive.part ?? 0).sort((a, b) => a - b),
-          harness.name,
-        ).toEqual([1, 2]);
-        const kiroMarker = marker(installed);
-        expect(kiroMarker.kind, harness.name).toBe("load-steering");
-        expect(
-          results.map((result) => result.directive.receipt),
-          harness.name,
-        ).toContain(String(kiroMarker.continue_token));
-        continue;
-      }
       expect(
         results.map((result) => result.directive.part),
         harness.name,
@@ -407,7 +391,8 @@ describe("t283 engine-owned continuation cursor", () => {
   }, 60000);
 
   // Old property: one winner, one stale error, owner preserved. New property:
-  // one winner, the loser re-sent part 1, and the Copilot owner preserved.
+  // both racers receive the committed successor and the Copilot owner is
+  // preserved.
   test("Copilot session-owned markers use the same one-winner cursor", async () => {
     const harness = HARNESSES.find((entry) => entry.name === "copilot")!;
     const installed = project(harness);
@@ -415,15 +400,8 @@ describe("t283 engine-owned continuation cursor", () => {
     makeCopilotOwned(installed);
 
     const results = await raceReceipt(installed, first, "copilot-owned");
-    // A session-owned marker is never re-answered from the marker, so the
-    // loser is answered as a bare `next` (a part-1 restart); every racer that
-    // advanced holds the same part-2 receipt and the owner is preserved.
-    const advanced = results.filter((result) => result.directive.part === 2);
-    expect(advanced.length).toBeGreaterThanOrEqual(1);
-    expect(new Set(advanced.map((result) => result.directive.receipt)).size).toBe(1);
-    for (const result of results) {
-      if (result.directive.part !== 2) expect(isRestart(result.directive)).toBe(true);
-    }
+    expect(results.map((result) => result.directive.part)).toEqual([2, 2]);
+    expect(results[0].stdout).toBe(results[1].stdout);
     expect(marker(installed).owner_session).toBe("cursor-owner");
   });
 

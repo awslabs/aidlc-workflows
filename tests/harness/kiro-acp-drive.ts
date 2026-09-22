@@ -253,14 +253,14 @@ export class AcpSession {
       clientPid: process.pid, cliPid: this.proc.pid, instance: this.diagnosticInstance,
       turn: this.diagnosticTurn, sessionId: this.sessionId, event, ...data,
     };
-    let line = JSON.stringify(envelope) + "\n";
+    let line = `${JSON.stringify(envelope)}\n`;
     const bytes = Buffer.byteLength(line);
     if (bytes > ACP_DIAGNOSTIC_MAX_EVENT || state.bytes + bytes > ACP_DIAGNOSTIC_MAX_FILE) {
-      line = JSON.stringify({
+      line = `${JSON.stringify({
         ts: envelope.ts, sequence: envelope.sequence, instance: this.diagnosticInstance,
         event: "diagnostic_incomplete", reason: "capture budget exceeded",
         omittedBytes: bytes, omittedSha256: createHash("sha256").update(line).digest("hex"),
-      }) + "\n";
+      })}\n`;
       state.capped = true; // The diagnostic is inconclusive; never silently truncate.
     }
     mkdirSync(dirname(path), { recursive: true });

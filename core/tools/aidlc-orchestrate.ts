@@ -2145,7 +2145,7 @@ function composeDispatchDirective(
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
     `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the routes instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, or change to a scope whose guard_policy declares the value)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation takes the value from the scope file: a custom scope carries the approved value as \`guard_policy: <value>\`, and a matched scope carries its own default; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched scope's value to \`relaxed\` or \`off\` at this gate, that is an edit: the composer converts the proposal to a custom scope declaring \`guard_policy: <value>\` and creation reads it from there; the custom scope carries the value at creation, so no setter runs afterwards)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation takes the value from the scope file: a custom scope carries the approved value as \`guard_policy: <value>\`, and a matched scope carries its own default; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched scope's value to \`relaxed\` or \`off\` at this gate, that is an edit: the composer converts the proposal to a custom scope declaring \`guard_policy: <value>\` and creation reads it from there; the custom scope carries the value at creation, so no setter runs afterwards)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   const directive = printDirective(parts.join(" "));
   // This is the moment issue 682's reporter described: the user has asked for a
@@ -4211,14 +4211,20 @@ function retainedTransportForCurrentState(
   content: RuleContent[],
 ): Directive | null {
   if (engineInvocation?.commandKind !== "next") return null;
-  if (engineInvocation.attemptId !== undefined) return null;
+  if (
+    engineInvocation.attemptId !== undefined &&
+    !continuationLoserReadsMarker
+  ) return null;
   if (directive.single === true) return null;
   const projectDir = route.codekbCtx.projectDir;
   const stateHash = route.stateHash;
   if (!stateHash) return null;
   let marker: ActiveDirectiveMarker | null = null;
   try {
-    if (installedHarnessName(projectDir) === "kiro-ide") return null;
+    if (
+      installedHarnessName(projectDir) === "kiro-ide" &&
+      !continuationLoserReadsMarker
+    ) return null;
     const state = loadStateFileIfPresent(projectDir);
     if (state === null) return null;
     marker = readActiveDirectiveMarker(projectDir, state);
@@ -4228,9 +4234,12 @@ function retainedTransportForCurrentState(
   if (
     marker?.version !== 2 ||
     marker.state_sha256 !== stateHash ||
-    marker.delivery !== "issued" ||
-    marker.needs_rehydrate === true ||
-    marker.owner_session?.startsWith("sessionless:") !== true ||
+    (marker.delivery !== "issued" && !continuationLoserReadsMarker) ||
+    (marker.needs_rehydrate === true && !continuationLoserReadsMarker) ||
+    (
+      marker.owner_session?.startsWith("sessionless:") !== true &&
+      !continuationLoserReadsMarker
+    ) ||
     marker.stage !== directive.stage ||
     (marker.unit ?? undefined) !== (directive.unit ?? undefined) ||
     marker.rules_bundle !== bundle ||

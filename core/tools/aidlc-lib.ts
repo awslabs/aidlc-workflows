@@ -30544,70 +30544,118 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
 // The human-turn hook applies these switches at prompt time, as the host's
 // channel for what the person typed. No request waits for a later setter.
 // Accept /aidlc, $aidlc, or bare aidlc followed by flags first or config set
-// <key> <value> with only optional --intent and --space pairs, each at most once.
-// Both command forms capture those selectors; flags stop at a description or
-// explanation. The whole prompt may instead be the confirmation words guard
-// policy relaxed (also hyphenated, change control, or off).
+// <key> <value>; either form may combine intent settings and include optional
+// --intent and --space selectors, each at most once. Both command forms capture
+// those selectors; flags-first form stops at a description or explanation. The
+// whole prompt may instead be the confirmation words guard policy relaxed
+// (also hyphenated, change control, or off).
 // Strip trailing prompt punctuation and match case-insensitively. strict and
 // on never switch; human presence has no switch. Last value wins per key.
+const TYPED_INTENT_SETTING_KEYS = new Set([
+  "depth",
+  "test-strategy",
+  "review",
+  "guard-policy",
+  "sensors",
+  "learnings",
+  "summary-confirmation",
+  "guard.plan-approval",
+  "guard.review-freeze",
+  "guard.state-transition",
+  "guard.reviewer-scope",
+]);
+
 export function parseTypedGuardSwitchRequest(prompt: string): {
-  switches: GuardSwitch[]; space: string | null; intent: string | null;
+  switches: GuardSwitch[];
+  settings: Array<{ key: string; value: string }>;
+  space: string | null;
+  intent: string | null;
+  error: string | null;
 } {
   const text = prompt.trim().replace(/[.,;:!?]+$/, "").toLowerCase();
   const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/);
   if (command === null) {
     const confirmation = text.match(/^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/);
+    const value = confirmation?.[1] as GuardSwitch["value"] | undefined;
     return {
-      switches: confirmation === null
-        ? []
-        : [{ key: "guard-policy", value: confirmation[1] as GuardSwitch["value"] }],
+      switches: value === undefined ? [] : [{ key: "guard-policy", value }],
+      settings: value === undefined ? [] : [{ key: "guard-policy", value }],
       space: null,
       intent: null,
+      error: null,
     };
   }
   const tokens = text.slice(command[0].length).trim().split(/\s+/);
   const configForm = tokens[0] === "config" && tokens[1] === "set";
   const switches = new Map<GuardSwitchKey, GuardSwitch>();
+  const settings = new Map<string, string>();
   let space: string | null = null;
   let intent: string | null = null;
-  if (configForm) {
-    if (tokens.length < 4) return { switches: [], space: null, intent: null };
-    for (let i = 4; i < tokens.length; i += 2) {
-      const selector = tokens[i];
-      const value = tokens[i + 1];
-      if (value === undefined || value.startsWith("--")) {
-        return { switches: [], space: null, intent: null };
-      }
-      if (selector === "--space" && space === null) space = value;
-      else if (selector === "--intent" && intent === null) intent = value;
-      else return { switches: [], space: null, intent: null };
-    }
+  const error: string | null = null;
+  let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
+  let index = configForm ? 2 : 0;
+  if (configForm && tokens.length < 4) {
+    return { switches: [], settings: [], space: null, intent: null, error: null };
   }
-  for (let i = configForm ? 2 : 0; i < (configForm ? 4 : tokens.length);) {
-    const token = tokens[i++];
-    if (!configForm && !token.startsWith("--")) break;
-    const configKey = configForm ? token : token.slice(2);
-    const value = tokens[i] !== undefined && !tokens[i].startsWith("--") ? tokens[i++] : undefined;
-    if (!configForm && configKey === "space" && value !== undefined) {
-      space = value;
+
+  while (index < tokens.length) {
+    const token = tokens[index++];
+    const configKey = configForm && index === 3 ? token : token.startsWith("--") ? token.slice(2) : null;
+    if (configKey === null) {
+      if (!configForm) break;
+      return { switches: [], settings: [], space: null, intent: null, error: null };
+    }
+    const value = tokens[index] !== undefined && !tokens[index].startsWith("--")
+      ? tokens[index++]
+      : undefined;
+    if (value === undefined || value.trim().length === 0) {
+      return { switches: [], settings: [], space: null, intent: null, error: null };
+    }
+    if (configKey === "space" || configKey === "intent") {
+      if ((configKey === "space" ? space : intent) !== null) {
+        return { switches: [], settings: [], space: null, intent: null, error: null };
+      }
+      if (configKey === "space") space = value;
+      else intent = value;
       continue;
     }
-    if (!configForm && configKey === "intent" && value !== undefined) {
-      intent = value;
-      continue;
+    const currentKey = configKey === "change-control" ? "guard-policy" : configKey;
+    if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) {
+      return { switches: [], settings: [], space: null, intent: null, error: null };
     }
+    const previous = settings.get(currentKey);
+    if (
+      currentKey === "guard-policy" &&
+      guardPolicySpelling !== null &&
+      guardPolicySpelling !== configKey &&
+      previous !== undefined &&
+      previous !== value
+    ) {
+      return { switches: [], settings: [], space: null, intent: null, error: null };
+    }
+    if (currentKey === "guard-policy") {
+      guardPolicySpelling = configKey as "guard-policy" | "change-control";
+    }
+    settings.set(currentKey, value);
+
     let key: GuardSwitchKey;
-    if (configKey === "guard-policy" || configKey === "change-control") {
+    if (currentKey === "guard-policy") {
       key = "guard-policy";
     } else {
-      if (!configKey.startsWith("guard.")) continue;
-      const fence = configKey.slice("guard.".length);
+      if (!currentKey.startsWith("guard.")) continue;
+      const fence = currentKey.slice("guard.".length);
       if (!isSwitchableGuardFence(fence) || value !== "off") continue;
       key = `guard.${fence}`;
     }
     if (value === "relaxed" || value === "off") switches.set(key, { key, value });
   }
-  return { switches: [...switches.values()], space, intent };
+  return {
+    switches: [...switches.values()],
+    settings: [...settings].map(([key, value]) => ({ key, value })),
+    space,
+    intent,
+    error,
+  };
 }
 
 export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {

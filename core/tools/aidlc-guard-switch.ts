@@ -449,6 +449,7 @@ export function applyTypedGuardSwitchPrompt(
 ): TypedGuardSwitchOutcome | null {
   const parsed = parseTypedGuardSwitchRequest(prompt);
   if (parsed.switches.length === 0 || process.env.AIDLC_UNATTENDED === "1") return null;
+  if (parsed.error !== null) return { applied: false, lines: [parsed.error] };
   try {
     const selection = resolveWorkflowSelection(projectDir, {
       sessionId,
@@ -471,8 +472,8 @@ export function applyTypedGuardSwitchPrompt(
       };
     }
     const requested: IntentSettingsRequest = {};
-    for (const wanted of parsed.switches) {
-      requested[wanted.key] = { value: wanted.value, source: "you" };
+    for (const setting of parsed.settings) {
+      requested[setting.key as ConfigKey] = { value: setting.value, source: "you" };
     }
     return withAuditLock(projectDir, (): TypedGuardSwitchOutcome => {
       const content = readStateFile(projectDir, intent, space);

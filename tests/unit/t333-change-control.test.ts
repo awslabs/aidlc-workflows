@@ -933,8 +933,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
   test("the flag at creation writes the human as the source, under either spelling", () => {
     const { state } = project("classic", ["--guard-policy", "strict"]);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");
-    const off = project("enterprise", ["--guard-policy", "off"]);
-    expect(getField(readFileSync(off.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
 
     const proj = createTestProject();
     tempDirs.push(proj);
@@ -1009,13 +1007,14 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(guardPolicyRows(kept.proj)).toEqual(keptRows);
 
     const retired = project("classic");
+    recordHumanPrompt(retired.proj, "/aidlc --guard-policy off");
     const retiredChange = run(UTILITY, ["scope-change", "--scope", "enterprise", "--change-control", "off"], retired.proj);
     expect(retiredChange.status, retiredChange.stderr).toBe(0);
     expect(renameNotices(retiredChange.stderr)).toBe(1);
     expect(getField(readFileSync(retired.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
   });
 
-  test("naming the selected scope's own default is recorded as the scope's value, not a chat lowering", () => {
+  test("creation accepts its scope default, while scope-change lowering requires a typed switch", () => {
     // Creation: the flag names what the scope would have given anyway.
     const proj = createTestProject();
     tempDirs.push(proj);
@@ -1035,8 +1034,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     );
     expect(lower.status).toBe(1);
 
-    // Scope change: a line raised to strict by hand takes the scope's value back
-    // when that value is named beside --scope; any other lowering stays refused.
+    // Scope change: naming the new scope's lower default is still a lowering.
     const raised = project("enterprise");
     writeFileSync(
       raised.state,
@@ -1045,14 +1043,23 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const refused = run(UTILITY, ["scope-change", "--scope", "classic", "--guard-policy", "off"], raised.proj, FENCE_ENV_CLEAR);
     expect(refused.status).toBe(1);
     expect(getField(readFileSync(raised.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");
+    const defaultRefused = run(
+      UTILITY,
+      ["scope-change", "--scope", "classic", "--guard-policy", "relaxed"],
+      raised.proj,
+      FENCE_ENV_CLEAR,
+    );
+    expect(defaultRefused.status).toBe(1);
+    expect(getField(readFileSync(raised.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");
+    recordHumanPrompt(raised.proj, "/aidlc --guard-policy relaxed");
     const taken = run(UTILITY, ["scope-change", "--scope", "classic", "--guard-policy", "relaxed"], raised.proj);
     expect(taken.status, taken.stderr).toBe(0);
-    expect(getField(readFileSync(raised.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    expect(getField(readFileSync(raised.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
     const rows = guardPolicyRows(raised.proj);
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("relaxed");
-    expect(auditBlockField(rows[0].block, "Source")).toBe("scope classic");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("you");
   });
 
   test("a scope change renames a retired state line in place while following the new scope", () => {
@@ -1098,11 +1105,11 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
   });
 
   test("a scope change commits its state and audit rows together", () => {
-    const moved = project("enterprise");
+    const moved = project("classic");
     const beforeFault = readFileSync(moved.state, "utf-8");
     const failed = run(
       UTILITY,
-      ["scope-change", "--scope", "classic"],
+      ["scope-change", "--scope", "enterprise"],
       moved.proj,
       { AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT: "t333" },
     );
@@ -1112,15 +1119,15 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(rowsOf(moved.proj, "SCOPE_CHANGED")).toHaveLength(0);
     expect(guardPolicyRows(moved.proj)).toHaveLength(0);
 
-    const changed = run(UTILITY, ["scope-change", "--scope", "classic"], moved.proj);
+    const changed = run(UTILITY, ["scope-change", "--scope", "enterprise"], moved.proj);
     expect(changed.status, changed.stderr).toBe(0);
-    expect(getField(readFileSync(moved.state, "utf-8"), "Scope")).toBe("classic");
+    expect(getField(readFileSync(moved.state, "utf-8"), "Scope")).toBe("enterprise");
     expect(rowsOf(moved.proj, "SCOPE_CHANGED")).toHaveLength(1);
     const rows = guardPolicyRows(moved.proj);
     expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
-    expect(auditBlockField(rows[0].block, "New Value")).toBe("relaxed");
-    expect(auditBlockField(rows[0].block, "Source")).toBe("scope classic");
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("scope enterprise");
   });
 
   test("a lineless legacy intent stays strict across a scope change without a change row", () => {
@@ -1186,6 +1193,10 @@ describe("t333 (5) an explicit workflow selection governs Guard Policy end to en
   test("a selected relaxed change updates and audits only the selected intent", () => {
     const selected = selectedProject();
     const defaultBefore = selectedRows(selected.proj, selected.defaultIntent, "default", "GUARD_POLICY_SET");
+    recordHumanPrompt(
+      selected.proj,
+      `/aidlc --guard-policy relaxed --intent ${selected.targetIntent} --space alt`,
+    );
 
     const changed = run(
       UTILITY,
@@ -1199,7 +1210,7 @@ describe("t333 (5) an explicit workflow selection governs Guard Policy end to en
     expect(selectedRows(selected.proj, selected.defaultIntent, "default", "GUARD_POLICY_SET")).toEqual(defaultBefore);
   });
 
-  test("a selected scope change writes both rows only to the selected intent", () => {
+  test("a selected scope change preserves strict and writes only its scope row", () => {
     const selected = selectedProject();
 
     const changed = run(
@@ -1209,13 +1220,13 @@ describe("t333 (5) an explicit workflow selection governs Guard Policy end to en
     );
 
     expect(changed.status, changed.stderr).toBe(0);
-    expect(selectedRows(selected.proj, selected.targetIntent, "alt", "GUARD_POLICY_SET")).toHaveLength(1);
+    expect(selectedRows(selected.proj, selected.targetIntent, "alt", "GUARD_POLICY_SET")).toHaveLength(0);
     expect(selectedRows(selected.proj, selected.targetIntent, "alt", "SCOPE_CHANGED")).toHaveLength(1);
     expect(selectedRows(selected.proj, selected.defaultIntent, "default", "GUARD_POLICY_SET")).toHaveLength(0);
     expect(selectedRows(selected.proj, selected.defaultIntent, "default", "SCOPE_CHANGED")).toHaveLength(0);
   });
 
-  test("a selected scope change audits its stored default while remaining memory-strict", () => {
+  test("a selected scope change preserves its stored strict value under memory strict", () => {
     const selected = selectedProject();
     declareAltMemoryStrict(selected.proj);
 
@@ -1232,13 +1243,10 @@ describe("t333 (5) an explicit workflow selection governs Guard Policy end to en
     expect(resolution.value).toBe("strict");
     expect(resolution.source).toBe("project.md");
     expect(getField(readFileSync(selected.targetState, "utf-8"), GUARD_POLICY_FIELD)).toBe(
-      "relaxed (from scope classic)",
+      "strict (from scope enterprise)",
     );
     const rows = selectedRows(selected.proj, selected.targetIntent, "alt", "GUARD_POLICY_SET");
-    expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
-    expect(auditBlockField(rows[0].block, "New Value")).toBe("relaxed");
-    expect(auditBlockField(rows[0].block, "Source")).toBe("scope classic");
+    expect(rows).toHaveLength(0);
     expect(selectedRows(selected.proj, selected.targetIntent, "alt", "SCOPE_CHANGED")).toHaveLength(1);
     expect(selectedRows(selected.proj, selected.defaultIntent, "default", "SCOPE_CHANGED")).toHaveLength(0);
   });
@@ -2072,6 +2080,60 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(guardPolicyRows(proj)).toEqual(rows);
   });
 
+  test.each([
+    {
+      prompt: "/aidlc --guard-policy relaxed --depth impossible",
+      error: 'Unknown depth: "impossible". Valid depths: minimal, standard, comprehensive.',
+    },
+    {
+      prompt: "/aidlc --guard-policy relaxed --unknown value",
+      error: null,
+    },
+    {
+      prompt: "/aidlc config set guard-policy relaxed --depth",
+      error: null,
+    },
+    {
+      prompt: "/aidlc --guard-policy relaxed --change-control off",
+      error: null,
+    },
+    {
+      prompt: "/aidlc --change-control relaxed --guard-policy off",
+      error: null,
+    },
+  ])("a typed lowering command validates every companion before changing state: $prompt", ({ prompt, error }) => {
+    const { proj, state } = project("enterprise");
+    const before = readFileSync(state, "utf-8");
+    const ledger = mutationRows(proj);
+    const output = recordHumanPrompt(proj, prompt);
+    if (error === null) {
+      expect(output).toBe("");
+    } else {
+      const context = JSON.parse(output);
+      expect(context.additionalContext).toBe(`AIDLC Guard Policy: ${error}`);
+    }
+    expect(readFileSync(state, "utf-8")).toBe(before);
+    expect(mutationRows(proj)).toEqual(ledger);
+  });
+
+  test.each([
+    "/aidlc --guard-policy relaxed --depth minimal --sensors off",
+    "/aidlc config set guard-policy relaxed --depth minimal --sensors off",
+  ])("a valid typed lowering command applies all companion settings atomically: %s", (prompt) => {
+    const { proj, state } = project("enterprise");
+    const context = JSON.parse(recordHumanPrompt(proj, prompt));
+    expect(context.additionalContext).toContain("Guard Policy changed:");
+    expect(context.additionalContext).toContain("Depth changed: Comprehensive -> Minimal");
+    expect(context.additionalContext).toContain("Sensors changed:");
+    const content = readFileSync(state, "utf-8");
+    expect(getField(content, GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
+    expect(getField(content, "Depth")).toBe("Minimal");
+    expect(getField(content, "Sensors")).toBe("off (set by you)");
+    expect(guardPolicyRows(proj)).toHaveLength(1);
+    expect(rowsOf(proj, "DEPTH_CHANGED")).toHaveLength(1);
+    expect(rowsOf(proj, "CEREMONY_SET")).toHaveLength(1);
+  });
+
   test("a submitted prompt normalizes a retired policy before applying its typed lowering switch", () => {
     const { proj, state } = project("classic");
     const retired = readFileSync(state, "utf-8").replace(
@@ -2131,7 +2193,6 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     { malformed: "a repeated space selector", suffix: "--space default --space default" },
     { malformed: "an intent selector without a value", suffix: "--intent" },
     { malformed: "a space selector without a value", suffix: "--space" },
-    { malformed: "an unrelated trailing flag", suffix: "--space default --review advisory" },
   ])("a typed config command with $malformed applies nothing", ({ suffix }) => {
     const { proj, state } = project("enterprise");
     const intent = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
@@ -2246,21 +2307,21 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
     const changed = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
     expect(getField(readFileSync(state, "utf-8"), "Scope")).toBe("classic");
     expect(rowsOf(proj, "SCOPE_CHANGED")).toHaveLength(1);
-    expect(guardPolicyRows(proj)).toHaveLength(2);
-    expect(auditBlockField(guardPolicyRows(proj)[1].block, "Source")).toBe("scope classic");
+    expect(guardPolicyRows(proj)).toHaveLength(1);
+    expect(auditBlockField(guardPolicyRows(proj)[0].block, "Source")).toBe("you");
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
   });
 
-  test("a relaxed scope default does not require a human turn", () => {
+  test("a scope change preserves a stricter policy until the person lowers it", () => {
     const { proj, state } = project("enterprise");
     const changed = run(UTILITY, ["scope-change", "--scope", "classic"], proj, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (from scope enterprise)");
     expect(rowsOf(proj, "SCOPE_CHANGED")).toHaveLength(1);
-    expect(guardPolicyRows(proj)).toHaveLength(1);
+    expect(guardPolicyRows(proj)).toHaveLength(0);
   });
 
   test("memory strict raises a previously lowered fence and refuses unapproved source writes", () => {
@@ -2622,8 +2683,7 @@ describe("t333 (10) retired policy confirmation", () => {
         `- **Change Control**: relaxed (${source})`,
       );
       writeFileSync(state, retired);
-      const changed = run(UTILITY, ["config-change", "--guard-policy", "relaxed"], proj);
-      expect(changed.status, changed.stderr).toBe(0);
+      recordHumanPrompt(proj, "/aidlc --guard-policy relaxed");
       const confirmed = readFileSync(state, "utf-8");
       expect(confirmed).toContain("- **Guard Policy**: relaxed (set by you)");
       expect(getField(confirmed, CHANGE_CONTROL_FIELD)).toBeNull();

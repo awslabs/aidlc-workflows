@@ -884,7 +884,7 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches; the scope and settings supplied to the CLI are applied in one transaction, after the human-turn hook applies any typed lowering switches at prompt time. Scope-sourced Guard Policy and ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. This also updates the scope-sourced Guard Policy line when memory enforces strict; memory still controls the effective value. Explicit flags in the same command take precedence over scope defaults and retain human provenance. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an explicit `--guard-policy relaxed` or `--guard-policy off` refused by strict memory policy, refuse the whole CLI update.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches. Scope-sourced Guard Policy follows a stricter new default automatically, but a lower default does not reduce the running workflow's policy; type the Guard Policy lowering switch first. Ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. Memory strict still controls the effective policy. Explicit flags retain human provenance and follow the same lowering rule as `config-change`. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an unauthorized `--guard-policy relaxed` or `--guard-policy off`, refuse the whole CLI update.
 
 The `Approval gates: ...; no ...` summary lists ceremonies effectively disabled after the change, including retained human overrides and environment kill switches, rather than only the new scope's defaults. The reviewers entry follows the scope's review cap.
 
@@ -1006,8 +1006,8 @@ request at the next ordinal.
 All eleven intent settings share one CLI setter, `config-change`.
 Flags from different settings can be combined in one atomic CLI command; do not
 split companion settings into successive setters.
-For a typed lowering switch, the human-turn hook applies the switch at prompt
-time before that CLI transaction handles companion settings.
+For a typed lowering command, the human-turn hook validates and applies the
+switch and its companion intent settings in one transaction at prompt time.
 This is active-intent configuration, distinct from native project configuration
 through `aidlc config flags`.
 
@@ -1035,8 +1035,8 @@ regardless of their order; the first occurrence of the chosen flag is used.
 Either flag overrides the scope object, where a string `guardPolicy` takes
 precedence over a string `changeControl`.
 
-Each line below combines settings; any typed lowering switch applies at prompt
-time, while the remaining settings share one CLI update:
+Each line below combines settings. When the command lowers a guard, the
+human-turn hook applies all listed intent settings together at prompt time:
 
 ```
 /aidlc --depth minimal --review none --guard-policy relaxed --sensors off
@@ -1068,8 +1068,9 @@ The trailing `...` in the flags form stands for an optional task description.
 Omitted selectors use the session's workflow selection; a nonexistent named
 intent is refused, and a selection without a state file must be created before
 the person types the switch again.
-The hook applies only the recognized lowering switches; companion settings
-remain a separate CLI transaction, and an already-applied switch is a no-op there.
+The hook validates all recognized companion intent settings before mutation.
+Malformed commands, unknown flags, missing values, and invalid companion values
+change nothing; the later CLI route reports its normal validation error.
 
 The CLI validates all flags and values before mutating state. Invalid values
 and unknown flags refuse that entire update; an unknown flag is named in the error. If an
@@ -1180,13 +1181,13 @@ A CLI setter that would change the policy to `relaxed` refuses with:
 
 > Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it. This command does not lower fences on its own.
 
-Direct `scope change --guard-policy relaxed|off` uses the same rule unless the
-value names the selected scope's own default. Direct
+Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
 `intent create --guard-policy relaxed|off` from chat is refused when the value
 differs from that default: create the piece of work, then have the person type
-the switch. Naming the scope's own default at creation or beside `--scope`
-records the scope's value rather than a chat lowering; scope defaults apply
-without asking. Creation that would lower the policy to `relaxed` refuses with:
+the switch. Naming the scope's own default at creation records the scope's
+value without another prompt. A running workflow preserves its stricter policy
+when moving to a scope with a lower default. Creation that would lower the
+policy to `relaxed` refuses with:
 
 > Creating this intent with Guard Policy relaxed would lower fences. Create it, then have the person type `/aidlc --guard-policy relaxed`; the harness applies it as they say it. A scope default applies without asking.
 

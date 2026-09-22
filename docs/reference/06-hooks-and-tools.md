@@ -138,8 +138,9 @@ change nothing.
 `strict`, `on`, and `guard.human-presence` never name a lowering. One entry per
 key, last value wins, keys ordered by first appearance. Codex uses `$aidlc`
 instead of `/aidlc`, including in refusals that tell the person what to type.
-The hook applies only the recognized lowering switches; companion settings
-remain a separate CLI transaction.
+When a recognized command lowers a guard, the hook validates and applies all
+companion intent settings in the same transaction. A malformed command or
+invalid companion changes nothing.
 The conductor runs `next` and relays the stand-aside line or harness note instead
 of running a setter to lower fences; a plain-words strict choice runs the strict
 setter directly.
@@ -304,8 +305,9 @@ or `fenceKeyBypassed` permits the fixture/harness-launch presence bypass.
 Direct `intent create --guard-policy relaxed|off` from chat is refused when the
 value differs from the selected scope's default: create the piece of work,
 then have the person type the switch. Naming the scope's own default at
-creation or beside `--scope` records the scope's value rather than a chat
-lowering; scope defaults apply without asking.
+creation records the scope's value without another prompt. A running workflow
+keeps its stricter policy when changing to a scope with a lower default until
+the person types the lowering switch.
 Memory-held strict refuses first, naming the file, and also forces earlier
 `Guards Off` entries back on while preserving them for when the memory line no
 longer holds strict.

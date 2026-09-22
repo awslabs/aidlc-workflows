@@ -520,6 +520,8 @@ resolves to `guard-policy`. `config-change` accepts only those setting flags plu
 `--intent`, `--space`, and `--project-dir`, requires at least one setting, and
 refuses unknown flags by name. Validation precedes the complete mutation, so
 invalid values cannot partially apply companion settings.
+When a typed prompt includes a lowering switch, the human-turn hook uses the
+same settings applier for every companion intent setting under one lock.
 Human presence has no per-work switch: only the machine-wide
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers it. A `guard.human-presence` setting
 refuses the entire update rather than changing it or any companion setting.
@@ -546,10 +548,12 @@ remain allowed. Memory-held strict also forces any previously lowered fence
 back on while that line stands, unless a machine-wide kill switch takes
 precedence. The persisted `Guards Off` entry remains and takes effect again
 only after the memory line no longer holds strict. Scope-owned Guard Policy
-and ceremony values follow the new scope even under that memory policy, which
-still controls the effective value. Changed stored values or sources are audited
-with scope provenance; explicit human overrides and absent legacy rows are
-preserved. Explicit Guard Policy and ceremony flags store `<value> (set by you)`.
+follows a stricter new scope default, while a lower default preserves the
+stored value until the person types the lowering switch. Ceremony values still
+follow the new scope under memory policy, which controls the effective Guard
+Policy. Changed stored values or sources are audited with scope provenance;
+explicit human overrides and absent legacy rows are preserved. Explicit Guard
+Policy and ceremony flags store `<value> (set by you)`.
 A same-value source change still counts as a change; `review adversarial`
 clears `Review Override` to an empty string.
 
@@ -559,10 +563,9 @@ prompt arrives, before its ledger state-file gate, through
 The accepted lowering forms include `/aidlc --guard-policy relaxed|off`,
 `guard policy relaxed|off`, and `/aidlc config set guard.<fence> off`.
 Codex uses `$aidlc` instead of `/aidlc`, including in refusals.
-Both config and flags-first forms accept `--intent <name>` and `--space <name>`;
-omitted selectors use the hook payload session's workflow selection.
-The config form permits each selector at most once, in either order, with no
-other trailing tokens.
+Both config and flags-first forms accept companion intent settings plus
+`--intent <name>` and `--space <name>`; omitted selectors use the hook payload
+session's workflow selection. Each selector is permitted at most once.
 A nonexistent named intent is refused; without a state file, create the piece
 of work and type the switch again.
 The hook checks memory-held strict, then uses the shared settings transaction
@@ -1279,7 +1282,8 @@ immediately, without a feedback hash. Human-input selections remain
 `awaiting-feedback` until a separate human answer supplies `feedback_sha256`
 and changes the status to `ready`. An unmatched selection authorizes no remedy.
 For `lower-fence`, neither the selection nor later recorded feedback lowers
-anything; the human-turn hook applies only the person's exact typed switch.
+anything; the human-turn hook applies only the person's exact typed command,
+including any validated companion intent settings.
 A recorded command or external-work selection authorizes only until the next
 human response; a later prompt before the returned command runs replaces it,
 while an identical re-recorded response is idempotent. An unmatched answer
