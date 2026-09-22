@@ -175,7 +175,7 @@ describe("t345 complete nightly coverage", () => {
     expect(setup[bind].run).toContain('test "$(git rev-parse HEAD)" = "$TEST_REF"');
     expect(packageIndex).toBeGreaterThan(install);
     expect(packageIndex).toBeLessThan(setup.findIndex((step) => step.name === "Run deterministic tier"));
-    expect(setup.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"]).toBe("1.3.14");
+    expect(setup.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"]).toBe("1.4.2");
     const substrate = setup.find((step) => step.name === "Prepare unit test substrates")!;
     expect(substrate.if).toBe("inputs.tier == 'unit' && runner.os != 'Windows'");
     expect(substrate.run).toContain('command -v "$tool"');
@@ -347,6 +347,83 @@ describe("t345 complete nightly coverage", () => {
       }
     }
   });
+
+  test("Linux Codex uses distro bubblewrap and a scoped AppArmor profile before credentials", () => {
+    const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.sh"), "utf8");
+    const provisioning = source.slice(source.indexOf("prepare_linux_bwrap()"), source.indexOf("prove_linux_bwrap()"));
+    expect(provisioning).toContain("sudo apt-get install -y -qq bubblewrap");
+    expect(provisioning).toContain("sudo apt-get install -y -qq apparmor-profiles apparmor-utils");
+    expect(provisioning).toContain('if [[ ! -f "$profile" ]]');
+    expect(provisioning).toContain("profile=/etc/apparmor.d/bwrap-userns-restrict");
+    expect(provisioning).toContain('sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict "$profile"');
+    expect(provisioning).toContain('sudo apparmor_parser -r "$profile"');
+    expect(provisioning).toContain('if [[ "$prior" == 1 ]]');
+    expect(provisioning).toContain('$(cat "$restriction")" != "$prior"');
+    expect(source).not.toMatch(/\bsysctl\b|apparmor_restrict_unprivileged_userns\s*=\s*0/);
+    expect(source).toContain('if [[ "$family" == codex ]]; then prepare_linux_bwrap; fi');
+    expect(source.indexOf("then prepare_linux_bwrap; fi")).toBeLessThan(source.indexOf("sudo adduser"));
+    expect(source).toContain('sudo ln -s /usr/bin/bwrap "$live_tools/bin/bwrap"');
+    const proofs = source.slice(source.indexOf('if [[ "$mode" == prepare || "$mode" == prove ]]'));
+    expect(proofs).toContain('if [[ "$(uname -s)" == Linux && "$family" == codex ]]; then\n    prove_linux_bwrap');
+    expect(proofs.indexOf("prove_linux_bwrap")).toBeGreaterThan(proofs.indexOf('if run_live test -r "$GITHUB_ENV"'));
+    const hosted = steps(workflow.jobs.live_hosted);
+    const prepare = hosted.findIndex((step) => step.name === "Prepare separate-user live runtime");
+    const credentials = hosted.findIndex((step) => step.id === "aws");
+    expect(prepare).toBeGreaterThanOrEqual(0);
+    expect(prepare).toBeLessThan(credentials);
+    expect(hosted[prepare].if).toBeUndefined();
+    expect(hosted.find((step) => step.name === "Prove isolation")?.run)
+      .toBe(`bash .github/scripts/prepare-live-runtime.sh prove \${{ matrix.family }}`);
+  });
+
+  test("Codex namespace proof requires distro PATH, propagates failure and cleans only its sentinels", () => {
+    const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.sh"), "utf8");
+    const proof = source.match(/^prove_linux_bwrap\(\) \([\s\S]*?^\)/m)![0];
+    const root = mkdtempSync(join(tmpdir(), "t345-bwrap-"));
+    try {
+      for (const directory of ["runner", "tools"]) mkdirSync(join(root, directory));
+      const script = [
+        "set -euo pipefail",
+        'live_tools="$PROBE_ROOT/tools"; live_home="$PROBE_ROOT/live"; live_root="$live_home/workspace"',
+        // Mock only the OS boundary; no real sudo, user creation or namespaces in unit tests.
+        'sudo() { case "$1" in mktemp|rm) "$@" ;; *) return 99 ;; esac; }',
+        'run_live() { if [[ "$1" == /bin/bash ]]; then printf "%s\\n" "$BWRAP_PATH"; else printf "%s\\0" "$@" > "$PROBE_ARGS"; return "$BWRAP_EXIT"; fi; }',
+        proof, "prove_linux_bwrap", "echo PROBE_COMPLETE",
+      ].join("\n");
+      const argv = join(root, "argv.bin");
+      for (const [path, exit, expected] of [["/usr/bin/bwrap", "0", 0], ["/usr/bin/bwrap", "17", 17], ["/bundled/bwrap", "0", 1]] as const) {
+        rmSync(argv, { force: true });
+        const result = spawnSync("bash", ["-c", script], {
+          encoding: "utf8",
+          env: {
+            ...process.env, PROBE_ROOT: root.replaceAll("\\", "/"), PROBE_ARGS: argv.replaceAll("\\", "/"),
+            RUNNER_TEMP: join(root, "runner").replaceAll("\\", "/"), GITHUB_WORKSPACE: root.replaceAll("\\", "/"),
+            GITHUB_ENV: join(root, "environment").replaceAll("\\", "/"), BWRAP_PATH: path, BWRAP_EXIT: exit,
+          },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(expected);
+        expect(result.stdout.includes("PROBE_COMPLETE")).toBe(expected === 0);
+        expect(readdirSync(join(root, "runner"))).toEqual([]);
+        expect(readdirSync(join(root, "tools"))).toEqual([]);
+        if (path !== "/usr/bin/bwrap") {
+          expect(existsSync(argv)).toBe(false);
+          continue;
+        }
+        const args = readFileSync(argv, "utf8").split("\0").filter(Boolean);
+        expect(args.slice(0, 11)).toEqual(["bwrap", "--unshare-user", "--uid", "0", "--gid", "0", "--cap-drop", "ALL", "--ro-bind", "/", "/"]);
+        const body = args[args.indexOf("-c") + 1];
+        expect(body).toContain('[[ "$(id -u)" == 0 ]]');
+        expect(body).toContain('[[ "$(cat "$probe")" == namespace-write ]]');
+        expect(body).toContain("bun --version");
+        expect(body).toContain('if cat "$denied" >/dev/null 2>&1; then');
+        expect(args.some((arg) => /^\/proc\/\d+\/environ$/.test(arg))).toBe(true);
+        expect(args.at(-2)).toContain("/runner/bwrap-runner.");
+        expect(args.at(-1)).toContain("/tools/bwrap-host.");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test("POSIX live preparation transports a complete pinned Node prefix before credentialed startup", () => {
     const prepare = steps(workflow.jobs.live_prepare);

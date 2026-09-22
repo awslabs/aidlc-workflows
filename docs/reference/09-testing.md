@@ -469,7 +469,7 @@ runner, tier, unit shard and artifact label. PR CI selects Linux smoke, eight
 weighted unit shards, and integration; Full Suite selects smoke, the same eight
 shards, integration, and isolated E2E on Linux/macOS/Windows. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
-Every call owns a fresh checkout, installs frozen dependencies under Bun 1.3.14,
+Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
 regenerates projections, and invokes the Bash wrapper with `--debug -P 8
 --no-llm`. E2E runs retain `--isolated-e2e`; smoke and unit remain serial within
 each checkout. Sharing the workflow shares the commands and setup, not previous
@@ -1330,6 +1330,21 @@ Hosted Linux/macOS live agents run as the separate unprivileged `aidlc-live`
 user in a private checkout copy, using an explicit `sudo ... env -i` environment
 and root-owned readable/executable tools. They cannot read the launcher process's
 procfs environment, runner home, original checkout or Actions command files.
+
+Linux Codex preparation installs distro `bubblewrap` and exposes a root-owned
+symlink to `/usr/bin/bwrap` on the live PATH, preserving its AppArmor attachment.
+When Ubuntu restricts unprivileged user namespaces, preparation loads the existing
+`/etc/apparmor.d/bwrap-userns-restrict` profile, or installs the distro's extra
+profile from `apparmor-profiles` with `apparmor-utils`. The global restriction
+must remain unchanged. This follows the official
+[Codex sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing#prerequisites);
+Codex retains `workspace-write`.
+Before AWS setup, the scrubbed live user must create a bubblewrap user namespace,
+execute Bun and write in its private temp directory. Even as root inside that
+namespace, it must not read the runner home, original checkout, Actions environment
+file, launcher environment, or temporary runner-owned/root-owned sentinel files.
+The proof repeats after broker startup; failure blocks live execution.
+
 Windows creates a standard Users-only account and ACL-isolated work/home/tools
 under `C:\aidlc-live`; Task Scheduler launches each body with a Limited batch
 logon under that identity, avoiding the runner session's desktop ACL. Preparation

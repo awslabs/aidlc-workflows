@@ -24,6 +24,68 @@ run_live() {
     AIDLC_LIVE_ROOT="$live_root" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live "$@"
 }
 
+prepare_linux_bwrap() {
+  # Use the distro executable and its scoped profile, never a global userns opt-out.
+  # https://learn.chatgpt.com/docs/sandboxing#prerequisites
+  local restriction=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+  local prior="" profile=/etc/apparmor.d/bwrap-userns-restrict
+  if [[ -r "$restriction" ]]; then prior="$(cat "$restriction")"; fi
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq bubblewrap
+  if [[ "$prior" == 1 ]]; then
+    if [[ ! -f "$profile" ]] || ! command -v apparmor_parser >/dev/null 2>&1; then
+      sudo apt-get install -y -qq apparmor-profiles apparmor-utils
+    fi
+    if [[ ! -f "$profile" ]]; then
+      sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict "$profile"
+    fi
+    sudo apparmor_parser -r "$profile"
+  fi
+  if [[ -n "$prior" && "$(cat "$restriction")" != "$prior" ]]; then
+    echo 'AppArmor user namespace restriction changed during provisioning' >&2
+    exit 1
+  fi
+}
+
+prove_linux_bwrap() (
+  # Exercise userns creation as the live UID, including namespace-root DAC checks.
+  # Only trusted shell code runs here, with no broker or provider environment.
+  resolved="$(run_live /bin/bash --noprofile --norc -c 'readlink -f "$(command -v bwrap)"')"
+  [[ "$resolved" == /usr/bin/bwrap ]] || {
+    echo 'Codex must resolve the distro /usr/bin/bwrap first on its live PATH' >&2
+    exit 1
+  }
+  runner_probe=""
+  host_probe=""
+  trap '[[ -z "$runner_probe" ]] || rm -f -- "$runner_probe"; [[ -z "$host_probe" ]] || sudo rm -f -- "$host_probe"' EXIT
+  runner_probe="$(mktemp "$RUNNER_TEMP/bwrap-runner.XXXXXX")"
+  host_probe="$(sudo mktemp "$live_tools/bwrap-host.XXXXXX")"
+  run_live bwrap --unshare-user --uid 0 --gid 0 --cap-drop ALL \
+    --ro-bind / / --bind "$live_home" "$live_home" --chdir "$live_root" --die-with-parent \
+    /bin/bash --noprofile --norc -c '
+      set -euo pipefail
+      [[ "$(id -u)" == 0 ]]
+      probe="$(mktemp "$TMPDIR/bwrap-write.XXXXXX")"
+      trap '\''rm -f -- "$probe"'\'' EXIT
+      printf "namespace-write\n" > "$probe"
+      [[ "$(cat "$probe")" == namespace-write ]]
+      bun --version
+      if /bin/ls "$1" >/dev/null 2>&1; then
+        echo "Nested bubblewrap can read runner home" >&2; exit 1
+      fi
+      test -r "$2"
+      shift 2
+      for denied in "$@"; do
+        if cat "$denied" >/dev/null 2>&1; then
+          echo "Nested bubblewrap can read protected host file: $denied" >&2; exit 1
+        fi
+      done
+      echo "Codex bubblewrap namespace and host-file isolation verified"
+    ' codex-bwrap "$HOME" "$live_root/scripts/ci-live-filter.ts" \
+    "$GITHUB_WORKSPACE/scripts/ci-start-credential-broker.ts" "$GITHUB_ENV" \
+    "/proc/$PPID/environ" "$runner_probe" "$host_probe"
+)
+
 active_live_processes() {
   # Zombies cannot execute or mutate the evidence tree; Darwin can retain them
   # while their parent reaps them. A failed process inventory still fails closed.
@@ -38,6 +100,7 @@ if [[ "$mode" == prepare ]]; then
     exit 1
   fi
   if [[ "$(uname -s)" == Linux ]]; then
+    if [[ "$family" == codex ]]; then prepare_linux_bwrap; fi
     sudo adduser --system --home "$live_home" --shell /bin/bash --group "$live_user"
   else
     password="$(openssl rand -hex 16)"
@@ -71,6 +134,10 @@ if [[ "$mode" == prepare ]]; then
   fi
   sudo chown -Rh "root:$(id -gn root)" "$live_tools"
   sudo chmod -R a+rX,go-w "$live_tools"
+  if [[ "$(uname -s)" == Linux && "$family" == codex ]]; then
+    # Preserve the distro executable's AppArmor attachment path; do not copy it.
+    sudo ln -s /usr/bin/bwrap "$live_tools/bin/bwrap"
+  fi
   case "$family" in
     claude-*) cli=claude ;;
     codex) cli=codex ;;
@@ -123,6 +190,9 @@ if [[ "$mode" == prepare || "$mode" == prove ]]; then
   if run_live sudo -n true >/dev/null 2>&1; then
     echo 'Live identity unexpectedly has sudo authority' >&2
     exit 1
+  fi
+  if [[ "$(uname -s)" == Linux && "$family" == codex ]]; then
+    prove_linux_bwrap
   fi
   echo 'Separate-user live runtime isolation verified'
 elif [[ "$mode" == smoke ]]; then

@@ -175,7 +175,7 @@ PR CI runs Linux smoke, eight weighted unit shards, and deterministic integratio
 Full Suite runs smoke, the same eight unit shards, integration, and isolated
 E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
 with fresh Bun runner processes. Each call checks out its supplied commit,
-installs frozen dependencies with Bun 1.3.14, packages the projections, and runs
+installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
 the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
 each checkout; the independent unit jobs and eight workers in each integration
 or E2E job provide parallelism. E2E retains a 900-second per-file deadline.
