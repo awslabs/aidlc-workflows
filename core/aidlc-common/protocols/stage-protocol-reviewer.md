@@ -235,8 +235,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
    human, and the Review brief below says `Reviewed content differs` with the
-   changed paths. The reviewer's verdict is never altered and the freeze stays
-   on under both values.
+   changed paths. The reviewer's verdict is never altered, and the freeze
+   remains this protocol's obligation under both values; under `relaxed` or
+   `off` the review-freeze fence stands aside for work nobody directed and
+   records `GUARD_STOOD_ASIDE` instead of refusing, so the obligation is met by
+   following this protocol rather than by a refusal.
    **Review brief (required at every reviewer-backed human gate).** Before the
    structured approval question, run
    `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --why <first|revision|stale>`;
