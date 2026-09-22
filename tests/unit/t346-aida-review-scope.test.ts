@@ -302,7 +302,8 @@ describe("t346 AIDA incremental review scope", () => {
     const sole = parseStructuredReview(review([{ priority: "P1", category: "correctness", evidence: [diffLine(42)] }], { readiness: 5, risk: 1 }, CHANGE), BASE, HEAD, MANIFEST, METADATA, INCREMENTAL);
     expect(sole.findings).toEqual([]);
     expect(sole.decision.action).toBe("merge");
-    expect(sole.decision.rationale).toContain("Re-derived: 1 finding outside the incremental review scope was deferred and no blocking finding remains.");
+    // One explanation, built from the judge's raw rationale: no stacked parser-override text.
+    expect(sole.decision.rationale).toBe("Re-derived: 1 finding outside the incremental review scope was deferred and no blocking finding remains. Judge's note, superseded by finding severity: The finding must be corrected.");
     expect(renderReview(sole, CONTEXT_ID).event).toBe("COMMENT");
     // Scores never decide: with nothing left to report the action is the maintainer's merge decision
     // even at low readiness and high risk, and the scores stay visible to inform it.

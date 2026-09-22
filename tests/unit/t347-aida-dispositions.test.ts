@@ -220,6 +220,8 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
         advisoryOpen, root, root, AT,
       );
       expect(foldedUp.review.findings.map(item => `${item.priority}:${item.ledgerId}:${item.title}`)).toEqual(["P1:F1:Restated as number 1"]);
+      // ...and the published body is the P1's (its evidence), not the softer restatement's.
+      expect(foldedUp.review.findings[0].evidence).toEqual([{ source: "DIFF", path: PATH, line: 42, side: "RIGHT" }]);
       expect(foldedUp.ledger.findings[0]).toMatchObject({ id: "F1", priority: "P1", title: "Restated as number 1" });
       expect(foldedUp.review.decision.action).toBe("change");
       expect(renderReview(foldedUp.review, CONTEXT_ID).event).toBe("REQUEST_CHANGES");

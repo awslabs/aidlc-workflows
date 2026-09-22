@@ -1568,17 +1568,22 @@ export function parseStructuredReview(
     if (decisionInvariantError(kept, assessment, decision) !== null) {
       const derived = deriveDecision(kept.filter(finding => finding.priority === "P0" || finding.priority === "P1").length);
       const plural = deferred.length === 1 ? "" : "s";
+      // Built from the judge's raw rationale so a parser override and a deferral
+      // never stack two mutually exclusive explanations.
       review.decision =
         derived === "merge"
           ? {
               actor: "maintainer",
               action: "merge",
-              rationale: `${decision.rationale} Re-derived: ${deferred.length} finding${plural} outside the incremental review scope ${deferred.length === 1 ? "was" : "were"} deferred and no blocking finding remains.`,
+              rationale: supersededRationale(
+                `Re-derived: ${deferred.length} finding${plural} outside the incremental review scope ${deferred.length === 1 ? "was" : "were"} deferred and no blocking finding remains.`,
+                rationale,
+              ),
             }
           : {
               actor: "author",
               action: "change",
-              rationale: `${decision.rationale} Re-derived after deferring ${deferred.length} finding${plural} outside the incremental review scope.`,
+              rationale: supersededRationale(`Re-derived after deferring ${deferred.length} finding${plural} outside the incremental review scope.`, rationale),
             };
     }
   }

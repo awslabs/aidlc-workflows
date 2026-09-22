@@ -900,11 +900,11 @@ export function reconcileLedger<T extends ReviewFindingInput>(
         if (rank(finding.priority) < rank(bound.priority)) {
           bound.priority = finding.priority;
           bound.title = finding.title;
-          const published = result.kept.find(entry => entry.ledgerId === bound.id);
-          if (published) {
-            published.priority = finding.priority;
-            published.title = finding.title;
-          }
+          // The higher-severity duplicate is the one worth publishing: its whole
+          // payload (evidence, problem, impact, correction) replaces the softer
+          // restatement under the same id.
+          const index = result.kept.findIndex(entry => entry.ledgerId === bound.id);
+          if (index !== -1) result.kept[index] = { ...finding, priority: finding.priority, ledgerId: bound.id };
         }
         continue;
       }
