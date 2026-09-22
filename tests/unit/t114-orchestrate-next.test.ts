@@ -96,6 +96,14 @@ const NATIVE_TOOL = join(
   "tools",
   "aidlc-orchestrate.ts",
 );
+const CODEX_TOOL = join(
+  REPO_ROOT,
+  "dist",
+  "codex",
+  ".codex",
+  "tools",
+  "aidlc-orchestrate.ts",
+);
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SKILL_MD = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 
@@ -949,9 +957,26 @@ describe("t114 retired flags are consumed, not description text", () => {
     const out = runNext(proj, ["--force", "--init"]).out;
     expect(out).toContain('"kind":"error"');
     expect(out).toContain("are retired");
-    expect(out).toContain("/aidlc --scope <scope>");
+    expect(out).toContain("--scope <scope>");
     expect(out).toContain("No workflow stage was run");
     expect(out).not.toContain('"kind":"run-stage"');
     expect(out).not.toContain("intent create");
+  });
+
+  test("Codex projection keeps retired-only guidance command-neutral", () => {
+    proj = createOrchestrationTestProject();
+    const result = runOrchestrateNext(
+      CODEX_TOOL,
+      proj,
+      ["--init", "--force"],
+      { cwd: proj, env: process.env },
+    );
+    expect(result.status).toBe(0);
+    expect(result.out).toContain("invoking the AI-DLC skill");
+    expect(result.out).toContain("--scope <scope>");
+    expect(result.out).toContain("--new-intent --scope <scope>");
+    expect(result.out).not.toContain("/aidlc");
+    expect(result.out).not.toContain("bun .codex");
+    expect(result.out).not.toContain('"kind":"run-stage"');
   });
 });

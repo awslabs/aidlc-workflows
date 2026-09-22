@@ -4236,9 +4236,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (flags.retiredOnly) {
     emit(errorDirective(
       "`--init` and `--force` are retired and no longer initialize or restart a workflow. " +
-        "Start work by describing what to build (/aidlc \"build the auth service\") or naming a scope " +
-        "(/aidlc --scope <scope>). To start separate work alongside an active intent, use " +
-        "/aidlc --new-intent --scope <scope> \"<description>\". No workflow stage was run.",
+        "Start work by invoking the AI-DLC skill with a description of what to build, or with " +
+        "`--scope <scope>`. To start separate work alongside an active intent, invoke the skill with " +
+        "`--new-intent --scope <scope> \"<description>\"`. No workflow stage was run.",
     ));
     return;
   }
