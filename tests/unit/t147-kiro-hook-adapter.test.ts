@@ -932,7 +932,15 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
         if (packetBytes <= 10 * 1024) {
           expect(Buffer.byteLength(result.stdout)).toBe(packetBytes);
-          expect(result.stdout).toContain(`--- DIRECTIVE ---\n${response}\n--- END DIRECTIVE ---`);
+          // The fence carries a per-invocation nonce, so match it rather than a
+          // fixed marker - and use a backreference, which also proves the two ends
+          // carry the SAME nonce. That is the property the injection fix rests on:
+          // a body that reproduces one marker still cannot close the block.
+          const fenced = result.stdout.match(
+            /--- DIRECTIVE ([0-9a-f]{12}) ---\n([\s\S]*?)\n--- END DIRECTIVE \1 ---/,
+          );
+          expect(fenced, "the directive is fenced with a matching nonce").not.toBeNull();
+          expect(fenced?.[2]).toBe(response);
           expect(existsSync(latch)).toBe(false);
         } else {
           expect(result.stdout).toContain("deterministic argument forwarding");
