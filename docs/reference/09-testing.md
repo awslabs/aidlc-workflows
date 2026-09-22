@@ -285,9 +285,10 @@ owner SID and no allow ACEs for Everyone, BUILTIN\Users or Authenticated Users.
 Symlinks, junctions and other Windows reparse points are refused. The driver
 creates a missing root with private permissions; it refuses an unsafe existing
 root rather than changing its permissions. On POSIX, every explicit-root ancestor
-must be owned by the current user or root, with no group/other write bits unless
-sticky; the implicit root's temporary parent must be current-user-owned or mode
-**1777**. Windows validates root/session owner and DACL, but does not yet validate
+must be owned by the current user or root and must not be writable by other users
+unless sticky (other-write, or group-write by a group other than the caller's own
+primary group); the implicit root's temporary parent must be current-user-owned or
+mode **1777**. Windows validates root/session owner and DACL, but does not yet validate
 ancestor ACL trust; the generation handshake below remains enforced. Remove an
 unsafe pre-created root or point `AIDLC_TUI_BUN_ROOT` at a private directory under
 trusted ancestors, and keep that setting consistent across commands.

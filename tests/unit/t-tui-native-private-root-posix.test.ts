@@ -103,10 +103,10 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
     }
   }, 20_000);
 
-  test("an explicit root below a group-writable non-sticky ancestor is rejected before spawn", async () => {
+  test("an explicit root below an other-writable non-sticky ancestor is rejected before spawn", async () => {
     const outer = fs.mkdtempSync(join(tmpdir(), "aidlc-native-ancestor-"));
     scratch.push(outer);
-    fs.chmodSync(outer, 0o770);
+    fs.chmodSync(outer, 0o707);
     const root = join(outer, "private", "root");
     const marker = join(outer, "executed");
     const env = { ...process.env, AIDLC_TUI_BACKEND: "bun", AIDLC_TUI_BUN_ROOT: root };
