@@ -17,6 +17,7 @@ import {
 } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
+import { liveCaseTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
@@ -351,6 +352,7 @@ describe("Windows cleanup identity snapshots", () => {
 });
 
 test("the stable Windows wrapper stays alive until its owner terminates it", async () => {
+  const startedAt = Date.now();
   const child = spawn(process.env.AIDLC_NODE_BIN || "node", [
     "--experimental-strip-types", "--input-type=module", "-e",
     `import { waitForWindowsWrapperRetirement } from ${JSON.stringify(new URL("../harness/tui-drive.ts", import.meta.url).href)};
@@ -359,14 +361,22 @@ await waitForWindowsWrapperRetirement();`,
   ], { stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   let errors = "";
+  let ended = false;
   child.stdout.on("data", (chunk) => { output += chunk; });
   child.stderr.on("data", (chunk) => { errors += chunk; });
   const exited = new Promise<number | null>((accept) => {
-    child.once("exit", accept);
-    child.once("error", (error) => { errors += String(error); accept(-1); });
+    child.once("exit", (code) => { ended = true; accept(code); });
+    child.once("error", (error) => { ended = true; errors += String(error); accept(-1); });
   });
   try {
-    expect(await waitUntil(() => output.includes("WRAPPER_WAITING") || child.exitCode !== null, 5000), errors).toBe(true);
+    // Loading the real Node/TypeScript driver is fixture startup. The separate
+    // 300ms empty-event-loop observation below is the lifetime contract.
+    const ready = await waitUntil(() => output.includes("WRAPPER_WAITING") || ended, NATIVE_STARTUP_TIMEOUT_MS);
+    const diagnostic = JSON.stringify({
+      startupMs: Date.now() - startedAt, exitCode: child.exitCode,
+      output: output.slice(-1000), stderr: errors.slice(-1000),
+    });
+    expect(ready, diagnostic).toBe(true);
     expect(output, errors).toContain("WRAPPER_WAITING");
     // Let Node reach an otherwise empty event loop. An unresolved top-level
     // await exits with code 13 here; the referenced wrapper must remain alive.
@@ -376,7 +386,7 @@ await waitForWindowsWrapperRetirement();`,
     child.kill("SIGKILL");
     await exited;
   }
-}, 10_000);
+}, liveCaseTimeoutMs(300, { fixtureMs: 0, startupMs: NATIVE_STARTUP_TIMEOUT_MS }));
 
 describe("t-tui-preflight (terminal substrate capability gate)", () => {
   test.skipIf(!IS_WIN || LEGACY_ABSENT_REASON !== null)(

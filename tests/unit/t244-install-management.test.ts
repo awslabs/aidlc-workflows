@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   activeExecutablePath,
@@ -39,7 +39,11 @@ import {
 } from "../../core/tools/aidlc-update.ts";
 import { _resetSettingsCacheForTests } from "../../core/tools/aidlc-settings.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
-import { scanWindowsUninstallJournals } from "../../core/tools/aidlc-windows-uninstall.ts";
+import {
+  scanWindowsUninstallJournals,
+  windowsUninstallCleanupScript,
+  type WindowsUninstallJournal,
+} from "../../core/tools/aidlc-windows-uninstall.ts";
 import {
   type ReleaseFixtureOptions,
   type ReleaseServerFault,
@@ -1252,6 +1256,85 @@ describe("t244 installer has no machine-level harness selection", () => {
 });
 
 describe("t244 Windows and completion release surfaces", () => {
+  test.skipIf(process.platform !== "win32")("uninstall releases the project CWD before retiring its fence, while the worker remains alive", async () => {
+    const root = temp("aidlc-t244-uninstall-cwd-");
+    const project = join(root, "project");
+    const machine = join(root, "machine");
+    const control = join(root, "control");
+    for (const path of [project, machine, control]) mkdirSync(path);
+    writeFileSync(join(project, "keep.txt"), "project-owned\n");
+    const preserved = join(machine, "aidlc.settings.json");
+    writeFileSync(preserved, "machine-owned\n");
+    const journalPath = join(control, "uninstall.json");
+    const cleanupPath = join(control, "uninstall.ps1");
+    const ready = join(control, "ready.json");
+    const release = join(control, "release");
+    const journal: WindowsUninstallJournal = {
+      schemaVersion: 1,
+      operation: "windows-uninstall-continuation",
+      status: "pending",
+      parentPid: 0, // This focused worker has no owning CLI/shim to wait for.
+      shimPid: null,
+      installRoot: machine,
+      commandPath: join(machine, "aidlc.cmd"),
+      pointerPath: join(machine, "active-executable"),
+      cleanupPath,
+      fencePath: join(machine, "uninstall-fence.json"),
+      purge: false,
+      preserved: [preserved],
+    };
+    writeFileSync(journalPath, JSON.stringify(journal));
+    writeFileSync(journal.fencePath, JSON.stringify({
+      schemaVersion: 1, operation: journal.operation, journalPath,
+    }));
+    const ps = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    // Use the real cleanup payload, then hold its process open after completion.
+    // This makes the CWD lifetime deterministic without changing production waits.
+    writeFileSync(cleanupPath, windowsUninstallCleanupScript(journal) + [
+      `$receipt = @{ nativeCwd = [Environment]::CurrentDirectory; location = (Get-Location).Path; pid = $PID } | ConvertTo-Json -Compress`,
+      `[IO.File]::WriteAllText(${ps(ready)}, $receipt)`,
+      "$deadline = [DateTime]::UtcNow.AddSeconds(20)",
+      `while (-not (Test-Path -LiteralPath ${ps(release)})) {`,
+      "  if ([DateTime]::UtcNow -ge $deadline) { exit 9 }",
+      "  Start-Sleep -Milliseconds 50",
+      "}",
+    ].join("\r\n"));
+    const child = Bun.spawn([
+      "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", cleanupPath, journalPath,
+    ], { cwd: project, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+    const output = Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    let diagnostic = "";
+    try {
+      const deadline = Date.now() + 20_000;
+      while (!existsSync(ready) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(50);
+      expect(existsSync(ready), `cleanup did not reach its completion marker; exit=${child.exitCode}`).toBe(true);
+      const receipt = JSON.parse(readFileSync(ready, "utf-8"));
+      diagnostic = JSON.stringify({ receipt, pid: child.pid, project });
+      console.error(`t244 uninstall worker CWD: ${diagnostic}`);
+      expect(child.exitCode, diagnostic).toBeNull();
+      expect(receipt.pid, diagnostic).toBe(child.pid);
+      expect(existsSync(journal.fencePath), diagnostic).toBe(false);
+      expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
+      expect(readFileSync(preserved, "utf-8")).toBe("machine-owned\n");
+      // No retries: fence retirement must not leave the project pinned by CWD.
+      rmSync(project, { recursive: true });
+      expect(existsSync(project), diagnostic).toBe(false);
+      expect(child.exitCode, diagnostic).toBeNull();
+      expect(receipt.nativeCwd, diagnostic).toBe(parse(cleanupPath).root);
+      expect(receipt.location, diagnostic).toBe(parse(cleanupPath).root);
+    } finally {
+      writeFileSync(release, "release\n");
+      await child.exited;
+      const [stdout, stderr] = await output;
+      diagnostic += `\nstdout=${stdout}\nstderr=${stderr}`;
+      if (child.exitCode !== 0) console.error(diagnostic);
+    }
+    expect(child.exitCode, diagnostic).toBe(0);
+  }, 60_000);
+
   test("Windows uninstall cleanup supports adding completion metadata in PowerShell 5.1", () => {
     const source = readFileSync(
       join(REPO_ROOT, "core", "tools", "aidlc-windows-uninstall.ts"),
