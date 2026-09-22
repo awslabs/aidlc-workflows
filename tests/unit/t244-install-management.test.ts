@@ -1,7 +1,7 @@
 // covers: tool:aidlc-lifecycle, tool:aidlc-machine-config, tool:aidlc-update
 // covers: tool:aidlc-completions, file:scripts/install.sh, file:scripts/install.ps1
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -78,6 +78,7 @@ const RELEASE_HARNESSES = [
   "opencode",
 ] as const;
 const temporary: string[] = [];
+const suiteTemporary = new Set<string>();
 const originalPath = process.env.PATH;
 
 beforeAll(() => {
@@ -96,11 +97,23 @@ const REMOVABLE_VERSION = patchVersion(4);
 const RUNTIME_ASSET = `aidlc-runtime-${AIDLC_VERSION}.tar.gz`;
 const COPY_RUNTIME_ASSET = `aidlc-copy-runtime-${AIDLC_VERSION}.tar.gz`;
 
-// Removing the whole suite's copied release trees needs its own bounded budget.
+function cleanupTemporary(keepSuiteFixtures: boolean): void {
+  for (let index = temporary.length - 1; index >= 0; index--) {
+    const path = temporary[index];
+    if (keepSuiteFixtures && suiteTemporary.has(path)) continue;
+    rmSync(path, { recursive: true, force: true });
+    temporary.splice(index, 1);
+  }
+}
+
+// Do not retain every installed version and release archive until one teardown:
+// that both exhausts small Windows disks and overruns the final hook's budget.
+afterEach(() => cleanupTemporary(true), 30_000);
+
 afterAll(() => {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
-  for (const path of temporary) rmSync(path, { recursive: true, force: true });
+  cleanupTemporary(false);
 }, 30_000);
 
 // Production emits canonical project and machine paths, so fixtures live under
@@ -377,6 +390,21 @@ function envFor(machine: string): NodeJS.ProcessEnv {
   };
 }
 
+function uninstallFenceFor(machine: string): string {
+  const keys = ["AIDLC_INSTALL_ROOT", "AIDLC_BIN_DIR"] as const;
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, envFor(machine));
+  try {
+    return windowsUninstallFencePath();
+  } finally {
+    for (const key of keys) {
+      const value = saved[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 describe("t244 machine configuration and update discovery", () => {
   let updateRelease: string;
   beforeAll(() => {
@@ -384,6 +412,7 @@ describe("t244 machine configuration and update discovery", () => {
     // projections and archives once, outside the refresh case's 5s deadline.
     // Servers, request counters, faults, and machine/cache roots remain separate.
     updateRelease = fixture(NEXT_VERSION, { binary: "bytes" });
+    suiteTemporary.add(updateRelease);
   }, process.platform === "win32" ? 120_000 : 30_000);
 
   test("global config works outside projects and precedence is flag, env, config, default", () => {
@@ -1108,9 +1137,11 @@ describe("t244 management lifecycle", () => {
     mkdirSync(join(project, ".git"));
     writeFileSync(join(project, "keep.txt"), "project-owned\n");
     const env = envFor(machine);
-    expect(run(LIFECYCLE, [
+    const completionPaths = process.platform === "win32" ? [uninstallFenceFor(machine)] : [];
+    const installed = run(LIFECYCLE, [
       "update", "--version", AIDLC_VERSION, "--from", release,
-    ], project, env).status).toBe(0);
+    ], project, env);
+    expect(installed.status, `${installed.stdout}\n${installed.stderr}`).toBe(0);
     const command = join(
       machine,
       "bin",
@@ -1148,13 +1179,16 @@ describe("t244 management lifecycle", () => {
 
     expect(run(LIFECYCLE, ["uninstall"], project, env).status).toBe(2);
     const uninstall = run(LIFECYCLE, ["uninstall", "--yes"], project, env);
-    expect(uninstall.status).toBe(0);
+    expect(uninstall.status, `${uninstall.stdout}\n${uninstall.stderr}`).toBe(0);
     if (process.platform !== "win32") {
       expect(uninstall.stdout).toContain(
         "Removed aidlc and all retained releases. Machine settings, update cache, pins, harness default, and project files were kept.",
       );
     }
-    await waitForAbsent([join(machine, "versions"), command]);
+    // Windows restores retained files before retiring the mutation fence.
+    // Wait for that final marker too; visible files alone do not mean reinstall
+    // can begin, or that fixture cleanup may safely remove this machine root.
+    await waitForAbsent([join(machine, "versions"), command, ...completionPaths]);
     await waitForPresent([
       join(machine, "aidlc.settings.json"),
       join(machine, "update-check.json"),
@@ -1167,12 +1201,13 @@ describe("t244 management lifecycle", () => {
     expect(existsSync(join(machine, "pins.json"))).toBe(true);
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
 
-    expect(run(LIFECYCLE, [
+    const reinstalled = run(LIFECYCLE, [
       "update", "--version", AIDLC_VERSION, "--from", release,
-    ], project, env).status).toBe(0);
+    ], project, env);
+    expect(reinstalled.status, `${reinstalled.stdout}\n${reinstalled.stderr}`).toBe(0);
     writeFileSync(join(machine, "default-harness"), "claude\n");
     const purge = run(LIFECYCLE, ["uninstall", "--purge", "--yes"], project, env);
-    expect(purge.status).toBe(0);
+    expect(purge.status, `${purge.stdout}\n${purge.stderr}`).toBe(0);
     if (process.platform !== "win32") {
       expect(purge.stdout).toContain(
         "Removed aidlc, all retained releases, machine settings, update cache, pins, and harness default. Project files were kept.",
@@ -1181,6 +1216,7 @@ describe("t244 management lifecycle", () => {
     await waitForAbsent([
       join(machine, "versions"),
       command,
+      ...completionPaths,
       join(machine, "aidlc.settings.json"),
       join(machine, "update-check.json"),
       join(machine, "pins.json"),

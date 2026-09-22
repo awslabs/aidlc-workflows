@@ -133,7 +133,8 @@ checks and Full Suite gate the authorized commit before the normal release
 build chain. Preview does not repeat the PR CI test matrix.
 PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
 with different matrices: Linux smoke/eight unit shards/integration for PRs, and
-Linux/macOS/Windows smoke/eight unit shards/deep for nightly coverage. Each call
+Linux/macOS/Windows smoke/eight unit shards/integration/E2E for nightly coverage.
+Integration and isolated E2E run in separate jobs with fresh runner processes. Each call
 tests a fresh checkout of the supplied commit and retains sanitized evidence;
 no previous test result is substituted for a run.
 `AIDLC_BUILD_VERSION` stamps the preview id into projections, binaries,

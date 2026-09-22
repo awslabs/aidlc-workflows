@@ -447,15 +447,15 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards and deep in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
-| Nightly preview / manual preview dispatch | Declared deep-tier matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
+| Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is ineligible for release | GitHub Actions |
 | Stable tag | Exact-source evidence and release assets | `release.yml` requires passing Full Suite evidence for the exact tag SHA, then contract checks, builds and native/installer/lifecycle validation; it does not rerun the source test tiers | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
 By maintainer decision on 2026-09-21, `main` is not production: PR CI remains the
-fast gate listed above, while deterministic and required hosted live deep tiers gate the preview
+fast gate listed above, while deterministic E2E and required hosted live tiers gate the preview
 stage in `full-suite.yml`, called by `preview-release.yml`.
 
 Tag the SHA of a green nightly for a stable release, or dispatch `full-suite.yml`
@@ -467,15 +467,18 @@ is not stable-release evidence.
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
 runner, tier, unit shard and artifact label. PR CI selects Linux smoke, eight
 weighted unit shards, and integration; Full Suite selects smoke, the same eight
-shards, and deep (integration plus isolated e2e) on Linux/macOS/Windows.
+shards, integration, and isolated E2E on Linux/macOS/Windows. Integration and
+E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.3.14,
 regenerates projections, and invokes the Bash wrapper with `--debug -P 8
---no-llm`. Deep runs retain `--isolated-e2e`; smoke and unit remain serial within
+--no-llm`. E2E runs retain `--isolated-e2e`; smoke and unit remain serial within
 each checkout. Sharing the workflow shares the commands and setup, not previous
 test results.
 
 Shared deterministic jobs allow 15 minutes for smoke and 60 minutes for other
-tiers. Deep runs also cap each isolated e2e file at 900 seconds. Unit work is
+tiers. Test steps stop after 10 and 50 minutes respectively, reserving time to
+sanitize and upload partial evidence after a timeout. E2E runs also cap each
+isolated file at 900 seconds. Unit work is
 partitioned into eight weighted shards per OS without duplicating files, and
 compiled producer/consumer affinity remains intact.
 
@@ -495,8 +498,8 @@ for 90 days.
 
 For platform verification before a nightly fix lands, dispatch
 `gh workflow run ci.yml --ref <branch> -f platform_regressions=true`. This expands
-the existing deterministic matrix to all three OSes and replaces integration
-with deep; it does not run the Linux pass first or append another broad
+the existing deterministic matrix to all three OSes and adds isolated E2E jobs
+alongside integration; it does not run the Linux pass first or append another broad
 regression slice. The full unit shards include the tmux, path, workspace-fixture,
 and macOS regressions, with t238/t249 kept in their weighted affinity group.
 They use the same POSIX provisioning and capture path as nightly tests.
@@ -756,7 +759,7 @@ matrix are both part of the required CI gate.
 Dropping `--production-guards` from this filtered command fails because
 `t-guard-recovery-production.test.ts` executes no journeys under the fixture
 profile. Passing runner unit tests cannot mask that missing coverage.
-The unfiltered deterministic deep jobs in the preview's `full-suite.yml` keep
+The unfiltered deterministic integration jobs in the preview's `full-suite.yml` keep
 their deliberate fixture profile and report the production journey file as
 `SKIP`; the required production jobs in PR CI and Full Suite exercise those
 journeys. Full Suite additionally requires complete coverage for that selection.
@@ -776,7 +779,7 @@ journeys. Full Suite additionally requires complete coverage for that selection.
 
 All 8 parallel calls observed `cache_read=73789`. This historical help-command probe observed prompt-cache reuse without throttling or corruption; it does not establish capacity for concurrent full workflows.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses eight weighted unit shards on Linux and eight workers for integration. Full Suite uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration/E2E uses eight workers. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses eight weighted unit shards on Linux and eight workers for integration. Full Suite uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
 
@@ -1159,8 +1162,9 @@ Windows release-contract job also runs.
 
 The declared coverage is:
 
-- Deterministic smoke, eight independent unit shards, and isolated integration/e2e
-  with eight workers on each of Linux, macOS and Windows. Every unit file is
+- Deterministic smoke, eight independent unit shards, integration, and isolated E2E
+  on each of Linux, macOS and Windows. Integration and E2E have separate jobs,
+  each with eight workers and its own runner process and evidence. Every unit file is
   assigned to one shard per OS; each shard retains its own debug logs and results.
 - A Linux production-guard slice selects `--production-guards` and
   `--require-coverage` for the runner and recovery contracts. Those cases are
@@ -1230,7 +1234,7 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-production-guards`,
 `full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
-`unit-8`, or `deep`), `full-suite-live-<family>-<slice-number>-<OS>`,
+`unit-8`, `integration`, or `e2e`), `full-suite-live-<family>-<slice-number>-<OS>`,
 `full-suite-live-release-contract-Windows`, and
 `full-suite-result` (90-day retention). The final JSON records `sha`, `runId`,
 `runAttempt`, `purpose`, `verificationFamily`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
@@ -1252,7 +1256,7 @@ receipt reconciliation still discovers the receipts recursively.
 Shared deterministic artifacts contain `tests/logs/<stamp>/` and
 `tmp/ci-deterministic/` (full stdout/stderr plus the literal stamp path). CI
 artifacts use `ci-deterministic-<suite>-<OS>`, where suite is smoke,
-unit-1 through unit-8, or integration (deep for the expanded manual matrix).
+unit-1 through unit-8, integration, or e2e (expanded manual matrix only).
 An upload requires both log locations
 to pass sanitization, including after a failed test command.
 

@@ -2306,7 +2306,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(blocked.stdout).toContain("Retry this exact command");
     expect(blocked.stdout).not.toContain("Run a fresh");
     expect(blocked.stdout).not.toContain("do not reuse");
-  }, 15_000);
+  }, 30_000); // Fixture setup plus the real contention loop took 20.8s on Windows.
 
   test("26: direct and source foreign projects are denied before claim or Post can mutate either marker", () => {
     const current = orchestrationProject();

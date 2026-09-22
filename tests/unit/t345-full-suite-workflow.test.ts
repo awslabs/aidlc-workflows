@@ -18,7 +18,7 @@ interface Step {
   name?: string;
   id?: string;
   shell?: string;
-  "timeout-minutes"?: number;
+  "timeout-minutes"?: number | string;
   uses?: string;
   if?: string;
   run?: string;
@@ -27,6 +27,7 @@ interface Step {
 }
 interface Matrix {
   include?: Array<Record<string, string>>;
+  exclude?: string;
   family?: LiveFamily[];
   runner?: string[] | string;
   suite?: Array<{ name: string; tier: string; shard?: string }>;
@@ -127,6 +128,8 @@ describe("t345 complete nightly coverage", () => {
     });
     expect(ci.jobs.deterministic.steps).toBeUndefined();
     expect(ci.jobs.deterministic["runs-on"]).toBeUndefined();
+    expect(ci.jobs.deterministic.needs).toBeUndefined();
+    expect(ci.jobs.deterministic.strategy?.["fail-fast"]).toBe(false);
     expect(ci.jobs.test.needs).toContain("deterministic");
     expect(workflow.jobs.deterministic).toMatchObject({
       needs: "plan", uses,
@@ -137,6 +140,7 @@ describe("t345 complete nightly coverage", () => {
       },
     });
     expect(workflow.jobs.deterministic.steps).toBeUndefined();
+    expect(workflow.jobs.deterministic.strategy?.["fail-fast"]).toBe(false);
     const aggregate = steps(ci.jobs.test)[0];
     const passed = Object.fromEntries(Object.keys(aggregate.env!).map((key) => [key, "success"]));
     const run = (env: Record<string, string>) => spawnSync("bash", ["-e", "-c", aggregate.run!], {
@@ -159,6 +163,8 @@ describe("t345 complete nightly coverage", () => {
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
     expect(job["timeout-minutes"]).toBe(`\${{ inputs.tier == 'smoke' && 15 || 60 }}`);
     const setup = steps(job);
+    expect(setup.find((step) => step.name === "Run deterministic tier")?.["timeout-minutes"])
+      .toBe(`\${{ inputs.tier == 'smoke' && 10 || 50 }}`);
     const checkout = setup.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
     const bind = setup.findIndex((step) => step.name === "Bind checkout to requested commit");
     const install = setup.findIndex((step) => step.run === "bun install --frozen-lockfile");
@@ -189,11 +195,11 @@ describe("t345 complete nightly coverage", () => {
     });
     expect(run({}).status).toBe(0);
     expect(run({ UNIT_SHARD: "1/1" }).status).toBe(0);
-    for (const tier of ["smoke", "integration", "deep"]) {
+    for (const tier of ["smoke", "integration", "e2e"]) {
       expect(run({ TEST_TIER: tier, UNIT_SHARD: "" }).status).toBe(0);
       expect(run({ TEST_TIER: tier }).status).not.toBe(0);
     }
-    for (const extra of [{ TEST_REF: "main" }, { TEST_TIER: "unknown" }, { UNIT_SHARD: "" }, { UNIT_SHARD: "9/8" }, { ARTIFACT_LABEL: "../outside" }]) {
+    for (const extra of [{ TEST_REF: "main" }, { TEST_TIER: "unknown" }, { TEST_TIER: "deep", UNIT_SHARD: "" }, { UNIT_SHARD: "" }, { UNIT_SHARD: "9/8" }, { ARTIFACT_LABEL: "../outside" }]) {
       const result = run(extra);
       expect(result.status, `${JSON.stringify(extra)}\n${result.stdout}\n${result.stderr}`).toBe(2);
     }
@@ -206,6 +212,7 @@ describe("t345 complete nightly coverage", () => {
     };
     expect(ci.on.workflow_dispatch.inputs.platform_regressions).toMatchObject({ type: "boolean", default: false });
     const matrix = matrixOf(ci.jobs.deterministic);
+    expect(matrix.suite).toEqual(matrixOf(workflow.jobs.deterministic).suite);
     for (const [event, enabled, expanded] of [
       ["pull_request", false, false], ["pull_request", true, false],
       ["workflow_call", true, false], ["workflow_dispatch", false, false],
@@ -221,11 +228,14 @@ describe("t345 complete nightly coverage", () => {
         );
       };
       const runners = evaluate(matrix.runner as string) as string[];
-      const suites = matrix.suite!.map((suite) => ({ ...suite, name: evaluate(suite.name), tier: evaluate(suite.tier) }));
+      const excluded = evaluate(matrix.exclude!) as Array<{ suite: { name: string; tier: string } }>;
+      expect(excluded).toEqual(expanded ? [] : [{ suite: { name: "e2e", tier: "e2e" } }]);
+      const suites = matrix.suite!.filter((suite) =>
+        !excluded.some((row) => row.suite.name === suite.name && row.suite.tier === suite.tier));
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(8).fill("unit"), expanded ? "deep" : "integration"]);
+      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(8).fill("unit"), "integration", ...(expanded ? ["e2e"] : [])]);
       expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 8 }, (_, index) => `${index + 1}/8`));
-      expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 30 : 10);
+      expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 33 : 10);
       if (expanded) expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     }
     expect(steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")?.run).not.toContain("--filter");
@@ -241,7 +251,7 @@ describe("t345 complete nightly coverage", () => {
     ["smoke", "", ["--smoke"]],
     ["unit", "3/8", ["--unit", "--shard", "3/8"]],
     ["integration", "", ["--integration"]],
-    ["deep", "", ["--integration", "--e2e", "--isolated-e2e", "--e2e-file-timeout", "900"]],
+    ["e2e", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "900"]],
   ] as const) {
     test(`shared ${tier} execution preserves arguments, captured output and failure status`, () => {
       const root = mkdtempSync(join(tmpdir(), "t345-shared-tier-"));
@@ -769,7 +779,9 @@ describe("t345 complete nightly coverage", () => {
     expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
     const suites = matrix.suite!;
     expect(suites.filter((suite) => suite.tier === "smoke")).toHaveLength(1);
-    expect(suites.filter((suite) => suite.tier === "deep")).toHaveLength(1);
+    expect(suites.filter((suite) => suite.tier === "integration")).toEqual([{ name: "integration", tier: "integration" }]);
+    expect(suites.filter((suite) => suite.tier === "e2e")).toEqual([{ name: "e2e", tier: "e2e" }]);
+    expect(suites.some((suite) => suite.tier === "deep")).toBe(false);
     expect(new Set(suites.map((suite) => suite.name)).size).toBe(suites.length);
     const shards = suites.filter((suite) => suite.tier === "unit");
     expect(shards.map((suite) => suite.shard)).toEqual(Array.from({ length: 8 }, (_, index) => `${index + 1}/8`));

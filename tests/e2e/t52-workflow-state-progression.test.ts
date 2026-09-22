@@ -2,7 +2,7 @@
 //
 // t52-workflow-state-progression.test.ts — SDK-harness port of
 // tests/e2e/t52-workflow-state-progression.sh (plan 10). Drives the real
-// `/aidlc --init --scope bugfix` on a fresh project through the Claude Agent SDK and
+// `/aidlc --scope bugfix <description>` on a fresh project through the Claude Agent SDK and
 // asserts ONLY on deterministic surfaces — the on-disk state-file structure +
 // fields the init tool wrote, and the framework's counter↔checkbox invariant —
 // NEVER on assistantText.
@@ -23,8 +23,8 @@
 // progression lives in the tui tier; state INTEGRITY at the deterministic init
 // landing lives here.
 //
-// THE JOURNEY (verified against the SHIPPED tool). `/aidlc --init --scope
-// bugfix` on a fresh `--no-aidlc-docs` project routes through
+// THE JOURNEY. `/aidlc --scope bugfix <description>` on a fresh
+// `--no-aidlc-docs` project routes through intent creation and
 // `aidlc-utility.ts init --scope bugfix` (SKILL.md), which writes the full
 // State-Version-7 aidlc-state.md: the 3
 // init stages marked [x], every other in-scope stage [ ], the Completed counter
@@ -83,6 +83,10 @@ const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
+// --init was retired. Unknown flags are preserved as task text, so it made
+// the conductor ask for a task instead of creating the intent.
+// Give the real entry point a concrete task it can name without another turn.
+const CREATE_BUGFIX = "/aidlc --scope bugfix fix the todo checkbox state not persisting after reload";
 
 /** Count `- [x]` completed-stage rows in a state-file string. */
 function completedCount(stateText: string): number {
@@ -148,7 +152,7 @@ function reportInitFailure(projectDir: string, result: DriveResult | undefined):
   }, null, 2)}`);
 }
 
-describe("t52 /aidlc --init --scope bugfix state-file integrity (sdk)", () => {
+describe("t52 /aidlc --scope bugfix state-file integrity (sdk)", () => {
   // -------------------------------------------------------------------------
   // Fresh project: the full State-Version-7 file lands at explicit init. Assert its
   // structure (counter↔checkbox invariant, ordering, every field) on the landed
@@ -160,7 +164,7 @@ describe("t52 /aidlc --init --scope bugfix state-file integrity (sdk)", () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       let r: DriveResult | undefined;
       try {
-        r = await driveAidlc("/aidlc --init --scope bugfix", {
+        r = await driveAidlc(CREATE_BUGFIX, {
           projectDir: proj,
           answerScript: "default",
           timeoutMs: DRIVE_TIMEOUT_MS,

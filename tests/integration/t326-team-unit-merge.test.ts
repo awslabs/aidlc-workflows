@@ -110,11 +110,11 @@ function run(
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   const reviewUnit = reviewOperation ? args[1] : undefined;
   if (result.status !== 0 && reviewUnit && tracePath &&
-      out.includes("reviewer READY receipts")) {
-    console.error(`t326 receipt revalidation failed:\n${JSON.stringify({
+      (out.includes("reviewer READY receipts") || out.includes("candidate-exact"))) {
+    console.error(`t326 merge validation failed:\n${JSON.stringify({
       args, status: result.status, signal: result.signal, error: result.error?.message, out,
     }, null, 2)}`);
-    reportPinnedReviewFailure(cwd, reviewUnit, tracePath);
+    reportPinnedMergeFailure(cwd, reviewUnit, tracePath, out);
   } else if (result.status !== 0 && windowsClaimOrPin && tracePath && existsSync(tracePath)) {
     console.error(`t326 ${args[0]} Git trace (${tracePath}):\n${readFileSync(tracePath, "utf-8")}`);
   }
@@ -325,11 +325,12 @@ function reviewAuditExtras(
 
 // The fixture cleanup removes candidate checkouts even when an assertion fails.
 // Keep the pinned inputs and the original Git command outcomes in the test log
-// when any gate/land call rejects review evidence after a successful pin.
-function reportPinnedReviewFailure(
+// when any gate/land call rejects review evidence or candidate-exact content.
+function reportPinnedMergeFailure(
   projectDir: string,
   unit: string,
   tracePath: string,
+  failureOutput: string,
 ): void {
   try {
     const prefix = relative(projectDir, seededRecordDir(projectDir)).replaceAll("\\", "/");
@@ -353,16 +354,58 @@ function reportPinnedReviewFailure(
     const transaction = readUnitMergeTransaction(projectDir, unit);
     const pinnedOid = transaction?.pinned_oid ?? null;
     const landingHead = git(projectDir, ["rev-parse", "HEAD"]);
-    console.error(`t326 pinned review diagnostics:\n${JSON.stringify({
+    let candidateExact = null;
+    try { candidateExact = JSON.parse(failureOutput).candidate_exact ?? null; } catch { /* Keep the other captures. */ }
+    const readBlob = (oid: string | null, treeish: string, path: string) => {
+      const args = oid ? ["cat-file", "blob", oid] : ["show", `${treeish}:${path}`, "--"];
+      const result = spawnSync("git", args, {
+        cwd: projectDir,
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" },
+        maxBuffer: 64 * 1024,
+      });
+      const bytes = result.stdout ?? Buffer.alloc(0);
+      return {
+        args, status: result.status, signal: result.signal,
+        error: result.error?.message,
+        errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
+        stderr: result.stderr?.toString("utf8"),
+        capturedBytes: bytes.length,
+        capturedSha256: createHash("sha256").update(bytes).digest("hex"),
+        capturedBase64: bytes.toString("base64"),
+        utf8Preview: bytes.toString("utf8").slice(0, 4000),
+      };
+    };
+    const mismatches = candidateExact?.object_mismatches ?? [];
+    // Read the captured identities, including a rolled-back commit, before
+    // cleanup. These probes supplement rather than replace the original reads.
+    const blobComparisons = mismatches.slice(0, 8).map((entry: {
+      path: string; expected_treeish: string;
+      actual: { oid: string | null }; expected: { oid: string | null };
+    }) => ({
+      path: entry.path,
+      expectedAfterFailure: readBlob(entry.expected.oid, entry.expected_treeish, entry.path),
+      actualAfterFailure: readBlob(entry.actual.oid, candidateExact.treeish, entry.path),
+      pendingAfterFailure: candidateExact.passed_pending_tree_oid
+        ? readBlob(null, candidateExact.passed_pending_tree_oid, entry.path)
+        : null,
+    }));
+    console.error(`t326 pinned merge diagnostics:\n${JSON.stringify({
       unit,
       pinnedOid,
       landingHead,
       transaction,
+      candidateExact,
+      blobComparisons,
+      omittedBlobComparisons: Math.max(0, mismatches.length - blobComparisons.length),
       pinnedFiles: pinnedOid ? filesAt(pinnedOid) : null,
       landingFiles: filesAt(landingHead),
+      checkedTreeFiles: candidateExact?.treeish ? filesAt(candidateExact.treeish) : null,
+      passedPendingTreeFiles: candidateExact?.passed_pending_tree_oid
+        ? filesAt(candidateExact.passed_pending_tree_oid)
+        : null,
     }, null, 2)}`);
   } catch (error) {
-    console.error(`t326 pinned review diagnostics unavailable: ${String(error)}`);
+    console.error(`t326 pinned merge diagnostics unavailable: ${String(error)}`);
   }
   try {
     console.error(`t326 landing Git trace:\n${readFileSync(tracePath, "utf-8")}`);
@@ -1612,6 +1655,19 @@ describe("t326 pinned team Unit merge", () => {
     expect(landed.out).toContain("candidate-exact merge policy");
     expect(landed.out).toContain("src/shared.ts");
     expect(landed.out).toContain("Rebase");
+    const policy = JSON.parse(landed.out).candidate_exact;
+    expect(policy).toMatchObject({
+      phase: "pending-index", unit: "alpha", pinned_oid: pinPayload.pinned_oid,
+    });
+    const mismatch = policy.object_mismatches.find((entry: { path: string }) => entry.path === "src/shared.ts");
+    expect(mismatch).toMatchObject({
+      expected_treeish: pinPayload.pinned_oid,
+      expected: { status: 0, oid: git(fixture.seed, ["rev-parse", `${pinPayload.pinned_oid}:src/shared.ts`]) },
+      actual: { status: 0 },
+    });
+    expect(mismatch.actual.oid).not.toBe(mismatch.expected.oid);
+    expect(git(fixture.seed, ["cat-file", "blob", mismatch.actual.oid])).toContain('export const right = "main";');
+    expect(git(fixture.seed, ["cat-file", "blob", mismatch.expected.oid])).toContain('export const right = "base";');
     expect(git(fixture.seed, ["rev-parse", "HEAD"])).toBe(headBefore);
     expect(git(fixture.seed, ["ls-files", "-u"])).toBe("");
   }, 120000);

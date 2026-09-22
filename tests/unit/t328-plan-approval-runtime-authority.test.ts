@@ -520,7 +520,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 30000);
+  }, 60_000); // Real hook and approval CLI round-trip exceeded 30s on Windows.
 
   test("directive churn preserves authority while a moved stage or attempt retires it", () => {
     const project = createProject();
@@ -1098,7 +1098,7 @@ describe("t328 human-only break-glass override", () => {
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain("Plan Approval override is human-only");
     expect(refused.stderr).not.toContain("[Answer]");
-  }, 30000);
+  }, 60_000); // Fixture/CLI setup took 32s on Windows; the refusal assertions remain required.
 
   test("an edited request file or one typed under another intent is not a request", () => {
     const project = createProject();

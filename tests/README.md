@@ -172,16 +172,18 @@ The runner sets Bun's default case deadline to 15 seconds on Windows and
 5 seconds on Linux/macOS. Explicit case and hook deadlines take precedence;
 performance assertions keep their own bounds.
 PR CI runs Linux smoke, eight weighted unit shards, and deterministic integration.
-Full Suite runs smoke, the same eight unit shards, and deep (integration plus
-isolated e2e) on Linux/macOS/Windows. Each call checks out its supplied commit,
+Full Suite runs smoke, the same eight unit shards, integration, and isolated
+E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
+with fresh Bun runner processes. Each call checks out its supplied commit,
 installs frozen dependencies with Bun 1.3.14, packages the projections, and runs
 the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
-each checkout; the independent unit jobs and eight deep workers provide
-parallelism. Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
+each checkout; the independent unit jobs and eight workers in each integration
+or E2E job provide parallelism. E2E retains a 900-second per-file deadline.
+Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
 are retained together for 90 days.
 POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. Manual CI with `platform_regressions=true`
-expands this same matrix to all three OSes and uses deep instead of integration,
+expands this same matrix to all three OSes and adds the separate E2E jobs,
 without a preceding Linux pass or another broad regression slice. It includes
 all unit regressions through the same eight shards and provisioning. Only the
 distinct Windows node-pty backend is added as a manual extra.

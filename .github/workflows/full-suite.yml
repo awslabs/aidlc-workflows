@@ -262,7 +262,8 @@ jobs:
           - {name: unit-6, tier: unit, shard: "6/8"}
           - {name: unit-7, tier: unit, shard: "7/8"}
           - {name: unit-8, tier: unit, shard: "8/8"}
-          - {name: deep, tier: deep}
+          - {name: integration, tier: integration}
+          - {name: e2e, tier: e2e}
     uses: ./.github/workflows/deterministic-tests.yml
     with:
       ref: ${{ needs.plan.outputs.sha }}

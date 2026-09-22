@@ -114,8 +114,10 @@ The workflow:
 
 PR CI and Full Suite share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).
-Each call owns its checkout; deterministic integration and E2E use eight
-workers, while unit files stay serial within each independent shard.
+Each call owns its checkout. Deterministic integration and isolated E2E run
+as separate jobs per OS, each with eight workers and a fresh Bun runner process;
+unit files stay serial within each independent shard. Default PR CI includes
+Linux integration; E2E runs in Full Suite and expanded manual CI.
 
 Live model tests are required and use the existing `ai-pr-review` environment's
 `AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested

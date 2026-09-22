@@ -2,7 +2,7 @@
 //
 // t54-workflow-audit-completeness.test.ts — SDK-harness port of
 // tests/e2e/t54-workflow-audit-completeness.sh (plan 10). Drives the real
-// `/aidlc --init --scope bugfix` on a fresh project through the Claude Agent SDK and
+// `/aidlc --scope bugfix <description>` on a fresh project through the Claude Agent SDK and
 // asserts ONLY on deterministic surfaces — the on-disk audit.md structure (the
 // AI-DLC Audit Log header, the canonical **Event**:/**Timestamp**: field shapes,
 // the `---` block separators, ISO timestamps, no duplicate SESSION_STARTED) and
@@ -20,8 +20,8 @@
 // longer emits, so there is nothing to assert. Dropping it here loses NO real
 // coverage: the field is gone from the engine entirely.
 //
-// THE JOURNEY (verified against the SHIPPED tool). `/aidlc --init --scope
-// bugfix` on a fresh `--no-aidlc-docs` project routes through
+// THE JOURNEY. `/aidlc --scope bugfix <description>` on a fresh
+// `--no-aidlc-docs` project routes through intent creation and
 // `aidlc-utility.ts init --scope bugfix` (SKILL.md). init bootstraps audit.md
 // with the `# AI-DLC Audit Log`
 // header (utility.ts:1777), then appends WORKFLOW_STARTED + the init-phase events
@@ -86,6 +86,9 @@ const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 
 const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
+// The retired --init flag became an unknown task word and elicited a question
+// instead of intent creation. Exercise the supported entry point with a task.
+const CREATE_BUGFIX = "/aidlc --scope bugfix fix the todo checkbox state not persisting after reload";
 
 /** Count occurrences of a specific event type in a parsed event-type list. */
 function countEvent(events: string[], event: string): number {
@@ -151,7 +154,7 @@ function reportInitFailure(projectDir: string, result: DriveResult | undefined):
   }, null, 2)}`);
 }
 
-describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
+describe("t54 /aidlc --scope bugfix audit completeness (sdk)", () => {
   // -------------------------------------------------------------------------
   // Fresh project: the audit.md structure lands at explicit init. Assert the header,
   // canonical field shapes, separators, ISO timestamps, no duplicate
@@ -163,7 +166,7 @@ describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       let r: DriveResult | undefined;
       try {
-        r = await driveAidlc("/aidlc --init --scope bugfix", {
+        r = await driveAidlc(CREATE_BUGFIX, {
           projectDir: proj,
           answerScript: "default",
           timeoutMs: DRIVE_TIMEOUT_MS,

@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       tier:
-        description: smoke, unit, integration, or deep (integration and isolated e2e)
+        description: smoke, unit, integration, or e2e (isolated deterministic E2E)
         required: true
         type: string
       unit-shard:
@@ -55,7 +55,7 @@ jobs:
             exit 2
           }
           case "$TEST_TIER:$UNIT_SHARD" in
-            smoke:|integration:|deep:) ;;
+            smoke:|integration:|e2e:) ;;
             unit:*)
               [[ "$UNIT_SHARD" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] || {
                 echo "::error::Unit tier requires an N/M shard"
@@ -101,6 +101,8 @@ jobs:
           fi
           tmux -V
       - name: Run deterministic tier
+        # Leave time to sanitize and upload partial evidence after a timeout.
+        timeout-minutes: ${{ inputs.tier == 'smoke' && 10 || 50 }}
         env:
           TEST_TIER: ${{ inputs.tier }}
           UNIT_SHARD: ${{ inputs.unit-shard }}
@@ -110,7 +112,7 @@ jobs:
             smoke) args=(--smoke) ;;
             unit) args=(--unit --shard "$UNIT_SHARD") ;;
             integration) args=(--integration) ;;
-            deep) args=(--integration --e2e --isolated-e2e --e2e-file-timeout 900) ;;
+            e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 900) ;;
             *) exit 2 ;;
           esac
           capture="$GITHUB_WORKSPACE/tmp/ci-deterministic"
