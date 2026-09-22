@@ -1,5 +1,5 @@
 // covers: hook:aidlc-continue-workflow, hook:aidlc-rebuild-stage-graph
-// covers: function:parseLiteralShellInvocation
+// covers: function:parseLiteralShellInvocation, function:isRetiredOnlyNextArgv
 //
 // Pins the both-shape detector contract for the stop hook and runtime-compile
 // hook. The legacy tool-file shape is a permanent input: plugin manifests and

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1072,
+    "total": 1073,
     "enumeratedByClass": {
-      "function": 752,
+      "function": 753,
       "audit": 102,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 449,
+      "function": 450,
       "audit": 63,
       "scope": 11,
       "stage": 11,
@@ -4170,6 +4170,18 @@
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isRetiredOnlyNextArgv",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t226-detector-corpus.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
