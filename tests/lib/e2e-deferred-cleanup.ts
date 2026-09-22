@@ -103,7 +103,13 @@ export async function retainDeferredCodexFixtures(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
     await mkdir(destination);
-    await cp(temp, destination, { recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false });
+    // The root is exclusively reserved above. Bun rejects copying a directory
+    // onto that existing root with errorOnExist, so copy its fresh entries.
+    for (const name of readdirSync(temp)) {
+      await cp(join(temp, name), join(destination, name), {
+        recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false,
+      });
+    }
     sourceKept = true;
   }
   verifyArtifacts();
