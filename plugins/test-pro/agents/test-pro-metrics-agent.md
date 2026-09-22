@@ -9,6 +9,14 @@ plugin: test-pro
 # the refusal names.
 resources:
   - 'file://aidlc/spaces/default/memory/**/*.md'
+# And an explicit capability allowlist, for the same reason the resource above is
+# explicit. `kiro_tools` is Kiro-scoped on purpose: Copilot requires the
+# `disallowedTools: Task` below and refuses a persona that also declares `tools:`,
+# and the two vocabularies are disjoint, so one shared `tools:` cannot serve both.
+# Declaring it here is also what lets an ALREADY-INSTALLED copy be migrated - a
+# persona composed with no allowlist is refused on re-compose, because narrowing it
+# would withdraw whatever it had been inheriting. State what this worker needs.
+kiro_tools: ["fs_read", "fs_write", "execute_bash", "thinking"]
 examples:
   - methodology.md
 description: >

@@ -663,6 +663,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const body = readFileSync(native, "utf-8");
     expect(body).toMatch(/^tools: \["read", "edit", "search", "execute", "web", "todo"\]$/m);
     expect(body).not.toMatch(/^(model|tier|effort|disallowedTools):/m);
+    // `kiro_tools` is Kiro-scoped, and the reference persona declares one so a single
+    // authored file satisfies both harnesses. Copilot's grants come from the
+    // `disallowedTools` translation above, so the Kiro key must not survive into a roster
+    // that would not read it.
+    expect(body).not.toMatch(/^kiro_tools:/m);
+    expect(body).not.toContain("fs_read");
     expect(body).toContain("aidlc/spaces/default/memory/");
 
     const unsafePlugin = join(tmp, "plugin", "copilot-missing-disallowed-tools");
@@ -2381,11 +2387,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(migratedBody).toMatch(/^tools: \["fs_read", "thinking"\]$/m);
     expect(migrated.drops).not.toContain("collides with an existing file");
 
-    // A persona ALREADY installed with no allowlist IS migrated - refusing it would
-    // demand a `tools:` declaration a cross-harness plugin cannot make - but the
-    // narrowing is STATED, with the resulting tools named, so the capability it loses is
-    // readable instead of silent. The notice is advisory, because the migration did what
-    // it was asked to do; doctor's failure count reads `[degraded]` lines only.
+    // A persona ALREADY installed with no capability allowlist is REFUSED before the
+    // migration is committed, not narrowed. It has been inheriting the whole session
+    // toolset and this projection cannot know which of those tools it used, so rewriting
+    // it to the four defaults could withdraw an MCP or web capability a working stage
+    // depends on. The refusal is DEGRADED so `plugin sync` fails on it, and it states the
+    // DELTA plus the `kiro_tools` repair - which is performable now that the key exists.
     const bare = agent.replaceAll("syn-kiro-upgrade", "syn-kiro-bare-upgrade")
       .replace('tools: ["fs_read", "thinking"]\n', "");
     const bareRel = join("agents", "syn-kiro-bare-upgrade-agent.md");
@@ -2398,19 +2405,41 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         writeFileSync(join(harnessDir, bareRel), bare);
       },
     );
-    const bareBody = readFileSync(join(bareRun.proj, ".kiro", bareRel), "utf-8");
-    expect(bareBody).toMatch(
-      /^tools: \["fs_read", "fs_write", "execute_bash", "thinking"\]$/m,
-    );
-    expect(bareBody).not.toMatch(/^disallowedTools:/m);
-    expect(bareRun.drops).toContain("had been inheriting the session toolset");
-    // The notice must NAME the tools it narrowed to, not just say that it narrowed.
+    expect(readFileSync(join(bareRun.proj, ".kiro", bareRel), "utf-8")).toBe(bare);
+    expect(bareRun.drops).toContain("inherits the whole session toolset");
+    expect(bareRun.drops).toContain("was NOT committed");
+    expect(bareRun.drops).toContain("kiro_tools");
+    // The delta must be readable: what it would be left with, named.
     expect(bareRun.drops).toContain("fs_read, fs_write, execute_bash, thinking");
-    // Advisory, so doctor's degraded count is untouched by a migration that succeeded.
-    expect(bareRun.drops).toContain("[advisory]");
-    expect(bareRun.drops).not.toMatch(
-      /\[degraded\][^\n]*syn-kiro-bare-upgrade-agent\.md/,
+    // Degraded, so synchronization cannot report success over the capability loss.
+    expect(bareRun.drops).toContain("[degraded]");
+
+    // THE UPGRADE CASE THE FINDING NAMES: a persona whose install had been inheriting MCP
+    // and web tools. Declaring them under the Kiro-scoped key both repairs the refusal and
+    // KEEPS them - they survive into the canonical allowlist instead of being replaced by
+    // the four defaults, which is the capability preservation the finding asked for.
+    const mcp = agent.replaceAll("syn-kiro-upgrade", "syn-kiro-mcp-upgrade")
+      .replace(
+        'tools: ["fs_read", "thinking"]',
+        'kiro_tools: ["fs_read", "@context7", "@aws-knowledge-mcp-server"]',
+      );
+    const mcpRel = join("agents", "syn-kiro-mcp-upgrade-agent.md");
+    const mcpRun = composeSynthetic(
+      "syn-kiro-mcp-upgrade",
+      { "agents/syn-kiro-mcp-upgrade-agent.md": mcp },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, mcpRel), mcp);
+      },
     );
+    const mcpBody = readFileSync(join(mcpRun.proj, ".kiro", mcpRel), "utf-8");
+    expect(mcpBody).toMatch(
+      /^tools: \["fs_read", "@context7", "@aws-knowledge-mcp-server"\]$/m,
+    );
+    expect(mcpBody).not.toMatch(/^kiro_tools:/m);
+    expect(mcpBody).not.toMatch(/^disallowedTools:/m);
+    expect(mcpRun.drops).not.toContain("syn-kiro-mcp-upgrade-agent.md");
 
     const editedAgent = `${agent}\n<!-- user-owned edit -->\n`;
     const edited = composeSynthetic(

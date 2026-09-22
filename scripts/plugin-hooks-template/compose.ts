@@ -839,6 +839,19 @@ const KIRO_WORKER_TOOLS = ["fs_read", "fs_write", "execute_bash", "thinking"] as
  *  showed only `[` on the key's line and read as empty, and two `tools:` keys resolved
  *  to the FIRST where YAML takes the last. An unresolvable declaration now stops the
  *  persona instead of being guessed at. */
+/** The frontmatter keys a persona may declare a Kiro capability allowlist under.
+ *
+ *  `kiro_tools` exists because a plugin ships ONE `agents/` tree and the harnesses do not
+ *  agree on `tools`. Copilot REQUIRES `disallowedTools: Task` and refuses a persona that
+ *  also declares `tools:`, and the two grant vocabularies are disjoint anyway - Copilot
+ *  grants `read`/`edit`/`search`/`execute`, Kiro grants `fs_read`/`fs_write`/
+ *  `execute_bash`. So no single `tools:` list can serve both, and demanding one made the
+ *  migration guidance impossible to follow for exactly the cross-harness plugins this
+ *  tree ships. A Kiro-scoped key is invisible to Copilot's precheck, which tests
+ *  `/^tools:/`, so one authored persona can now satisfy both harnesses. */
+const KIRO_TOOLS_KEYS = ["kiro_tools", "tools"] as const;
+const KIRO_TOOLS_KEY_RE = /^(kiro_tools|tools):/;
+
 type ToolGrants =
   | { kind: "absent" }
   /** `from`/`through` are the INCLUSIVE frontmatter line range the declaration occupies,
@@ -880,24 +893,56 @@ function kiroToolGrants(content: string): ToolGrants {
   const lines = frontmatter(content).split(/\r?\n/);
   const keys = lines
     .map((line, index) => ({ line, index }))
-    .filter(({ line }) => /^tools:/.test(line));
+    .filter(({ line }) => KIRO_TOOLS_KEY_RE.test(line));
   if (keys.length === 0) return { kind: "absent" };
-  if (keys.length > 1) {
+  const named = new Set(
+    keys.map(({ line }) => KIRO_TOOLS_KEY_RE.exec(line)?.[1] ?? ""),
+  );
+  if (keys.length > 1 && named.size === 1) {
     // YAML takes the last of two identical keys and most parsers call the document
     // malformed. Either way a reader that takes the first can be aimed at the wrong list.
-    return { kind: "unresolved", reason: "declares `tools` more than once" };
+    return {
+      kind: "unresolved",
+      reason: `declares \`${[...named][0]}\` more than once`,
+    };
+  }
+  if (named.size > 1) {
+    // Both keys present. Picking one silently would leave the other in the output for a
+    // later reader to act on, and deleting both would need a second scan - the defect
+    // this reader was just rebuilt to remove. Make the author say which one governs.
+    return {
+      kind: "unresolved",
+      reason:
+        "declares both `kiro_tools` and `tools`; declare exactly one (use `kiro_tools` when the persona is also projected to another harness)",
+    };
   }
   const { line, index } = keys[0];
-  const inline = line.slice("tools:".length).trim();
+  const key = KIRO_TOOLS_KEY_RE.exec(line)?.[1] ?? "tools";
+  const inline = line.slice(`${key}:`.length).trim();
+  if (key === "kiro_tools" && inline === "") {
+    // `kiro_tools` is ONE LINE by definition. A block form would have to be deleted from
+    // the Copilot projection too, and a second scanner deciding where the declaration
+    // ends is the exact defect this reader was rebuilt to remove - so the shape is
+    // narrowed instead of the deletion being duplicated. `tools:` keeps block support
+    // because personas already ship it.
+    return {
+      kind: "unresolved",
+      reason:
+        "declares `kiro_tools` as a block sequence; declare it on one line, e.g. kiro_tools: [\"fs_read\", \"fs_write\"]",
+    };
+  }
   if (inline !== "") {
     if (!inline.startsWith("[")) {
       return {
         kind: "unresolved",
-        reason: `declares a \`tools\` value that is neither a flow sequence nor a block sequence: ${inline}`,
+        reason: `declares a \`${key}\` value that is neither a flow sequence nor a block sequence: ${inline}`,
       };
     }
     if (!inline.endsWith("]")) {
-      return { kind: "unresolved", reason: "declares a multiline `tools` flow sequence" };
+      return {
+        kind: "unresolved",
+        reason: `declares a multiline \`${key}\` flow sequence`,
+      };
     }
     const body = inline.slice(1, -1).trim();
     if (body === "") return { kind: "resolved", tools: [], from: index, through: index };
@@ -907,7 +952,7 @@ function kiroToolGrants(content: string): ToolGrants {
       if (scalar === null) {
         return {
           kind: "unresolved",
-          reason: `declares a \`tools\` entry that cannot be resolved to a tool name: ${raw.trim()}`,
+          reason: `declares a \`${key}\` entry that cannot be resolved to a tool name: ${raw.trim()}`,
         };
       }
       tools.push(scalar);
@@ -935,14 +980,14 @@ function kiroToolGrants(content: string): ToolGrants {
       if (/^\S/.test(next)) break;
       return {
         kind: "unresolved",
-        reason: `declares a \`tools\` block containing a line that is not a sequence entry: ${next.trim()}`,
+        reason: `declares a \`${key}\` block containing a line that is not a sequence entry: ${next.trim()}`,
       };
     }
     const scalar = plainYamlScalar(item[1] ?? "");
     if (scalar === null) {
       return {
         kind: "unresolved",
-        reason: `declares a \`tools\` entry that cannot be resolved to a tool name: ${next.trim()}`,
+        reason: `declares a \`${key}\` entry that cannot be resolved to a tool name: ${next.trim()}`,
       };
     }
     tools.push(scalar);
@@ -1090,31 +1135,31 @@ function migrateExistingKiroAgent(
   // no denial to translate into one.
   if (disallowed.length === 0 && grants.kind === "resolved") return "compare";
   if (grants.kind === "absent") {
-    // MIGRATE, but not silently. This persona has been running with the inherited
-    // session toolset, and this projection cannot know which of those tools it used -
-    // only that it had them - so the rewrite below may withdraw an MCP or web
-    // capability it depended on.
+    // FAIL BEFORE COMMITTING the migration, rather than narrowing this persona behind
+    // the operator's back. It has been running with the inherited session toolset and
+    // this projection knows only that it inherited everything, not which tools it used,
+    // so rewriting it to the four defaults can withdraw an MCP or web capability a
+    // working stage depends on. Preserving the non-delegation half would need Kiro's
+    // ambient tool list, which this repository does not state.
     //
-    // Refusing the migration instead was tried and rejected: the repair it would demand
-    // - "declare an explicit `tools:` allowlist" - is not applicable to a cross-harness
-    // plugin. A plugin ships ONE `agents/` tree (only Cursor reads a separate
-    // `aidlc/agents`), `copilotNativeAgentPrecheck` refuses a persona that declares both
-    // `tools:` and `disallowedTools:` while also requiring the denial, and the two grant
-    // vocabularies are disjoint - Copilot grants `read`/`edit`/`search`/`execute`, Kiro
-    // grants `fs_read`/`fs_write`/`execute_bash`. One authored list cannot serve both,
-    // so the refusal would have been un-actionable guidance for exactly the plugins the
-    // reference tree ships.
+    // Refusing was previously rejected as un-actionable, and correctly: there was no
+    // declaration a cross-harness persona could make. `kiro_tools` is that declaration,
+    // so the repair below can now actually be performed, and the refusal is the right
+    // answer instead of a notice.
     //
-    // So behaviour continuity is kept and the NARROWING is stated instead, with the
-    // resulting tools named - which is what the finding's own problem statement asked
-    // for: the capabilities disappeared "without an error or migration notice".
-    // ADVISORY, not degraded: doctor counts `[degraded]` lines for its failure total
-    // (`aidlc-doctor-bundle.ts`), and a migration that did what it was asked to do is
-    // not a failure - it is a change the operator has to be able to read.
+    // DEGRADED, not advisory: `aidlc-plugin.ts` gates sync on `[degraded]` lines only, so
+    // an advisory let synchronization report success over a capability loss. This is the
+    // line that makes sync fail, and it carries the DELTA - what the persona has now
+    // versus what it would be left with - because that is what the operator has to judge.
+    //
+    // A FRESH copy is deliberately untouched by this and still receives the default
+    // allowlist: the persona has never run in that project, so nothing is withdrawn, and
+    // refusing there would compose an `inline` stage while leaving its support persona
+    // missing.
     recordDrop(
-      `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" declared no \`tools:\` allowlist, so it had been inheriting the session toolset; re-compose narrowed it to ${KIRO_WORKER_TOOLS.join(", ")} so that delegation is excluded. Any MCP or web tool it relied on is no longer granted - declare an explicit \`tools:\` allowlist in the plugin source to keep one, then remove "${installedRel}" and re-run compose`,
-      "advisory",
+      `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed with no capability allowlist, so it currently inherits the whole session toolset (MCP and web tools included, plus delegation); migrating it would leave it with exactly ${KIRO_WORKER_TOOLS.join(", ")} and withdraw everything else, so the migration was NOT committed. Declare the capabilities this persona needs as \`kiro_tools:\` in the plugin source - a Kiro-scoped key, so a persona projected to Copilot as well keeps its \`disallowedTools: Task\` - then remove "${installedRel}" and re-run compose`,
     );
+    return "handled";
   }
   if (disallowed.length > 1) {
     recordDrop(
@@ -1225,6 +1270,10 @@ function emitCopilotNativeAgent({ file, content }: CopyContext): string {
     .split(/\r?\n/)
     .flatMap((line) => {
       if (/^(tier|model|effort):/.test(line)) return [];
+      // `kiro_tools` is a Kiro-scoped capability declaration. Copilot's own grants come
+      // from the `disallowedTools` translation below, so the Kiro key is dropped rather
+      // than passed through into a roster that would not read it.
+      if (/^kiro_tools:/.test(line)) return [];
       if (/^disallowedTools:/.test(line)) {
         return [`tools: [${COPILOT_WORKER_TOOLS.map((tool) => `"${tool}"`).join(", ")}]`];
       }

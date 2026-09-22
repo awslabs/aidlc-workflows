@@ -962,14 +962,20 @@ async function runComposer(
   const aidlcRoot = join(stagedProject, "aidlc");
   if (existsSync(aidlcRoot)) {
     for (const file of surfaceFiles(aidlcRoot)) {
-      if (
-        basename(file) === `plugin-compose-${plugin.key}.drops` &&
-        readFileSync(file, "utf-8").includes("[degraded]")
-      ) drops.push(file);
+      if (basename(file) !== `plugin-compose-${plugin.key}.drops`) continue;
+      // Carry the degraded REASONS, not just the file path. A capability-narrowing
+      // refusal is only useful if the operator can read what changed without opening a
+      // health file, and this message is what `jsonEnvelope` reports as `message`, so the
+      // same text reaches `--json`.
+      for (const line of readFileSync(file, "utf-8").split(/\r?\n/)) {
+        if (line.includes("[degraded]")) drops.push(line.trim());
+      }
     }
   }
   if (drops.length > 0) {
-    throw new Error(`plugin ${plugin.key} composition reported degraded drops: ${drops.join(", ")}`);
+    throw new Error(
+      `plugin ${plugin.key} composition reported degraded drops:\n${drops.map((d) => `  - ${d}`).join("\n")}`,
+    );
   }
   if (pluginSourceHash(plugin.root) !== plugin.sourceHash) {
     throw new Error(`plugin ${plugin.key} source changed during composition`);

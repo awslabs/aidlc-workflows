@@ -610,6 +610,12 @@ describe("t242 transactional sync and ownership-safe prune", () => {
 
     await expect(syncPlugins(project, [], ".claude"))
       .rejects.toThrow("plugin renamed composition reported degraded drops");
+    // The error must carry the REASON, not just the drops file's path: a capability or
+    // ownership refusal is only actionable if the operator reads what was refused
+    // without opening a health file, and this same text is what `--json` reports as
+    // `message`.
+    await expect(syncPlugins(project, [], ".claude"))
+      .rejects.toThrow(/\[degraded\]/);
     expect(existsSync(join(
       project,
       ".claude",
