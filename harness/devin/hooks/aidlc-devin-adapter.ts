@@ -1516,8 +1516,12 @@ export async function run(
       //                                      deliver-stage-rules PreToolUse
       //                                      created; no core call, no audit
       //   run_subagent + terminal output   → forward a synthesized SubagentStop
-      //   run_subagent + anything else     → fail-open terminal forward (the
-      //                                      pre-correlation contract: a
+      //   run_subagent (background) +      → no-op + a log-subagent drop line
+      //     unclassifiable output            (a background PostToolUse is not
+      //                                      terminal; the launch ack is its
+      //                                      only non-terminal output)
+      //   run_subagent (foreground) +      → fail-open terminal forward (the
+      //     anything else                    pre-correlation contract: a
       //                                      completion is never dropped)
       //   read_subagent + terminal output  → forward only while an annotated
       //                                      entry for that id is pending
@@ -1570,6 +1574,17 @@ export async function run(
             profile,
             terminal.agentId,
             subagentTerminalMessage(output),
+          );
+          return 0;
+        }
+        if (input.is_background === true) {
+          // A background dispatch's PostToolUse is not terminal: the launch
+          // ack above is its only non-terminal output, so anything else is
+          // envelope drift — never mint a completion with no agent id.
+          recordHookDrop(
+            projectDir,
+            "log-subagent",
+            "unclassified background run_subagent output",
           );
           return 0;
         }

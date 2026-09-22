@@ -2407,6 +2407,46 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
+  test("Item 3 case 13: an unclassifiable background run_subagent output drops with a log-subagent line and mints no completion", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case13";
+      // The dispatch PreToolUse creates the pending in-flight entry; a
+      // drifted (neither launch-ack nor terminal) PostToolUse must leave it
+      // pending rather than minting an id-less SUBAGENT_COMPLETED.
+      expect(
+        runAdapter(
+          dir,
+          "deliver-stage-rules",
+          devinRunSubagent(
+            "subagent_explore",
+            "Read sentinel.txt in the project root and report its first line verbatim",
+            { is_background: true },
+            session,
+          ),
+        ).code,
+      ).toBe(0);
+      const before = inflightEntries(dir);
+      expect(before.length).toBe(1);
+      const drifted = nativeEvent("backgroundLaunchPost", {
+        "<session>": session,
+        "<agent-id>": "aa37dc28",
+      });
+      (drifted.tool_response as Record<string, unknown>).output =
+        "Subagent queued for background execution.";
+      expect(
+        runAdapter(dir, "log-subagent", withCwd(drifted, dir)).code,
+      ).toBe(0);
+      expect(inflightEntries(dir)).toEqual(before);
+      expect(subagentCompletedRows(dir)).toBe(0);
+      expect(hookDrops(dir, "log-subagent")).toContain(
+        "unclassified background run_subagent output",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // --- Item 4: reviewer-scope foreground-window attribution -------------------
   //
   // Devin's native child hook payloads carry no structured identity (DEVIN-07;
