@@ -3747,8 +3747,7 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
     }
   });
 
-  test("T1b: guarded legacy write failures clear the pre-write latch for retry", () => {
-    for (const entry of [
+  for (const entry of [
       {
         toolName: "fs_write",
         result: "Write failed before creating the file",
@@ -3760,7 +3759,8 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
           "Caught an error while replacing string String '[Answer]:' found multiple times in the file",
         toolSuccess: undefined,
       },
-    ]) {
+  ]) {
+    test(`T1b: guarded legacy ${entry.toolName} failures clear the pre-write latch for retry`, () => {
       const dir = scratchProject(true);
       try {
         initGitWorkspace(dir);
@@ -3800,8 +3800,8 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-    }
-  }, 30000);
+    }, 30_000);
+  }
 
   test("T2: toolSuccess=true on the same write IS audited (guard is not over-broad)", () => {
     const dir = scratchProject(true);

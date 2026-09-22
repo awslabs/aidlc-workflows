@@ -28,6 +28,14 @@ export const FAMILIES = {
 } as const satisfies Record<string, Family>;
 export type LiveFamily = keyof typeof FAMILIES;
 
+let invocationFiles: Map<LiveFamily, string[]> | undefined;
+function liveInvocationFiles(): Map<LiveFamily, string[]> {
+  // A CI invocation uses one immutable checkout. Matrix planning and selection
+  // share its inventory instead of rescanning every source file for every row.
+  invocationFiles ??= classifyLiveFiles(REPO_ROOT);
+  return invocationFiles;
+}
+
 /** Same top-level tier/plugin discovery as run-tests.ts; never import test modules. */
 export function discoverLiveFiles(root: string): Map<string, Set<AllowedLiveGate>> {
   const claude = new Set(discoverClaudeRequiredTests(join(root, "tests")).map(({ file }) => file));
@@ -80,12 +88,68 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts": ["win32"],
 };
 
+const LIVE_RUNNERS = { linux: "ubuntu-latest", darwin: "macos-15", win32: "windows-latest" } as const;
+export interface LiveMatrixRow {
+  family: LiveFamily;
+  runner: (typeof LIVE_RUNNERS)[keyof typeof LIVE_RUNNERS];
+  platform: keyof typeof LIVE_RUNNERS;
+  shard: string;
+  slice: string;
+}
+
+function eligibleLiveFiles(partition: Map<LiveFamily, string[]>, family: LiveFamily, platform: NodeJS.Platform): string[] {
+  if (!Object.hasOwn(FAMILIES, family)) throw new Error(`unknown family: ${family}`);
+  const spec: Family = FAMILIES[family];
+  if (spec.hosting !== "hosted") throw new Error(`${family} is excluded from hosted live runs`);
+  if (!spec.platforms.includes(platform)) throw new Error(`${family} does not support ${platform}`);
+  const files = partition.get(family)!.filter((file) => !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(platform));
+  if (!files.length) throw new Error(`${family} has no selected files on ${platform}`);
+  return files;
+}
+
+/** One assigned file per shard; omitted shards preserve whole-family callers. */
+export function selectedLiveFiles(family: LiveFamily, platform: NodeJS.Platform, shard?: string): string[] {
+  const files = eligibleLiveFiles(liveInvocationFiles(), family, platform);
+  if (shard === undefined) return files;
+  const match = /^[1-9][0-9]*\/[1-9][0-9]*$/.exec(shard);
+  if (!match || match[0] !== shard) throw new Error(`invalid live shard: ${shard}; expected N/M`);
+  const [index, total] = shard.split("/").map(Number);
+  if (!Number.isSafeInteger(index) || !Number.isSafeInteger(total) || total !== files.length || index > total) {
+    throw new Error(`invalid live shard: ${shard}; ${family}/${platform} requires N/${files.length} with N in 1..${files.length}`);
+  }
+  return [files[index - 1]];
+}
+
+/** Workflow matrices share discovery and platform eligibility with execution. */
+export function liveMatrix(kind: "hosted" | "windows"): { include: LiveMatrixRow[] } {
+  if (kind !== "hosted" && kind !== "windows") throw new Error(`unknown live matrix: ${kind}`);
+  const partition = liveInvocationFiles();
+  const platforms = kind === "hosted" ? ["linux", "darwin"] as const : ["win32"] as const;
+  const include: LiveMatrixRow[] = [];
+  for (const family of Object.keys(FAMILIES) as LiveFamily[]) {
+    const spec: Family = FAMILIES[family];
+    if (spec.hosting !== "hosted" || (kind === "windows" && family === "release-contract")) continue;
+    for (const platform of platforms) {
+      if (!spec.platforms.includes(platform)) continue;
+      const files = eligibleLiveFiles(partition, family, platform);
+      for (let index = 1; index <= files.length; index++) {
+        include.push({ family, runner: LIVE_RUNNERS[platform], platform, shard: `${index}/${files.length}`, slice: `${family}-${index}` });
+      }
+    }
+  }
+  if (!include.length) throw new Error(`${kind} has no selected live files`);
+  // Start the first file for every family/platform before its second file.
+  include.sort((a, b) => Number(a.shard.split("/")[0]) - Number(b.shard.split("/")[0]));
+  return { include };
+}
+
 /** Qualify tiers (and plugin names) to avoid collisions in all three runner aliases. */
 export function liveFilter(files: readonly string[], platform?: NodeJS.Platform): string {
   const selected = files.filter((file) => !platform || !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(platform));
   const names = selected.map((file) => {
-    const parts = file.replaceAll("\\", "/").split("/");
-    const name = basename(file, ".test.ts");
+    const normalized = file.replaceAll("\\", "/");
+    const parts = normalized.split("/");
+    const name = basename(normalized, ".test.ts");
     const qualified = parts[0] === "plugins" ? `plugins-plugin-${parts[1]}-${name}` : `${parts[1]}-${name}`;
     return qualified.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   });
@@ -93,23 +157,24 @@ export function liveFilter(files: readonly string[], platform?: NodeJS.Platform)
 }
 
 /** Runner modes follow the selected files, never an assumed family tier layout. */
-export function liveRunnerArgs(family: LiveFamily, platform: NodeJS.Platform): string[] {
+export function liveRunnerArgs(family: LiveFamily, platform: NodeJS.Platform, shard?: string): string[] {
+  const files = selectedLiveFiles(family, platform, shard);
   const spec: Family = FAMILIES[family];
-  if (!spec.platforms.includes(platform)) throw new Error(`${family} does not support ${platform}`);
-  const files = classifyLiveFiles(REPO_ROOT).get(family)!
-    .filter((file) => !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(platform));
-  if (!files.length) throw new Error(`${family} has no selected files on ${platform}`);
   const tiers = new Set(files.map((file) => file.startsWith("plugins/") ? "integration" : file.split("/")[1]));
   const args = ["unit", "integration", "e2e"].filter((tier) => tiers.has(tier)).map((tier) => `--${tier}`);
-  if (tiers.has("e2e")) args.push("--isolated-e2e", "--bedrock-parallel", "2");
+  if (tiers.has("e2e")) args.push("--isolated-e2e", "--bedrock-parallel", "2", "--e2e-file-timeout", "2400");
   if (spec.requireCoverage) args.push("--require-coverage");
   args.push("--filter", liveFilter(files));
   return args;
 }
 
 /** Preserve argument boundaries and keep the discovery-owned selection authoritative. */
-export function liveRunnerCommand(family: LiveFamily, platform: NodeJS.Platform, passthrough: readonly string[] = []): string[] {
-  return [join(REPO_ROOT, "tests/run-tests.ts"), ...passthrough, ...liveRunnerArgs(family, platform)];
+export function liveRunnerCommand(family: LiveFamily, platform: NodeJS.Platform, passthrough: readonly string[] = [], shard?: string): string[] {
+  const selectors = new Set(["--smoke", "--unit", "--integration", "--e2e", "--ci", "--release", "--all", "--filter", "--shard", "--matrix-plan", "--matrix-job", "--no-llm"]);
+  for (const arg of passthrough) {
+    if (selectors.has(arg.split("=")[0])) throw new Error(`live file selection cannot be overridden by ${arg}`);
+  }
+  return [join(REPO_ROOT, "tests/run-tests.ts"), ...passthrough, ...liveRunnerArgs(family, platform, shard)];
 }
 
 /** CI control-plane tokens and startup credentials are not agent capabilities. */
@@ -125,10 +190,13 @@ export function liveRunnerEnvironment(source: NodeJS.ProcessEnv): NodeJS.Process
 if (import.meta.main) {
   try {
     const [family, ...options] = process.argv.slice(2);
+    const matrix = family === "--matrix";
+    if (matrix && (options.length !== 1 || !["hosted", "windows"].includes(options[0]))) throw new Error("expected --matrix hosted|windows");
     let platform: NodeJS.Platform | undefined;
+    let shard: string | undefined;
     let mode: "filter" | "args" | "run" = "filter";
     let passthrough: string[] = [];
-    for (let index = 0; index < options.length; index++) {
+    for (let index = 0; !matrix && index < options.length; index++) {
       const option = options[index];
       if (option === "--args" && mode === "filter") mode = "args";
       else if (option === "--run" && mode === "filter") mode = "run";
@@ -137,13 +205,17 @@ if (import.meta.main) {
         break;
       } else if (option === "--platform" && !platform && ["linux", "darwin", "win32"].includes(options[index + 1])) {
         platform = options[++index] as NodeJS.Platform;
+      } else if (option === "--shard" && shard === undefined && options[index + 1] !== undefined) {
+        shard = options[++index];
       } else throw new Error(`invalid option: ${option}`);
     }
-    if (family === "--list" && mode === "filter") {
+    if (matrix) {
+      console.log(JSON.stringify(liveMatrix(options[0] as "hosted" | "windows")));
+    } else if (family === "--list" && mode === "filter" && shard === undefined) {
       console.log(JSON.stringify(Object.fromEntries(classifyLiveFiles(REPO_ROOT)), null, 2));
     } else if (Object.hasOwn(FAMILIES, family ?? "")) {
       if (mode === "run") {
-        const command = liveRunnerCommand(family as LiveFamily, platform ?? process.platform, passthrough);
+        const command = liveRunnerCommand(family as LiveFamily, platform ?? process.platform, passthrough, shard);
         const child = Bun.spawn([process.execPath, ...command], {
           env: liveRunnerEnvironment(process.env),
           cwd: REPO_ROOT, stdin: "inherit", stdout: "inherit", stderr: "inherit",
@@ -151,13 +223,13 @@ if (import.meta.main) {
         process.exitCode = await child.exited;
       } else {
         console.log(mode === "args"
-          ? liveRunnerArgs(family as LiveFamily, platform ?? process.platform).join("\n")
-          : liveFilter(classifyLiveFiles(REPO_ROOT).get(family as LiveFamily)!, platform));
+          ? liveRunnerArgs(family as LiveFamily, platform ?? process.platform, shard).join("\n")
+          : liveFilter(selectedLiveFiles(family as LiveFamily, platform ?? process.platform, shard)));
       }
     } else throw new Error(`unknown family: ${family}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    console.error(`Usage: bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--args | --run -- RUNNER_ARGS...]`);
+    console.error(`Usage: bun scripts/ci-live-filter.ts --matrix hosted|windows\n       bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--shard N/M] [--args | --run -- RUNNER_ARGS...]`);
     process.exitCode = 2;
   }
 }

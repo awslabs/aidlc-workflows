@@ -3505,7 +3505,7 @@ describe("t243 release lifecycle", () => {
     );
     expect(() => verifyReleaseDirectory(invalidBinary, [binary.name as string]))
       .toThrow("invalid selected release asset metadata");
-  });
+  }, 30_000); // Build and verify three independent release layouts on Windows.
 
   test("release client classifies HTTP failures, follows redirects, and enforces metadata timeout", async () => {
     const release = fixtureReleaseBytes();

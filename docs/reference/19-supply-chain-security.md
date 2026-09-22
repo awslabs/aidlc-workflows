@@ -50,6 +50,19 @@ and `complete: false`; a successful result requires the live jobs to succeed
 and the omissions to be explicitly skipped. Stable release rejects this
 purpose even if `passed` is true, including for verification run on `main`.
 
+POSIX preparation obtains a pinned official Node distribution and transports
+its complete prefix with the validated dependency archive. Credentialed jobs
+only unpack and copy those prepared bytes; they do not execute dependency
+installers. Node and CLI startup run under the low-privilege identity after
+runner directories are protected. Collection retires that macOS account's
+launchd domains and refuses to copy while executable processes remain.
+
+Live matrices assign one file per supported platform to each job, with at most
+12 hosted and 6 Windows jobs running concurrently. Each role session requests
+3,600 seconds; jobs allow 55 minutes, test steps 45 minutes, and isolated e2e
+files 2,400 seconds, leaving time to collect evidence. Timeouts fail coverage.
+The existing IAM role duration and credential-separation boundary are unchanged.
+
 Feature, fix, documentation, refactor, and test PRs do not update release
 metadata. The release-preparation PR summarizes the user-visible changes merged
 since the previous release and updates the version, README badge, and changelog
@@ -178,7 +191,7 @@ gate.
    `.purpose == "release"`, `.passed == true`, `.disabledLegs == []`,
    `.omittedLegs == []`, and every declared job successful.
    Required live jobs use the existing `ai-pr-review` environment's
-   `AWS_AI_PR_REVIEW_ROLE_ARN`; verify its OIDC/model permissions and six-hour
+   `AWS_AI_PR_REVIEW_ROLE_ARN`; verify its OIDC/model permissions and one-hour
    session support before running them.
    If its evidence is missing or expired, dispatch `full-suite.yml` on `main`
    with `ref=<sha>` to renew it without republishing an unchanged preview;

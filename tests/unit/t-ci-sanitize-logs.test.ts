@@ -49,6 +49,18 @@ afterEach(() => {
 });
 
 describe("CI log credential redaction", () => {
+  test("redacts the run's broker identity while retaining unrelated numeric fixtures", () => {
+    const account = "123456789012";
+    const arn = `arn:aws:sts::${account}:assumed-role/test-role/test-session`;
+    const text = `account=${account}\ncaller=${arn}\nfixture=111122223333\nBearer fixture-token\n`;
+    expect(redactSecrets(text, JSON.stringify({ account, arn }))).toBe(
+      "account=[REDACTED]\ncaller=[REDACTED]\nfixture=111122223333\nBearer [REDACTED]\n",
+    );
+    for (const invalid of ["", "invalid-json", "null", '{"account":42,"arn":"invalid"}']) {
+      expect(redactSecrets(text, invalid)).toBe(text.replace("fixture-token", "[REDACTED]"));
+    }
+  });
+
   test("redacts standalone AWS and Kiro keys without changing surrounding text", () => {
     expect(redactSecrets(`first ${accessKey}, second ${sessionKey}; ksk_fixture-123_abc. done\n`))
       .toBe("first [REDACTED], second [REDACTED]; [REDACTED]. done\n");

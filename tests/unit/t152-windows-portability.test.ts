@@ -159,7 +159,7 @@ describe("t152 Windows portability guard", () => {
       driver.match(
         /\[Convert\]::ToBase64String\(\[Text\.Encoding\]::UTF8\.GetBytes\(\$json\)\)/g,
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(4); // Includes the batched cleanup identity snapshot.
     expect(driver).toContain("parsePowerShellBase64Json");
     expect(driver).toContain('"target-spawn.json",');
     expect(driver).toContain('"target-exit.json",');

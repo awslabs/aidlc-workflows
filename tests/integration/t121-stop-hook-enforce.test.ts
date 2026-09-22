@@ -84,7 +84,7 @@
 // {"decision":"block"} stdout; the guard/release/fail-open cases prove the hook
 // lets go — a happy-path-only twin would not be equal-or-stronger.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -293,8 +293,10 @@ function rewriteCopilotMarker(proj: string, update: (marker: Record<string, unkn
 
 const tempDirs: string[] = [];
 
-afterAll(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+// Every case owns its projects. Retire them per case instead of accumulating
+// the entire file's fixtures for one cleanup hook (7s on Windows CI).
+afterEach(() => {
+  while (tempDirs.length > 0) rmSync(tempDirs.pop()!, { recursive: true, force: true });
 });
 
 // The MOCK engine, byte-for-byte the .sh's heredoc: emit one directive of
@@ -862,6 +864,7 @@ function seedTurnMarkers(
 interface HookResult {
   rc: number;
   out: string; // stdout only (the .sh discarded stderr with 2>/dev/null)
+  diagnostic: string;
 }
 
 /**
@@ -903,6 +906,7 @@ function runHook(
   else delete env.AIDLC_COPILOT_SESSION_ID;
   // The hook reads stdin + env only; it ignores argv (mirrors the .sh's bare
   // `bun "$HOOK_TS"`).
+  const started = performance.now();
   const res = spawnSync(BUN, [HOOK_TS], {
     input: payload,
     encoding: "utf-8",
@@ -910,7 +914,17 @@ function runHook(
     env,
     timeout: 20_000,
   });
-  return { rc: res.status ?? -1, out: (res.stdout ?? "").trim() };
+  return {
+    rc: res.status ?? -1,
+    out: (res.stdout ?? "").trim(),
+    diagnostic: JSON.stringify({
+      elapsedMs: Math.round(performance.now() - started),
+      status: res.status,
+      signal: res.signal,
+      error: res.error?.message,
+      stderr: res.stderr,
+    }),
+  };
 }
 
 function runCopilotStop(proj: string, cap = "2"): HookResult {
@@ -3191,7 +3205,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       token,
     }));
     const stopped = runCopilotStop(proj);
-    expect(stopped.rc).toBe(0);
+    expect(stopped.rc, stopped.diagnostic).toBe(0);
     expect(stopped.out).toBe("");
     expect(readFileSync(markerPath, "utf-8")).toBe(before);
     expect(statSync(lockDir).isDirectory()).toBe(true);

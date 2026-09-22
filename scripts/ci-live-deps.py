@@ -35,6 +35,11 @@ def validate(members, expected):
         folded.add(name.casefold())
     if {name.split("/")[0] for name in entries} != set(expected):
         raise ValueError("missing archive top-level entry")
+    if "aidlc-node" in expected:
+        node = entries.get("aidlc-node/bin/node")
+        libraries = entries.get("aidlc-node/lib")
+        if node is None or not node.isfile() or libraries is None or not libraries.isdir():
+            raise ValueError("prepared Node runtime requires bin/node and its lib directory")
     for name, member in entries.items():
         if name in expected and not member.isdir():
             raise ValueError("archive root must be a directory")
@@ -87,10 +92,13 @@ def digest(path):
     print("sha256 " + result.hexdigest(), flush=True)
 
 
-def pack(archive, workspace, cli):
+def pack(archive, workspace, cli, node_runtime=None):
     roots = {name: workspace / name for name in ROOTS}
+    if (cli is None) != (node_runtime is None):
+        raise ValueError("POSIX CLI preparation requires a complete Node runtime")
     if cli is not None:
         roots["aidlc-cli"] = cli
+        roots["aidlc-node"] = node_runtime
     for path in roots.values():
         if path.is_symlink() or not path.is_dir():
             raise ValueError("prepared dependency root must be a real directory")
@@ -103,10 +111,11 @@ def pack(archive, workspace, cli):
 
 
 def unpack(archive, workspace, temporary, posix_clis):
-    expected = set(ROOTS) | ({"aidlc-cli"} if posix_clis else set())
+    expected = set(ROOTS) | ({"aidlc-cli", "aidlc-node"} if posix_clis else set())
     destinations = {name: workspace / name for name in ROOTS}
     if posix_clis:
         destinations["aidlc-cli"] = temporary / "aidlc-cli"
+        destinations["aidlc-node"] = temporary / "aidlc-node"
     for path in destinations.values():
         if os.path.lexists(path):
             raise ValueError("refusing to overwrite an existing dependency root")
@@ -144,10 +153,11 @@ def main():
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--temporary", type=Path)
     parser.add_argument("--cli", type=Path)
+    parser.add_argument("--node-runtime", type=Path, help="Complete Node install prefix; required with --cli")
     parser.add_argument("--posix-clis", action="store_true")
     args = parser.parse_args()
     if args.command == "pack":
-        pack(args.archive, args.workspace, args.cli)
+        pack(args.archive, args.workspace, args.cli, args.node_runtime)
     else:
         if args.temporary is None:
             parser.error("unpack requires --temporary")

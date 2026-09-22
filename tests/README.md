@@ -209,9 +209,20 @@ the archive and Windows installs CLIs only as its isolated user. This closes
 Full Suite run executes hosted live jobs in the existing `ai-pr-review`
 environment, using its `AWS_AI_PR_REVIEW_ROLE_ARN` secret without requiring
 caller-supplied secrets. There is no separate live opt-in switch. The role must
-support six-hour sessions and the documented Bedrock models. The credential-free
+support one-hour sessions and the documented Bedrock models. The credential-free
 Windows release-contract job also runs. An unchanged preview skips publication,
 but still requires successful tests before reporting that intentional skip.
+
+Live matrices assign one eligible file to each job and interleave families and
+platforms. At most 12 POSIX and 6 Windows jobs run concurrently. Jobs allow
+55 minutes, test steps 45 minutes, and isolated E2E files 40 minutes, leaving
+time to collect evidence within the one-hour credential session. Required
+capability preflights still run in each fresh environment.
+
+The deterministic `t-windows-live-provisioning` E2E regression requires an
+Administrator session on Windows. It uses temporary accounts and a private
+volume-root fixture to verify CLI hard-link normalization and safe collection
+after failed setup; it makes no model calls.
 
 Kiro ACP/TUI/IDE live families are declared exclusions in the nightly full suite,
 printed as warnings and leaving `complete: false`. They need a dedicated isolated
@@ -252,10 +263,11 @@ all invalid UTF-8/NUL/binary files with reasons in `sanitizer-report.json`, and
 drop raw driver traces by default (`AIDLC_NIGHTLY_UPLOAD_TRACES=1` retains only
 eligible text, with residual disclosure risk).
 
-`bun scripts/ci-live-filter.ts --list` shows the
-discovered partition; append `--platform linux|darwin|win32` to a family query
-for its exact platform filter. Add `--args` for one runner argument per line;
-the nightly workflow uses `--run -- --debug -P 4` to launch the runner directly
+`bun scripts/ci-live-filter.ts --list` shows the discovered partition;
+`--matrix hosted` and `--matrix windows` emit the workflow matrices. Append
+`--platform linux|darwin|win32` to a family query for its platform filter and
+`--shard N/M` to select its assigned file. Add `--args` for one runner argument
+per line; the nightly workflow uses `--run -- --debug -P 8` to launch the runner directly
 with an argument array, preserving the regex without shell-specific builtins.
 Tiers follow the selected files, and isolated e2e/resource flags are emitted
 only when that family actually selects e2e files. See

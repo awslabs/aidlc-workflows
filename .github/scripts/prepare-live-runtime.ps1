@@ -5,7 +5,9 @@ param(
     [ValidateSet('prepare', 'prove', 'run', 'smoke', 'collect')]
     [string]$Mode = 'prepare',
     [ValidateSet('claude-sdk', 'claude-tui', 'codex', 'opencode', 'release-contract', 'isolation')]
-    [string]$Family = 'isolation'
+    [string]$Family = 'isolation',
+    [ValidatePattern('^[1-9][0-9]*/[1-9][0-9]*$')]
+    [string]$Shard
 )
 
 Set-StrictMode -Version Latest
@@ -15,6 +17,7 @@ $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSEdition -ne 'Desktop') {
     $nativeArguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-Mode', $Mode)
     if ($PSBoundParameters.ContainsKey('Family')) { $nativeArguments += @('-Family', $Family) }
+    if ($PSBoundParameters.ContainsKey('Shard')) { $nativeArguments += @('-Shard', $Shard) }
     & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @nativeArguments
     exit $LASTEXITCODE
 }
@@ -586,6 +589,70 @@ function Stop-SandboxProcesses([switch]$Disable) {
     throw 'Isolated processes did not stop; refusing unsafe collection.'
 }
 
+function Get-NpmInstallBody([string]$Package) {
+    $node = ConvertTo-PSLiteral (Join-Path $tools 'node.exe')
+    $npm = ConvertTo-PSLiteral (Join-Path $tools 'npm-cli\bin\npm-cli.js')
+    $prefix = ConvertTo-PSLiteral (Join-Path $tools 'npm')
+    $normalize = ConvertTo-PSLiteral (Join-Path $tools 'normalize-live-tools.cjs')
+    # Both installer and normalization run with the sandbox identity. Never let
+    # the collecting administrator copy bytes through an installer's hard link.
+    return "& $node $npm install --global --prefix $prefix --no-audit --no-fund " +
+        (ConvertTo-PSLiteral $Package) + "`nif (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`n" +
+        "& $node $normalize $prefix`nexit `$LASTEXITCODE"
+}
+
+function Assert-RuntimeOwner($Record) {
+    if ($Record.Version -ne 1 -or $Record.RunnerSid -ne $runnerSid.Value -or
+        $Record.Workspace -ne $workspace -or $Record.RunnerHome -ne $runnerHome -or $Record.RunnerTemp -ne $runnerTemp) {
+        throw 'Runtime state does not belong to this runner.'
+    }
+}
+
+function Save-PreparationFailure($Failure, [bool]$IncludeLaunchLogs) {
+    $evidence = Join-Path $stateRoot 'preparation-evidence'
+    New-PrivateDirectory $evidence
+    $summary = 'Windows live runtime failed closed during {0} ({1}, line {2}).' -f $stage, $Failure.Exception.GetType().Name, $Failure.InvocationInfo.ScriptLineNumber
+    [IO.File]::WriteAllText((Join-Path $evidence 'preparation.log'), $summary + "`r`n", [Text.UTF8Encoding]::new($true))
+    if ($IncludeLaunchLogs -and [IO.Directory]::Exists((Join-Path $tools 'logs'))) {
+        try { Copy-PlainTree (Join-Path $tools 'logs') (Join-Path $evidence 'launch') -RejectLinks }
+        catch {
+            # A failed strict copy may have left partial files. Do not publish
+            # any of that tree, and never retry without the link checks.
+            $partial = Join-Path $evidence 'launch'
+            if ([IO.Directory]::Exists($partial)) { Remove-OwnedTree $partial }
+            [IO.File]::AppendAllText((Join-Path $evidence 'preparation.log'), "Launch output could not be retained safely.`r`n")
+        }
+    }
+    [pscustomobject]@{
+        Version = 1; RunnerSid = $runnerSid.Value
+        SandboxSid = $(if ($null -ne $createdUserSid) { $createdUserSid.Value } else { $null })
+        Family = $Family; Workspace = $workspace; RunnerHome = $runnerHome; RunnerTemp = $runnerTemp
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stateRoot 'preparation-failed.json') -Encoding UTF8
+}
+
+function Collect-PreparationFailure([bool]$FamilyProvided) {
+    $marker = Join-Path $stateRoot 'preparation-failed.json'
+    Assert-PlainPath $marker
+    $record = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+    Assert-RuntimeOwner $record
+    if ($FamilyProvided -and $Family -ne $record.Family) { throw 'Runtime was prepared for another family.' }
+    if ($null -ne $record.SandboxSid) {
+        $script:sandboxSid = [Security.Principal.SecurityIdentifier]::new($record.SandboxSid)
+        # Preparation normally already removed this identity. Its recorded SID
+        # still identifies any remaining token/process; never disable a new user
+        # that happens to have reused the same account name.
+        $user = Get-LocalUser -SID $sandboxSid -ErrorAction SilentlyContinue
+        Stop-SandboxProcesses -Disable:($null -ne $user)
+    }
+    $destination = Join-Path $workspace 'tests\logs'
+    Assert-PlainPath $destination
+    [void][IO.Directory]::CreateDirectory($destination)
+    $collected = Join-Path $destination ('windows-preparation-' + [Guid]::NewGuid().ToString('N'))
+    Copy-PlainTree (Join-Path $stateRoot 'preparation-evidence') $collected -RejectLinks
+    Set-RuntimeAcl $collected $null 'ReadAndExecute' -Tree
+    [Console]::WriteLine('Collected failed Windows preparation evidence for sanitization.')
+}
+
 function Get-ProofBody {
     $paths = @($state.RunnerHome, $state.RunnerTemp, $state.Workspace)
     $files = @((Join-Path $stateRoot 'credential.clixml'), (Join-Path $state.Workspace 'scripts\ci-live-sandbox.ts'))
@@ -710,6 +777,10 @@ try {
             Assert-PlainPath $source
             [IO.File]::Copy($source, (Join-Path $tools $name), $false)
         }
+        $normalizerSource = Join-Path $workspace '.github\scripts\normalize-live-tools.cjs'
+        Assert-PlainPath $normalizerSource
+        [AidlcFileBoundary]::RequireSingleLink($normalizerSource)
+        [IO.File]::Copy($normalizerSource, (Join-Path $tools 'normalize-live-tools.cjs'), $false)
         Assert-PlainPath $git
         if (-not [IO.File]::Exists($git)) { throw 'Hosted Windows Git is required.' }
         foreach ($path in @('tmp', 'AppData\Roaming', 'AppData\Local', 'npm-cache')) {
@@ -796,7 +867,7 @@ exit $LASTEXITCODE
         if ($package) {
             # Installer code runs without runner authority, even before AWS setup.
             Set-RuntimeAcl (Join-Path $tools 'npm') $sandboxSid 'Modify'
-            $installBody = "& 'C:\aidlc-live\tools\node.exe' 'C:\aidlc-live\tools\npm-cli\bin\npm-cli.js' install --global --prefix 'C:\aidlc-live\tools\npm' --no-audit --no-fund " + (ConvertTo-PSLiteral $package) + "`nexit `$LASTEXITCODE"
+            $installBody = Get-NpmInstallBody $package
             $exitCode = Invoke-Isolated 'npm-install' $safe $installBody
             if ($exitCode -ne 0) { throw 'Pinned isolated CLI installation failed.' }
             Stop-SandboxProcesses
@@ -809,13 +880,14 @@ exit $LASTEXITCODE
         exit 0
     }
 
+    if ($Mode -eq 'collect' -and [IO.File]::Exists((Join-Path $stateRoot 'preparation-failed.json'))) {
+        Collect-PreparationFailure ($PSBoundParameters.ContainsKey('Family'))
+        exit 0
+    }
     Assert-PlainPath $stateFile
     Assert-PlainPath $credentialFile
     $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
-    if ($state.Version -ne 1 -or $state.RunnerSid -ne $runnerSid.Value -or
-        $state.Workspace -ne $workspace -or $state.RunnerHome -ne $runnerHome -or $state.RunnerTemp -ne $runnerTemp) {
-        throw 'Runtime state does not belong to this runner.'
-    }
+    Assert-RuntimeOwner $state
     $user = Get-LocalUser -Name $userName
     if ($user.SID.Value -ne $state.SandboxSid) { throw 'Runtime identity no longer matches its owner record.' }
     $sandboxSid = $user.SID
@@ -854,20 +926,24 @@ exit $LASTEXITCODE
     $safe = Get-SafeEnvironment
     $timeoutMinutes = 30
     if ($Mode -eq 'smoke') { $timeoutMinutes = 10 }
-    if ($Mode -eq 'run') { $timeoutMinutes = 350 }
+    if ($Mode -eq 'run') { $timeoutMinutes = 44 }
     switch ($Mode) {
         'prove' { $body = Get-ProofBody }
         'smoke' { $body = "& 'C:\aidlc-live\tools\bun.exe' tests/run-tests.ts --smoke --filter '^t01'`nexit `$LASTEXITCODE" }
         'run' {
             if ($Family -eq 'isolation') { throw 'Choose a live family when preparing a live run.' }
             if ($Family -ne 'release-contract') { Add-BrokerEnvironment $safe }
-            $body = "& 'C:\aidlc-live\tools\bun.exe' scripts/ci-live-sandbox.ts " + (ConvertTo-PSLiteral $Family) + " win32`nexit `$LASTEXITCODE"
+            $arguments = @($Family, 'win32')
+            if ($PSBoundParameters.ContainsKey('Shard')) { $arguments += $Shard }
+            $quotedArguments = ($arguments | ForEach-Object { ConvertTo-PSLiteral $_ }) -join ' '
+            $body = "& 'C:\aidlc-live\tools\bun.exe' scripts/ci-live-sandbox.ts " + $quotedArguments + "`nexit `$LASTEXITCODE"
         }
     }
     $exitCode = Invoke-Isolated $Mode $safe $body -TimeoutMinutes $timeoutMinutes
     [Console]::WriteLine(('Windows isolated {0} exited {1}; collect preserves its logs.' -f $Mode, $exitCode))
     exit $exitCode
 } catch {
+    $failure = $_
     [Console]::Error.WriteLine(('Windows live runtime failed closed during {0} ({1}, line {2}).' -f $stage, $_.Exception.GetType().Name, $_.InvocationInfo.ScriptLineNumber))
     if ($Mode -eq 'prepare') {
         $mayRemoveRoot = $null -eq $createdUserSid
@@ -880,6 +956,10 @@ exit $LASTEXITCODE
                     Remove-LocalUser -SID $createdUserSid
                 }
             } catch { [Console]::Error.WriteLine('Could not remove the newly created sandbox identity; this runner must be discarded.') }
+        }
+        if ($createdState) {
+            try { Save-PreparationFailure $failure ($createdRoot -and $mayRemoveRoot) }
+            catch { [Console]::Error.WriteLine('Could not retain preparation evidence safely.') }
         }
         if ($createdRoot -and $mayRemoveRoot) {
             try { Remove-OwnedTree $root }

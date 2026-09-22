@@ -585,7 +585,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     const supported = runDoctorWithCodexVersion("0.145.0");
     expect(supported.status).toBe(0);
     expect(supported.output).toContain("Harness CLI: codex codex-cli 0.145.0");
-  });
+  }, 15_000); // Two complete doctor runs exceeded the default 5s on Windows.
 
   test("14: both generated Codex configs select workspace-write at the TOML root", () => {
     for (const output of ["dist", "dist-release"]) {

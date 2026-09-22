@@ -1123,8 +1123,15 @@ artifact name and require all jobs. Older artifacts without the release purpose
 do not satisfy the stable gate.
 
 `live_prepare` installs dependencies and packages projections on all three hosted
-OSes with contents-read permission only; POSIX pinned CLIs travel in the same
-validated archive, while Windows CLI installation stays inside its isolated user.
+OSes with contents-read permission only. POSIX preparation selects official Node
+22.23.2 and packs its complete install prefix with the pinned CLIs
+(`ci-live-deps.py pack --cli ... --node-runtime ...`). The validated archive
+requires both `bin/node` and its library directory. The isolated runtime copies
+that prefix into its root-owned tools tree and puts `node/bin` on PATH,
+preserving loader-relative libraries. Node and CLI startup are checked after
+runner directories are protected. Copying a lone Homebrew executable loses
+dependencies such as `@rpath/libnode` and is not supported.
+Windows CLI installation stays inside its isolated user.
 This closes [#1306](https://github.com/awslabs/aidlc-workflows/issues/1306): installers
 never run with OIDC in scope, and credentialed lanes only validate and unpack
 prepared bytes. Every authorized Full Suite run executes preparation and hosted
@@ -1153,6 +1160,19 @@ The declared coverage is:
   account policy; neither exclusion is reported as successful coverage.
 
 `scripts/ci-live-filter.ts --list` prints the discovered family partition.
+After authorization and dependency installation, the plan emits `--matrix
+hosted` and `--matrix windows` as dynamic job matrices. Each row's `shard: N/M`
+selects one file for its family/platform, with at most 12 hosted and 6 Windows
+jobs running concurrently. Windows release-contract coverage remains in its
+separate unsharded job. Every fresh job repeats isolation and authenticated
+readiness checks; required preflights may run in addition to its assigned file.
+
+Each credentialed job requests a 3,600-second session from the existing role.
+Jobs have a 55-minute limit, live test steps have a 45-minute limit, and isolated
+e2e files have a 2,400-second execution deadline. Collection still runs after
+failures and timeouts. An older journey's longer timeout does not override this
+budget: exceeding it is a performance failure with incomplete coverage.
+
 `bun scripts/ci-live-filter.ts claude-tui --platform linux` prints an anchored
 runner filter. Discovery uses each file's own integration/e2e live gate variables,
 the derived Claude substrate list, and the unit release-contract opt-in; using a
@@ -1180,7 +1200,7 @@ to spawn the runner directly from the repository root, preserving each argument
 without shell word splitting or Bash-version-specific builtins:
 
 ```bash
-bun scripts/ci-live-filter.ts claude-sdk --platform linux --run -- --debug -P 4
+bun scripts/ci-live-filter.ts claude-sdk --platform linux --run -- --debug -P 8
 ```
 
 For a selection containing e2e files, append `--e2e-plan` to inspect its plan
@@ -1193,7 +1213,8 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-production-guards`,
 `full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
-`unit-8`, or `deep`), `full-suite-live-<family>-<OS>`, and
+`unit-8`, or `deep`), `full-suite-live-<family>-<slice-number>-<OS>`,
+`full-suite-live-release-contract-Windows`, and
 `full-suite-result` (90-day retention). The final JSON records `sha`, `runId`,
 `runAttempt`, `purpose`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
 `disabledLegs: []`, `omittedLegs`, and live families declared with `hosting: "excluded"` in the
@@ -1205,6 +1226,11 @@ no excluded families; it remains false with the documented Kiro/Cursor/Copilot
 exclusions and is not the publication predicate. Those exclusions warn without
 blocking publication; disabled required jobs block it. Neither job success nor
 this policy marker asserts full case coverage across OSes.
+
+Native jobs use the Bash wrapper with `--debug -P 8` and their unchanged
+matrix plan/job selectors. Their artifacts include `tests/logs/` plus the
+sanitized root `tmp/full-suite-native/` capture and literal stamp path; native
+receipt reconciliation still discovers the receipts recursively.
 
 Shared deterministic artifacts contain `tests/logs/<stamp>/` and
 `tmp/ci-deterministic/` (full stdout/stderr plus the literal stamp path). CI
@@ -1229,8 +1255,9 @@ prerequisites before running Full Suite:
   and the preview caller does not use `secrets: inherit`.
   No Kiro/Cursor API-key workflow secret or hosted vendor-key leg is supported.
   The AWS role's OIDC trust must be scoped to
-  this repository's `environment:ai-pr-review` subject. Its `MaxSessionDuration`
-  must support at least six hours; each assumption requests 21,600 seconds.
+  this repository's `environment:ai-pr-review` subject. Each assumption requests
+  3,600 seconds, within the existing one-hour role duration. The workflow splits
+  work into bounded file jobs without changing IAM session duration.
 - The role needs Bedrock invoke/stream access to the CI-only model table in
   `scripts/ci-credential-broker.ts`: Claude Fable 5, Opus 4.8, Sonnet 4.6 and
   Haiku 4.5 inference profiles in `us-east-1`, opencode's Sonnet 4.6 default in
@@ -1283,8 +1310,9 @@ Windows creates a standard Users-only account and ACL-isolated work/home/tools
 under `C:\aidlc-live`; Task Scheduler launches each body with a Limited batch
 logon under that identity, avoiding the runner session's desktop ACL. Preparation
 grants only `SeBatchLogonRight` while preserving existing principals, then verifies
-an actual batch-logon task. Jobs default to 30 minutes (Git/smoke: 10 minutes;
-live runs: 5h50m); tasks not started after 30 seconds fail with scheduler status
+an actual batch-logon task. Preparation tasks default to 30 minutes
+(Git/smoke: 10 minutes); live test steps are capped at 45 minutes by the workflow.
+Tasks not started after 30 seconds fail with scheduler status
 and the last 20 operational events. Explicit safe environments and UTF-8
 identity/cwd/output logs remain, and tasks are unregistered after completion.
 Secondary-logon `Start-Process` is a
@@ -1293,6 +1321,12 @@ use session 0: the proof requires correct user identity and access denied for
 launcher modules/`PROCESS_VM_READ`, runner directories and private credential state.
 The broker stays under the runner identity; only nonsecret routes and model pins
 cross into the live user's environment. Failed isolation proofs block execution.
+
+POSIX collection stops the dedicated account's processes before administrator
+copying. On macOS it first retires that account's launchd user/GUI domains to
+stop service restarts. Zombie entries cannot execute; any other remaining
+process, or an inventory failure, refuses collection. Failures include the
+remaining PID/state rows. Only this job's newly created account is affected.
 
 Every PR runs `test_live_isolation` on all three OSes, using the same preparation
 and proof scripts plus `--smoke --filter '^t01'` under the sandbox identity,

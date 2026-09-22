@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, type LiveFamily } from "../../scripts/ci-live-filter.ts";
+import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, type LiveFamily } from "../../scripts/ci-live-filter.ts";
 import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds } from "../../scripts/ci-full-suite-result.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { brokerChildEnvironment } from "../../scripts/ci-start-credential-broker.ts";
@@ -18,11 +18,18 @@ interface Step {
   name?: string;
   id?: string;
   shell?: string;
+  "timeout-minutes"?: number;
   uses?: string;
   if?: string;
   run?: string;
   env?: Record<string, string>;
   with?: Record<string, unknown>;
+}
+interface Matrix {
+  include?: Array<Record<string, string>>;
+  family?: LiveFamily[];
+  runner?: string[] | string;
+  suite?: Array<{ name: string; tier: string; shard?: string }>;
 }
 interface Job {
   if?: string;
@@ -33,12 +40,7 @@ interface Job {
   env?: Record<string, string>;
   environment?: string;
   permissions?: Record<string, string>;
-  strategy?: { matrix: {
-    include?: Array<Record<string, string>>;
-    family?: LiveFamily[];
-    runner?: string[] | string;
-    suite?: Array<{ name: string; tier: string; shard?: string }>;
-  } };
+  strategy?: { "fail-fast"?: boolean; "max-parallel"?: number; matrix: Matrix | string };
   steps?: Step[];
   with?: Record<string, string>;
   outputs?: Record<string, string>;
@@ -48,6 +50,7 @@ const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/
     workflow_call: { inputs: Record<string, unknown>; secrets?: Record<string, { required: boolean }> };
     workflow_dispatch: { inputs: Record<string, { description?: string; type: string; default?: boolean | string }> };
   };
+  env: Record<string, string>;
   jobs: Record<string, Job>;
 };
 const deterministic = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf8")) as {
@@ -75,12 +78,23 @@ function platformOf(runner: string | string[]): string {
   throw new Error(`unknown runner: ${runner}`);
 }
 
-function rows(job: Job): Array<{ family: LiveFamily; platform: string }> {
+function matrixOf(job: Job): Matrix {
   const matrix = job.strategy?.matrix;
+  if (typeof matrix !== "string") return matrix ?? {};
+  for (const kind of ["hosted", "windows"] as const) {
+    if (matrix === `\${{ fromJSON(needs.plan.outputs.live_${kind}_matrix) }}`) {
+      return { include: liveMatrix(kind).include.map((row) => ({ ...row })) };
+    }
+  }
+  throw new Error(`Unrecognized live matrix: ${matrix}`);
+}
+
+function rows(job: Job): Array<{ family: LiveFamily; platform: string; shard?: string; slice?: string }> {
+  const matrix = matrixOf(job);
   if (matrix?.include) return matrix.include.map((row) => {
     const platform = platformOf(row.runner);
     expect(row.platform).toBe(platform);
-    return { family: row.family as LiveFamily, platform };
+    return { family: row.family as LiveFamily, platform, shard: row.shard, slice: row.slice };
   });
   return (matrix?.family ?? []).map((family) => ({ family, platform: platformOf(job["runs-on"]!) }));
 }
@@ -190,7 +204,7 @@ describe("t345 complete nightly coverage", () => {
       jobs: Record<string, Job>;
     };
     expect(ci.on.workflow_dispatch.inputs.platform_regressions).toMatchObject({ type: "boolean", default: false });
-    const matrix = ci.jobs.deterministic.strategy!.matrix;
+    const matrix = matrixOf(ci.jobs.deterministic);
     for (const [event, enabled, expanded] of [
       ["pull_request", false, false], ["pull_request", true, false],
       ["workflow_call", true, false], ["workflow_dispatch", false, false],
@@ -211,7 +225,7 @@ describe("t345 complete nightly coverage", () => {
       expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(8).fill("unit"), expanded ? "deep" : "integration"]);
       expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 8 }, (_, index) => `${index + 1}/8`));
       expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 30 : 10);
-      if (expanded) expect(suites).toEqual(workflow.jobs.deterministic.strategy!.matrix.suite!);
+      if (expanded) expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     }
     expect(steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")?.run).not.toContain("--filter");
     const manual = steps(ci.jobs.test_native_terminal).find((step) => step.name === "Run Windows node-pty compatibility on manual dispatch")!;
@@ -268,7 +282,7 @@ describe("t345 complete nightly coverage", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, Job>;
     };
-    const matrix = ci.jobs.test_native_terminal.strategy!.matrix.include!;
+    const matrix = matrixOf(ci.jobs.test_native_terminal).include!;
     const shared = ["runtime", "bun-process", "native-private-root", "native-fixture-cleanup"];
     const owned: Record<string, string[]> = {
       linux: ["bun-process-linux", "native-private-root-posix"],
@@ -323,6 +337,83 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
+  test("POSIX live preparation transports a complete pinned Node prefix before credentialed startup", () => {
+    const prepare = steps(workflow.jobs.live_prepare);
+    const node = prepare.find((step) => step.name === "Prepare pinned POSIX Node runtime")!;
+    expect(node.uses).toMatch(/^actions\/setup-node@[a-f0-9]{40}$/);
+    expect(node.if).toBe("runner.os != 'Windows'");
+    expect(node.with).toMatchObject({ "node-version": `\${{ env.NODE_VERSION }}`, "package-manager-cache": false });
+    expect(workflow.env.NODE_VERSION).toBe("22.23.2");
+    expect(prepare.indexOf(node)).toBeLessThan(prepare.findIndex((step) => step.run === "bun install --frozen-lockfile"));
+    expect(prepare.find((step) => step.name === "Pack POSIX live dependencies")?.run).toContain('--node-runtime "$node_root"');
+    const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.sh"), "utf8");
+    expect(source).not.toContain('sudo install -m 755 "$node_bin"');
+    expect(source).toContain('sudo cp -a "$node_root" "$live_tools/node"');
+    expect(source).toContain('live_path="$live_tools/node/bin:');
+    const protect = source.indexOf('sudo chmod 700 "$HOME" "$RUNNER_TEMP" "$GITHUB_WORKSPACE"');
+    expect(source.indexOf("run_live node --version")).toBeGreaterThan(protect);
+    expect(source.indexOf('run_live "$cli" --version')).toBeGreaterThan(protect);
+    for (const name of ["live_hosted", "live_windows"]) {
+      expect(steps(workflow.jobs[name]).some((step) => step.uses?.startsWith("actions/setup-node@"))).toBe(false);
+    }
+  });
+
+  test("prepared POSIX dependency archives retain Node libraries and refuse incomplete runtimes", () => {
+    const root = mkdtempSync(join(tmpdir(), "t345-node-deps-"));
+    try {
+      const workspace = join(root, "source");
+      const destination = join(root, "destination");
+      const temporary = join(root, "temporary");
+      const cli = join(root, "cli");
+      const node = join(root, "node");
+      for (const path of [destination, temporary, cli, join(node, "bin"), ...["node_modules", "dist", "dist-release"].map((name) => join(workspace, name))]) {
+        mkdirSync(path, { recursive: true });
+      }
+      writeFileSync(join(node, "bin/node"), "prepared Node executable\n");
+      const archive = join(root, "deps.tar.gz");
+      const script = join(REPO_ROOT, "scripts/ci-live-deps.py");
+      const run = (...args: string[]) => spawnSync(process.platform === "win32" ? "python" : "python3", [script, ...args], { encoding: "utf8" });
+      const pack = ["pack", archive, "--workspace", workspace, "--cli", cli];
+      const missing = run(...pack);
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain("complete Node runtime");
+      const incomplete = run(...pack, "--node-runtime", node);
+      expect(incomplete.status).not.toBe(0);
+      expect(incomplete.stderr).toContain("requires bin/node and its lib directory");
+      const unpack = ["unpack", archive, "--workspace", destination, "--temporary", temporary, "--posix-clis"];
+      expect(run(...unpack).status).not.toBe(0);
+      expect(existsSync(join(destination, "node_modules"))).toBe(false);
+      mkdirSync(join(node, "lib/node_modules/npm/bin"), { recursive: true });
+      writeFileSync(join(node, "lib/libnode.fixture"), "required runtime library\n");
+      writeFileSync(join(node, "lib/node_modules/npm/bin/npm-cli.js"), "prepared npm\n");
+      const packed = run(...pack, "--node-runtime", node);
+      expect(packed.status, packed.stderr).toBe(0);
+      rmSync(node, { recursive: true, force: true });
+      const unpacked = run(...unpack);
+      expect(unpacked.status, unpacked.stderr).toBe(0);
+      expect(readFileSync(join(temporary, "aidlc-node/bin/node"), "utf8")).toBe("prepared Node executable\n");
+      expect(readFileSync(join(temporary, "aidlc-node/lib/libnode.fixture"), "utf8")).toBe("required runtime library\n");
+      expect(readFileSync(join(temporary, "aidlc-node/lib/node_modules/npm/bin/npm-cli.js"), "utf8")).toBe("prepared npm\n");
+      expect(existsSync(join(temporary, "aidlc-cli"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("POSIX collection retires macOS user domains and refuses remaining executable processes", () => {
+    const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.sh"), "utf8");
+    const collect = source.slice(source.indexOf('elif [[ "$mode" == collect ]]'));
+    expect(collect.indexOf('sudo launchctl bootout "$domain"')).toBeLessThan(collect.indexOf("sudo pkill"));
+    expect(collect).toContain('"gui/$live_uid" "user/$live_uid"');
+    expect(collect.indexOf('remaining="$(active_live_processes)"')).toBeLessThan(collect.indexOf('sudo cp -a "$live_root/tests/logs/."'));
+    const filter = source.match(/awk -v uid="\$live_uid" '([^']+)'/)![1];
+    const result = spawnSync("bash", ["-c", 'awk -v uid=502 "$1"', "collection-filter", filter], {
+      encoding: "utf8", input: "501 10 S runner\n502 11 Z zombie\n502 12 Z+ zombie-child\n502 13 S worker\n502 14 R child\n",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("502 13 S worker\n502 14 R child\n");
+  });
+
   test("credentialed startup is isolated from broker and agent environments", () => {
     const source = {
       PATH: "/bin", RUNNER_TRACKING_ID: "owned", GITHUB_ACTIONS: "true",
@@ -348,6 +439,7 @@ describe("t345 complete nightly coverage", () => {
       const assume = steps(job).find((step) => step.name === "Assume nightly Bedrock role")!;
       expect(assume.with).toMatchObject({
         "role-to-assume": `\${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}`,
+        "role-duration-seconds": 3600,
         "output-credentials": true, "output-env-credentials": false,
       });
       const startup = steps(job).find((step) => step.name === "Start credential-isolated Bedrock broker")!;
@@ -382,9 +474,12 @@ describe("t345 complete nightly coverage", () => {
   test("all tests/logs uploads require successful sanitization even after test failure", () => {
     for (const job of Object.values(workflow.jobs)) {
       for (const [index, step] of steps(job).entries()) {
-        if (!step.uses?.startsWith("actions/upload-artifact@") || step.with?.path !== "tests/logs/") continue;
+        const path = step.with?.path;
+        if (!step.uses?.startsWith("actions/upload-artifact@") || typeof path !== "string" || !path.split("\n").includes("tests/logs/")) continue;
         const sanitize = steps(job)[index - 1];
-        expect(sanitize).toMatchObject({ id: "sanitize", if: `\${{ always() }}`, run: "bun scripts/ci-sanitize-logs.ts tests/logs" });
+        expect(sanitize).toMatchObject({ id: "sanitize", if: `\${{ always() }}` });
+        expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tests/logs");
+        if (path.includes("tmp/full-suite-native/")) expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tmp/full-suite-native");
         expect(step.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);
       }
     }
@@ -427,6 +522,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("live families have every supported platform, opt-ins and strictness, without no-LLM", () => {
     const actual: string[] = [];
+    const partition = classifyLiveFiles(REPO_ROOT);
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
       expect(job["runs-on"] ?? []).not.toContain("self-hosted");
       if (!jobName.startsWith("live_") && jobName !== "release_contract_windows") continue;
@@ -438,31 +534,65 @@ describe("t345 complete nightly coverage", () => {
       for (const row of rows(job)) {
         const family = FAMILIES[row.family];
         expect(family, row.family).toBeDefined();
-        actual.push(`${row.family}:${row.platform}`);
+        const files = partition.get(row.family)!.filter((file) =>
+          !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(row.platform as NodeJS.Platform));
+        if (row.shard) {
+          const [index, total] = row.shard.split("/").map(Number);
+          expect(total).toBe(files.length);
+          expect(index).toBeGreaterThan(0);
+          expect(index).toBeLessThanOrEqual(total);
+          actual.push(`${row.family}:${row.platform}:${files[index - 1]}`);
+        } else {
+          actual.push(...files.map((file) => `${row.family}:${row.platform}:${file}`));
+        }
         const run = steps(job).find((step) => step.name === `Run ${row.family}`);
         expect(run, `${jobName}/${row.family} command`).toBeDefined();
         expect({ ...job.env, ...run!.env }).toMatchObject(family.env);
-        const command = run!.run!.replaceAll(`\${{ matrix.platform }}`, row.platform).trim();
+        expect(run!["timeout-minutes"]).toBe(45);
+        const command = run!.run!.replaceAll(`\${{ matrix.platform }}`, row.platform)
+          .replaceAll(`\${{ matrix.shard }}`, row.shard ?? "").trim();
         if (jobName === "live_hosted") {
           expect(command).toContain("sudo -u aidlc-live -H env -i");
           expect(command).toContain('cd "$AIDLC_LIVE_ROOT" && exec "$@"');
-          expect(command).toContain(`ci-live-sandbox.ts" ${row.family} ${row.platform}`);
+          expect(command).toContain(`ci-live-sandbox.ts" ${row.family} ${row.platform} "${row.shard}"`);
           const proof = steps(job).findIndex((step) => step.name === "Prove isolation");
           expect(proof).toBeGreaterThanOrEqual(0);
           expect(proof).toBeLessThan(steps(job).indexOf(run!));
         } else if (jobName === "live_windows") {
-          expect(command).toBe(`.github/scripts/prepare-live-runtime.ps1 -Mode run -Family ${row.family}`);
+          expect(command).toBe(`.github/scripts/prepare-live-runtime.ps1 -Mode run -Family ${row.family} -Shard '${row.shard}'`);
           const proof = steps(job).findIndex((step) => step.name === "Prove isolation");
           expect(proof).toBeGreaterThanOrEqual(0);
           expect(proof).toBeLessThan(steps(job).indexOf(run!));
         } else {
           expect(job.if).toBeUndefined();
-          expect(command).toBe(`bun scripts/ci-live-filter.ts ${row.family} --platform ${row.platform} --run -- --debug -P 4`);
+          expect(command).toBe(`bun scripts/ci-live-filter.ts ${row.family} --platform ${row.platform} --run -- --debug -P 8`);
         }
       }
     }
-    const expected = Object.entries(FAMILIES).flatMap(([family, spec]) => spec.platforms.map((platform) => `${family}:${platform}`));
+    const expected = Object.entries(FAMILIES).flatMap(([family, spec]) => spec.platforms.flatMap((platform) =>
+      partition.get(family as LiveFamily)!.filter((file) => !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(platform))
+        .map((file) => `${family}:${platform}:${file}`)));
     expect(actual.sort()).toEqual(expected.sort());
+  });
+
+  test("live jobs use authorized dynamic matrices and leave time for collection before credentials expire", () => {
+    const plan = steps(workflow.jobs.plan);
+    const discovery = plan.find((step) => step.id === "live_matrix")!;
+    expect(plan.indexOf(discovery)).toBeGreaterThan(plan.findIndex((step) => step.id === "source"));
+    expect(plan.indexOf(discovery)).toBeGreaterThan(plan.findIndex((step) => step.run === "bun install --frozen-lockfile"));
+    expect(discovery.if).toBeUndefined();
+    for (const kind of ["hosted", "windows"] as const) {
+      const job = workflow.jobs[`live_${kind}`];
+      expect(discovery.run).toContain(`bun scripts/ci-live-filter.ts --matrix ${kind}`);
+      expect(workflow.jobs.plan.outputs?.[`live_${kind}_matrix`]).toBe(`\${{ steps.live_matrix.outputs.${kind} }}`);
+      expect(job.strategy?.matrix).toBe(`\${{ fromJSON(needs.plan.outputs.live_${kind}_matrix) }}`);
+      expect(job.strategy?.["max-parallel"]).toBe(kind === "hosted" ? 12 : 6);
+      expect(job.strategy?.["fail-fast"]).toBe(false);
+      expect(job["timeout-minutes"]).toBe(55);
+      expect(steps(job).find((step) => step.name === "Collect isolated live logs")?.if).toBe(`\${{ always() }}`);
+      expect(steps(job).find((step) => step.name === "Upload diagnostic logs")?.with?.name).toContain(`\${{ matrix.slice }}`);
+    }
+    expect(steps(workflow.jobs.plan).find((step) => step.run === "bun install --frozen-lockfile")?.if).toBeUndefined();
   });
 
   test("sandbox env is explicit and excludes runner control-plane and AWS secrets", () => {
@@ -485,7 +615,7 @@ describe("t345 complete nightly coverage", () => {
   test("Kiro and Cursor are excluded without exposing vendor API keys", () => {
     for (const [name, job] of Object.entries(workflow.jobs)) {
       expect(name).not.toContain("kiro");
-      const matrix = job.strategy?.matrix;
+      const matrix = matrixOf(job);
       for (const family of [...(matrix?.family ?? []), ...(matrix?.include ?? []).map((row) => row.family ?? "")]) {
         expect(family).not.toContain("kiro");
       }
@@ -549,7 +679,7 @@ describe("t345 complete nightly coverage", () => {
       expect(workflow.jobs[job].if, job).toBeUndefined();
     }
     for (const step of steps(workflow.jobs.plan).filter((step) =>
-      step.run?.includes("bun install") || step.run?.includes("reconcile-tests.ts") || step.with?.name === "full-suite-native-plan")) {
+      step.run?.includes("reconcile-tests.ts") || step.with?.name === "full-suite-native-plan")) {
       expect(step.if).toBe("steps.source.outputs.purpose == 'release'");
     }
     expect(steps(workflow.jobs.result).find((step) => step.name === "Require every declared leg")?.env?.FULL_SUITE_PURPOSE)
@@ -581,6 +711,7 @@ describe("t345 complete nightly coverage", () => {
         if (args.includes("--e2e")) {
           expect(args).toContain("--isolated-e2e");
           expect(args[args.indexOf("--bedrock-parallel") + 1]).toBe("2");
+          expect(args[args.indexOf("--e2e-file-timeout") + 1]).toBe("2400");
           expect(args).not.toContain("--kiro-parallel");
           expect(args).not.toContain("--ide-parallel");
           expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -598,10 +729,16 @@ describe("t345 complete nightly coverage", () => {
   }
 
   test("native obligations include macOS and the fail-closed result depends on every job", () => {
-    expect(workflow.jobs.native_terminal.strategy?.matrix.include).toContainEqual({ job: "darwin-bun", runner: "macos-15", backend: "bun" });
+    expect(matrixOf(workflow.jobs.native_terminal).include).toContainEqual({ job: "darwin-bun", runner: "macos-15", backend: "bun" });
     expect(workflow.jobs.result.if).toBe(`\${{ always() }}`);
     expect([...(workflow.jobs.result.needs as string[])].sort()).toEqual(Object.keys(workflow.jobs).filter((name) => name !== "result").sort());
     expect(Object.keys(workflow.jobs).filter((name) => name !== "result").sort()).toEqual([...FULL_SUITE_JOBS].sort());
+    const native = steps(workflow.jobs.native_terminal).find((step) => step.name === "Run exact native obligations")!.run!;
+    expect(native).toContain("bash tests/run-tests.sh --debug -P 8");
+    expect(native).toContain('--filter "$TEST_MATRIX_FILTER" --matrix-plan "$RUNNER_TEMP/native-plan.json"');
+    expect(native).toContain(`--matrix-job "\${{ matrix.job }}"`);
+    expect(native).toContain('> "$capture/run.log" 2>&1');
+    expect(native).toContain("p;q;}");
     const production = steps(workflow.jobs.production_guards).find((step) => step.name === "Require production guard coverage")!.run!;
     expect(production).toContain("--production-guards");
     expect(production).toContain("--require-coverage");
@@ -616,7 +753,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("nightly unit shards cover every unit file exactly once on each supported OS", () => {
     const job = workflow.jobs.deterministic;
-    const matrix = job.strategy!.matrix;
+    const matrix = matrixOf(job);
     expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
     const suites = matrix.suite!;
     expect(suites.filter((suite) => suite.tier === "smoke")).toHaveLength(1);
