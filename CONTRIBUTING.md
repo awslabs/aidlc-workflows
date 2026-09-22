@@ -126,7 +126,10 @@ author should address the reported gaps. `maintainer/merge` means the review
 found no blocking issue and considers the PR ready for a maintainer's merge
 decision; AIDA does not approve or merge the PR. The merge decision requires no
 P0 or P1 finding. P2 and P3 remain advisory. Readiness and risk provide context
-for the human decision and do not change the requested action.
+for the human decision and do not change the requested action. To keep the
+published assessment consistent with that action, a review without P0 or P1
+uses readiness 4 or 5 and risk 1 or 2. A material reason for a lower-readiness
+or higher-risk result must be reported as a P0 or P1 finding.
 
 The first AIDA review evaluates the complete PR. Each later review rechecks the
 previous findings and reviews only the commits added since that assessment for

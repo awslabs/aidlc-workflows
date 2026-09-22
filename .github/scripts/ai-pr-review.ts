@@ -976,6 +976,12 @@ export function validateStructuredReview(
   if (decision.action === "change" && !blocking) {
     throw new Error("decision author/change requires a P0 or P1 finding");
   }
+  if (!blocking && assessment.readiness.score < 4) {
+    throw new Error("a review without P0 or P1 findings requires readiness 4 or 5");
+  }
+  if (!blocking && assessment.risk.score > 2) {
+    throw new Error("a review without P0 or P1 findings requires risk 1 or 2");
+  }
 
   const residualRisk = requiredText(candidate.residualRisk, "residualRisk", 1000);
   return {

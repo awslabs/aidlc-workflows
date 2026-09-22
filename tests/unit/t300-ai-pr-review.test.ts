@@ -319,7 +319,7 @@ process.stdout.write(JSON.stringify(value));
     );
   });
 
-  test("validator binds the PR decision only to blocking findings", () => {
+  test("validator binds the PR decision and assessment to blocking findings", () => {
     const blockingMerge = review("P1");
     blockingMerge.decision = {
       actor: "maintainer",
@@ -332,7 +332,15 @@ process.stdout.write(JSON.stringify(value));
 
     const lowReadiness = review();
     lowReadiness.assessment.readiness.score = 3;
-    expect(() => validate(JSON.stringify(lowReadiness))).not.toThrow();
+    expect(() => validate(JSON.stringify(lowReadiness))).toThrow(
+      "requires readiness 4 or 5",
+    );
+
+    const highRisk = review();
+    highRisk.assessment.risk.score = 3;
+    expect(() => validate(JSON.stringify(highRisk))).toThrow(
+      "requires risk 1 or 2",
+    );
 
     const wrongPair = review() as unknown as {
       decision: { actor: string; action: string; rationale: string };
@@ -1516,6 +1524,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(common).toContain("introduced that problem. Do not report a newly noticed problem");
     expect(common).toContain("Do not report a newly noticed problem in older");
     expect(common).toContain("When the head has not changed");
+    expect(common).toContain("metadata delta for this narrow security exception");
     expect(candidates).toContain("inspection or the command sandbox fails");
     expect(aidlc).toContain("Reconstruct every affected caller, writer, reader");
     expect(aidlc).toContain("Treat tests as claims");
@@ -1549,6 +1558,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(judge).toContain("Additional specialist lenses do not expand");
     expect(judge).toContain("publish an empty findings list");
     expect(judge).toContain("no code delta exists");
+    expect(judge).toContain("Current metadata is review delta");
     expect(judge).toContain("Review the code that exists");
     expect(judge).toContain("The runner verifies");
     expect(judge).toContain("publisher records the immutable");
@@ -1571,6 +1581,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(judge).toContain("human merge decision");
     expect(judge).toContain("Readiness 5/5 is the best readiness result");
     expect(judge).toContain("risk 1/5 is the best risk result");
+    expect(judge).toContain("readiness must be 4 or 5");
+    expect(judge).toContain("risk must be 1 or 2");
     expect(judgeSchema.required).toEqual([
       "base",
       "head",
