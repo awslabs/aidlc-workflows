@@ -20,6 +20,7 @@ import { loadGraph } from "../../core/tools/aidlc-graph.ts";
 import { producesArtifactFile } from "../../core/tools/aidlc-lib.ts";
 import {
   captureStageValidationBasis,
+  computeProducerOutputChanges,
   diffStageValidationBasis,
   inspectStageValidity,
   latestCompletionBasesFromAudit,
@@ -29,6 +30,7 @@ import {
   VALIDATION_BASIS_FIELD,
   VALIDATION_WARNING_FIELD,
   type ArtifactBasis,
+  type ProducerOutputChanges,
   type StageValidationBasis,
   type StageValidityNode,
 } from "../../core/tools/aidlc-validity.ts";
@@ -959,6 +961,76 @@ describe("observed stage-level stale propagation", () => {
 
     expect(issues.map((issue) => [issue.stage, issue.status])).toEqual([
       ["build-and-test", "needs-revalidation"],
+    ]);
+  });
+
+  test("skips a content-only producer change for a files-added-or-removed consumer", () => {
+    // End-to-end plumbing check for the typed-dependency-edges RFC
+    // (docs/rfcs/typed-dependency-edges.md, #1001): the recheck_if
+    // declaration on a consume edge, carried through the receipt and
+    // matched against the producer's actual change class, should filter
+    // out a propagation whose producer only edited content.
+    const stages: StageValidityNode[] = graph.map((stage) => {
+      if (stage.slug !== "build-and-test") return stage;
+      return {
+        ...stage,
+        consumes: [
+          {
+            artifact: "code-summary",
+            required: true,
+            recheck_if: "files-added-or-removed",
+          },
+        ],
+      };
+    });
+    const previous = observedBases(false);
+    const currentCode = basis({
+      inputs: [artifactBasis()],
+      outputs: [
+        artifactBasis({
+          artifact: "code-summary",
+          producer: "code-generation",
+          instanceCount: runtimeUnits.length,
+          presentCount: runtimeUnits.length,
+          structureHash: "sha256:code-structure",
+          contentHash: "sha256:code-content-DRIFTED",
+        }),
+      ],
+    });
+    const current = new Map(previous);
+    current.set("code-generation", currentCode);
+    // Consumer's stored receipt records the declared recheck_if on its input.
+    const buildBasis = basis({
+      inputs: [
+        artifactBasis({
+          artifact: "code-summary",
+          producer: "code-generation",
+          instanceCount: runtimeUnits.length,
+          presentCount: runtimeUnits.length,
+          structureHash: "sha256:code-structure",
+          contentHash: "sha256:code-content",
+          recheck_if: "files-added-or-removed",
+        }),
+      ],
+      outputs: [],
+    });
+    previous.set("build-and-test", buildBasis);
+    current.set("build-and-test", buildBasis);
+    const changes: ProducerOutputChanges = computeProducerOutputChanges(
+      previous,
+      current,
+    );
+    const issues = propagateStageInvalidation(
+      stages,
+      new Set(stages.map((stage) => stage.slug)),
+      new Map([["code-generation", ["output:code-summary"]]]),
+      previous,
+      changes,
+    );
+    // code-generation is directly stale; build-and-test only cares about
+    // structural changes, which did not occur — so the edge is skipped.
+    expect(issues.map((issue) => [issue.stage, issue.status])).toEqual([
+      ["code-generation", "stale"],
     ]);
   });
 
