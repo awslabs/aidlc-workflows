@@ -1544,8 +1544,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(direction).not.toContain("scope that is silently broadened");
     expect(direction).not.toContain("can no longer be traced");
     expect(direction).not.toContain("free-form chatbot");
-    expect(judge).toContain(".ai-review-lenses/prompt-injection.md");
-    expect(judge).toContain(".ai-review-lenses/security.md");
+    expect(judge).toContain(".ai-review-lenses/prompt-injection.json");
+    expect(judge).toContain(".ai-review-lenses/security.json");
     expect(judge).toContain(".ai-review-lenses/aidlc.md");
     expect(judge).toContain(".ai-review-lenses/user-experience.md");
     expect(judge).toContain(".ai-review-lenses/direction.md");
@@ -1580,6 +1580,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "userExperience",
       "decision",
       "findings",
+      "ledger",
       "residualRisk",
     ]);
     expect(judgeSchema.properties.assessment.required).toEqual(["readiness", "risk"]);

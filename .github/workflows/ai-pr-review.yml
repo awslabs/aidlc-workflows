@@ -488,12 +488,17 @@ jobs:
             echo "$name complete."
           }
 
+          # The two security lenses emit structured JSON (same evidence shapes as
+          # the final review) so the publisher can read exactly which lines and
+          # files they cited: that provenance, not the judge's category, exempts a
+          # finding from the incremental scope.
+          lens_schema="$(jq -c . .ai-review-controls/prompts/ai-pr-review-lens-schema.json)"
           prompt_injection_prompt="$(
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
-              .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-lens-json.md \
               .ai-review-controls/prompts/ai-pr-review-prompt-injection.md
-            printf '\nRead the review context and trusted base tree. End with exactly:\n'
+            printf '\nRead the review context and trusted base tree. Set marker to exactly:\n'
             printf '[LENS-REVIEWED] prompt-injection %s\n' "$HEAD_SHA"
           )"
           run_model \
@@ -501,18 +506,18 @@ jobs:
             "Prompt-injection review" \
             "medium" \
             50000 \
-            ".ai-review-lenses/prompt-injection.md" \
-            "$prompt_injection_prompt"
-          grep -Fqx \
-            "[LENS-REVIEWED] prompt-injection $HEAD_SHA" \
-            .ai-review-lenses/prompt-injection.md
+            ".ai-review-lenses/prompt-injection.json" \
+            "$prompt_injection_prompt" \
+            "$lens_schema"
+          jq -e --arg marker "[LENS-REVIEWED] prompt-injection $HEAD_SHA" \
+            '.marker == $marker' .ai-review-lenses/prompt-injection.json >/dev/null
 
           security_prompt="$(
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
-              .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-lens-json.md \
               .ai-review-controls/prompts/ai-pr-review-security.md
-            printf '\nRead the review context and trusted base tree. End with exactly:\n'
+            printf '\nRead the review context and trusted base tree. Set marker to exactly:\n'
             printf '[LENS-REVIEWED] security %s\n' "$HEAD_SHA"
           )"
           run_model \
@@ -520,11 +525,11 @@ jobs:
             "Security review" \
             "medium" \
             50000 \
-            ".ai-review-lenses/security.md" \
-            "$security_prompt"
-          grep -Fqx \
-            "[LENS-REVIEWED] security $HEAD_SHA" \
-            .ai-review-lenses/security.md
+            ".ai-review-lenses/security.json" \
+            "$security_prompt" \
+            "$lens_schema"
+          jq -e --arg marker "[LENS-REVIEWED] security $HEAD_SHA" \
+            '.marker == $marker' .ai-review-lenses/security.json >/dev/null
 
           aidlc_prompt="$(
             cat \

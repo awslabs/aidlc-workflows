@@ -10,6 +10,7 @@
     "userExperience",
     "decision",
     "findings",
+    "ledger",
     "residualRisk"
   ],
   "properties": {
@@ -152,6 +153,39 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/finding"
+      }
+    },
+    "ledger": {
+      "type": "array",
+      "description": "One disposition for every ledger entry whose status is open: still-open (with findingIndex pointing at its restatement in findings, or null when not restated) or resolved (the head corrected it).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "disposition",
+          "findingIndex"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^F[1-9][0-9]*$"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "still-open",
+              "resolved"
+            ]
+          },
+          "findingIndex": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
       }
     },
     "residualRisk": {

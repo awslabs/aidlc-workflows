@@ -45,3 +45,5 @@ Scope: this lens always reviews the full head and the full PR metadata.
 `.ai-review-context/review-scope.json` narrows the other lenses to lines changed
 since the last review; it never narrows this one, and its findings are never
 deferred by the publisher.
+Its output is the structured JSON described above; the publisher reads the
+cited lines and files from it directly.

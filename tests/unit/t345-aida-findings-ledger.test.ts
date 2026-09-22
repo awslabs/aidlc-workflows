@@ -1246,8 +1246,8 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(COMMON_PROMPT).not.toContain("A substantive maintainer decision is project authority");
     expect(JUDGE_PROMPT).toContain("the only authoritative record of\n  maintainer decisions");
     expect(JUDGE_PROMPT).toContain("retained by\n  the publisher");
-    expect(JUDGE_PROMPT).toContain("Set `ledgerId` only to the\n  id of an `open` ledger entry");
-    expect(JUDGE_PROMPT).toContain("Never emit the id of an `accepted` or\n  `rejected` entry");
+    expect(JUDGE_PROMPT).toContain("Dispose of every ledger entry whose `status` is `open`");
+    expect(JUDGE_PROMPT).toContain("Never emit the id of an\n  `accepted` or `rejected` entry");
     expect(JUDGE_PROMPT).toContain('"ledgerId": null,');
     const schema = JSON.parse(readFileSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-judge-schema.json"), "utf8"));
     expect(schema.$defs.finding.properties.ledgerId).toMatchObject({ type: ["string", "null"], pattern: "^F[1-9][0-9]*$" });

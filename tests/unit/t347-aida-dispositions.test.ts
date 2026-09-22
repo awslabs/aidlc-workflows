@@ -1,0 +1,157 @@
+import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { emptyLedger, type Ledger, lineAnchor, type LoadedLedger, reconcileLedger } from "../../.github/scripts/ai-pr-ledger.ts";
+import {
+  applyLedgerToReview,
+  type ChangedFileManifest,
+  parseStructuredReview,
+  renderReview,
+  type ReviewMetadata,
+  type StructuredReview,
+} from "../../.github/scripts/ai-pr-review.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
+
+const BASE = "b".repeat(40);
+const HEAD = "a".repeat(40);
+const OLD_HEAD = "9".repeat(40);
+const CONTEXT_ID = "c".repeat(64);
+const AT = "2026-09-22T12:00:00Z";
+const PATH = "core/example.ts";
+const LINE_42 = "  const total = computeTotal(items);";
+const LINE_43 = "  applyDiscount(total, coupon);";
+const METADATA: ReviewMetadata = { title: "Add payment validation", body: "Please review." };
+const MANIFEST: ChangedFileManifest = {
+  base: BASE,
+  head: HEAD,
+  files: [{ path: PATH, status: "M", added: [{ start: 42, end: 44 }], deleted: [{ start: 40, end: 41 }], fileLevelEvidence: false, snapshot: `head/${PATH}` }],
+};
+const A42 = lineAnchor(PATH, "RIGHT", LINE_42);
+const A43 = lineAnchor(PATH, "RIGHT", LINE_43);
+const JUDGE_PROMPT = readFileSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-judge.md"), "utf8");
+const SCHEMA = JSON.parse(readFileSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-judge-schema.json"), "utf8"));
+
+function entry(id: string, priority: "P0" | "P1" | "P2" | "P3", anchors: Ledger["findings"][number]["anchors"]): Ledger["findings"][number] {
+  return { id, priority, category: "correctness", title: `Finding ${id}`, anchors, status: "open", firstSeen: { head: OLD_HEAD, at: AT }, lastSeen: { head: OLD_HEAD, at: AT } };
+}
+
+function ledgerWith(...findings: Ledger["findings"]): LoadedLedger {
+  const ledger = emptyLedger(42);
+  ledger.findings = findings;
+  ledger.nextId = findings.reduce((max, item) => Math.max(max, Number(item.id.slice(1))), 0) + 1;
+  return { ledger, commentId: 900, digest: null, migrated: false };
+}
+
+function review(
+  findings: Array<{ priority: "P0" | "P1" | "P2" | "P3"; line: number; ledgerId?: string }>,
+  ledger: Array<{ id: string; disposition: "still-open" | "resolved"; findingIndex: number | null }> | undefined,
+  decision: StructuredReview["decision"] = { actor: "author", action: "change", rationale: "The finding must be corrected." },
+): string {
+  return JSON.stringify({
+    base: BASE,
+    head: HEAD,
+    inspection: { status: "complete", changedFiles: [PATH] },
+    validation: ["Read every changed file."],
+    assessment: { readiness: { score: 2, rationale: "Concrete completeness assessment." }, risk: { score: 4, rationale: "Concrete blast-radius assessment." } },
+    userExperience: { status: "no-user-visible-change", change: "Internal validation only.", before: null, after: null, example: null, assessment: "No indirect user-experience risk." },
+    decision,
+    findings: findings.map((item, index) => ({
+      priority: item.priority,
+      category: "correctness",
+      title: `Restated as number ${index + 1}`,
+      ledgerId: item.ledgerId ?? null,
+      evidence: [{ source: "DIFF", path: PATH, line: item.line, side: "RIGHT" }],
+      problem: "The changed line sums items before discounts are applied.",
+      impact: "Customers are overcharged.",
+      requiredCorrection: "Apply the discount before computing the total.",
+    })),
+    ...(ledger ? { ledger } : {}),
+    residualRisk: "None identified.",
+  });
+}
+
+function contextDir(): string {
+  const root = mkdtempSync(join(tmpdir(), "aida-dispositions-"));
+  mkdirSync(join(root, "head", "core"), { recursive: true });
+  const lines = Array.from({ length: 50 }, (_, index) => `line ${index + 1}`);
+  lines[41] = LINE_42;
+  lines[42] = LINE_43;
+  writeFileSync(join(root, "head", "core", "example.ts"), `${lines.join("\n")}\n`);
+  return root;
+}
+
+describe("t347 AIDA judge dispositions of open ledger entries", () => {
+  test("a still-open disposition binds the restatement to the ledger id; contradictions are rejected", () => {
+    const parsed = parseStructuredReview(review([{ priority: "P1", line: 43 }], [{ id: "F2", disposition: "still-open", findingIndex: 0 }]), BASE, HEAD, MANIFEST, METADATA);
+    expect(parsed.findings[0].ledgerId).toBe("F2");
+    expect(parsed.dispositions).toEqual([{ id: "F2", disposition: "still-open", findingIndex: 0 }]);
+    // Absent (older judge output) parses as no dispositions.
+    expect(parseStructuredReview(review([], undefined), BASE, HEAD, MANIFEST, METADATA).dispositions).toEqual([]);
+    const bad = (ledger: unknown, findings: Array<{ priority: "P1"; line: number; ledgerId?: string }> = [{ priority: "P1", line: 43 }]) =>
+      parseStructuredReview(review(findings, ledger as never), BASE, HEAD, MANIFEST, METADATA);
+    expect(() => bad([{ id: "x", disposition: "resolved", findingIndex: null }])).toThrow("ledger[0].id must be a ledger id");
+    expect(() => bad([{ id: "F1", disposition: "fixed", findingIndex: null }])).toThrow("disposition must be still-open or resolved");
+    expect(() => bad([{ id: "F1", disposition: "still-open", findingIndex: 3 }])).toThrow("findingIndex must name an entry of findings");
+    expect(() => bad([{ id: "F1", disposition: "resolved", findingIndex: 0 }])).toThrow("resolves F1 but also restates it");
+    expect(() => bad([{ id: "F1", disposition: "still-open", findingIndex: 0 }, { id: "F1", disposition: "resolved", findingIndex: null }])).toThrow("disposes of F1 twice");
+    expect(() => bad([{ id: "F1", disposition: "still-open", findingIndex: 0 }], [{ priority: "P1", line: 43, ledgerId: "F2" }])).toThrow("binds F1 to findings[0], which already carries F2");
+    expect(() => bad("nope")).toThrow("ledger must be an array of dispositions");
+  });
+
+  test("dispositions decide the omitted pass: resolved closes, still-open retains, undisposed falls back to presence", () => {
+    const loaded = ledgerWith(entry("F1", "P1", [A42]), entry("F2", "P1", [A43]), entry("F3", "P2", [A42]), entry("F4", "P1", [lineAnchor(PATH, "RIGHT", "gone")]));
+    const result = reconcileLedger(
+      loaded,
+      [],
+      HEAD,
+      AT,
+      anchor => anchor.sha256 !== lineAnchor(PATH, "RIGHT", "gone").sha256,
+      new Map([["F1", "resolved"], ["F2", "still-open"], ["F3", "resolved"]]),
+    );
+    expect(result.resolvedIds).toEqual(["F1", "F3", "F4"]);
+    expect(result.resolvedByJudgeIds).toEqual(["F1", "F3"]);
+    expect(result.retained.map(item => item.id)).toEqual(["F2"]);
+    expect(result.undisposedIds).toEqual(["F4"]);
+    expect(result.ledger.events.filter(event => event.kind === "resolved").map(event => `${event.id}:${event.reason}`)).toEqual([
+      "F1:declared corrected by the judge; cited lines unchanged",
+      "F3:declared corrected by the judge; cited lines unchanged",
+      "F4:cited code is gone",
+    ]);
+    expect(result.ledger.events.find(event => event.id === "F2")?.reason).toBe("retained: still open per the judge, not restated");
+  });
+
+  test("end to end: a restatement under new wording keeps its id, a declared fix resolves, and the review says what happened", () => {
+    const root = contextDir();
+    try {
+      const loaded = ledgerWith(entry("F1", "P1", [A42]), entry("F2", "P1", [A43]), entry("F3", "P1", [lineAnchor(PATH, "RIGHT", "line 7")]));
+      // The judge restates F2 with new wording on a different line, declares F1 fixed, forgets F3.
+      const raw = review([{ priority: "P1", line: 44 }], [{ id: "F2", disposition: "still-open", findingIndex: 0 }, { id: "F1", disposition: "resolved", findingIndex: null }]);
+      const applied = applyLedgerToReview(parseStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA), loaded, root, root, AT);
+      expect(applied.review.findings.map(item => `${item.ledgerId}:${item.title}`)).toEqual(["F2:Restated as number 1"]);
+      expect(applied.ledger.findings.map(item => `${item.id}:${item.status}`)).toEqual(["F1:resolved", "F2:open", "F3:open"]);
+      expect(applied.ledger.findings[1].anchors).toHaveLength(2);
+      expect(applied.ledger.nextId).toBe(4);
+      expect(applied.review.ledger?.resolvedByJudge).toEqual(["F1"]);
+      expect(applied.review.ledger?.undisposed).toEqual(["F3"]);
+      expect(applied.review.ledger?.retained.map(item => item.id)).toEqual(["F3"]);
+      const body = renderReview(applied.review, CONTEXT_ID).body;
+      expect(body).toContain("**P1 [F2]: Restated as number 1**");
+      expect(body).toContain("resolved F1 (F1 declared corrected by the judge); 1 open entry left undisposed by the judge (F3).");
+      expect(body).toContain("**P1 [F3]: Finding F3** — first reported at");
+      expect(body).not.toContain("[F4]");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the schema requires one disposition per open entry and the prompt explains the duty", () => {
+    expect(SCHEMA.required).toContain("ledger");
+    expect(SCHEMA.properties.ledger.items.required).toEqual(["id", "disposition", "findingIndex"]);
+    expect(SCHEMA.properties.ledger.items.properties.disposition.enum).toEqual(["still-open", "resolved"]);
+    expect(SCHEMA.properties.ledger.items.properties.findingIndex.type).toEqual(["integer", "null"]);
+    expect(JUDGE_PROMPT).toContain("Dispose of every ledger entry whose `status` is `open` in the top-level\n  `ledger` array, exactly once each");
+    expect(JUDGE_PROMPT).toContain("Never open a new finding for a defect an open entry already\n  names — bind it instead.");
+    expect(JUDGE_PROMPT).toContain('{"id": "F3", "disposition": "still-open", "findingIndex": 0}');
+  });
+});

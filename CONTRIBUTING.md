@@ -176,10 +176,13 @@ review so the head can proceed without an artificial commit; when a `reopen`
 turns it back into `author/change`, it posts a blocking review for the head.
 The check of the original review run is not rewritten. Review and command
 workflows share one non-cancelling per-PR execution group, so opposing verdict
-mutations are serialized. An open P0/P1 that a later review omits
-while at least one of its cited lines is provably unchanged is *retained*: it
-stays in the review and keeps the next action with the author until the code
-changes or a maintainer accepts it. It is also retained when a current,
+mutations are serialized. On every later review the judge must dispose of each open ledger entry:
+*still-open* (restating it under the same id, whatever the new wording or
+lines) or *resolved* (the head corrected it). A restatement never opens a new
+id for a defect an open entry already names. An open P0/P1 the judge leaves
+undisposed while at least one of its cited lines is provably unchanged is
+*retained*: it stays in the review and keeps the next action with the author
+until the code changes, the judge disposes of it, or a maintainer accepts it. It is also retained when a current,
 evaluable anchor has an unknown result. A finding resolves when all current,
 evaluable anchors are gone; legacy-only identity anchors do not keep it open.
 
@@ -194,8 +197,9 @@ user-experience, and AIDLC lenses and the judge's non-security categories only
 cover the lines of the PR diff that changed since the head AIDA last reviewed;
 the code that did not change was reviewable then and its findings are in the
 ledger; lines or files deleted since, and renamed files, stay in scope. The
-security and prompt-attack lenses always review the full head, and a finding on
-a line they cited is never deferred whatever its category. A non-security
+security and prompt-attack lenses always review the full head and emit
+structured evidence, and a finding on a line or file they cited is never
+deferred whatever category the judge assigns it. A non-security
 finding the judge still reports on unchanged lines is listed under *Deferred*
 and never affects the decision. The review header states the scope.
 AIDA falls back to a full review on the first review, after a force-push, or

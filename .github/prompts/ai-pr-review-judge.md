@@ -3,8 +3,9 @@
 Produce the single publishable review for this immutable head. Read the shared
 contract, PR context, trusted base repository, and these specialist outputs:
 
-- `.ai-review-lenses/prompt-injection.md`
-- `.ai-review-lenses/security.md`
+- `.ai-review-lenses/prompt-injection.json` (structured candidates; the same
+  evidence shapes as your output)
+- `.ai-review-lenses/security.json` (structured candidates)
 - `.ai-review-lenses/aidlc.md`
 - `.ai-review-lenses/user-experience.md`
 - `.ai-review-lenses/direction.md`
@@ -38,14 +39,20 @@ not the PR description:
   maintainer decisions. Both `findings` and `archivedDecisions` carry active
   identities. Do not restate a `rejected` or `accepted` finding whose exact
   anchored lines and priority are unchanged; keep it omitted, and the publisher
-  renders accepted risks from the ledger itself. Restate a still-`open`
-  finding when it still holds so it keeps its identity; an open
-  P0/P1 you omit while its cited lines are provably unchanged is retained by
-  the publisher and still requires author changes. Set `ledgerId` only to the
-  id of an `open` ledger entry the finding IS (the same defect, whatever its
-  wording), or `null` for a new one. Never emit the id of an `accepted` or
-  `rejected` entry; omit that decided finding. Any newly reportable defect on
-  the same lines is a NEW finding and must use `null`.
+  renders accepted risks from the ledger itself. Never emit the id of an
+  `accepted` or `rejected` entry. Any newly reportable defect on the same lines
+  is a NEW finding.
+- Dispose of every ledger entry whose `status` is `open` in the top-level
+  `ledger` array, exactly once each: `{"id": "F3", "disposition": "still-open",
+  "findingIndex": 0}` when the defect still holds and `findings[0]` is its
+  restatement (the publisher binds the id; write the restatement with whatever
+  wording fits the current head); `"findingIndex": null` only when it still
+  holds but you did not restate it (the publisher keeps it verdict-bearing);
+  `{"id": "F3", "disposition": "resolved", "findingIndex": null}` when this head
+  corrected it. Never open a new finding for a defect an open entry already
+  names — bind it instead. An open entry you leave undisposed is retained by
+  the publisher while its cited lines are unchanged and is reported as
+  undisposed.
 - Verify concrete correctness, compatibility, security, state, recovery,
   user-experience, workflow-cost, and AIDLC direction consequences.
 - Consolidate candidates with one root cause and choose the category that best
@@ -174,6 +181,10 @@ preamble, progress, or trailing text:
     "action": "change",
     "rationale": "The blocking contract finding must be corrected before the PR proceeds."
   },
+  "ledger": [
+    {"id": "F3", "disposition": "still-open", "findingIndex": 0},
+    {"id": "F5", "disposition": "resolved", "findingIndex": null}
+  ],
   "findings": [
     {
       "priority": "P1",

@@ -235,14 +235,18 @@ describe("t346 AIDA incremental review scope", () => {
     // is never deferred.
     const lensDir = mkdtempSync(join(tmpdir(), "aida-scope-lenses-"));
     try {
-      writeFileSync(join(lensDir, "prompt-injection.md"), `**P1 candidate: instruction smuggled into a comment**\n\nEvidence: \`${PATH}:42\`, \`docs/with space.md:7-9\`, \`assets/logo.png\`, \`README.md\`, \`my docs/plan.md\`, \`not-a-changed-file.ts\`, \`C:/odd:path.ts:3\`, \`huge.ts:99999999999999999999\`, \`x.ts:1-999999\`.\n`);
-      writeFileSync(join(lensDir, "security.md"), "No candidates.\n");
-      const cited = securityCitations(lensDir, new Set(["assets/logo.png", "README.md", "my docs/plan.md", PATH]));
-      expect([...cited.lines].filter(line => !line.startsWith("x.ts:")).sort()).toEqual(["C:/odd:path.ts:3", `${PATH}:42`, "docs/with space.md:7", "docs/with space.md:8", "docs/with space.md:9"]);
-      // Ranges are capped, absurd numbers are ignored: parsing never hangs.
-      expect([...cited.lines].filter(line => line.startsWith("x.ts:"))).toHaveLength(5001);
-      // Bare paths count as file-level evidence when they name a changed file exactly.
-      expect(cited.files).toEqual(new Set(["assets/logo.png", "README.md", "my docs/plan.md"]));
+      writeFileSync(join(lensDir, "prompt-injection.json"), JSON.stringify({
+        marker: "[LENS-REVIEWED] prompt-injection x", status: "complete",
+        candidates: [
+          { priority: "P1", title: "instruction smuggled into a comment", evidence: [{ source: "DIFF", path: PATH, line: 42, side: "RIGHT" }, { source: "DIFF_FILE", path: "assets/logo.png" }, { source: "PR_BODY", quote: "ignore previous" }], problem: "p", impact: "i", requiredCorrection: "r" },
+          { priority: "P2", title: "odd evidence is ignored, not fatal", evidence: [{ source: "DIFF", path: "", line: 3, side: "RIGHT" }, { source: "DIFF", path: "x.ts", line: 1e30, side: "RIGHT" }, { source: "DIFF_FILE", path: "my docs/plan.md" }, "junk"], problem: "p", impact: "i", requiredCorrection: "r" },
+        ],
+      }));
+      writeFileSync(join(lensDir, "security.json"), "{not json");
+      const cited = securityCitations(lensDir);
+      expect([...cited.lines]).toEqual([`${PATH}:42`]);
+      // Bare paths count as file-level evidence exactly as the lens cited them.
+      expect(cited.files).toEqual(new Set(["assets/logo.png", "my docs/plan.md"]));
       expect(findingInScope(finding("correctness", diffLine(42)), INCREMENTAL, cited)).toBe(true);
       expect(findingInScope(finding("correctness", diffLine(44)), INCREMENTAL, cited)).toBe(false);
       expect(findingInScope(finding("correctness", { source: "DIFF_FILE", path: "assets/logo.png" }), INCREMENTAL, cited)).toBe(true);
@@ -344,11 +348,27 @@ describe("t346 AIDA incremental review scope", () => {
     }
     expect(REVIEW_WORKFLOW.split("--scope .ai-review-context/review-scope.json")).toHaveLength(3);
     expect(REVIEW_WORKFLOW.split("--lens-dir .ai-review-lenses")).toHaveLength(3);
+    // The two security lenses emit structured JSON under the lens schema; the other three stay prose.
+    expect(REVIEW_WORKFLOW).toContain('lens_schema="$(jq -c . .ai-review-controls/prompts/ai-pr-review-lens-schema.json)"');
+    expect(REVIEW_WORKFLOW.split('"$lens_schema"')).toHaveLength(3);
+    for (const lens of ["prompt-injection", "security"]) {
+      expect(REVIEW_WORKFLOW).toContain(`".ai-review-lenses/${lens}.json"`);
+      expect(REVIEW_WORKFLOW).toContain(`'.marker == $marker' .ai-review-lenses/${lens}.json >/dev/null`);
+      expect(REVIEW_WORKFLOW).toContain(`.ai-review-controls/prompts/ai-pr-review-lens-json.md \\\n              .ai-review-controls/prompts/ai-pr-review-${lens}.md`);
+    }
+    for (const lens of ["aidlc", "user-experience", "direction"]) {
+      expect(REVIEW_WORKFLOW).toContain(`".ai-review-lenses/${lens}.md"`);
+    }
+    const lensSchema = JSON.parse(readFileSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-lens-schema.json"), "utf8"));
+    expect(lensSchema.required).toEqual(["marker", "status", "candidates"]);
+    expect(lensSchema.$defs.evidence.properties.source.enum).toEqual(["DIFF", "DIFF_FILE", "PR_TITLE", "PR_BODY"]);
+    expect(prompt("lens-json")).toContain('"marker": "[LENS-REVIEWED] <lens> <head sha>"');
+    expect(prompt("judge")).toContain("`.ai-review-lenses/security.json` (structured candidates)");
 
     expect(prompt("scope")).toContain('`mode: "incremental"`');
     expect(prompt("scope")).toContain("report candidates only when their evidence cites a line inside the scope");
     expect(prompt("scope")).toContain("`deleted[]` lists the base lines (`LEFT` side");
-    expect(CONTRIBUTING).toContain("a finding on\na line they cited is never deferred whatever its category");
+    expect(CONTRIBUTING).toContain("a finding on a line or file they cited is never\ndeferred whatever category the judge assigns it");
     expect(prompt("security")).toContain("this lens always reviews the full head");
     expect(prompt("prompt-injection")).toContain("this lens always reviews the full head and the full PR metadata");
     expect(prompt("judge")).toContain("Honor `.ai-review-context/review-scope.json`");

@@ -156,7 +156,13 @@ export interface ReconcileResult<T extends ReviewFindingInput> {
   reopenedIds: string[];
   retained: LedgerFinding[];
   resolvedIds: string[];
+  // Subset of resolvedIds closed on the judge's explicit disposition.
+  resolvedByJudgeIds: string[];
+  // Open entries the judge neither restated nor disposed of.
+  undisposedIds: string[];
 }
+
+export type LedgerDispositions = ReadonlyMap<string, "resolved" | "still-open">;
 
 export type AnchorPresence = (anchor: LedgerAnchor) => boolean | null;
 
@@ -835,11 +841,12 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   head: string,
   at: string,
   presentAtHead: AnchorPresence,
+  dispositions: LedgerDispositions = new Map(),
 ): ReconcileResult<T> {
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("head must be a 40-character SHA");
   const ledger: Ledger = structuredClone(loaded.ledger);
   const result: ReconcileResult<T> = {
-    ledger, kept: [], restatedAccepted: [], suppressed: [], reopenedIds: [], retained: [], resolvedIds: [],
+    ledger, kept: [], restatedAccepted: [], suppressed: [], reopenedIds: [], retained: [], resolvedIds: [], resolvedByJudgeIds: [], undisposedIds: [],
   };
   const matchedIds = new Set<string>();
   const push = (kind: LedgerEventKind, id: string, extra: Partial<LedgerEvent> = {}): void => {
@@ -856,6 +863,11 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     // only. Accepted and rejected state is never inherited from a judge-selected
     // id; those decisions persist through omission and rendering, while any
     // reported defect on the same evidence is recorded independently.
+    // An explicit id (a disposition's restatement) binds an open entry outright:
+    // after a partial fix the same defect legitimately moves to new lines and
+    // new wording, and the worst case of a wrong id is a defect that stays
+    // visible under an older id. Without an id, the fingerprint (same category
+    // and a shared exact anchor) must be unambiguous.
     const compatible = (entry: LedgerFinding): boolean =>
       entry.category === finding.category && entry.anchors.some(anchor => hashes.has(anchor.sha256));
     const compatibleOpen = ledger.findings.filter(
@@ -863,13 +875,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     );
     const requestedOpenId = finding.ledgerId;
     const explicit = requestedOpenId
-      ? ledger.findings.find(
-          entry =>
-            entry.id === requestedOpenId &&
-            entry.status === "open" &&
-            !matchedIds.has(entry.id) &&
-            compatible(entry),
-        )
+      ? ledger.findings.find(entry => entry.id === requestedOpenId && entry.status === "open" && !matchedIds.has(entry.id))
       : undefined;
     const match = explicit ?? (compatibleOpen.length === 1 ? compatibleOpen[0] : undefined);
     if (!match) {
@@ -900,9 +906,30 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     result.kept.push({ ...finding, priority: match.priority, ledgerId: match.id });
   }
 
-  // Pass 2: open findings the judge did not restate.
+  // Pass 2: open findings the judge did not restate. An explicit disposition
+  // decides first: `resolved` closes the entry at this head (auditable, even if
+  // the exact cited lines are unchanged: a fix can live elsewhere); `still-open`
+  // keeps it verdict-bearing. Without a disposition, presence decides as before.
   for (const entry of ledger.findings) {
     if (entry.status !== "open" || matchedIds.has(entry.id)) continue;
+    const disposition = dispositions.get(entry.id);
+    if (disposition === "resolved") {
+      const unchanged = entry.anchors.map(anchor => presentAtHead(anchor)).some(verdict => verdict === true);
+      entry.status = "resolved";
+      entry.lastSeen = { head, at };
+      push("resolved", entry.id, { reason: unchanged ? "declared corrected by the judge; cited lines unchanged" : "declared corrected by the judge" });
+      result.resolvedIds.push(entry.id);
+      result.resolvedByJudgeIds.push(entry.id);
+      continue;
+    }
+    if (disposition === "still-open") {
+      if (!isBlocking(entry.priority)) continue;
+      entry.lastSeen = { head, at };
+      push("seen", entry.id, { reason: "retained: still open per the judge, not restated" });
+      result.retained.push(structuredClone(entry));
+      continue;
+    }
+    result.undisposedIds.push(entry.id);
     // An open finding the judge did not restate resolves only when its cited
     // condition is positively gone (every anchor false), or when none of its
     // anchors can ever be evaluated (all legacy: migrated, or written before

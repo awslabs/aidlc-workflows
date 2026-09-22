@@ -239,6 +239,14 @@ export interface DeferredFinding {
   paths: string[];
 }
 
+// The judge's explicit disposition of an open ledger entry. `findingIndex`
+// names the restatement in `findings`; the validator binds the id to it.
+export interface LedgerDisposition {
+  id: string;
+  disposition: "still-open" | "resolved";
+  findingIndex: number | null;
+}
+
 export interface StructuredReview {
   base: string;
   head: string;
@@ -264,6 +272,7 @@ export interface StructuredReview {
   ledger?: ReviewLedgerSummary;
   scope?: ReviewScope;
   deferred?: DeferredFinding[];
+  dispositions?: LedgerDisposition[];
 }
 
 export interface ReviewLedgerSummary {
@@ -275,6 +284,10 @@ export interface ReviewLedgerSummary {
   open: number;
   migrated: boolean;
   decisionAdjusted: boolean;
+  // Open entries the judge explicitly resolved at this head, and open entries it
+  // left without a disposition (retained by presence, as before).
+  resolvedByJudge: string[];
+  undisposed: string[];
 }
 
 export interface ReviewPayload {
@@ -1058,36 +1071,39 @@ export function buildScope(
   return { mode: "incremental", since, reason: `lines of the PR diff changed since the review at ${since.slice(0, 8)}`, files };
 }
 
-// The lines the security and prompt-attack lenses cited, extracted
-// deterministically from their outputs (`path:line` or `path:start-end` in
-// backticks, the candidate format). A finding that cites one of these lines is
-// never deferred, whatever category the judge chose: the exemption rests on the
-// full-head lenses' own evidence, not on a model-selected label.
+// The lines and files the security and prompt-attack lenses cited, read from
+// their structured outputs (the same evidence shapes as the final review). A
+// finding that cites one of them is never deferred, whatever category the judge
+// chose: the exemption rests on the full-head lenses' own evidence, not on a
+// model-selected label. Quotes need no entry: metadata evidence is always in
+// scope. Unreadable or absent lens output contributes nothing.
 export interface SecurityCitations {
   lines: Set<string>;
   files: Set<string>;
 }
 
-const MAX_CITED_LINE = 10_000_000;
-
-export function securityCitations(lensDir: string, knownPaths: ReadonlySet<string> = new Set()): SecurityCitations {
+export function securityCitations(lensDir: string): SecurityCitations {
   const cited: SecurityCitations = { lines: new Set(), files: new Set() };
-  for (const name of ["security.md", "prompt-injection.md"]) {
+  for (const name of ["security.json", "prompt-injection.json"]) {
     const file = join(lensDir, name);
     if (!existsSync(file)) continue;
-    for (const match of readFileSync(file, "utf8").matchAll(/`([^`]+)`/g)) {
-      const token = match[1].trim();
-      const located = /^(.+):(\d{1,7})(?:-(\d{1,7}))?$/.exec(token);
-      if (!located) {
-        // A bare path in backticks is file-level evidence when it names a
-        // changed file exactly (root-level names and spaces included).
-        if (knownPaths.has(token)) cited.files.add(token);
-        continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as Record<string, unknown>).candidates)) continue;
+    for (const candidate of (parsed as { candidates: unknown[] }).candidates) {
+      const evidence = candidate && typeof candidate === "object" ? (candidate as Record<string, unknown>).evidence : undefined;
+      if (!Array.isArray(evidence)) continue;
+      for (const item of evidence) {
+        if (!item || typeof item !== "object") continue;
+        const { source, path, line } = item as Record<string, unknown>;
+        if (typeof path !== "string" || path.length === 0) continue;
+        if (source === "DIFF" && Number.isSafeInteger(line) && Number(line) >= 1) cited.lines.add(`${path}:${line}`);
+        if (source === "DIFF_FILE") cited.files.add(path);
       }
-      const start = Number(located[2]);
-      const end = Math.min(Number(located[3] ?? located[2]), start + 5000, MAX_CITED_LINE);
-      if (!Number.isSafeInteger(start) || start < 1 || start > MAX_CITED_LINE) continue;
-      for (let line = start; line <= end; line++) cited.lines.add(`${located[1]}:${line}`);
     }
   }
   return cited;
@@ -1438,6 +1454,40 @@ export function parseStructuredReview(
     throw new Error("decision must be author/change or maintainer/merge");
   }
 
+  // Dispositions of open ledger entries. A still-open disposition with an index
+  // binds that finding to the ledger id (the judge does not have to carry ids
+  // per finding); a contradiction (two ids on one finding, one id twice) is a
+  // validation error.
+  const dispositions: LedgerDisposition[] = [];
+  if (candidate.ledger !== undefined) {
+    if (!Array.isArray(candidate.ledger)) throw new Error("ledger must be an array of dispositions");
+    const seenIds = new Set<string>();
+    candidate.ledger.forEach((value, index) => {
+      const entry = record(value, `ledger[${index}]`);
+      const id = typeof entry.id === "string" && /^F[1-9][0-9]*$/.test(entry.id) ? entry.id : null;
+      if (id === null) throw new Error(`ledger[${index}].id must be a ledger id such as F3`);
+      if (seenIds.has(id)) throw new Error(`ledger[${index}] disposes of ${id} twice`);
+      seenIds.add(id);
+      if (entry.disposition !== "still-open" && entry.disposition !== "resolved") {
+        throw new Error(`ledger[${index}].disposition must be still-open or resolved`);
+      }
+      let findingIndex: number | null = null;
+      if (entry.findingIndex !== null && entry.findingIndex !== undefined) {
+        if (!Number.isInteger(entry.findingIndex) || Number(entry.findingIndex) < 0 || Number(entry.findingIndex) >= findings.length) {
+          throw new Error(`ledger[${index}].findingIndex must name an entry of findings`);
+        }
+        findingIndex = Number(entry.findingIndex);
+        if (entry.disposition === "resolved") throw new Error(`ledger[${index}] resolves ${id} but also restates it`);
+        const bound = findings[findingIndex];
+        if (bound.ledgerId !== undefined && bound.ledgerId !== id) {
+          throw new Error(`ledger[${index}] binds ${id} to findings[${findingIndex}], which already carries ${bound.ledgerId}`);
+        }
+        findings[findingIndex] = { ...bound, ledgerId: id };
+      }
+      dispositions.push({ id, disposition: entry.disposition, findingIndex });
+    });
+  }
+
   const residualRisk = requiredText(candidate.residualRisk, "residualRisk", 1000);
   const review: StructuredReview = {
     base: expectedBase,
@@ -1449,6 +1499,7 @@ export function parseStructuredReview(
     decision,
     findings,
     residualRisk,
+    dispositions,
   };
   if (!scope) return review;
   // Convergence by construction: in an incremental scope a non-security finding
@@ -1542,7 +1593,16 @@ export function applyLedgerToReview(
     anchors: findingAnchors(finding, contextDir, repoDir),
     finding,
   }));
-  const result = reconcileLedger(loaded, inputs, review.head, at, presence);
+  // Explicit dispositions for entries not restated among the kept findings: a
+  // resolved entry closes at this head; a still-open one stays verdict-bearing.
+  // (A restatement deferred by the scope counts as still-open, unrestated.)
+  const restatedIds = new Set(inputs.flatMap(input => (input.ledgerId ? [input.ledgerId] : [])));
+  const dispositions = new Map<string, "resolved" | "still-open">();
+  for (const entry of review.dispositions ?? []) {
+    if (restatedIds.has(entry.id)) continue;
+    dispositions.set(entry.id, entry.disposition);
+  }
+  const result = reconcileLedger(loaded, inputs, review.head, at, presence, dispositions);
   // The ledger's effective priority wins: a restatement never lowers an open
   // finding's priority.
   const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, ledgerId: entry.ledgerId }));
@@ -1608,6 +1668,8 @@ export function applyLedgerToReview(
       open: result.ledger.findings.filter(entry => entry.status === "open").length,
       migrated: loaded.migrated,
       decisionAdjusted,
+      resolvedByJudge: result.resolvedByJudgeIds,
+      undisposed: result.undisposedIds,
     },
   };
   return { review: enforceDecision(adjusted), ledger: result.ledger };
@@ -1758,7 +1820,9 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       "",
       `Ledger: ${summary.open} open, ${summary.retained.length} retained blocking, ${summary.accepted.length} accepted, ${summary.suppressed} suppressed as rejected by a maintainer${
         summary.reopened > 0 ? `, ${summary.reopened} reopened on new evidence` : ""
-      }${summary.resolvedIds.length > 0 ? `, resolved ${summary.resolvedIds.join(", ")}` : ""}.${
+      }${summary.resolvedIds.length > 0 ? `, resolved ${summary.resolvedIds.join(", ")}` : ""}${
+        summary.resolvedByJudge.length > 0 ? ` (${summary.resolvedByJudge.join(", ")} declared corrected by the judge)` : ""
+      }${summary.undisposed.length > 0 ? `; ${summary.undisposed.length} open entr${summary.undisposed.length === 1 ? "y" : "ies"} left undisposed by the judge (${summary.undisposed.join(", ")})` : ""}.${
         summary.decisionAdjusted ? " The next decision was re-derived from the ledger." : ""
       }${
         summary.migrated ? " The ledger was migrated from schema v1; earlier decisions were reset." : ""
@@ -1918,9 +1982,7 @@ function main(): void {
     const scope = args.includes("--scope")
       ? (JSON.parse(readFileSync(argValue(args, "--scope"), "utf8")) as ReviewScope)
       : undefined;
-    const securityCited = args.includes("--lens-dir")
-      ? securityCitations(argValue(args, "--lens-dir"), new Set(manifest.files.flatMap(file => [file.path, ...(file.previousPath ? [file.previousPath] : [])])))
-      : NO_CITATIONS;
+    const securityCited = args.includes("--lens-dir") ? securityCitations(argValue(args, "--lens-dir")) : NO_CITATIONS;
     let review: StructuredReview;
     if (args.includes("--ledger")) {
       const ledgerFile = readLedgerFile(argValue(args, "--ledger"));
