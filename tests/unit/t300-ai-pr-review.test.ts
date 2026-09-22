@@ -1251,6 +1251,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW.indexOf("    concurrency:")).toBeGreaterThan(
       WORKFLOW.indexOf("  review:"),
     );
+    expect(WORKFLOW).toContain(`group: aida-pr-\${{ github.event.pull_request.number || inputs.pr_number }}`);
+    expect(WORKFLOW).toContain("cancel-in-progress: false");
     expect(WORKFLOW).toContain("persist-credentials: false");
     expect(WORKFLOW).toContain("id-token: write");
     expect(WORKFLOW).toContain("AWS_AI_PR_REVIEW_ROLE_ARN");

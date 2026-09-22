@@ -141,18 +141,26 @@ gate.
    ```bash
    gh workflow run full-suite.yml --ref main -f 'ref=<intended-release-sha>'
    ```
-3. Create and push the matching tag from that verified commit (do not advance
-   to a newer `main` tip without obtaining fresh preview evidence):
 
-```bash
-git switch main
-git pull --ff-only
-# Set this to the sha recorded in the passing full-suite-result artifact.
-RELEASE_SHA='<preview-verified-commit-sha>'
-test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-git tag vX.Y.Z "$RELEASE_SHA"
-git push origin vX.Y.Z
-```
+3. Create and push the matching tag from that verified commit. The commit may
+   no longer be the tip of `main`, but it must still be contained in `main`.
+   Do not substitute a newer tip without obtaining fresh preview evidence:
+
+   ```bash
+   # Set this to the sha recorded in the passing full-suite-result artifact.
+   RELEASE_SHA='<preview-verified-commit-sha>'
+   RELEASE_VERSION='X.Y.Z'
+   git fetch --no-tags origin \
+     '+refs/heads/main:refs/remotes/origin/main' &&
+   git cat-file -e "${RELEASE_SHA}^{commit}" &&
+   git merge-base --is-ancestor "$RELEASE_SHA" origin/main &&
+   test "$(
+     git show "${RELEASE_SHA}:core/tools/aidlc-version.ts" |
+       awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }'
+   )" = "$RELEASE_VERSION" &&
+   git tag "v$RELEASE_VERSION" "$RELEASE_SHA" &&
+   git push origin "v$RELEASE_VERSION"
+   ```
 
 4. Monitor the `Release` workflow.
 5. Confirm that the GitHub Release contains the binaries, installers,

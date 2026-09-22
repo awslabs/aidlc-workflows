@@ -24,11 +24,16 @@
     "inspection": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["complete", "failed"]
+          "enum": [
+            "complete",
+            "failed"
+          ]
         }
       }
     },
@@ -44,7 +49,10 @@
     "assessment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["readiness", "risk"],
+      "required": [
+        "readiness",
+        "risk"
+      ],
       "properties": {
         "readiness": {
           "$ref": "#/$defs/assessment"
@@ -57,11 +65,22 @@
     "userExperience": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "change", "before", "after", "example", "assessment"],
+      "required": [
+        "status",
+        "change",
+        "before",
+        "after",
+        "example",
+        "assessment"
+      ],
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["changed", "no-user-visible-change", "uncertain"]
+          "enum": [
+            "changed",
+            "no-user-visible-change",
+            "uncertain"
+          ]
         },
         "change": {
           "type": "string",
@@ -69,17 +88,26 @@
           "maxLength": 1500
         },
         "before": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1500
         },
         "after": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1500
         },
         "example": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 2000
         },
@@ -93,15 +121,25 @@
     "decision": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["actor", "action", "rationale"],
+      "required": [
+        "actor",
+        "action",
+        "rationale"
+      ],
       "properties": {
         "actor": {
           "type": "string",
-          "enum": ["author", "maintainer"]
+          "enum": [
+            "author",
+            "maintainer"
+          ]
         },
         "action": {
           "type": "string",
-          "enum": ["change", "merge"]
+          "enum": [
+            "change",
+            "merge"
+          ]
         },
         "rationale": {
           "type": "string",
@@ -126,7 +164,10 @@
     "assessment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["score", "rationale"],
+      "required": [
+        "score",
+        "rationale"
+      ],
       "properties": {
         "score": {
           "type": "integer",
@@ -147,6 +188,7 @@
         "priority",
         "category",
         "title",
+        "ledgerId",
         "evidence",
         "problem",
         "impact",
@@ -155,7 +197,12 @@
       "properties": {
         "priority": {
           "type": "string",
-          "enum": ["P0", "P1", "P2", "P3"]
+          "enum": [
+            "P0",
+            "P1",
+            "P2",
+            "P3"
+          ]
         },
         "category": {
           "type": "string",
@@ -172,6 +219,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 160
+        },
+        "ledgerId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^F[1-9][0-9]*$",
+          "description": "The id of the findings-ledger entry this finding IS (the same defect), or null when it is new."
         },
         "evidence": {
           "type": "array",
@@ -200,11 +255,18 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source"],
+      "required": [
+        "source"
+      ],
       "properties": {
         "source": {
           "type": "string",
-          "enum": ["DIFF", "DIFF_FILE", "PR_TITLE", "PR_BODY"]
+          "enum": [
+            "DIFF",
+            "DIFF_FILE",
+            "PR_TITLE",
+            "PR_BODY"
+          ]
         },
         "path": {
           "type": "string"
@@ -215,7 +277,10 @@
         },
         "side": {
           "type": "string",
-          "enum": ["LEFT", "RIGHT"]
+          "enum": [
+            "LEFT",
+            "RIGHT"
+          ]
         },
         "quote": {
           "type": "string",

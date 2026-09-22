@@ -52,8 +52,8 @@ jobs:
           && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
-      group: ai-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
-      cancel-in-progress: true
+      group: aida-pr-${{ github.event.pull_request.number || inputs.pr_number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ai-pr-review
     timeout-minutes: 110
@@ -271,7 +271,27 @@ jobs:
           elif [ "$EXISTING_DECISION" = "maintainer/merge" ]; then
             label_outcome="reviewed-merge"
           fi
-          if [ -n "$label_outcome" ]; then
+          # The serialized ledger verdict is authoritative for every review
+          # surface associated with this head.
+          ledger_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+            --repo "$REPO" --pr "$PR_NUMBER")"
+          if [ "$(jq -r '.head // empty' <<<"$ledger_verdict")" = "$HEAD_SHA" ]; then
+            refresh="$(bun .ai-review-controls/scripts/ai-pr-review.ts converge-verdict \
+              --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+              --reason "existing SHA-bound review")"
+            if [ "$refresh" != "applied" ]; then
+              echo "::error::The existing review verdict could not be converged ($refresh)"
+              exit 1
+            fi
+            ledger_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+              --repo "$REPO" --pr "$PR_NUMBER")"
+            case "$(jq -r .decision <<<"$ledger_verdict")" in
+              merge) label_outcome="reviewed-merge"; EXISTING_STATE="COMMENTED" ;;
+              change) label_outcome="reviewed-change"; EXISTING_STATE="CHANGES_REQUESTED" ;;
+            esac
+          fi
+          if [ -n "$label_outcome" ] \
+            && [ "$(jq -r '.head // empty' <<<"$ledger_verdict")" != "$HEAD_SHA" ]; then
             bun .ai-review-controls/scripts/ai-pr-review.ts labels \
               --repo "$REPO" \
               --pr "$PR_NUMBER" \
@@ -654,10 +674,10 @@ jobs:
               --context-dir .ai-review-context \
               --repo-dir .)"
             publish_status=0
-            bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
+            ledger_published_record="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
               --repo "$REPO" \
               --pr "$PR_NUMBER" \
-              --input .ai-pr-review-final/ledger.json || publish_status=$?
+              --input .ai-pr-review-final/ledger.json)" || publish_status=$?
             if [ "$publish_status" -eq 0 ]; then
               ledger_published=true
               break
@@ -732,6 +752,27 @@ jobs:
           echo "published=true" >> "$GITHUB_OUTPUT"
           : > .ai-pr-review-final/published
 
+          # The live ledger is the final authority. Converge the review gate first
+          # and labels second, retrying if a /aida command changes the ledger while
+          # publication is finishing.
+          refresh="$(bun .ai-review-controls/scripts/ai-pr-review.ts converge-verdict \
+            --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+            --reason "review publication")"
+          if [ "$refresh" != "applied" ]; then
+            echo "::error::The live ledger verdict could not be converged ($refresh)"
+            exit 1
+          fi
+          live_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+            --repo "$REPO" --pr "$PR_NUMBER")"
+          case "$(jq -r .decision <<<"$live_verdict")" in
+            change) EVENT="REQUEST_CHANGES" ;;
+            merge) EVENT="COMMENT" ;;
+            *)
+              echo "::error::The live ledger has no verdict for $HEAD_SHA"
+              exit 1
+              ;;
+          esac
+
           if [ "$EVENT" = "REQUEST_CHANGES" ]; then
             echo "::error::AI review found a P0 or P1 issue"
             exit 1
@@ -783,29 +824,21 @@ jobs:
             exit 0
           fi
 
-          outcome="review-error"
           if [ -f .ai-pr-review-final/published ]; then
-            decision="$(jq -r '"\(.actor)/\(.action)"' \
-              .ai-pr-review-final/decision.json)"
-            case "$decision" in
-              author/change)
-                outcome="reviewed-change"
-                ;;
-              maintainer/merge)
-                outcome="reviewed-merge"
-                ;;
-              *)
-                echo "::error::Published AIDA review has no valid decision"
-                exit 1
-                ;;
-            esac
+            refresh="$(bun "$review_script" converge-verdict \
+              --repo "${{ github.repository }}" \
+              --pr "$pr_number" \
+              --head "$expected_head" \
+              --reason "final workflow reconciliation")"
+            echo "::notice::Final verdict convergence: $refresh"
+            exit 0
           fi
 
           args=(
             labels
             --repo "${{ github.repository }}"
             --pr "$pr_number"
-            --outcome "$outcome"
+            --outcome review-error
           )
           if [ -n "$expected_head" ]; then
             args+=(--expected-head "$expected_head")
