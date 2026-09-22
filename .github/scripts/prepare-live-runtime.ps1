@@ -1008,6 +1008,14 @@ $env:CODEX_MANAGED_PACKAGE_ROOT = __PACKAGE_ROOT__
 $expectedSids = __SIDS__
 $initializer = __INITIALIZER__
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+# Create the actual temporary root as the live user, as the test runner does.
+# Assigning another user's ownership from the administrator requires a restore
+# privilege that hosted runner tokens do not necessarily enable.
+$ownedTemp = Join-Path $env:TEMP 'owned-temp'
+[void][IO.Directory]::CreateDirectory($ownedTemp)
+$env:TEMP = $ownedTemp
+$env:TMP = $ownedTemp
+$env:TMPDIR = $ownedTemp
 $index = 0
 foreach ($network in @('false', 'true')) {
     $base = Join-Path $env:TEMP ('home-' + $index)
@@ -1406,9 +1414,6 @@ exit $LASTEXITCODE
             $proofRoot = Join-Path $root ('codex-readiness-' + [Guid]::NewGuid().ToString('N'))
             New-PrivateDirectory $proofRoot
             Set-RuntimeAcl $proofRoot $sandboxSid 'Modify'
-            $proofAcl = Get-Acl -LiteralPath $proofRoot
-            $proofAcl.SetOwner($sandboxSid)
-            [IO.Directory]::SetAccessControl($proofRoot, $proofAcl)
             $proofEnvironment = Get-SafeEnvironment
             $proofEnvironment.TEMP = $proofRoot
             $proofEnvironment.TMP = $proofRoot

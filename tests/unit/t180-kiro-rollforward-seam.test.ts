@@ -34,6 +34,7 @@ import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
@@ -67,11 +68,20 @@ function runAdapter(
 }
 
 function fakeCompiledExecutable(projectDir: string, recordNext = false): string {
-  const path = join(projectDir, process.platform === "win32" ? "fake-aidlc.cmd" : "fake-aidlc");
+  const path = join(projectDir, process.platform === "win32" ? "fake-aidlc.exe" : "fake-aidlc");
   if (process.platform === "win32") {
-    writeFileSync(path, "@echo off\r\n" +
-      (recordNext ? 'if "%~1"=="engine" if "%~2"=="orchestrate" if "%~3"=="next" type nul > "%AIDLC_COMPILED_NEXT_MARKER%"\r\n' : "") +
-      "echo %*\r\n", "utf-8");
+    writeWindowsExecutable(path, `using System;
+using System.IO;
+internal static class CompiledAidlcFixture {
+  public static int Main(string[] args) {
+    ${recordNext ? `if (args.Length >= 3 && args[0] == "engine" && args[1] == "orchestrate" && args[2] == "next") {
+      File.WriteAllText(Environment.GetEnvironmentVariable("AIDLC_COMPILED_NEXT_MARKER"), "");
+    }` : ""}
+    Console.WriteLine(string.Join(" ", args));
+    return 0;
+  }
+}
+`);
   } else {
     writeFileSync(path, "#!/bin/sh\n" +
       (recordNext ? 'if [ "$1" = engine ] && [ "$2" = orchestrate ] && [ "$3" = next ]; then : > "$AIDLC_COMPILED_NEXT_MARKER"; fi\n' : "") +
@@ -516,7 +526,9 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
         encoding: "utf-8",
         env: { ...process.env, AIDLC_COMPILED_NEXT_MARKER: marker },
       });
+      expect(probe.error).toBeUndefined();
       expect(probe.status, probe.stderr).toBe(0);
+      expect(probe.stdout.trim()).toBe("engine orchestrate next");
       expect(existsSync(marker)).toBe(true);
       rmSync(marker);
       const r = runAdapter(

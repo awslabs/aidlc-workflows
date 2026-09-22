@@ -1,6 +1,6 @@
 // covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:recordPlanApprovalOverrideRequest, function:recordPlanApprovalOverrideReceipt, audit:PLAN_APPROVAL_OVERRIDDEN, audit:GUARD_DISABLED
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -27,6 +27,7 @@ import {
   stateDigest,
   stripRecommendedDecorator,
   workspaceSourceFingerprint,
+  workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -50,9 +51,9 @@ const projects: string[] = [];
 const barriers: string[] = [];
 const DIST_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
 
-afterAll(() => {
-  for (const project of projects) cleanupTestProject(project);
-  for (const barrier of barriers) {
+afterEach(() => {
+  while (projects.length) cleanupTestProject(projects.pop()!);
+  for (const barrier of barriers.splice(0)) {
     rmSync(`${barrier}.published`, { force: true });
     rmSync(`${barrier}.snapshotted`, { force: true });
     rmSync(`${barrier}.release`, { force: true });
@@ -66,11 +67,14 @@ function publicationBarrier(): string {
 }
 
 function initGitBaseline(project: string): void {
+  const sourceBefore = workspaceSourceState(project);
+  expect(sourceBefore).not.toBeNull();
+  expect([...sourceBefore!.listing.keys()]).toEqual(["\0src/base.ts"]);
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"],
-    ["add", "-A"],
+    ["add", "--", "src"],
     ["commit", "-qm", "baseline"],
   ]) {
     const result = Bun.spawnSync(["git", ...args], {
@@ -80,6 +84,7 @@ function initGitBaseline(project: string): void {
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   }
+  expect(workspaceSourceFingerprint(project)).toBe(sourceBefore!.fingerprint);
 }
 
 function createProject(): string {

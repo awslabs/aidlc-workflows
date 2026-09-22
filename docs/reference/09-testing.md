@@ -941,6 +941,11 @@ The exec driver disables the interactive `request_user_input` feature, which
 Codex exec cannot service, and exercises the skill's prose approval fallback.
 Approval assertions and sandbox permissions remain required.
 
+Windows provisioning fixtures require their temporary accounts and processes
+to be retired before returning. A profile hive still held by Windows services
+is recorded for VM disposal only on GitHub-hosted runners; persistent hosts
+must delete it within the bounded cleanup operation.
+
 Worker preparation checks free space for the snapshot and checkout copies,
 plus a reserve of 512 MiB. Each isolated file checks the reserve before starting.
 `AIDLC_E2E_MIN_FREE_BYTES` overrides the reserve in bytes (a nonnegative integer).

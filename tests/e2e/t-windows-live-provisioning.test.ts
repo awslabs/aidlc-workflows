@@ -54,7 +54,14 @@ describe.skipIf(process.platform !== "win32")("Windows live provisioning boundar
             { encoding: "utf8", timeout: 35_000, windowsHide: true });
           expect(cleanup.status, `Profile cleanup:\n${cleanup.error ?? ""}\n${cleanup.stdout}\n${cleanup.stderr}`).toBe(0);
           const receipt = JSON.parse(readFileSync(join(root, "trusted-teardown/cleanup.json"), "utf8").replace(/^\uFEFF/, ""));
-          expect(receipt).toMatchObject({ fixtureId, removed: true });
+          expect(receipt.fixtureId).toBe(fixtureId);
+          if (receipt.removed !== true) {
+            expect(process.env.GITHUB_ACTIONS).toBe("true");
+            expect(process.env.RUNNER_ENVIRONMENT).toBe("github-hosted");
+            expect(receipt).toMatchObject({
+              removed: false, deferredToHostDisposal: true, reason: "profile-service-sharing-lock",
+            });
+          }
           console.log(`Fixture profile cleanup: ${JSON.stringify({ case: name, ...receipt })}`);
         }
       } catch (error) {

@@ -32,6 +32,17 @@ function Remove-FixtureProfile([Security.Principal.SecurityIdentifier]$Sid) {
         } catch {
             if ($_.FullyQualifiedErrorId -notmatch '\b0x800700(?:20|21)\b') { throw }
             $lastFailure = $_.Exception.Message
+            if ($env:GITHUB_ACTIONS -ceq 'true' -and $env:RUNNER_ENVIRONMENT -ceq 'github-hosted') {
+                # The account and every process using its SID are already gone.
+                # Windows services can retain the hive until this disposable VM
+                # exits. Report that residual honestly; never waive live identity
+                # retirement or use this path on persistent developer hosts.
+                return @{
+                    removed = $false; deferredToHostDisposal = $true
+                    reason = 'profile-service-sharing-lock'
+                    deleteAttempts = $attempts; firstLoaded = $firstLoaded
+                }
+            }
         }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
@@ -122,6 +133,14 @@ if ($Mode -eq 'cleanup') {
         $receipt.processesDrained -eq $true -and $receipt.accountRemoved -eq $true) 'Fixture account teardown did not complete.'
     $createdUserSid = [Security.Principal.SecurityIdentifier]::new($receipt.createdUserSid)
     Check ($null -eq (Get-RecordedLocalUser $createdUserSid)) 'Fixture account still exists.'
+    foreach ($process in Get-CimInstance Win32_Process) {
+        try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop }
+        catch {
+            if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) { throw }
+            continue
+        }
+        Check (-not ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $createdUserSid.Value)) 'Fixture still has a live process.'
+    }
     $cleanup = Remove-FixtureProfile $createdUserSid
     $cleanup['fixtureId'] = $FixtureId.ToString()
     $cleanup | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $receiptRoot 'cleanup.json') -Encoding UTF8

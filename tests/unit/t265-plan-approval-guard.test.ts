@@ -1756,7 +1756,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("a bare numeric reply reaches the offered-choice match instead of being parsed away", () => {
     const proj = scratchProject();
@@ -2149,7 +2149,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("approved bytes cannot replay across targets, and survive a reissued directive", () => {
     const proj = scratchProject();

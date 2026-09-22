@@ -101,7 +101,7 @@ function cleanupTemporary(keepSuiteFixtures: boolean): void {
   for (let index = temporary.length - 1; index >= 0; index--) {
     const path = temporary[index];
     if (keepSuiteFixtures && suiteTemporary.has(path)) continue;
-    rmSync(path, { recursive: true, force: true });
+    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     temporary.splice(index, 1);
   }
 }
