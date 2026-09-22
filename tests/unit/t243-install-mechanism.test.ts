@@ -5597,6 +5597,50 @@ describe("t243 projection channel", () => {
         ),
       ).distribution,
     ).toBe("kiro");
+
+    // IDEMPOTENCE, which is the half normalizing `selectSource` alone did not buy.
+    // The first run stamps the project `kiro`, so a SECOND `--harness kiro-ide`
+    // reaches the existing-project and copied-source lookups with the alias, and
+    // `distributionUpgradesTo("kiro", "kiro-ide")` is false: the projection it just
+    // wrote is missed and the run goes on to collide with its own `.kiro`.
+    // Documented provisioning scripts are repeatable or they are not usable.
+    const again = run(INIT, [
+      "config",
+      "--project-dir",
+      fromProject,
+      "--from",
+      KIRO_RELEASE,
+      "--harness",
+      "kiro-ide",
+      "--yes",
+    ], fromProject);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    const againOutput = again.stdout + again.stderr;
+    expect(againOutput).not.toContain("refusing");
+    expect(againOutput).not.toContain("already contains");
+    expect(againOutput).not.toContain("does not contain a copied");
+    expect(
+      JSON.parse(
+        readFileSync(join(fromProject, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+      ).distribution,
+    ).toBe("kiro");
+
+    // Section-specific configuration takes the same alias through a DIFFERENT
+    // lookup (`selectedDiagnosticHarness`), so it is asserted separately rather
+    // than assumed to follow.
+    for (const section of ["providers", "models"]) {
+      const shown = run(INIT, [
+        "config",
+        section,
+        "--show",
+        "--project-dir",
+        fromProject,
+        "--harness",
+        "kiro-ide",
+      ], fromProject);
+      expect(shown.status, `${section}: ${shown.stdout}${shown.stderr}`).toBe(0);
+      expect(shown.stdout + shown.stderr, section).not.toContain("refusing kiro-ide");
+    }
   }, 180_000);
 
   test("release runtime-generated commands remain binary-invoked", () => {

@@ -1308,6 +1308,33 @@ function projectionProductName(root: string, distribution: string): string {
   return distribution;
 }
 
+/** The installed project harness a REQUEST names.
+ *
+ *  The request is canonicalized HERE and nowhere else, so every source and
+ *  existing-project lookup asks the same question. `distributionUpgradesTo` alone
+ *  answered only the old-candidate/current-request direction: a project already
+ *  stamped `kiro` did not match the documented `--harness kiro-ide`, so a SECOND
+ *  run of the same command missed its own projection and went on to hit a `.kiro`
+ *  collision - the documented compatibility alias was not idempotent.
+ *
+ *  The CANDIDATE stays raw on purpose. It is a historical stamp, and reading it is
+ *  exactly what `distributionUpgradesTo` is for; normalizing it would make an
+ *  unrefreshed project unfindable.
+ *
+ *  An absent request means "the only one installed", which is every caller's
+ *  existing behaviour. Callers keep their own arity checks and refusal messages,
+ *  and those messages go on echoing the raw name the user typed. */
+function requestedProjectHarness<T extends { distribution: string }>(
+  harnesses: readonly T[],
+  requested: string | undefined,
+): T | undefined {
+  if (!requested) return harnesses[0];
+  const name = currentDistribution(requested);
+  return harnesses.find((candidate) =>
+    distributionUpgradesTo(candidate.distribution, name)
+  );
+}
+
 function selectedDiagnosticHarness(
   projectDir: string,
   requested: string | undefined,
@@ -1319,9 +1346,7 @@ function selectedDiagnosticHarness(
   harness: ModelHarness;
 } {
   const harnesses = discoverProjectHarnesses(projectDir);
-  const selected = requested
-    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
-    : harnesses[0];
+  const selected = requestedProjectHarness(harnesses, requested);
   if (!selected) {
     throw new Error(
       requested && harnesses.length > 0
@@ -4890,9 +4915,7 @@ function copiedProjectSource(
   requested?: string,
 ): ConfigSource {
   const harnesses = discoverProjectHarnesses(projectDir);
-  const selected = requested
-    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
-    : harnesses[0];
+  const selected = requestedProjectHarness(harnesses, requested);
   if (!selected) {
     throw new Error("the project does not contain a copied AI-DLC projection");
   }
@@ -5895,9 +5918,7 @@ function existingProject(projectDir: string, requested?: string): {
   if (!requested && harnesses.length > 1) {
     throw new Error("multiple project harnesses are present; pass one --harness <name>");
   }
-  const harness = requested
-    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
-    : harnesses[0];
+  const harness = requestedProjectHarness(harnesses, requested);
 
   if (!harness) return {};
   const baselinePath = join(harness.root, "tools", "data", "aidlc-manifest.json");
@@ -6549,9 +6570,7 @@ function prepareModelsSection(
   const projectDir = projectDirFrom(argv);
   const requested = valueAfter(argv, "--harness");
   const harnesses = discoverProjectHarnesses(projectDir);
-  const selected = requested
-    ? harnesses.find((candidate) => distributionUpgradesTo(candidate.distribution, requested))
-    : harnesses[0];
+  const selected = requestedProjectHarness(harnesses, requested);
   if (!selected) {
     emitResult(
       usage(

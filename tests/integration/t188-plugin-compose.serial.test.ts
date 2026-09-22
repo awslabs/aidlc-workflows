@@ -2015,6 +2015,91 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     return { drops, proj };
   }
 
+  test("Kiro projects a capability allowlist onto every plugin persona it composes", () => {
+    // The wider half of the same hole. A persona declaring NEITHER `disallowedTools`
+    // nor `tools:` was never objected to and inherited the ambient toolset once
+    // trusted, so nested delegation was available to it without any author saying so.
+    // It gets the allowlist too, rather than being refused: refusing would leave an
+    // `inline` stage composed while its support persona went missing.
+    const bare = [
+      "---",
+      "name: syn-bare-agent",
+      "display_name: Synthetic Bare",
+      "plugin: syn-bare",
+      "---",
+      "",
+      "# Synthetic Bare",
+      "",
+    ].join("\n");
+    const bareRun = composeSynthetic(
+      "syn-bare",
+      { "agents/syn-bare-agent.md": bare },
+      ".kiro",
+    );
+    const composedBare = readFileSync(
+      join(bareRun.proj, ".kiro", "agents", "syn-bare-agent.md"),
+      "utf-8",
+    );
+    expect(composedBare).toMatch(
+      /^tools: \["fs_read", "fs_write", "execute_bash", "thinking"\]$/m,
+    );
+    expect(composedBare).not.toMatch(/subagent/);
+
+    // An AUTHORED allowlist governs, so one that NAMES the delegation tool is an
+    // explicit request to nest. The conductor is the only delegator on this row, so
+    // the persona is refused rather than projected into a contradiction.
+    const nesting = [
+      "---",
+      "name: syn-nesting-agent",
+      "display_name: Synthetic Nesting",
+      "plugin: syn-nesting",
+      'tools: ["fs_read", "subagent"]',
+      "---",
+      "",
+      "# Synthetic Nesting",
+      "",
+    ].join("\n");
+    const nestingRun = composeSynthetic(
+      "syn-nesting",
+      { "agents/syn-nesting-agent.md": nesting },
+      ".kiro",
+    );
+    expect(existsSync(join(
+      nestingRun.proj,
+      ".kiro",
+      "agents",
+      "syn-nesting-agent.md",
+    ))).toBe(false);
+    expect(nestingRun.drops).toContain("grants the subagent tool");
+
+    // An authored allowlist WITHOUT the delegation tool is taken as written: the
+    // projection must not widen a persona that already narrowed itself.
+    const narrow = [
+      "---",
+      "name: syn-narrow-agent",
+      "display_name: Synthetic Narrow",
+      "plugin: syn-narrow",
+      'tools: ["fs_read"]',
+      "disallowedTools: Task",
+      "---",
+      "",
+      "# Synthetic Narrow",
+      "",
+    ].join("\n");
+    const narrowRun = composeSynthetic(
+      "syn-narrow",
+      { "agents/syn-narrow-agent.md": narrow },
+      ".kiro",
+    );
+    const composedNarrow = readFileSync(
+      join(narrowRun.proj, ".kiro", "agents", "syn-narrow-agent.md"),
+      "utf-8",
+    );
+    expect(composedNarrow).toMatch(/^tools: \["fs_read"\]$/m);
+    expect(composedNarrow).not.toMatch(/^disallowedTools:/m);
+    expect(composedNarrow).not.toMatch(/execute_bash/);
+  }, 240_000);
+
   test("Kiro rejects plugin-owned ensemble collaborators with a compose drop", () => {
     const stage = [
       "---",
@@ -2074,12 +2159,21 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "agents",
       "syn-kiro-collaborator-agent.md",
     ))).toBe(true);
-    expect(readFileSync(join(
+    const composedKiroAgent = readFileSync(join(
       proj,
       ".kiro",
       "agents",
       "syn-kiro-collaborator-agent.md",
-    ), "utf-8")).not.toMatch(/^disallowedTools:/m);
+    ), "utf-8");
+    // The denial is PROJECTED, not merely dropped. Asserting only its absence is what
+    // let the boundary disappear: Kiro has no `disallowedTools` key, so without an
+    // allowlist in its place the persona inherited the ambient toolset - delegation
+    // included - the moment it was trusted.
+    expect(composedKiroAgent).not.toMatch(/^disallowedTools:/m);
+    expect(composedKiroAgent).toMatch(
+      /^tools: \["fs_read", "fs_write", "execute_bash", "thinking"\]$/m,
+    );
+    expect(composedKiroAgent).not.toMatch(/subagent/);
     expect(drops).toContain('stage "syn-kiro-ensemble"');
     expect(drops).toContain('agent "syn-kiro-collaborator-agent"');
     expect(drops).toContain("a Kiro Markdown agent");

@@ -2233,6 +2233,52 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
+  test("5d12: a refused rule delivery leaves no delegation window behind", () => {
+    // Every refusal-capable validation on this edge must finish BEFORE the window
+    // opens. When delivery refused AFTER the open, repairing and retrying in the same
+    // turn opened a second window while a close cancels only the most-recent group
+    // for the key -- so the refused window survived until a human turn or its TTU and
+    // misattributed the conductor's own calls to a delegate, blocking the very
+    // same-turn recovery the operator was told to perform.
+    const dir = scratchProject(true);
+    try {
+      const org = join(dir, "aidlc", "spaces", "default", "memory", "org.md");
+      const saved = readFileSync(org, "utf-8");
+      rmSync(org);
+      const payload = {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "subagent_aidlc-design-agent",
+        tool_input: { prompt: "delegate to aidlc-design-agent" },
+      };
+      const refused = runAdapter(dir, "log-subagent", payload);
+      expect(refused.code, refused.stdout + refused.stderr).toBe(2);
+      expect(refused.stderr).toContain("Cannot load required stage rule");
+
+      // A refusal is not a ledger fact, so there is nothing to reclaim: either the
+      // ledger was never created or it carries no open record.
+      const bucketRoot = join(dir, "aidlc", ".aidlc-sessions", "kiro-delegation");
+      const opensAfterRefusal = existsSync(bucketRoot)
+        ? readFileSync(findDelegationLedger(dir), "utf-8")
+          .split("\n")
+          .filter((line) => line.includes('"op":"open"')).length
+        : 0;
+      expect(opensAfterRefusal, "a refused dispatch opened a window").toBe(0);
+
+      // Repair and retry inside the same turn. Exactly one window exists afterwards,
+      // which is what the old order could not deliver.
+      writeFileSync(org, saved, "utf-8");
+      const repaired = runAdapter(dir, "log-subagent", payload);
+      expect(repaired.code, repaired.stdout + repaired.stderr).toBe(0);
+      const opens = readFileSync(findDelegationLedger(dir), "utf-8")
+        .split("\n")
+        .filter((line) => line.includes('"op":"open"'));
+      expect(opens.length, "one dispatch, one window").toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("5g: reviewer-scope still enforces when another persona is inflight too", () => {
     // Regression: with two DIFFERENT personas inflight the adapter used to forward
     // an empty identity, so the core guard passed the call through - the exact gap

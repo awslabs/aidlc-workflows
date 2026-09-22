@@ -1710,38 +1710,27 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
           return 2;
         }
       }
-      const ledgerRefusal = openDelegation(
-        latchSession,
-        payload,
-        dispatch?.agents ?? [],
-      );
-      if (ledgerRefusal !== null) {
-        // Fail CLOSED. Without a durable window the delegate's calls carry no
-        // agent_type, and both persona guards return 0 on an empty one -- so letting
-        // the dispatch through would run the delegate with the delegated-review read
-        // boundary and the lifecycle-command restrictions skipped. The ledger sits
-        // under a project-controlled path, so that outcome is reachable by the
-        // repository itself, which is what makes refusing the only safe answer.
-        process.stderr.write(
-          `${ledgerRefusal} Refusing this dispatch: a delegate whose window was never ` +
-            "recorded runs with the reviewer-scope and state-transition guards " +
-            "skipped. Remove the obstruction under aidlc/.aidlc-sessions, then retry.\n",
-        );
-        return 2;
-      }
-      // DELIVERY, after admission. The shared augmenter runs as an OBSERVER on this
-      // row: the preload validated above is the real channel, so a brief it judges
-      // incomplete is expected rather than a fault and is recorded only through
-      // opt-in hookDebug - never on stderr, where a dispatch would surface it as a
-      // warning the operator can do nothing about.
+      // DELIVERY VALIDATION, and it must finish BEFORE the window opens, because it
+      // can refuse. The shared augmenter runs as an OBSERVER on this row: the preload
+      // validated above is the real channel, so a brief it judges incomplete is
+      // expected rather than a fault and is recorded only through opt-in hookDebug -
+      // never on stderr, where a dispatch would surface it as a warning the operator
+      // can do nothing about. Its one refusal is a required rule file that cannot be
+      // loaded at all.
       //
-      // It runs AFTER the window opened, unlike the three gates, because it is the
-      // only step here with side effects of its own: the core hook appends the
-      // `aidlc/.aidlc-subagent-inflight` entry the Stop hook waits on. Ordering it
-      // before the open would let a ledger refusal leave an inflight entry for a
-      // dispatch that never started. Refusing after the open instead leaves a window
-      // with no close, which is the outcome the block above already accounts for -
-      // the human-turn sweep reclaims it.
+      // This used to run AFTER the open, on the reasoning that it is the only step
+      // with a side effect of its own - the core hook's
+      // `aidlc/.aidlc-subagent-inflight` entry - so opening first kept a ledger
+      // refusal from leaving an entry for a dispatch that never started. That
+      // reasoning was taken from the cross-harness contract rather than from THIS
+      // row: `recordAcceptedBackgroundDispatch` returns early unless
+      // `tool_input.run_in_background === true`, and the Kiro skill pins every
+      // `subagent` call to `mode:"blocking"`, so no entry is ever written here. The
+      // cost of the old order was real instead: a refusal after the open leaves a
+      // live window, and repairing and retrying in the SAME turn opens a second one
+      // while a close cancels only the most-recent group for the key - so the
+      // refused window survives until a human turn or its TTU, misattributing the
+      // conductor's own calls to a delegate and blocking valid same-turn recovery.
       if (dispatch !== null) {
         const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
         const command = executable
@@ -1767,7 +1756,8 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
         if (r.exitCode === 2) {
           // A required rule file could not be loaded at all (missing/unreadable):
           // that is real missing steering with no preload to fall back on - the one
-          // case that still blocks, with the core hook's repair guidance.
+          // case that still blocks, with the core hook's repair guidance. No window
+          // has been opened yet, so this refusal leaves no ledger state behind.
           process.stderr.write(r.stderr?.toString() ?? "");
           return 2;
         }
@@ -1784,6 +1774,27 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
             { target, transport: "native-preload" },
           );
         }
+      }
+      // ADMITTED, and every refuser above has already spoken. The open is the LAST
+      // thing on this edge, so nothing after it can refuse and orphan the window.
+      const ledgerRefusal = openDelegation(
+        latchSession,
+        payload,
+        dispatch?.agents ?? [],
+      );
+      if (ledgerRefusal !== null) {
+        // Fail CLOSED. Without a durable window the delegate's calls carry no
+        // agent_type, and both persona guards return 0 on an empty one -- so letting
+        // the dispatch through would run the delegate with the delegated-review read
+        // boundary and the lifecycle-command restrictions skipped. The ledger sits
+        // under a project-controlled path, so that outcome is reachable by the
+        // repository itself, which is what makes refusing the only safe answer.
+        process.stderr.write(
+          `${ledgerRefusal} Refusing this dispatch: a delegate whose window was never ` +
+            "recorded runs with the reviewer-scope and state-transition guards " +
+            "skipped. Remove the obstruction under aidlc/.aidlc-sessions, then retry.\n",
+        );
+        return 2;
       }
     } else if (ide.event === "PostToolUse") {
       closeDelegation(latchSession, payload);

@@ -810,6 +810,51 @@ function disallowedToolsValues(content: string): string[] {
   ].map((match) => match[1].trim());
 }
 
+// The capability allowlist a composed Kiro plugin persona carries.
+//
+// Kiro has no `disallowedTools` key, so an author's `disallowedTools: Task` cannot be
+// projected AS a denial. An allowlist that omits the delegation tool is the same
+// statement in the vocabulary this row does have, and emitting one is what makes
+// `harness/kiro/manifest.ts`'s "no persona receives a subagent tool, so nested
+// delegation stays unavailable" true of PLUGIN personas and not only of the 14 core
+// ones - those get their allowlist from `personaFrontmatter()` at build time, a path
+// a plugin persona never travels. Copilot already solves the same problem the same
+// way (`COPILOT_WORKER_TOOLS`); Kiro was the outlier that removed the denial and put
+// nothing in its place.
+//
+// Deliberately NOT the core persona list: those also carry `@context7` and
+// `@aws-knowledge-mcp-server` because the workflow itself uses them, and a plugin
+// worker that never asked for an MCP server should not be handed one. A plugin
+// needing more declares its own `tools:`, which is then taken as authored.
+const KIRO_WORKER_TOOLS = ["fs_read", "fs_write", "execute_bash", "thinking"] as const;
+
+/** The tool names a persona's frontmatter grants, in either YAML form: flow
+ *  (`tools: ["a", "b"]`, which the conductor uses) or block (`tools:` then `  - a`,
+ *  which the built core personas use). An absent key returns the empty list, which is
+ *  NOT the same as granting nothing - it means the persona inherits, which is exactly
+ *  why the projection below has to supply a list. */
+function kiroToolGrants(content: string): string[] {
+  const lines = frontmatter(content).split(/\r?\n/);
+  const at = lines.findIndex((line) => /^tools:/.test(line));
+  if (at === -1) return [];
+  const inline = lines[at].slice("tools:".length).trim();
+  if (inline.length > 0) {
+    return inline
+      .replace(/^\[/, "")
+      .replace(/\]$/, "")
+      .split(",")
+      .map((tool) => tool.trim().replace(/^["']|["']$/g, ""))
+      .filter((tool) => tool.length > 0);
+  }
+  const out: string[] = [];
+  for (const line of lines.slice(at + 1)) {
+    const item = /^\s+-\s+(.*\S)\s*$/.exec(line);
+    if (item === null) break;
+    out.push(item[1].trim().replace(/^["']|["']$/g, ""));
+  }
+  return out;
+}
+
 function projectKiroNativeAgent({ file, content }: CopyContext): string {
   const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!m) throw new Error(`${file}: plugin agent has no closed frontmatter block`);
@@ -820,11 +865,22 @@ function projectKiroNativeAgent({ file, content }: CopyContext): string {
   ) {
     throw new Error(`${file}: Kiro cannot project this disallowedTools declaration`);
   }
-  const fm = m[1]
-    .split(/\r?\n/)
-    .filter((line) => !/^disallowedTools:/.test(line))
-    .join("\n");
-  return content.replace(m[0], () => `---\n${fm}\n---\n`);
+  // An authored `tools:` governs: the precheck has already refused one that grants
+  // `subagent`, so what survives is the author's own narrower statement and this
+  // projection must not overwrite it. Otherwise the allowlist is supplied - taking
+  // the denial's own slot when there was one, so the restriction reads where the
+  // author wrote it, and appended when the persona declared neither.
+  const authored = /^tools:/m.test(m[1]);
+  const allowlist = `tools: [${KIRO_WORKER_TOOLS.map((tool) => `"${tool}"`).join(", ")}]`;
+  let placed = false;
+  const lines = m[1].split(/\r?\n/).flatMap((line) => {
+    if (!/^disallowedTools:/.test(line)) return [line];
+    if (authored) return [];
+    placed = true;
+    return [allowlist];
+  });
+  if (!authored && !placed) lines.push(allowlist);
+  return content.replace(m[0], () => `---\n${lines.join("\n")}\n---\n`);
 }
 
 function kiroNativeAgentPrecheck(): CopyPrecheck {
@@ -848,8 +904,35 @@ function kiroNativeAgentPrecheck(): CopyPrecheck {
       );
       return false;
     }
+    // An authored allowlist is taken as written, so one that NAMES the delegation
+    // tool is an explicit request to nest - which this row does not have. The
+    // conductor is the only delegator (`agents/aidlc.md` is the one persona granted
+    // `subagent`), so refuse rather than project a persona that contradicts it.
+    const granted = kiroToolGrants(ctx.content);
+    if (granted.some((tool) => /^subagent$/i.test(tool))) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" grants the subagent tool; only the conductor may delegate on this row, so nested delegation cannot be projected; not copied`,
+      );
+      return false;
+    }
     return true;
   };
+}
+
+/** What the PREVIOUS composer wrote for Kiro: the source with its `disallowedTools:`
+ *  line removed and nothing put in its place. An install in exactly that shape is
+ *  this plugin's own output from before the allowlist existed, so it is as safe to
+ *  re-project as an untouched pre-projection copy. Without this, every persona already
+ *  composed by the old code keeps the ambient toolset forever: the migration below
+ *  only ever accepted an install byte-identical to the SOURCE. */
+function legacyKiroProjection(content: string): string {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  if (!m) return content;
+  const fm = m[1]
+    .split(/\r?\n/)
+    .filter((line) => !/^disallowedTools:/.test(line))
+    .join("\n");
+  return content.replace(m[0], () => `---\n${fm}\n---\n`);
 }
 
 function migrateExistingKiroAgent(
@@ -857,18 +940,24 @@ function migrateExistingKiroAgent(
 ): ExistingCopyAction {
   if (!ctx.file.endsWith(".md")) return "compare";
   const installed = ctx.installed.toString("utf-8");
-  // This migration is deliberately narrower than ordinary plugin upgrades:
-  // only an unchanged pre-projection copy owned by this plugin is rewritten.
-  // User edits, core files, and another plugin's files stay under no-clobber.
+  // This migration is deliberately narrower than ordinary plugin upgrades: only an
+  // unchanged copy this plugin itself produced is rewritten - the pre-projection
+  // source, or the older projection that merely dropped the denial. User edits, core
+  // files, and another plugin's files stay under no-clobber.
   if (
-    installed !== ctx.content ||
+    (installed !== ctx.content && installed !== legacyKiroProjection(ctx.content)) ||
     frontmatterScalar(ctx.content, "plugin") !== PLUGIN_NAME ||
     frontmatterScalar(installed, "plugin") !== PLUGIN_NAME
   ) {
     return "compare";
   }
   const disallowed = disallowedToolsValues(ctx.content);
-  if (disallowed.length === 0) return "compare";
+  // Nothing to project only when the source already governs itself: its own `tools:`
+  // allowlist and no denial to translate. A source declaring NEITHER still needs the
+  // allowlist, which is the wider half of the same hole.
+  if (disallowed.length === 0 && /^tools:/m.test(frontmatter(ctx.content))) {
+    return "compare";
+  }
   if (disallowed.length > 1) {
     const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
     recordDrop(
@@ -876,7 +965,7 @@ function migrateExistingKiroAgent(
     );
     return "handled";
   }
-  if (!/^Task$/i.test(disallowed[0])) {
+  if (disallowed.length === 1 && !/^Task$/i.test(disallowed[0])) {
     const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
     recordDrop(
       `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed with unsupported disallowedTools "${disallowed[0]}"; fix the plugin source, remove "${installedRel}", and re-run compose`,
