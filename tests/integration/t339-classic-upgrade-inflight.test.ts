@@ -280,7 +280,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on" });
     expect(restored.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(restored.protocol_modules).toContain("learnings");
-  });
+  }, 15_000); // Setup and four real CLI handshakes exceeded the macOS 5s default.
 
   test("classic caps an adversarial override to advisory, while a none override still silences the reviewer", () => {
     const { project, path } = legacyClassic();

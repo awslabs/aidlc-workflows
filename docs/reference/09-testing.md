@@ -941,7 +941,13 @@ Scheduling does not extend live workflow deadlines. The terminal substrate prefl
 runs before selected TUI work, including filtered selections. Normal assertion
 failures do not prevent unrelated files from running.
 
-The revision-loop TUI test also stops waiting after a confirmed, completed root
+The revision-loop TUI test runs its clean and reject/revise/approve journeys
+concurrently in separate projects, Claude profiles, and terminal sessions.
+Both must reach the same completion milestone within one 40-minute file budget,
+with time reserved for cleanup. Each journey retains its own terminal state,
+native fidelity evidence, and cleanup result.
+
+The test also stops waiting after a confirmed, completed root
 HTTP 5xx failure in its fresh Claude transcript. It records the provider error
 and native transcript, stops its owned answer-gate client, and performs normal
 terminal cleanup. This does not retry the model, erase the failure, or change the

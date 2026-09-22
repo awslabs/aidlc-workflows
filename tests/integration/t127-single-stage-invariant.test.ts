@@ -600,7 +600,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       proj,
     ]);
     expect(result.out).toContain('"kind":"done"');
-  });
+  }, 15_000); // Decision/answer, three write hooks, and completion took 6.5s on macOS CI.
 
   describe("isolated NFR review with a parent plan that skips Units Generation", () => {
     const stage = "nfr-requirements";

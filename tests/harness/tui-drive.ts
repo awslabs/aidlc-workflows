@@ -1308,6 +1308,9 @@ const tmuxBackend: Backend = {
 
     const r = tmux([
       "new-session",
+      // Parallel fixtures use independent profiles. An existing tmux server
+      // retains its original environment, so pass this value per session.
+      ...(process.env.CLAUDE_CONFIG_DIR ? ["-e", `CLAUDE_CONFIG_DIR=${process.env.CLAUDE_CONFIG_DIR}`] : []),
       "-d",
       "-s",
       session,
@@ -4009,6 +4012,18 @@ async function handleRevisionRecovery(
   while (Date.now() < recoveryDeadline) {
     await sleep(POLL_INTERVAL_MS);
     const after = await backend.capture(session, false, "physical");
+    if (gridHasMenu(after) && gridIsMultiSelect(after)) {
+      // A structured feedback question is already ready. The outer answer-gate
+      // loop owns checkbox selection/submission; do not spend a minute waiting
+      // for this real question to turn into a recovery menu or free-text prompt.
+      writeTuiTrace(session, "answer_gate_action", {
+        answered,
+        action: "reject_structured_followup",
+        screen: after,
+      });
+      process.stdout.write("answer-gate: structured revision feedback ready for normal menu handling\n");
+      return false;
+    }
     const typeSomethingNum = pickRevisionTypeSomethingOption(after);
     if (typeSomethingNum !== null) {
       await chooseNumberedMenuOption(backend, session, typeSomethingNum);

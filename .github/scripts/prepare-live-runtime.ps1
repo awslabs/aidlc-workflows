@@ -42,7 +42,11 @@ $git = 'C:\Program Files\Git\cmd\git.exe'
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 # Windows system directories precede Git so MSYS coreutils (whoami, find, sort)
 # never shadow the native tools, matching the hosted runner's own PATH order.
-$livePath = "$tools;$tools\npm;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin"
+# npm exposes claude.cmd; native-launch journeys require the actual executable.
+# This package directory is normalized and sealed with the rest of $tools before
+# any credential-bearing run. Never discover it through the runner's profile.
+$claudeNativeBin = Join-Path $tools 'npm\node_modules\@anthropic-ai\claude-code\bin'
+$livePath = "$tools;$claudeNativeBin;$tools\npm;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin"
 
 # File handles detect hard links (not reparse points), including links to secrets
 # that the collecting administrator could read but the sandbox identity cannot.
@@ -718,6 +722,19 @@ if ($errorCode -ne 5) { throw 'Process-memory probe did not prove access denial.
 if (-not [IO.File]::Exists('C:\aidlc-live\work\scripts\ci-live-sandbox.ts')) { throw 'Isolated source is missing.' }
 & 'C:\aidlc-live\tools\bun.exe' --version
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if (__CLAUDE_FAMILY__) {
+    $nativeClaude = 'C:\aidlc-live\tools\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe'
+    $resolvedClaude = (Get-Command claude.exe -CommandType Application -ErrorAction Stop).Source
+    if (-not [String]::Equals([IO.Path]::GetFullPath($resolvedClaude), $nativeClaude, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Native Claude did not resolve inside the sealed tool package.'
+    }
+    $denied = $false
+    try { $stream = [IO.File]::Open($nativeClaude, 'Open', 'Write', 'ReadWrite'); $stream.Dispose() }
+    catch { if (-not (Test-AccessDenied $_)) { throw }; $denied = $true }
+    if (-not $denied) { throw 'Sandbox can write the native Claude executable.' }
+    & $nativeClaude --version
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 & 'C:\Program Files\Git\cmd\git.exe' -c safe.directory=C:/aidlc-live/work -C 'C:\aidlc-live\work' rev-parse --is-inside-work-tree
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $configProbe = [IO.File]::Open((Join-Path $env:HOME '.gitconfig'), 'Open', 'ReadWrite', 'Read')
@@ -727,7 +744,8 @@ exit 0
 '@
     $directoryLiterals = @($paths | ForEach-Object { ConvertTo-PSLiteral $_ }) -join ', '
     $fileLiterals = @($files | ForEach-Object { ConvertTo-PSLiteral $_ }) -join ', '
-    return $body.Replace('__SID__', (ConvertTo-PSLiteral $sandboxSid.Value)).Replace('__DIRECTORIES__', ('@(' + $directoryLiterals + ')')).Replace('__FILES__', ('@(' + $fileLiterals + ')')).Replace('__PID__', [string]$PID)
+    $claudeFamily = if ($Family -in @('claude-sdk', 'claude-tui')) { '$true' } else { '$false' }
+    return $body.Replace('__SID__', (ConvertTo-PSLiteral $sandboxSid.Value)).Replace('__DIRECTORIES__', ('@(' + $directoryLiterals + ')')).Replace('__FILES__', ('@(' + $fileLiterals + ')')).Replace('__PID__', [string]$PID).Replace('__CLAUDE_FAMILY__', $claudeFamily)
 }
 
 try {

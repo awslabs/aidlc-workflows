@@ -385,7 +385,7 @@ describe("t327 Code Generation authority publication", () => {
     expect(
       readPlanApprovalChallenge(installed.dir, sessionA ?? ""),
     ).toBeNull();
-  }, 30000);
+  }, 60_000); // Three real IDE hosts plus continuation/recovery calls exceeded 30s on Windows.
 
   test("IPC-only legacy ownership blocks while live and permits human recovery after endpoint removal", () => {
     const installed = project("kiro-ide");
