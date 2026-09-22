@@ -26,6 +26,10 @@ const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const projects: string[] = [];
 type Directive = Record<string, unknown>;
 
+// These three cases each copy the complete shipped install before invoking
+// the CLI. Hosted Windows measured a 19s copy followed by a correct 354ms call.
+const ROUTING_CASE_TIMEOUT = process.platform === "win32" ? 60_000 : undefined;
+
 const EXPRESS_STAGES = [
   "workspace-detection",
   "workspace-scaffold",
@@ -252,9 +256,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
       scope: "express",
       source: "keyword",
     });
-    // Hosted Windows exhausted the 15s case budget during the first fixture/CLI
-    // call. Keep this cold-start allowance local; timings above separate both costs.
-  }, process.platform === "win32" ? 60_000 : undefined);
+  }, ROUTING_CASE_TIMEOUT);
 
   test("explicit --scope express writes the exact 10-stage plan", () => {
     const p = project();
@@ -280,7 +282,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
       .map(([slug]) => slug)
       .sort();
     expect(execute).toEqual(EXPRESS_STAGES);
-  });
+  }, ROUTING_CASE_TIMEOUT);
 
   test("freeform text with no scope keyword falls back to the classic default", () => {
     expect(detectedScope("build a simple task tracker")).toMatchObject(
@@ -289,7 +291,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
         source: "freeform",
       },
     );
-  });
+  }, ROUTING_CASE_TIMEOUT);
 
   test("engine completes Express when the conditional deploy tail does not apply", () => {
     const p = project();
