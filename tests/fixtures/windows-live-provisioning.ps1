@@ -1,18 +1,17 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
-param([string]$SourceRoot, [string]$FixtureRoot, [string]$BunPath,
-    [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny')][string]$Case,
+param([string]$SourceRoot, [string]$FixtureRoot, [string]$BunPath, [string]$RunnerPath,
+    [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny', 'runner-bootstrap')][string]$Case,
     [ValidateSet('run', 'cleanup')][string]$Mode = 'run', [Parameter(Mandatory)][Guid]$FixtureId)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Check([bool]$Value, [string]$Message) { if (-not $Value) { throw $Message } }
 
-function Remove-FixtureProfile([Security.Principal.SecurityIdentifier]$Sid) {
-    Check ($Sid.Value -eq $createdUserSid.Value -and $Sid.Value -ne $runnerSid.Value) 'Refusing profile cleanup outside the fixture SID.'
+function Remove-FixtureProfile([Security.Principal.SecurityIdentifier]$Sid, [DateTime]$Deadline = [DateTime]::UtcNow.AddSeconds(30)) {
+    Check ($Sid.Value -in $fixtureProfileSids -and $Sid.Value -ne $runnerSid.Value) 'Refusing profile cleanup outside the fixture SID.'
     # Run only after the provisioning PowerShell client exits. Loaded is
     # diagnostic status; let Windows reject a profile that is actually in use.
-    $deadline = [DateTime]::UtcNow.AddSeconds(30)
     $lastFailure = 'profile deletion has not completed'
     $attempts = 0
     $firstLoaded = $null
@@ -132,16 +131,28 @@ if ($Mode -eq 'cleanup') {
     Check ($receipt.userName -cmatch '^aidlc-pv-[0-9a-f]{8}$' -and
         $receipt.processesDrained -eq $true -and $receipt.accountRemoved -eq $true) 'Fixture account teardown did not complete.'
     $createdUserSid = [Security.Principal.SecurityIdentifier]::new($receipt.createdUserSid)
-    Check ($null -eq (Get-RecordedLocalUser $createdUserSid)) 'Fixture account still exists.'
+    $fixtureProfileSids = @($createdUserSid.Value)
+    if ($Case -eq 'runner-bootstrap' -and $receipt.PSObject.Properties['runnerUserSid']) {
+        Check ($receipt.runnerUserName -cmatch '^aidlc-pr-[0-9a-f]{8}$' -and
+            $receipt.runnerProcessesDrained -eq $true -and $receipt.runnerAccountRemoved -eq $true) 'Fixture runner teardown did not complete.'
+        $fixtureProfileSids += ([Security.Principal.SecurityIdentifier]::new($receipt.runnerUserSid)).Value
+    }
+    foreach ($sid in $fixtureProfileSids) {
+        Check ($sid -ne $runnerSid.Value -and $null -eq (Get-RecordedLocalUser ([Security.Principal.SecurityIdentifier]::new($sid)))) 'Fixture account still exists.'
+    }
     foreach ($process in Get-CimInstance Win32_Process) {
         try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop }
         catch {
             if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) { throw }
             continue
         }
-        Check (-not ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $createdUserSid.Value)) 'Fixture still has a live process.'
+        Check (-not ($owner.ReturnValue -eq 0 -and $owner.Sid -in $fixtureProfileSids)) 'Fixture still has a live process.'
     }
-    $cleanup = Remove-FixtureProfile $createdUserSid
+    $profileDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    $cleanup = Remove-FixtureProfile $createdUserSid $profileDeadline
+    if ($fixtureProfileSids.Count -gt 1) {
+        $cleanup['runnerProfile'] = Remove-FixtureProfile ([Security.Principal.SecurityIdentifier]::new($fixtureProfileSids[1])) $profileDeadline
+    }
     $cleanup['fixtureId'] = $FixtureId.ToString()
     $cleanup | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $receiptRoot 'cleanup.json') -Encoding UTF8
     exit 0
@@ -159,6 +170,8 @@ $userName = 'aidlc-pv-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $usersSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
 $sandboxSid = $null
 $createdUserSid = $null
+$runnerUserSid = $null
+$runnerPassword = $null
 $credential = $null
 $Family = 'isolation'
 $stage = 'fixture'
@@ -184,9 +197,12 @@ try {
         (Join-Path $tools 'npm-cli'), (Join-Path $tools 'npm-cli\bin'), (Join-Path $sandboxHome 'tmp'))) {
         New-PrivateDirectory $path
     }
-    [IO.File]::Copy($node, (Join-Path $tools 'node.exe'))
+    # Invoke-Isolated's failure path always sanitizes with the sealed Bun.
     [IO.File]::Copy($bun, (Join-Path $tools 'bun.exe'))
-    [IO.File]::Copy((Join-Path $SourceRoot '.github\scripts\normalize-live-tools.cjs'), (Join-Path $tools 'normalize-live-tools.cjs'))
+    if ($Case -ne 'runner-bootstrap') {
+        [IO.File]::Copy($node, (Join-Path $tools 'node.exe'))
+        [IO.File]::Copy((Join-Path $SourceRoot '.github\scripts\normalize-live-tools.cjs'), (Join-Path $tools 'normalize-live-tools.cjs'))
+    }
     [void][IO.Directory]::CreateDirectory((Join-Path $workspace 'scripts'))
     [IO.File]::Copy((Join-Path $SourceRoot 'scripts\ci-sanitize-logs.ts'), (Join-Path $workspace 'scripts\ci-sanitize-logs.ts'))
     [IO.File]::WriteAllText((Join-Path $runnerHome 'protected.txt'), $secret)
@@ -230,7 +246,82 @@ fs.writeFileSync(path.join(root, "installed.json"), JSON.stringify({
     Set-RuntimeAcl $tools $sandboxSid 'ReadAndExecute' -Tree
     Set-RuntimeAcl (Join-Path $tools 'npm') $sandboxSid 'Modify'
     $safe = Get-SafeEnvironment
-    if ($Case -eq 'seal') {
+    if ($Case -eq 'runner-bootstrap') {
+        # This opt-in probe runs only the pinned 8 MB command runner: no full
+        # Codex CLI, model, provider credentials, setup accounts or WFP changes.
+        Assert-PlainPath $RunnerPath
+        [AidlcFileBoundary]::RequireSingleLink($RunnerPath)
+        $runnerBinary = Join-Path $tools 'codex-command-runner.exe'
+        [IO.File]::Copy($RunnerPath, $runnerBinary)
+        Check ((Get-FileHash -LiteralPath $runnerBinary -Algorithm SHA256).Hash -ieq
+            '5a84820fc507e5e3c8689047434259d96197730e92d88e6a915b0da97c758da6') 'Official runner digest mismatch.'
+        $probeSource = Join-Path $tools 'runner-bootstrap.cs'
+        [IO.File]::Copy((Join-Path $SourceRoot 'tests\fixtures\windows-runner-bootstrap.cs'), $probeSource)
+        Set-RuntimeAcl $tools $sandboxSid 'ReadAndExecute' -Tree
+        $runnerUserName = 'aidlc-pr-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+        $runnerPassword = 'Aa1!' + [Guid]::NewGuid().ToString('N')
+        $runnerUser = New-LocalUser -Name $runnerUserName -Password (ConvertTo-SecureString $runnerPassword -AsPlainText -Force) -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword
+        $runnerUserSid = $runnerUser.SID
+        $identityReceipt.runnerUserName = $runnerUserName
+        $identityReceipt.runnerUserSid = $runnerUserSid.Value
+        $identityReceipt.runnerProcessesDrained = $false
+        $identityReceipt.runnerAccountRemoved = $false
+        Save-FixtureIdentity
+        Add-LocalGroupMember -SID $usersSid -Member $runnerUser
+        # Grant only the exact native executable and its ancestors. In
+        # particular the child cannot read the synthetic password in jobs/.
+        foreach ($path in @($FixtureRoot, $root, $tools, $work, $runnerBinary)) {
+            $acl = Get-Acl -LiteralPath $path
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($runnerUserSid, 'ReadAndExecute', 'None', 'None', 'Allow'))
+            Set-Acl -LiteralPath $path -AclObject $acl
+        }
+        $body = @'
+$fixtureRunnerPassword = $env:AIDLC_FIXTURE_RUNNER_PASSWORD
+Remove-Item Env:\AIDLC_FIXTURE_RUNNER_PASSWORD -ErrorAction Stop
+Add-Type -Path __SOURCE__
+$before = [AidlcRunnerBootstrapProbe]::Run(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__)
+__BOOTSTRAP__
+$probe = [AidlcRunnerBootstrapProbe]::Run(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__)
+$refused = 0
+foreach ($invalid in @(
+    @{ owner = __SID__; children = @(__SID__) },
+    @{ owner = __CALLER__; children = @('S-1-1-0') },
+    @{ owner = __CALLER__; children = @('S-1-5-32-545') },
+    @{ owner = __CALLER__; children = @(__CALLER__) },
+    @{ owner = __CALLER__; children = @('S-1-5-21-1-2-3-4444') }
+)) {
+    try { [AidlcCodexGuiBootstrap]::Prepare($invalid.owner, [string[]]$invalid.children) }
+    catch {
+        if ($_.Exception.GetBaseException() -isnot [InvalidOperationException]) { throw }
+        $refused++
+    }
+}
+[AidlcCodexGuiBootstrap]::Prepare(__CALLER__, [string[]]@(__SID__))
+$private = [AidlcRunnerBootstrapProbe]::RunPrivateDesktop(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__)
+$reentered = [AidlcRunnerBootstrapProbe]::Run(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__)
+$fixtureRunnerPassword = $null
+$probe['before'] = $before
+$probe['privateDesktop'] = $private
+$probe['refusedInputs'] = $refused
+$probe['idempotent'] = ($probe.station.sddl -ceq $reentered.station.sddl -and
+    $probe.desktop.sddl -ceq $reentered.desktop.sddl -and $reentered.pipeInConnected -and $reentered.pipeOutConnected -and $reentered.retired)
+$json = $probe | ConvertTo-Json -Depth 8 -Compress
+[IO.File]::WriteAllText((Join-Path $env:HOME 'runner-bootstrap.json'), $json)
+[Console]::WriteLine($json)
+exit 0
+'@
+        $body = $body.Replace('__SOURCE__', (ConvertTo-PSLiteral $probeSource)).Replace('__RUNNER__', (ConvertTo-PSLiteral $runnerBinary)).
+            Replace('__USER__', (ConvertTo-PSLiteral $runnerUserName)).
+            Replace('__SID__', (ConvertTo-PSLiteral $runnerUserSid.Value)).Replace('__CWD__', (ConvertTo-PSLiteral $work)).
+            Replace('__CALLER__', (ConvertTo-PSLiteral $sandboxSid.Value)).
+            Replace('__BOOTSTRAP__', (Get-CodexGuiBootstrap @($runnerUserSid.Value)))
+        # Keep the password out of method-call source lines that PowerShell
+        # includes in errors; remove it before any native runner inherits env.
+        $safe['AIDLC_FIXTURE_RUNNER_PASSWORD'] = $runnerPassword
+        try { [void](Invoke-Isolated 'runner-bootstrap' $safe $body -TimeoutMinutes 1) }
+        finally { [void]$safe.Remove('AIDLC_FIXTURE_RUNNER_PASSWORD'); $body = $null; $runnerPassword = $null }
+        $result['probe'] = Get-Content -LiteralPath (Join-Path $sandboxHome 'runner-bootstrap.json') -Raw | ConvertFrom-Json
+    } elseif ($Case -eq 'seal') {
         [void](Invoke-Isolated 'npm-install' $safe (Get-NpmInstallBody 'fixture@1.0.0') -TimeoutMinutes 2)
         Stop-SandboxProcesses
         $installed = Get-Content (Join-Path $tools 'npm\installed.json') -Raw | ConvertFrom-Json
@@ -325,13 +416,21 @@ exit 0
         $result['collectedAfterUserRemoval'] = $true
         $result['summaryArtifacts'] = $summaries.Count
     }
-    $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $FixtureRoot 'result.json') -Encoding UTF8
+    $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $FixtureRoot 'result.json') -Encoding UTF8
 } catch {
     $fixtureFailure = $_
     throw
 } finally {
     try {
         if ($null -ne $createdUserSid) {
+            if ($null -ne $runnerUserSid) {
+                Stop-SandboxProcesses -Disable -AdditionalSids @($runnerUserSid.Value)
+                $identityReceipt.runnerProcessesDrained = $true
+                [AidlcFixtureAccountCleanup]::RemoveRights($runnerUserSid.Value)
+                if (Get-RecordedLocalUser $runnerUserSid) { Remove-LocalUser -SID $runnerUserSid }
+                $identityReceipt.runnerAccountRemoved = $null -eq (Get-RecordedLocalUser $runnerUserSid)
+                Save-FixtureIdentity
+            }
             $existing = Get-RecordedLocalUser $createdUserSid
             if ($null -ne $existing) {
                 Stop-SandboxProcesses -Disable
@@ -352,5 +451,6 @@ exit 0
         [Console]::Error.WriteLine(('Additional fixture cleanup failure: ' + $_.Exception.ToString()))
     } finally {
         $credential = $null
+        $runnerPassword = $null
     }
 }

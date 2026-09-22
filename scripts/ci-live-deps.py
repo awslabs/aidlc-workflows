@@ -102,7 +102,9 @@ def pack(archive, workspace, cli, node_runtime=None):
     for path in roots.values():
         if path.is_symlink() or not path.is_dir():
             raise ValueError("prepared dependency root must be a real directory")
-    with tarfile.open(archive, "w:gz", format=tarfile.PAX_FORMAT) as output:
+    # Native CLI binaries dominate compression time. Prefer short preparation
+    # over a slightly smaller transport archive; extraction validation is unchanged.
+    with tarfile.open(archive, "w:gz", format=tarfile.PAX_FORMAT, compresslevel=1) as output:
         for name, path in roots.items():
             output.add(path, arcname=name, recursive=True)
     with tarfile.open(archive, "r:gz") as check:

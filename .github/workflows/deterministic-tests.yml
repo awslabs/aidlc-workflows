@@ -100,6 +100,32 @@ jobs:
             brew install tmux
           fi
           tmux -V
+      - name: Prepare Windows native sandbox probe
+        if: inputs.tier == 'e2e' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probeRoot = Join-Path $env:RUNNER_TEMP 'aidlc-codex-runner-probe'
+          [void][IO.Directory]::CreateDirectory($probeRoot)
+          $archive = Join-Path $probeRoot 'runner.zip'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/openai/codex/releases/download/rust-v0.151.0/codex-command-runner-x86_64-pc-windows-msvc.exe.zip' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine '57be8a93ad4be537cac12dbaa63de69968389393ab721ce47a6f0ac7e0b80c5b') {
+            throw 'Native runner archive digest mismatch.'
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($archive)
+          $runner = Join-Path $probeRoot 'codex-command-runner.exe'
+          try {
+            if ($zip.Entries.Count -ne 1 -or $zip.Entries[0].FullName -cne 'codex-command-runner-x86_64-pc-windows-msvc.exe' -or $zip.Entries[0].Length -ne 8199984) {
+              throw 'Unexpected native runner archive layout.'
+            }
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($zip.Entries[0], $runner)
+          } finally { $zip.Dispose() }
+          if ((Get-FileHash -LiteralPath $runner -Algorithm SHA256).Hash -ine '5a84820fc507e5e3c8689047434259d96197730e92d88e6a915b0da97c758da6') {
+            throw 'Native runner executable digest mismatch.'
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "AIDLC_CODEX_RUNNER_PROBE=$runner"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value 'AIDLC_CODEX_RUNNER_PROBE_ONLY=0'
       - name: Run deterministic tier
         # Leave time to sanitize and upload partial evidence after a timeout.
         timeout-minutes: ${{ inputs.tier == 'smoke' && 10 || 50 }}

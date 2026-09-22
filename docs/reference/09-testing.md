@@ -945,6 +945,13 @@ Windows provisioning fixtures require their temporary accounts and processes
 to be retired before returning. A profile hive still held by Windows services
 is recorded for VM disposal only on GitHub-hosted runners; persistent hosts
 must delete it within the bounded cleanup operation.
+Windows deterministic E2E jobs download the checksum-pinned Codex command runner
+and set `AIDLC_CODEX_RUNNER_PROBE` so the native bootstrap regression runs alongside
+the existing filesystem and account tests. It makes no model calls. For a local
+diagnostic, point that variable at the verified runner executable; optionally set
+`AIDLC_CODEX_RUNNER_PROBE_ONLY=1` to select the bootstrap and launcher checks.
+That diagnostic selection skips the other provisioning cases and is not a full
+coverage result.
 
 Worker preparation checks free space for the snapshot and checkout copies,
 plus a reserve of 512 MiB. Each isolated file checks the reserve before starting.
@@ -1219,6 +1226,8 @@ readiness checks; required preflights may run in addition to its assigned file.
 Manual planning can use `--family FAMILY --test <repository-path>` to select
 one file on its declared platforms while preserving the full inventory's shard
 assignments.
+Dependency preparation uses fast gzip compression and uploads the resulting
+archive without a second compression pass to shorten startup.
 
 Each credentialed job requests a 3,600-second session from the existing role.
 Jobs have a 55-minute limit, live test steps have a 45-minute limit, and isolated

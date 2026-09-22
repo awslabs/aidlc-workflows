@@ -387,6 +387,7 @@ jobs:
         with:
           name: "live-deps-${{ runner.os }}"
           path: "${{ runner.temp }}/live-deps.tar.gz"
+          compression-level: 0 # The transport archive is already gzip-compressed.
           retention-days: 1
           if-no-files-found: error
   live_hosted:

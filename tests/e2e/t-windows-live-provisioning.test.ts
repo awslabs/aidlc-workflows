@@ -9,6 +9,9 @@ import { writeWindowsExecutable } from "../harness/windows-native-executable.ts"
 
 const source = resolve(import.meta.dir, "../..");
 const fixture = join(source, "tests/fixtures/windows-live-provisioning.ps1");
+const runnerProbe = process.env.AIDLC_CODEX_RUNNER_PROBE;
+const runnerProbeOnly = process.env.AIDLC_CODEX_RUNNER_PROBE_ONLY === "1";
+if (runnerProbeOnly && !runnerProbe) throw new Error("Runner-only probing requires AIDLC_CODEX_RUNNER_PROBE.");
 
 describe.skipIf(process.platform !== "win32")("Windows live provisioning boundary", () => {
   test.each([
@@ -51,74 +54,98 @@ public static class NativeOutputFixture {
     }
   }, 30_000);
 
-  test.each([
+  for (const [name, expected] of [
     ["seal", { singleLinkTools: true, lowUserWriteDenied: true }],
     ["deny", { protectedReadDenied: true, reparseRejected: true }],
     ["failure-collect", { collectedAfterUserRemoval: true, summaryArtifacts: 1 }],
     ["poisoned-collect", { collectedAfterUserRemoval: true, linkedEvidenceRejected: true }],
-  ] as const)("%s uses real low-user execution and filesystem boundaries", (name, expected) => {
-    // A second Windows account cannot resolve Node scripts through the
-    // administrator's private AppData ancestors. Mirror production's C: root.
-    const volume = parse(process.env.SystemRoot ?? "C:\\Windows").root;
-    const root = mkdtempSync(join(volume, "aidlc-win-provision-"));
-    const fixtureId = randomUUID();
-    const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
-    const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fixture,
-      "-SourceRoot", source, "-FixtureRoot", root, "-BunPath", process.execPath, "-Case", name];
-    const failures: unknown[] = [];
-    try {
-      const result = spawnSync(
-        powershell, [...args, "-FixtureId", fixtureId],
-        { encoding: "utf8", timeout: 180_000, windowsHide: true },
-      );
-      expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
-      const record = JSON.parse(readFileSync(join(root, "result.json"), "utf8").replace(/^\uFEFF/, ""));
-      expect(record).toMatchObject({ case: name, ...expected });
-      expect(existsSync(join(root, "trusted-teardown/identity.json"))).toBe(true);
-    } catch (error) {
-      failures.push(error);
-    } finally {
+    ["runner-bootstrap", {}],
+  ] as const) {
+    // CI supplies the hash-checked runner and executes all boundary cases.
+    // Local diagnostics may explicitly select only the bootstrap case.
+    test.skipIf(name === "runner-bootstrap" ? !runnerProbe : runnerProbeOnly)(
+      `${name} uses real low-user execution and filesystem boundaries`, () => {
+      // A second Windows account cannot resolve Node scripts through the
+      // administrator's private AppData ancestors. Mirror production's C: root.
+      const volume = parse(process.env.SystemRoot ?? "C:\\Windows").root;
+      const root = mkdtempSync(join(volume, "aidlc-win-provision-"));
+      const fixtureId = randomUUID();
+      const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
+      const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fixture,
+        "-SourceRoot", source, "-FixtureRoot", root, "-BunPath", process.execPath, "-Case", name];
+      if (name === "runner-bootstrap") args.push("-RunnerPath", runnerProbe!);
+      const failures: unknown[] = [];
       try {
-        if (existsSync(join(root, "trusted-teardown/identity.json"))) {
-          // Task Scheduler/CIM clients have exited before profile deletion.
-          // Keep cleanup separate even when a boundary assertion failed.
-          if (name === "seal") {
-            try {
-              const rejected = spawnSync(powershell, [...args, "-Mode", "cleanup", "-FixtureId", randomUUID()],
-                { encoding: "utf8", timeout: 10_000, windowsHide: true });
-              expect(rejected.status).toBe(1);
-              expect(rejected.stderr).toContain("Fixture receipt binding mismatch.");
-            } catch (error) {
-              failures.push(error);
-            }
-          }
-          const cleanup = spawnSync(powershell, [...args, "-Mode", "cleanup", "-FixtureId", fixtureId],
-            { encoding: "utf8", timeout: 35_000, windowsHide: true });
-          expect(cleanup.status, `Profile cleanup:\n${cleanup.error ?? ""}\n${cleanup.stdout}\n${cleanup.stderr}`).toBe(0);
-          const receipt = JSON.parse(readFileSync(join(root, "trusted-teardown/cleanup.json"), "utf8").replace(/^\uFEFF/, ""));
-          expect(receipt.fixtureId).toBe(fixtureId);
-          if (receipt.removed !== true) {
-            expect(process.env.GITHUB_ACTIONS).toBe("true");
-            expect(process.env.RUNNER_ENVIRONMENT).toBe("github-hosted");
-            expect(receipt).toMatchObject({
-              removed: false, deferredToHostDisposal: true, reason: "profile-service-sharing-lock",
-            });
-          }
-          console.log(`Fixture profile cleanup: ${JSON.stringify({ case: name, ...receipt })}`);
+        const result = spawnSync(
+          powershell, [...args, "-FixtureId", fixtureId],
+          { encoding: "utf8", timeout: 180_000, windowsHide: true },
+        );
+        expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
+        const record = JSON.parse(readFileSync(join(root, "result.json"), "utf8").replace(/^\uFEFF/, ""));
+        expect(record).toMatchObject({ case: name, ...expected });
+        if (name === "runner-bootstrap") {
+          // Preserve native exit/GUI evidence even when the handshake fails.
+          // An early runner exit or a timeout must never be reported as a pass.
+          console.log(`Native runner bootstrap: ${JSON.stringify(record.probe)}`);
+          expect(record.probe, JSON.stringify(record.probe)).toMatchObject({
+            pipeInConnected: true, pipeOutConnected: true, retired: true, timedOut: false,
+            before: { naturalExitCode: "0xC0000142", pipeInConnected: false, pipeOutConnected: false, retired: true },
+            refusedInputs: 5, idempotent: true,
+          });
         }
+        expect(existsSync(join(root, "trusted-teardown/identity.json"))).toBe(true);
       } catch (error) {
         failures.push(error);
+      } finally {
+        try {
+          if (existsSync(join(root, "trusted-teardown/identity.json"))) {
+            // Task Scheduler/CIM clients have exited before profile deletion.
+            // Keep cleanup separate even when a boundary assertion failed.
+            if (name === "seal") {
+              try {
+                const rejected = spawnSync(powershell, [...args, "-Mode", "cleanup", "-FixtureId", randomUUID()],
+                  { encoding: "utf8", timeout: 10_000, windowsHide: true });
+                expect(rejected.status).toBe(1);
+                expect(rejected.stderr).toContain("Fixture receipt binding mismatch.");
+              } catch (error) {
+                failures.push(error);
+              }
+            }
+            const cleanup = spawnSync(powershell, [...args, "-Mode", "cleanup", "-FixtureId", fixtureId],
+              { encoding: "utf8", timeout: 35_000, windowsHide: true });
+            expect(cleanup.status, `Profile cleanup:\n${cleanup.error ?? ""}\n${cleanup.stdout}\n${cleanup.stderr}`).toBe(0);
+            const receipt = JSON.parse(readFileSync(join(root, "trusted-teardown/cleanup.json"), "utf8").replace(/^\uFEFF/, ""));
+            expect(receipt.fixtureId).toBe(fixtureId);
+            if (receipt.removed !== true) {
+              expect(process.env.GITHUB_ACTIONS).toBe("true");
+              expect(process.env.RUNNER_ENVIRONMENT).toBe("github-hosted");
+              expect(receipt).toMatchObject({
+                removed: false, deferredToHostDisposal: true, reason: "profile-service-sharing-lock",
+              });
+            }
+            if (receipt.runnerProfile && receipt.runnerProfile.removed !== true) {
+              expect(process.env.GITHUB_ACTIONS).toBe("true");
+              expect(process.env.RUNNER_ENVIRONMENT).toBe("github-hosted");
+              expect(receipt.runnerProfile).toMatchObject({
+                removed: false, deferredToHostDisposal: true, reason: "profile-service-sharing-lock",
+              });
+            }
+            console.log(`Fixture profile cleanup: ${JSON.stringify({ case: name, ...receipt })}`);
+          }
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
+          rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        } catch (error) {
+          failures.push(error);
+        }
       }
-      try {
-        rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-      } catch (error) {
-        failures.push(error);
+      if (failures.length > 0) {
+        throw new AggregateError(failures, failures.map(error => error instanceof Error ? error.stack : String(error)).join("\n"));
       }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, failures.map(error => error instanceof Error ? error.stack : String(error)).join("\n"));
-    }
-  // Preserve the 180s body and 30s deletion bounds, plus cleanup client startup
-  // and the 10s receipt-binding refusal check after the body process exits.
-  }, 230_000);
+    // Preserve the 180s body and 30s deletion bounds, plus cleanup client startup
+    // and the 10s receipt-binding refusal check after the body process exits.
+    }, 230_000);
+  }
 });

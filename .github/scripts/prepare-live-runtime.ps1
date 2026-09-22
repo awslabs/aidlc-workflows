@@ -724,6 +724,114 @@ function Invoke-CodexProvisioning([string]$NativeDirectory, [string]$CodexHomePa
     } finally { $process.Dispose() }
 }
 
+function Get-CodexGuiBootstrap([string[]]$ChildSids = $codexSandboxSids) {
+    # CreateProcessWithLogonW does not grant access to the caller's inherited
+    # station/desktop (except on Windows XP). Task Scheduler creates these
+    # noninteractive objects for our low user. Run this only as that owner.
+    # https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-createprocesswithlogonw
+    $body = @'
+Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+public static class AidlcCodexGuiBootstrap {
+    [DllImport("user32.dll")] private static extern IntPtr GetProcessWindowStation();
+    [DllImport("user32.dll")] private static extern IntPtr GetThreadDesktop(uint thread);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    private static extern bool GetUserObjectInformationW(IntPtr handle, int index, IntPtr data, uint length, out uint needed);
+    [DllImport("user32.dll", SetLastError=true)]
+    private static extern bool GetUserObjectSecurity(IntPtr handle, ref uint sections, byte[] data, uint length, out uint needed);
+    [DllImport("user32.dll", SetLastError=true)]
+    private static extern bool SetUserObjectSecurity(IntPtr handle, ref uint sections, byte[] data);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    private static extern bool GetTokenInformation(IntPtr token, int kind, byte[] data, uint length, out uint needed);
+    private static byte[] Information(IntPtr handle, int index) {
+        uint needed;
+        GetUserObjectInformationW(handle, index, IntPtr.Zero, 0, out needed);
+        IntPtr buffer = Marshal.AllocHGlobal((int)needed);
+        try {
+            if (!GetUserObjectInformationW(handle, index, buffer, needed, out needed))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            byte[] result = new byte[needed];
+            Marshal.Copy(buffer, result, 0, result.Length);
+            return result;
+        } finally { Marshal.FreeHGlobal(buffer); }
+    }
+    private static string Name(IntPtr handle) {
+        return System.Text.Encoding.Unicode.GetString(Information(handle, 2)).TrimEnd('\0');
+    }
+    private static RawSecurityDescriptor Security(IntPtr handle) {
+        uint sections = 7, needed;
+        GetUserObjectSecurity(handle, ref sections, null, 0, out needed);
+        byte[] bytes = new byte[needed];
+        if (!GetUserObjectSecurity(handle, ref sections, bytes, needed, out needed))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        return new RawSecurityDescriptor(bytes, 0);
+    }
+    private static void Grant(IntPtr handle, RawSecurityDescriptor security, string[] children, int rights) {
+        if (security.DiscretionaryAcl == null) throw new InvalidOperationException("Missing GUI object DACL.");
+        foreach (string child in children) {
+            var sid = new SecurityIdentifier(child);
+            for (int i = security.DiscretionaryAcl.Count - 1; i >= 0; i--) {
+                var ace = security.DiscretionaryAcl[i] as CommonAce;
+                if (ace == null || !ace.SecurityIdentifier.Equals(sid) || ace.AceQualifier != AceQualifier.AccessAllowed) continue;
+                if (ace.AceFlags != AceFlags.None) throw new InvalidOperationException("Unexpected inherited sandbox GUI grant.");
+                security.DiscretionaryAcl.RemoveAce(i);
+            }
+            security.DiscretionaryAcl.InsertAce(security.DiscretionaryAcl.Count,
+                new CommonAce(AceFlags.None, AceQualifier.AccessAllowed, rights, sid, false, null));
+        }
+        byte[] bytes = new byte[security.BinaryLength];
+        security.GetBinaryForm(bytes, 0);
+        uint sections = 4; // DACL only: preserve owner, group and audit rules.
+        if (!SetUserObjectSecurity(handle, ref sections, bytes))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+    public static void Prepare(string expectedOwner, string[] children) {
+        using (var identity = WindowsIdentity.GetCurrent()) {
+            if (identity.User.Value != expectedOwner || Process.GetCurrentProcess().SessionId != 0)
+                throw new InvalidOperationException("Codex bootstrap requires its noninteractive low user.");
+            if (children.Length < 1 || children.Length > 2) throw new InvalidOperationException("Invalid sandbox identity count.");
+            foreach (string child in children) {
+                var sid = new SecurityIdentifier(child);
+                if (!sid.IsAccountSid() || sid.Equals(identity.User) || !sid.AccountDomainSid.Equals(identity.User.AccountDomainSid))
+                    throw new InvalidOperationException("Codex bootstrap requires distinct local sandbox identities.");
+            }
+            byte[] statistics = new byte[56];
+            uint needed;
+            if (!GetTokenInformation(identity.Token, 10, statistics, (uint)statistics.Length, out needed))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            string expectedStation = "Service-0x" + BitConverter.ToUInt32(statistics, 12).ToString("x") +
+                "-" + BitConverter.ToUInt32(statistics, 8).ToString("x") + "$";
+            IntPtr station = GetProcessWindowStation(), desktop = GetThreadDesktop(GetCurrentThreadId());
+            var stationSecurity = Security(station);
+            var desktopSecurity = Security(desktop);
+            // Validate both objects before either write. Never touch Winsta0,
+            // an interactive session, another logon, or another user's desktop.
+            if (!String.Equals(Name(station), expectedStation, StringComparison.OrdinalIgnoreCase) ||
+                (BitConverter.ToUInt32(Information(station, 1), 8) & 1) != 0 || Name(desktop) != "Default" ||
+                stationSecurity.Owner.Value != expectedOwner || desktopSecurity.Owner.Value != expectedOwner)
+                throw new InvalidOperationException("Codex bootstrap refuses unowned or interactive GUI objects.");
+            // Native DLL initialization also requires WINSTA_EXITWINDOWS.
+            // This is this batch logon's noninteractive station, never the
+            // operator's session. No clipboard, screen, hook/journal, desktop
+            // switching, DELETE, WRITE_DAC or WRITE_OWNER rights are granted.
+            Grant(station, stationSecurity, children, 0x20063);
+            Grant(desktop, desktopSecurity, children, 0x20087);
+        }
+    }
+}
+"@
+[AidlcCodexGuiBootstrap]::Prepare(__OWNER__, [string[]]@(__CHILDREN__))
+'@
+    $children = @($ChildSids | ForEach-Object { ConvertTo-PSLiteral $_ }) -join ','
+    return $body.Replace('__OWNER__', (ConvertTo-PSLiteral $sandboxSid.Value)).Replace('__CHILDREN__', $children)
+}
+
 function Get-CodexHomeInitializer {
     # Executed only as the original low-user SID. Copy machine-scope DPAPI
     # artifacts, not passwords, preserving the pinned setup's access boundaries.
@@ -839,7 +947,8 @@ try {
     for ($index = $pins.Count - 1; $index -ge 0; $index--) { $pins[$index].Dispose() }
 }
 '@
-    return $body.Replace('__SID__', (ConvertTo-PSLiteral $sandboxSid.Value)).Replace('__SEED__', (ConvertTo-PSLiteral $codexSeed))
+    return $body.Replace('__SID__', (ConvertTo-PSLiteral $sandboxSid.Value)).Replace('__SEED__', (ConvertTo-PSLiteral $codexSeed)) +
+        "`r`n" + (Get-CodexGuiBootstrap)
 }
 
 function Initialize-CodexRuntime {
