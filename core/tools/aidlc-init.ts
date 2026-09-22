@@ -39,12 +39,12 @@ import {
 } from "./aidlc-color.ts";
 import {
   AIDLC_HOOK_ENTRY_PREFIX,
-  LEGACY_AIDLC_HOOK_TARGETS,
   aidlcHookRegistrationHashes,
   aidlcHookRegistrations,
   aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
   isCustomClaudeStatusLine,
+  legacyAidlcHookTarget,
   type ProjectionDescriptor,
   projectionFiles,
   sha256Bytes,
@@ -214,6 +214,7 @@ type PreparedRefreshSource = {
   root: string;
   cleanup?: string;
   regenerated: Set<string>;
+  retiredManagedFiles: Set<string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -3749,11 +3750,12 @@ function preserveClaudeProviderFields(
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
   notes: string[],
-): void {
+): Set<string> {
+  const retiredManagedFiles = new Set<string>();
   const relative = `${harnessDir}/settings.json`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return retiredManagedFiles;
   const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
   const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
   const priorEntries = prior?.entries?.[relative];
@@ -3761,13 +3763,43 @@ function preserveClaudeProviderFields(
   const recordedHookTargets = Object.keys(priorEntries ?? {})
     .filter((key) => key.startsWith(AIDLC_HOOK_ENTRY_PREFIX))
     .map((key) => key.slice(AIDLC_HOOK_ENTRY_PREFIX.length));
+  const registeredLegacyTargets = new Set<string>();
+  for (const groups of Object.values(isRecord(current.hooks) ? current.hooks : {})) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      if (!isRecord(group) || !Array.isArray(group.hooks)) continue;
+      for (const item of group.hooks) {
+        if (!isRecord(item) || typeof item.command !== "string") continue;
+        const target = legacyAidlcHookTarget(item.command);
+        if (target !== null) registeredLegacyTargets.add(target);
+      }
+    }
+  }
+  const attributableLegacyTargets = [...registeredLegacyTargets].filter((target) => {
+    const hookRelative = `${harnessDir}/hooks/aidlc-${target}.ts`;
+    if (prior?.files[hookRelative] !== undefined) return true;
+    if (prior !== null) return false;
+    const hookPath = join(projectDir, hookRelative);
+    if (!regularFile(hookPath)) return false;
+    const source = readFileSync(hookPath, "utf-8");
+    return /from\s+["']\.\.\/tools\/(?:aidlc-[^"']+|(?:lib|audit|state|graph))\.ts["']/.test(
+      source,
+    );
+  });
   const ownedHookTargets = new Set([
     ...Object.keys(incomingHookHashes),
     ...recordedHookTargets,
-    ...(priorEntries?.hooks !== undefined && recordedHookTargets.length === 0
-      ? LEGACY_AIDLC_HOOK_TARGETS
-      : []),
+    ...attributableLegacyTargets,
   ]);
+  if (prior === null) {
+    for (const target of attributableLegacyTargets) {
+      if (Object.hasOwn(incomingHookHashes, target)) continue;
+      const hookRelative = `${harnessDir}/hooks/aidlc-${target}.ts`;
+      if (!regularFile(join(stagedRoot, hookRelative))) {
+        retiredManagedFiles.add(hookRelative);
+      }
+    }
+  }
   // Start with the shipped object's key order so a pristine refresh is byte-identical.
   if (canonical(current.hooks) !== canonical(staged.hooks)) {
     const currentOwnedHooks = aidlcHookRegistrations(current.hooks, ownedHookTargets);
@@ -3906,6 +3938,7 @@ function preserveClaudeProviderFields(
   }
   staged.env = { ...stagedEnv, ...currentEnv };
   writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
+  return retiredManagedFiles;
 }
 
 const CODEX_FRAMEWORK_TABLES = new Set([
@@ -3930,14 +3963,25 @@ type TomlTopLevelEntry = {
   text: string;
 };
 
-function tomlRootName(text: string): string | null {
+function tomlEntryPath(text: string): string[] | null {
   try {
-    const parsed = Bun.TOML.parse(text) as Record<string, unknown>;
-    const keys = Object.keys(parsed);
-    return keys.length === 1 ? keys[0] : null;
+    let value: unknown = Bun.TOML.parse(text);
+    const path: string[] = [];
+    while (isRecord(value)) {
+      const keys = Object.keys(value);
+      if (keys.length !== 1) break;
+      path.push(keys[0]);
+      value = value[keys[0]];
+    }
+    return path.length > 0 ? path : null;
   } catch {
     return null;
   }
+}
+
+function tomlEntryName(path: string[] | null): string | null {
+  if (path === null) return null;
+  return path.length === 1 ? path[0] : JSON.stringify(path);
 }
 
 function tomlTableHeader(line: string): { table: boolean; name: string | null } {
@@ -3950,7 +3994,27 @@ function tomlTableHeader(line: string): { table: boolean; name: string | null } 
   } catch {
     return { table: false, name: null };
   }
-  return { table: true, name: tomlRootName(`${line}\n`) };
+  const path = tomlEntryPath(`${line}\n`);
+  return { table: true, name: tomlEntryName(path) };
+}
+
+function tomlAssignmentEquals(source: string): number {
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    if (char === "\n" || char === "\r") return -1;
+    if (quote !== null) {
+      if (quote === '"' && char === "\\") index++;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "=") return index;
+  }
+  return -1;
 }
 
 // Identify semantic top-level assignments and table sections while retaining
@@ -4015,9 +4079,13 @@ function tomlTopLevelEntries(content: string): TomlTopLevelEntry[] {
     }
     if (assignment !== null && multiline === null && depth === 0) {
       const source = content.slice(assignment.token, end);
+      const equals = tomlAssignmentEquals(source);
+      const path = equals < 0
+        ? null
+        : tomlEntryPath(`${source.slice(0, equals)} = 0\n`);
       assignments.push({
         kind: "assignment",
-        name: tomlRootName(source),
+        name: tomlEntryName(path),
         start: assignment.start,
         end,
         text: source.replaceAll("\r\n", "\n").trimEnd(),
@@ -4206,9 +4274,9 @@ function preserveUserProviderFields(
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
   notes: string[],
-): void {
+): Set<string> {
   if (harness === "claude") {
-    preserveClaudeProviderFields(
+    return preserveClaudeProviderFields(
       projectDir,
       stagedRoot,
       harnessDir,
@@ -4223,6 +4291,7 @@ function preserveUserProviderFields(
   } else if (harness === "opencode") {
     preserveOpenCodeProviderFields(projectDir, stagedRoot);
   }
+  return new Set();
 }
 
 function unrecordedLegacyProviderMigration(
@@ -4311,7 +4380,13 @@ function prepareRefreshSource(
     projectFlags === null &&
     diagnosticsOverride === undefined
   ) {
-    return { root: sourceRoot, regenerated: new Set(), entries, notes };
+    return {
+      root: sourceRoot,
+      regenerated: new Set(),
+      retiredManagedFiles: new Set(),
+      entries,
+      notes,
+    };
   }
   const cleanup = mkdtempSync(join(tmpdir(), "aidlc-init-refresh-"));
   try {
@@ -4436,7 +4511,7 @@ function prepareRefreshSource(
     }
   }
   // Refresh AI-DLC's entries while preserving the project's own settings.
-  preserveUserProviderFields(
+  const retiredManagedFiles = preserveUserProviderFields(
     projectDir,
     root,
     descriptor.harnessDir,
@@ -4679,7 +4754,7 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, entries, notes };
+  return { root, cleanup, regenerated, retiredManagedFiles, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -7451,6 +7526,16 @@ export async function main(
       prepared.regenerated,
       retainBaseline,
     );
+    for (const rel of prepared.retiredManagedFiles) {
+      const target = join(projectDir, rel);
+      if (!pathPresent(target)) continue;
+      operations.push({ kind: "remove", path: rel, expected: expected(target) });
+      actions.push({
+        path: rel,
+        action: "remove",
+        detail: "retired attributable manifestless hook",
+      });
+    }
     if (!selected.projectProjection) {
       planRootIntegrations(
         projectDir,

@@ -91,6 +91,10 @@ export function aidlcDispatcherTarget(
 export function aidlcHookTarget(command: string): string | null {
   const dispatcher = aidlcDispatcherTarget(command);
   if (dispatcher !== null) return dispatcher;
+  return legacyAidlcHookTarget(command);
+}
+
+export function legacyAidlcHookTarget(command: string): string | null {
   const legacy = LEGACY_AIDLC_HOOK_COMMAND.exec(command);
   if (!legacy) return null;
   const path = legacy[1].replace(/^(['"])([\s\S]*)\1$/, "$2").replaceAll("\\", "/");

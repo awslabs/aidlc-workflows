@@ -68,7 +68,7 @@ require it. For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 
-`aidlc config` projects the Codex shell, merges the AI-DLC blocks in `.gitignore`
+`aidlc config --harness codex` projects the Codex shell, merges the AI-DLC blocks in `.gitignore`
 and `AGENTS.md`, and writes `.codex/config.toml`, hooks, permission rules, and
 the matching `.codex/trust-seed.toml`. Codex requires one project-specific hook
 trust action before those hooks run:
@@ -87,7 +87,7 @@ run `$aidlc --doctor` in Codex.
 The generated `sandbox_mode = "workspace-write"` is a top-level TOML setting,
 not a member of `[shell_environment_policy]`. AI-DLC tracks it as a framework-owned
 entry alongside `developer_instructions`: provider answers leave it unchanged,
-and an ordinary `aidlc config` refresh restores both entries if either was edited
+and an ordinary `aidlc config --harness codex` refresh restores both entries if either was edited
 or removed while preserving user-owned provider tables. Selecting the current
 provider removes only attributable legacy Bedrock defaults; it does not change
 the sandbox policy.
