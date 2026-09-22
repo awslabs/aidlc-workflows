@@ -369,6 +369,38 @@ function ctx1x(
   });
 }
 
+/** The relay file for ONE terminal session.
+ *
+ *  The command's output is no longer inlined into the prompt or the refusal: the packet
+ *  carries a PATH REFERENCE and the bytes live in this file, so repository-controlled
+ *  output cannot reach the privileged prompt. A test that wants to judge the OUTPUT -
+ *  its UTF-8, its sanitization, which session produced it - has to read the file the
+ *  reference names.
+ *
+ *  Keyed by sha256 of the session id exactly as the adapter keys it, rather than by
+ *  "the single bucket present": the concurrency case has TWO sessions on purpose and
+ *  must address each one's own bucket to show they stayed isolated. A payload with no
+ *  session id lands under the adapter's legacy id. */
+const LEGACY_TERMINAL_SESSION_ID = "kiro-ide-legacy-current";
+
+function terminalRelay(
+  projectDir: string,
+  sessionId: string = LEGACY_TERMINAL_SESSION_ID,
+  file = "last-output.txt",
+): string {
+  const key = createHash("sha256").update(sessionId).digest("hex");
+  const path = join(
+    projectDir,
+    "aidlc",
+    ".aidlc-sessions",
+    "kiro-terminal",
+    key,
+    file,
+  );
+  expect(existsSync(path), `relay file for "${sessionId}" at ${path}`).toBe(true);
+  return readFileSync(path, "utf-8");
+}
+
 function installPlainTextUtility(dir: string): string {
   const countPath = join(dir, "terminal-utility-count");
   writeFileSync(
@@ -905,15 +937,20 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
       );
       expect(r.code).toBe(0);
       expect(r.stderr).toBe("");
-      expect(r.stdout).toContain("Unicode: ─ ✓ █▒ ⇄");
-      expect(r.stdout).toContain("Path: C:\\work\\file.txt");
-      expect(r.stdout).toContain("literal: \\\\x1b[31m");
-      expect(r.stdout).toContain("red");
-      expect(r.stdout).toContain("after-osc");
-      expect(r.stdout).toContain("stderr: → preserved");
-      expect(r.stdout).not.toContain("\u001b");
-      expect(r.stdout).not.toContain("\u0008");
-      expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
+      // The packet names the file and carries none of its bytes; the output's own
+      // UTF-8 and the control-sequence stripping are judged where the bytes now live.
+      expect(r.stdout).toContain("last-output.txt");
+      expect(r.stdout).not.toContain("Unicode: ─ ✓ █▒ ⇄");
+      const relayed = terminalRelay(dir, "sess_terminal_modern");
+      expect(relayed).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(relayed).toContain("Path: C:\\work\\file.txt");
+      expect(relayed).toContain("literal: \\\\x1b[31m");
+      expect(relayed).toContain("red");
+      expect(relayed).toContain("after-osc");
+      expect(relayed).toContain("stderr: → preserved");
+      expect(relayed).not.toContain("\u001b");
+      expect(relayed).not.toContain("\u0008");
+      expect(relayed).not.toContain("Cwd=C:\\shell\\noise");
       expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -952,10 +989,15 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
       const first = runIdeStdin(dir, "terminal-command-guard", payload);
       expect(first.code).toBe(2);
       expect(first.stdout).toBe("");
-      expect(first.stderr).toContain("Unicode: ─ ✓ █▒ ⇄");
-      expect(first.stderr).toContain("OUTPUT (exit 7)");
-      expect(first.stderr).not.toContain("\u001b");
-      expect(first.stderr).not.toContain("Cwd=C:\\shell\\noise");
+      // The refusal names the file and states the exit code; the output itself is in
+      // the file, so the exit-2 semantics are pinned without inlining the bytes.
+      expect(first.stderr).toContain("last-output.txt");
+      expect(first.stderr).toContain("exited 7");
+      expect(first.stderr).not.toContain("Unicode: ─ ✓ █▒ ⇄");
+      const firstRelay = terminalRelay(dir, "sess_terminal_legacy_prompt");
+      expect(firstRelay).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(firstRelay).not.toContain("\u001b");
+      expect(firstRelay).not.toContain("Cwd=C:\\shell\\noise");
       expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
 
       const retry = runIdeDispatcherStdin(
@@ -1042,11 +1084,20 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
       const status = guard("session-A", "--status");
       const doctor = guard("session-B", "--doctor");
       expect(status.code).toBe(2);
-      expect(status.stderr).toContain("UTILITY=status");
-      expect(status.stderr).not.toContain("UTILITY=doctor");
       expect(doctor.code).toBe(2);
-      expect(doctor.stderr).toContain("UTILITY=doctor");
-      expect(doctor.stderr).not.toContain("UTILITY=status");
+      // Isolation is now a property of the two RELAY FILES rather than of two refusal
+      // texts, because the refusal no longer carries the output. Each session's file
+      // must hold its own command's output and none of the other's - which is a
+      // stronger statement than before: the buckets are keyed per session, so a leak
+      // would have to cross a directory, not just a string.
+      const relayA = terminalRelay(dir, "session-A");
+      const relayB = terminalRelay(dir, "session-B");
+      expect(relayA).toContain("UTILITY=status");
+      expect(relayA).not.toContain("UTILITY=doctor");
+      expect(relayB).toContain("UTILITY=doctor");
+      expect(relayB).not.toContain("UTILITY=status");
+      expect(status.stderr).toContain("last-output.txt");
+      expect(doctor.stderr).toContain("last-output.txt");
       expect(readFileSync(commandLog, "utf-8").trim().split("\n")).toEqual([
         "status",
         "doctor",
@@ -1054,7 +1105,7 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
 
       const retry = guard("session-A", "--status");
       expect(retry.code).toBe(2);
-      expect(retry.stderr).toContain("UTILITY=status");
+      expect(terminalRelay(dir, "session-A")).toContain("UTILITY=status");
       expect(readFileSync(commandLog, "utf-8").trim().split("\n")).toEqual([
         "status",
         "doctor",
@@ -1070,8 +1121,12 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
       const countPath = installPlainTextUtility(dir);
       const r = runIde(dir, "verb-intercept", "/aidlc --status");
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("Unicode: ─ ✓ █▒ ⇄");
-      expect(r.stdout).not.toContain("\u001b");
+      // No session id in this channel, so the relay lands under the adapter's legacy id.
+      expect(r.stdout).toContain("last-output.txt");
+      expect(r.stdout).not.toContain("Unicode: ─ ✓ █▒ ⇄");
+      const relayed = terminalRelay(dir);
+      expect(relayed).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(relayed).not.toContain("\u001b");
       expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1108,8 +1163,11 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
         }),
       );
       expect(guard.code).toBe(2);
-      expect(guard.stderr).toContain("Unicode: ─ ✓ █▒ ⇄");
-      expect(guard.stderr).not.toContain("\u001b");
+      expect(guard.stderr).toContain("last-output.txt");
+      expect(guard.stderr).not.toContain("Unicode: ─ ✓ █▒ ⇄");
+      const relayed = terminalRelay(dir);
+      expect(relayed).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(relayed).not.toContain("\u001b");
       expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
     } finally {
       rmSync(dir, { recursive: true, force: true });
