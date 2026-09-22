@@ -3768,6 +3768,8 @@ function preserveClaudeProviderFields(
     const currentOwnedHash = sha256Bytes(canonical(currentOwnedHooks));
     const hadLocalHookDrift = priorEntries?.hooksAidlc !== undefined
       ? currentOwnedHash !== priorEntries.hooksAidlc
+      : priorEntries?.hooks !== undefined
+      ? sha256Bytes(canonical(current.hooks)) !== priorEntries.hooks
       : canonical(currentOwnedHooks) !==
         canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
     if (hadLocalHookDrift) {
@@ -4019,7 +4021,18 @@ function tomlTopLevelEntries(content: string): TomlTopLevelEntry[] {
     }
   }
   const sections = headers.map((header, index): TomlTopLevelEntry => {
-    const end = headers[index + 1]?.start ?? content.length;
+    const nextHeader = headers[index + 1]?.start ?? content.length;
+    let end = nextHeader;
+    if (nextHeader < content.length) {
+      const between = content.slice(header.start, nextHeader);
+      const lines = [...between.matchAll(/[^\r\n]*(?:\r\n|\n|$)/g)]
+        .filter((match) => match[0].length > 0);
+      for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
+        const line = lines[lineIndex][0].replace(/\r?\n$/, "");
+        if (line.trim() !== "" && !line.trimStart().startsWith("#")) break;
+        end = header.start + lines[lineIndex].index;
+      }
+    }
     return {
       kind: "table",
       name: header.name,
@@ -4094,9 +4107,9 @@ function mergeCodexUserConfiguration(
           existing.some((entry) => entry.kind === "table")
         ? `[${name}] table`
         : `${name} assignment`;
-      notes.push(
-        `restored the shipped ${label} in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`,
-      );
+      notes.push(incoming === undefined
+        ? `removed the retired AI-DLC-owned ${label} from .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`
+        : `restored the shipped ${label} in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`);
     }
     if (
       incoming !== undefined &&

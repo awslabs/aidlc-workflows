@@ -151,10 +151,12 @@ then run `aidlc config --harness claude` to restore the shipped registrations;
 your own hook entries are kept. A copy-channel project instead uses
 `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude root you copied from>`.
 No `--force` is needed. Notes tell you when registrations were restored.
-Doctor warns about changed AI-DLC registrations and fails when a shipped hook
-is no longer wired; your own additional hooks do not trigger drift warnings.
-An absent `statusLine` is restored too, but a custom non-AI-DLC statusline is
-kept. Delete that key and refresh if you want the shipped one again.
+Doctor fails when a flow-altering registration changes its event, matcher, or
+command, or when a shipped hook is no longer wired. Drift in other AI-DLC
+registrations produces a warning. Your own additional hooks do not trigger
+drift warnings. An absent `statusLine` is restored too, but a custom non-AI-DLC
+statusline is kept. Delete that key and refresh if you want the shipped one
+again.
 
 ### Hooks disabled globally (`disableAllHooks`)
 

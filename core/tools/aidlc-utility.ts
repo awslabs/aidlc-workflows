@@ -43,6 +43,7 @@ import {
   AIDLC_HOOK_ENTRY_PREFIX,
   aidlcDispatcherTarget,
   aidlcHookRegistrationHashes,
+  aidlcHookTarget,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
 import {
@@ -3172,6 +3173,7 @@ export async function collectDoctorReport(
     let expectedHooks: string[] = [];
     let settingsReadable = true;
     let settingsHooks: unknown;
+    let customStatusLine = false;
     try {
       const raw = readFileSync(settingsForHooks, "utf-8");
       // jq-free: collect every distinct aidlc-*.ts basename referenced anywhere
@@ -3179,7 +3181,13 @@ export async function collectDoctorReport(
       // "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-write-audit-log.ts" and the
       // statusLine command). Basename, not path, so the probe is dir-relative.
       const parsed = JSON.parse(raw) as unknown;
-      settingsHooks = isPlainObject(parsed) ? parsed.hooks : undefined;
+      const parsedSettings = isPlainObject(parsed) ? parsed : {};
+      settingsHooks = parsedSettings.hooks;
+      const statusLine = isPlainObject(parsedSettings.statusLine)
+        ? parsedSettings.statusLine
+        : {};
+      customStatusLine = typeof statusLine.command === "string" &&
+        aidlcHookTarget(statusLine.command) !== "statusline";
       const commands: string[] = [];
       const collectCommands = (value: unknown): void => {
         if (Array.isArray(value)) return void value.forEach(collectCommands);
@@ -3243,6 +3251,7 @@ export async function collectDoctorReport(
           for (const file of Object.keys(manifest?.files ?? {})) {
             if (!file.startsWith(hooksPrefix)) continue;
             const basename = file.slice(hooksPrefix.length);
+            if (customStatusLine && basename === "aidlc-statusline.ts") continue;
             if (!/^aidlc-[a-z0-9-]+\.ts$/.test(basename) || expectedHooks.includes(basename)) continue;
             results.push({
               pass: false,

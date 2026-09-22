@@ -92,7 +92,8 @@ export function aidlcHookTarget(command: string): string | null {
   const legacy = LEGACY_AIDLC_HOOK_COMMAND.exec(command);
   if (!legacy) return null;
   const path = legacy[1].replace(/^(['"])([\s\S]*)\1$/, "$2").replaceAll("\\", "/");
-  const hook = /(?:^|\/)hooks\/aidlc-([A-Za-z0-9_-]+)\.ts$/.exec(path);
+  const hook =
+    /^\$CLAUDE_PROJECT_DIR\/\.claude\/hooks\/aidlc-([A-Za-z0-9_-]+)\.ts$/.exec(path);
   const target = hook?.[1];
   return target !== undefined && LEGACY_AIDLC_HOOK_TARGETS.has(target) ? target : null;
 }
