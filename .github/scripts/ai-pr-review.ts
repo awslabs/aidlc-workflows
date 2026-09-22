@@ -988,9 +988,11 @@ export function buildScope(
 
   // Path lineage and line mapping come from the base..since diff: a since-path
   // is followed back to its base path, and a since-line to its base line.
-  const priorDiff = git(["diff", "--binary", "--find-renames", "--unified=0", `${manifest.base}..${since}`], undefined, repoDir) as Buffer;
+  // The manifest is expressed against the merge base of base and head; the
+  // prior diff must use the same coordinates.
+  const priorDiff = git(["diff", "--binary", "--find-renames", "--unified=0", `${manifest.base}...${since}`], undefined, repoDir) as Buffer;
   const priorEntries = parseNameStatus(
-    git(["diff", "--name-status", "-z", "--find-renames", `${manifest.base}..${since}`], undefined, repoDir) as Buffer,
+    git(["diff", "--name-status", "-z", "--find-renames", `${manifest.base}...${since}`], undefined, repoDir) as Buffer,
   );
   const priorRanges = rangesFromDiff(priorDiff.toString("utf8"), priorEntries.length);
   const prior = new Map(priorEntries.map((entry, index) => [entry.path, { entry, ranges: priorRanges[index] }]));
@@ -1068,7 +1070,7 @@ export interface SecurityCitations {
 
 const MAX_CITED_LINE = 10_000_000;
 
-export function securityCitations(lensDir: string): SecurityCitations {
+export function securityCitations(lensDir: string, knownPaths: ReadonlySet<string> = new Set()): SecurityCitations {
   const cited: SecurityCitations = { lines: new Set(), files: new Set() };
   for (const name of ["security.md", "prompt-injection.md"]) {
     const file = join(lensDir, name);
@@ -1077,12 +1079,13 @@ export function securityCitations(lensDir: string): SecurityCitations {
       const token = match[1].trim();
       const located = /^(.+):(\d{1,7})(?:-(\d{1,7}))?$/.exec(token);
       if (!located) {
-        // A bare path in backticks is file-level evidence.
-        if (token.length > 0 && !/\s/.test(token) && token.includes("/")) cited.files.add(token);
+        // A bare path in backticks is file-level evidence when it names a
+        // changed file exactly (root-level names and spaces included).
+        if (knownPaths.has(token)) cited.files.add(token);
         continue;
       }
       const start = Number(located[2]);
-      const end = Math.min(Number(located[3] ?? located[2]), start + 500, MAX_CITED_LINE);
+      const end = Math.min(Number(located[3] ?? located[2]), start + 5000, MAX_CITED_LINE);
       if (!Number.isSafeInteger(start) || start < 1 || start > MAX_CITED_LINE) continue;
       for (let line = start; line <= end; line++) cited.lines.add(`${located[1]}:${line}`);
     }
@@ -1915,7 +1918,9 @@ function main(): void {
     const scope = args.includes("--scope")
       ? (JSON.parse(readFileSync(argValue(args, "--scope"), "utf8")) as ReviewScope)
       : undefined;
-    const securityCited = args.includes("--lens-dir") ? securityCitations(argValue(args, "--lens-dir")) : NO_CITATIONS;
+    const securityCited = args.includes("--lens-dir")
+      ? securityCitations(argValue(args, "--lens-dir"), new Set(manifest.files.flatMap(file => [file.path, ...(file.previousPath ? [file.previousPath] : [])])))
+      : NO_CITATIONS;
     let review: StructuredReview;
     if (args.includes("--ledger")) {
       const ledgerFile = readLedgerFile(argValue(args, "--ledger"));

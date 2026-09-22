@@ -235,13 +235,14 @@ describe("t346 AIDA incremental review scope", () => {
     // is never deferred.
     const lensDir = mkdtempSync(join(tmpdir(), "aida-scope-lenses-"));
     try {
-      writeFileSync(join(lensDir, "prompt-injection.md"), `**P1 candidate: instruction smuggled into a comment**\n\nEvidence: \`${PATH}:42\`, \`docs/with space.md:7-9\`, \`assets/logo.png\`, \`C:/odd:path.ts:3\`, \`huge.ts:99999999999999999999\`, \`x.ts:1-999999\`.\n`);
+      writeFileSync(join(lensDir, "prompt-injection.md"), `**P1 candidate: instruction smuggled into a comment**\n\nEvidence: \`${PATH}:42\`, \`docs/with space.md:7-9\`, \`assets/logo.png\`, \`README.md\`, \`my docs/plan.md\`, \`not-a-changed-file.ts\`, \`C:/odd:path.ts:3\`, \`huge.ts:99999999999999999999\`, \`x.ts:1-999999\`.\n`);
       writeFileSync(join(lensDir, "security.md"), "No candidates.\n");
-      const cited = securityCitations(lensDir);
+      const cited = securityCitations(lensDir, new Set(["assets/logo.png", "README.md", "my docs/plan.md", PATH]));
       expect([...cited.lines].filter(line => !line.startsWith("x.ts:")).sort()).toEqual(["C:/odd:path.ts:3", `${PATH}:42`, "docs/with space.md:7", "docs/with space.md:8", "docs/with space.md:9"]);
       // Ranges are capped, absurd numbers are ignored: parsing never hangs.
-      expect([...cited.lines].filter(line => line.startsWith("x.ts:"))).toHaveLength(501);
-      expect(cited.files).toEqual(new Set(["assets/logo.png"]));
+      expect([...cited.lines].filter(line => line.startsWith("x.ts:"))).toHaveLength(5001);
+      // Bare paths count as file-level evidence when they name a changed file exactly.
+      expect(cited.files).toEqual(new Set(["assets/logo.png", "README.md", "my docs/plan.md"]));
       expect(findingInScope(finding("correctness", diffLine(42)), INCREMENTAL, cited)).toBe(true);
       expect(findingInScope(finding("correctness", diffLine(44)), INCREMENTAL, cited)).toBe(false);
       expect(findingInScope(finding("correctness", { source: "DIFF_FILE", path: "assets/logo.png" }), INCREMENTAL, cited)).toBe(true);
