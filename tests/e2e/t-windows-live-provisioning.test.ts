@@ -87,6 +87,12 @@ public static class NativeOutputFixture {
         var method = assembly.GetType("AidlcCodexLauncher").GetMethod("RunExplicit",
           System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
         try {
+          if (args[0] == "--explicit-powershell-cwd") {
+            return (int)method.Invoke(null, new object[] {
+              args[3], new string[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-File", args[2] },
+              10000, station + "\\\\" + desktopName, false
+            });
+          }
           return (int)method.Invoke(null, new object[] {
             System.Reflection.Assembly.GetExecutingAssembly().Location, childArgs.ToArray(), timeout ? 1000 : 10000, station + "\\\\" + desktopName, true
           });
@@ -146,7 +152,7 @@ public static class NativeOutputFixture {
   }
   public static int Main(string[] args) {
     Console.OutputEncoding = new UTF8Encoding(false);
-    if (args.Length >= 2 && (args[0] == "--explicit-desktop" || args[0] == "--explicit-timeout")) return ExplicitDesktop(args);
+    if (args.Length >= 2 && (args[0] == "--explicit-desktop" || args[0] == "--explicit-timeout" || args[0] == "--explicit-powershell-cwd")) return ExplicitDesktop(args);
     if (args.Length >= 7 && (args[0] == "--desktop-child" || args[0] == "--desktop-timeout-child")) {
       Check(Name(GetProcessWindowStation()) == args[1] &&
         Name(GetThreadDesktop(GetCurrentThreadId())) == args[2], "Explicit desktop was not used.");
@@ -286,6 +292,35 @@ public static class NativeOutputFixture {
         child.stdin.destroy();
         if (child.exitCode === null && child.signalCode === null) child.kill();
       }
+    }, 20_000);
+    test("PowerShell provider location and OS cwd survive explicit desktop launch", () => {
+      const report = join(root!, "cwd-report.ps1");
+      const sourceText = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+      const start = sourceText.indexOf("`$providerCwd = (Get-Location).Path");
+      const end = sourceText.indexOf("[IO.File]::WriteAllText((Join-Path (Get-Location)", start);
+      expect(start).toBeGreaterThan(0);
+      expect(end).toBeGreaterThan(start);
+      const cwdCheck = sourceText.slice(start, end).replaceAll("`$", "$");
+      const token = "a".repeat(32);
+      writeFileSync(join(root!, `.aidlc-cwd-${token}`), token);
+      const setup = `$ErrorActionPreference='Stop'\n$ExpectedProject=$PSScriptRoot\n$CwdToken='${token}'\n$CwdMarker='.aidlc-cwd-${token}'\n`;
+      writeFileSync(report, setup + cwdCheck);
+      const shell = join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe");
+      const result = spawnSync(native, ["--explicit-powershell-cwd", executable, report, shell], {
+        cwd: root, encoding: "utf8", timeout: 15_000,
+      });
+      console.log(`Explicit PowerShell cwd: ${result.stdout.trim()}`);
+      expect(result.status, `${result.error ?? ""}\n${result.stderr}`).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ expectedProject: root, providerCwd: root, osCwd: root, scriptRoot: root });
+      // A provider-only location change must be diagnosed and refused even
+      // while the process's OS cwd still identifies the expected project.
+      writeFileSync(report, `${setup}Set-Location -LiteralPath ([IO.Path]::GetPathRoot($PSScriptRoot))\n${cwdCheck}`);
+      const wrong = spawnSync(native, ["--explicit-powershell-cwd", executable, report, shell], {
+        cwd: root, encoding: "utf8", timeout: 15_000,
+      });
+      expect(wrong.status, `${wrong.error ?? ""}\n${wrong.stderr}`).toBe(1);
+      expect(JSON.parse(wrong.stdout)).toMatchObject({ expectedProject: root, providerCwd: parse(root!).root, osCwd: root });
+      expect(wrong.stderr).toContain("Native sandbox cwd does not identify the expected project");
     }, 20_000);
   });
 

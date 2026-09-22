@@ -1115,6 +1115,9 @@ public static class AidlcCodexDesktopProcess {
             // contain quotes. Arguments were quoted by the existing bridge.
             var command = new System.Text.StringBuilder("\"" + info.FileName + "\" " + info.Arguments);
             string cwd = String.IsNullOrEmpty(info.WorkingDirectory) ? Environment.CurrentDirectory : info.WorkingDirectory;
+            if (Environment.GetEnvironmentVariable("AIDLC_CODEX_GUI_DIAGNOSTICS") == "1")
+                Console.WriteLine("Codex native cwd: executable=" + System.IO.Path.GetFileName(info.FileName) +
+                    "; expected=" + Environment.GetEnvironmentVariable("AIDLC_CODEX_EXPECTED_CWD") + "; actual=" + cwd);
             if (!CreateProcessW(info.FileName, command, IntPtr.Zero, IntPtr.Zero, true,
                 0x08000000 | 0x400 | 0x80000, environment, cwd, ref startup, out process)) throw Error("CreateProcessW on private desktop");
             created = true;
@@ -1873,6 +1876,9 @@ public static class AidlcCodexLauncher {
     }
     public static int Main(string[] args) {
         try {
+            if (Environment.GetEnvironmentVariable("AIDLC_CODEX_GUI_DIAGNOSTICS") == "1")
+                Console.WriteLine("Codex launcher cwd: expected=" +
+                    Environment.GetEnvironmentVariable("AIDLC_CODEX_EXPECTED_CWD") + "; actual=" + Environment.CurrentDirectory);
             bool version = args.Length == 1 && (args[0] == "--version" || args[0] == "-V");
             if (!version) {
                 int initialized = Run(PowerShell, new string[] {
@@ -1992,6 +1998,9 @@ foreach ($network in @('false', 'true')) {
     $project = Join-Path $base 'project with spaces'
     [void][IO.Directory]::CreateDirectory($env:CODEX_HOME)
     [void][IO.Directory]::CreateDirectory($project)
+    $cwdToken = [Guid]::NewGuid().ToString('N')
+    $cwdMarker = '.aidlc-cwd-' + $cwdToken
+    [IO.File]::WriteAllText((Join-Path $project $cwdMarker), $cwdToken)
     [IO.File]::WriteAllText((Join-Path $env:CODEX_HOME 'config.toml'), "[windows]`nsandbox = `"elevated`"`n")
     & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $initializer
     if ($LASTEXITCODE -ne 0) { throw 'Fresh Codex home initialization failed.' }
@@ -2001,12 +2010,25 @@ foreach ($network in @('false', 'true')) {
     if (-not [IO.File]::Exists($secretPath)) { throw 'Fresh Codex sandbox credential file is absent.' }
     $probe = Join-Path $project 'probe.ps1'
     [IO.File]::WriteAllText($probe, @"
-param([string]`$ExpectedSid, [string]`$SecretPath, [string]`$ForbiddenPath, [string]`$Literal)
+param([string]`$ExpectedSid, [string]`$SecretPath, [string]`$ForbiddenPath, [string]`$Literal,
+    [string]`$ExpectedProject, [string]`$CwdMarker, [string]`$CwdToken)
 `$ErrorActionPreference = 'Stop'
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne `$ExpectedSid) { throw 'Wrong native sandbox identity.' }
 `$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if (`$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Native sandbox identity is an administrator.' }
 if (`$Literal -cne 'space "quoted" & symbols \tail\') { throw 'Native launcher changed an argument.' }
+`$providerCwd = (Get-Location).Path
+`$osCwd = [Environment]::CurrentDirectory
+[ordered]@{probe='codex-sandbox-cwd'; expectedProject=`$ExpectedProject; providerCwd=`$providerCwd; osCwd=`$osCwd; scriptRoot=`$PSScriptRoot} | ConvertTo-Json -Compress
+if (`$CwdMarker -cne ('.aidlc-cwd-' + `$CwdToken) -or `$CwdToken -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid cwd proof marker.' }
+# Check the actual directory through a unique fixture marker. This permits a
+# vendor-created junction to the same project without accepting another root.
+foreach (`$directory in @(`$ExpectedProject, `$osCwd, `$providerCwd)) {
+    `$markerPath = Join-Path `$directory `$CwdMarker
+    if (-not [IO.File]::Exists(`$markerPath) -or [IO.File]::ReadAllText(`$markerPath) -cne `$CwdToken) {
+        throw ('Native sandbox cwd does not identify the expected project: ' + `$directory)
+    }
+}
 [IO.File]::WriteAllText((Join-Path (Get-Location) 'workspace-write.txt'), 'workspace-write verified')
 `$denied = `$false
 try { `$s = [IO.File]::OpenRead(`$SecretPath); `$s.Dispose() } catch [UnauthorizedAccessException] { `$denied = `$true }
@@ -2019,14 +2041,23 @@ Write-Output 'Codex native identity, workspace write, secret denial and protecte
     $invoke = Join-Path $project 'invoke.cjs'
     [IO.File]::WriteAllText($invoke, @"
 const {spawnSync} = require("node:child_process");
-const {writeSync} = require("node:fs");
-const [launcher, shell, script, sid, secret, forbidden, network] = process.argv.slice(2);
+const {writeSync, realpathSync} = require("node:fs");
+const {dirname} = require("node:path");
+const [launcher, shell, script, sid, secret, forbidden, network, cwdMarker, cwdToken] = process.argv.slice(2);
+const project = dirname(script);
+const callerCwd = process.cwd();
+writeSync(1, JSON.stringify({probe:"codex-caller-cwd",expectedProject:project,callerCwd}) + "\n");
+if (realpathSync.native(callerCwd).toLowerCase() !== realpathSync.native(project).toLowerCase()) {
+  throw Error("Bun caller cwd does not identify the expected project");
+}
 const args = ["-c", "sandbox_mode=workspace-write", "-c", "windows.sandbox=elevated",
   "-c", "sandbox_workspace_write.network_access=" + network, "sandbox", "--",
   shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
   "-File", script, "-ExpectedSid", sid, "-SecretPath", secret, "-ForbiddenPath", forbidden,
+  "-ExpectedProject", project, "-CwdMarker", cwdMarker, "-CwdToken", cwdToken,
   "-Literal", 'space "quoted" & symbols \\tail\\'];
-const result = spawnSync(launcher, args, {encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:90000});
+const result = spawnSync(launcher, args, {cwd:project,
+  env:{...process.env,AIDLC_CODEX_EXPECTED_CWD:project},encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:90000});
 writeSync(1, result.stdout || "");
 // This credential-free probe records both channels on stdout so PowerShell 5
 // cannot turn a diagnostic stderr line into an exception before exit handling.
@@ -2037,7 +2068,8 @@ writeSync(1, JSON.stringify({probe:"codex-native-readiness",network,status:resul
 process.exitCode = result.status === null ? 1 : result.status;
 "@)
     Set-Location -LiteralPath $project
-    & $bun $invoke $native $powershell $probe $expectedSids[$index] $secretPath __FORBIDDEN__ $network
+    [Console]::WriteLine((@{probe='codex-parent-cwd'; expectedProject=$project; providerCwd=(Get-Location).Path; osCwd=[Environment]::CurrentDirectory} | ConvertTo-Json -Compress))
+    & $bun $invoke $native $powershell $probe $expectedSids[$index] $secretPath __FORBIDDEN__ $network $cwdMarker $cwdToken
     if ($LASTEXITCODE -ne 0) { throw 'Fresh-home elevated sandbox readiness command failed.' }
     if (-not [IO.File]::Exists((Join-Path $project 'workspace-write.txt'))) { throw 'Native workspace write was not observed.' }
     # Resume-style reentry must validate the same generation without resetting
