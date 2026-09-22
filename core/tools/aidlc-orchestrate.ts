@@ -1567,6 +1567,8 @@ interface ParsedFlags {
   claimRhythm?: string;
   projectDir?: string;
   parseError?: string;
+  retiredFlags?: string[];
+  retiredOnly?: boolean;
 }
 
 const CONFIG_SECTIONS = [
@@ -1781,13 +1783,14 @@ function parseNextFlags(args: string[]): ParsedFlags {
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
     } else if (a === "--init" || a === "--force") {
-      // RETIRED flags (Branch 3 retired in P4; see the handleNext comment at
-      // ~:4082): initialization happens automatically, so these are harmless
-      // no-ops from pre-P4 docs and muscle memory. Consume them - since #847
-      // made unknown flag-looking tokens lossless task text, an unconsumed
-      // retired flag would otherwise become the intent's literal DESCRIPTION
-      // (`--arguments=--init`), which downstream agents cannot act on. A task
-      // that genuinely needs the token spells it via the `--` delimiter.
+      // RETIRED flags; see the named "Branch 3 — the legacy `--init` flag —
+      // retired in P4" note in routeNext. Record and consume them so they never
+      // become intent DESCRIPTION text (#847). When no supported command or
+      // description remains, routeNext emits replacement guidance instead of
+      // treating the invocation as bare `next`. A task that genuinely needs
+      // the token spells it via the `--` delimiter.
+      flags.retiredFlags ??= [];
+      flags.retiredFlags.push(a);
     } else {
       // Unknown flag-looking tokens are task text, not disposable noise. Use
       // the standard `--` delimiter when a task must contain a token that is
@@ -1821,6 +1824,12 @@ function parseNextFlags(args: string[]): ParsedFlags {
   }
   if (flags.release && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--release does not accept --team or --rhythm.";
+  }
+  if (
+    flags.retiredFlags &&
+    Object.keys(flags).every((key) => key === "retiredFlags")
+  ) {
+    flags.retiredOnly = true;
   }
   return flags;
 }
@@ -4221,6 +4230,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
 
   if (flags.parseError) {
     emit(errorDirective(flags.parseError));
+    return;
+  }
+
+  if (flags.retiredOnly) {
+    emit(errorDirective(
+      "`--init` and `--force` are retired and no longer initialize or restart a workflow. " +
+        "Start work by describing what to build (/aidlc \"build the auth service\") or naming a scope " +
+        "(/aidlc --scope <scope>). To start separate work alongside an active intent, use " +
+        "/aidlc --new-intent --scope <scope> \"<description>\". No workflow stage was run.",
+    ));
     return;
   }
 

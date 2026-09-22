@@ -872,7 +872,8 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
 // tokens lossless task text. Together they leaked retired flags into the
 // created intent's DESCRIPTION (`--arguments=--init`). These pin the repair:
 // retired flags vanish, genuinely-unknown tokens still ride as task text,
-// and the `--` delimiter still passes a literal `--init` through.
+// the `--` delimiter still passes a literal `--init` through, and an invocation
+// containing only retired flags stops with current replacement guidance.
 describe("t114 retired flags are consumed, not description text", () => {
   test("--init with --new-intent + prose creates without leaking the flag", () => {
     proj = createOrchestrationTestProject();
@@ -930,5 +931,27 @@ describe("t114 retired flags are consumed, not description text", () => {
     ]).out;
     expect(out).toContain("intent create");
     expect(out).toContain("--init");
+  });
+
+  test("retired flags alone do not advance an active workflow", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--init", "--force"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("are retired");
+    expect(out).toContain("--new-intent");
+    expect(out).toContain("No workflow stage was run");
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("retired flags alone do not create or advance a fresh workspace", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["--force", "--init"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("are retired");
+    expect(out).toContain("/aidlc --scope <scope>");
+    expect(out).toContain("No workflow stage was run");
+    expect(out).not.toContain('"kind":"run-stage"');
+    expect(out).not.toContain("intent create");
   });
 });
