@@ -444,6 +444,11 @@ function scratchProject(): string {
     join(dir, ".claude", "tools", "data"),
     { recursive: true },
   );
+  cpSync(
+    join(AIDLC_SRC, "tools", "vendor"),
+    join(dir, ".claude", "tools", "vendor"),
+    { recursive: true },
+  );
   mkdirSync(join(dir, RECORD_REL), { recursive: true });
   for (const args of [
     ["init", "-q"],
