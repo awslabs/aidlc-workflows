@@ -455,8 +455,8 @@ export function refreshVerdict(
     "pull request",
   );
   if (!pullIsEligible(pull, head)) return "moved";
-  const current = outcomeForLabels(pullLabels(pull));
-  if (current !== "reviewed-change" && current !== "reviewed-merge") return "no-review";
+  // The bot's published review for the head is the gate, not the labels: during
+  // a review run the labels sit in the cleared "started" state.
   const reviews = paginatedRecords(`repos/${repository}/pulls/${pullRequest}/reviews`, ghExecutable).filter(
     review =>
       record(review.user ?? {}, "review user").login === "github-actions[bot]" &&

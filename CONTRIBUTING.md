@@ -153,7 +153,8 @@ line, and a line may name several findings:
   action. P0 and P1 findings can be accepted but not rejected.
 - `reject` — not a defect; AIDA stops reporting it while the cited code is
   unchanged.
-- `reopen` — reverse an accept or reject.
+- `reopen` — reverse an accept or reject. A resolved finding cannot be
+  reopened; a review re-establishes it if it still applies.
 - `status` — re-render the ledger.
 
 A comment is applied all-or-nothing: if one line is invalid (an unknown

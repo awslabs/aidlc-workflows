@@ -752,10 +752,21 @@ jobs:
             && [ "$(jq -r '.head // empty' <<<"$live_verdict")" = "$HEAD_SHA" ]; then
             echo "::notice::Maintainer decisions landed during publication; refreshing the verdict from the ledger"
             live_decision="$(jq -r .decision <<<"$live_verdict")"
-            bun .ai-review-controls/scripts/ai-pr-review.ts refresh-verdict \
+            refresh="$(bun .ai-review-controls/scripts/ai-pr-review.ts refresh-verdict \
               --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
-              --decision "$live_decision" --reason "maintainer /aida command during publication"
-            if [ "$live_decision" = "change" ]; then EVENT="REQUEST_CHANGES"; else EVENT="COMMENT"; fi
+              --decision "$live_decision" --reason "maintainer /aida command during publication")"
+            if [ "$refresh" != "applied" ]; then
+              echo "::error::The live ledger verdict could not be applied ($refresh)"
+              exit 1
+            fi
+            # The final label reconciliation reads decision.json: carry the live verdict there too.
+            if [ "$live_decision" = "change" ]; then
+              EVENT="REQUEST_CHANGES"
+              jq -n '{actor: "author", action: "change", rationale: "Re-derived from the findings ledger after a maintainer command during publication."}' > .ai-pr-review-final/decision.json
+            else
+              EVENT="COMMENT"
+              jq -n '{actor: "maintainer", action: "merge", rationale: "Re-derived from the findings ledger after a maintainer command during publication."}' > .ai-pr-review-final/decision.json
+            fi
           fi
 
           if [ "$EVENT" = "REQUEST_CHANGES" ]; then

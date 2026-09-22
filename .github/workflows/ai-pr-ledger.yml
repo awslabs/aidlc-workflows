@@ -78,9 +78,10 @@ jobs:
           # readiness, risk, the stored decision), never from a blocker count
           # alone. refresh-verdict applies it to the labels and the bot's review
           # state for the reviewed head, and does nothing when the PR moved on.
-          bun .github/scripts/ai-pr-review.ts refresh-verdict \
+          refresh="$(bun .github/scripts/ai-pr-review.ts refresh-verdict \
             --repo "$REPO" \
             --pr "$PR_NUMBER" \
             --head "$REFRESH_HEAD" \
             --decision "$REFRESH_DECISION" \
-            --reason "maintainer /aida command"
+            --reason "maintainer /aida command")"
+          echo "::notice::Verdict refresh: $refresh"

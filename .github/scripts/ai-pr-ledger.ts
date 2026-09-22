@@ -622,6 +622,9 @@ export function applyCommands(
       if (!finding) throw new Error(`${where}unknown finding ${id}`);
       if (command.kind === "reopen") {
         if (finding.status === "open") throw new Error(`${where}${id} is already open`);
+        if (finding.status === "resolved") {
+          throw new Error(`${where}${id} is resolved: reopen reverses an accept or reject; a review re-establishes a finding that still applies`);
+        }
         finding.status = "open";
         delete finding.decision;
         event("reopened", { id });
@@ -686,37 +689,31 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     pushEvent(ledger, { at, kind, by: "aida", id, head, ...extra });
   };
 
+  // Pass 1: match restated findings. New findings are collected and inserted
+  // after the omitted pass, so a head that fixes old findings frees their slots
+  // before capacity is enforced.
+  const pending: T[] = [];
   for (const finding of findings) {
     const hashes = anchorSet(finding.anchors);
     // Identity. An explicit `ledgerId` from the judge names the entry this
-    // finding IS, and is the only way to reach an accepted or rejected entry.
-    // Without it, the fingerprint (same category AND a shared exact anchor)
+    // finding IS, and is the only way to reach an accepted or rejected entry —
+    // but the judge's output derives from untrusted PR content, so the id is
+    // honored only when the deterministic fingerprint agrees: same category and
+    // at least one shared exact anchor. Without a compatible id, the fingerprint
     // matches OPEN entries only: a finding on lines a maintainer decided on is a
-    // new defect until the judge says otherwise, so a distinct vulnerability on
-    // an accepted line can never ride that acceptance.
+    // new defect until the judge names it, so a distinct vulnerability on an
+    // accepted line can never ride that acceptance.
+    const compatible = (entry: LedgerFinding): boolean =>
+      entry.category === finding.category && entry.anchors.some(anchor => hashes.has(anchor.sha256));
     const explicit = finding.ledgerId
-      ? ledger.findings.find(entry => entry.id === finding.ledgerId && entry.status !== "resolved" && !matchedIds.has(entry.id))
+      ? ledger.findings.find(
+          entry => entry.id === finding.ledgerId && entry.status !== "resolved" && !matchedIds.has(entry.id) && compatible(entry),
+        )
       : undefined;
     const match =
-      explicit ??
-      ledger.findings.find(
-        entry =>
-          entry.status === "open" &&
-          !matchedIds.has(entry.id) &&
-          entry.category === finding.category &&
-          entry.anchors.some(anchor => hashes.has(anchor.sha256)),
-      );
+      explicit ?? ledger.findings.find(entry => entry.status === "open" && !matchedIds.has(entry.id) && compatible(entry));
     if (!match) {
-      makeRoom(ledger);
-      const id = `F${ledger.nextId}`;
-      ledger.nextId += 1;
-      ledger.findings.push({
-        id, priority: finding.priority, category: finding.category, title: finding.title,
-        anchors: finding.anchors, status: "open", firstSeen: { head, at }, lastSeen: { head, at },
-      });
-      push("opened", id);
-      matchedIds.add(id);
-      result.kept.push({ ...finding, ledgerId: id });
+      pending.push(finding);
       continue;
     }
     matchedIds.add(match.id);
@@ -757,6 +754,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     result.kept.push({ ...finding, priority: match.priority, ledgerId: match.id });
   }
 
+  // Pass 2: open findings the judge did not restate.
   for (const entry of ledger.findings) {
     if (entry.status !== "open" || matchedIds.has(entry.id)) continue;
     // An open finding the judge did not restate resolves only when its cited
@@ -783,6 +781,20 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     entry.lastSeen = { head, at };
     push("resolved", entry.id, { reason: gone ? "cited code is gone" : "not restated; legacy anchors cannot be evaluated" });
     result.resolvedIds.push(entry.id);
+  }
+
+  // Pass 3: new findings, once the reconciled ledger knows what it can free.
+  for (const finding of pending) {
+    makeRoom(ledger);
+    const id = `F${ledger.nextId}`;
+    ledger.nextId += 1;
+    ledger.findings.push({
+      id, priority: finding.priority, category: finding.category, title: finding.title,
+      anchors: finding.anchors, status: "open", firstSeen: { head, at }, lastSeen: { head, at },
+    });
+    push("opened", id);
+    matchedIds.add(id);
+    result.kept.push({ ...finding, ledgerId: id });
   }
   return result;
 }

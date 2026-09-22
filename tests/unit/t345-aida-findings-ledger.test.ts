@@ -254,6 +254,8 @@ describe("t345 AIDA findings ledger", () => {
     expect(reopened.ledger.findings.slice(0, 2).map(entry => entry.status)).toEqual(["open", "open"]);
     expect(reopened.ledger.findings[0].decision).toBeUndefined();
     expect(() => applyCommands(reopened.ledger, parseCommands("/aida reopen F1"), actor)).toThrow("F1 is already open");
+    const withResolved = ledgerWith(entry("F1", "P1", "resolved", [A42]));
+    expect(() => applyCommands(withResolved, parseCommands("/aida reopen F1"), actor)).toThrow("F1 is resolved: reopen reverses an accept or reject");
     expect(applyCommands(ledger, parseCommands("/aida status"), actor)).toMatchObject({ messages: ["Ledger re-rendered."] });
   });
 
@@ -405,6 +407,16 @@ describe("t345 AIDA findings ledger", () => {
     // An id that names a resolved or unknown entry falls back to a new finding.
     const unknownId = reconcileLedger(acceptedOnly, [input("P1", [A42], "typo in id", "F9")], HEAD, AT, () => true);
     expect(unknownId.kept.map(item => item.ledgerId)).toEqual(["F4"]);
+    // The judge's id is advisory: it is honored only when the deterministic fingerprint agrees.
+    // A different category, or no shared anchor, on an accepted id is a new finding (an injected
+    // id can never hide a distinct vulnerability behind an acceptance).
+    const wrongCategory = reconcileLedger(acceptedOnly, [{ priority: "P1", category: "security", title: "injected id", anchors: [A42], ledgerId: "F3" }], HEAD, AT, () => true);
+    expect(wrongCategory.restatedAccepted).toEqual([]);
+    expect(wrongCategory.kept.map(item => item.ledgerId)).toEqual(["F4"]);
+    expect(wrongCategory.ledger.findings[0].status).toBe("accepted");
+    const noSharedAnchor = reconcileLedger(acceptedOnly, [input("P1", [lineAnchor(PATH, "RIGHT", "line 10")], "elsewhere", "F3")], HEAD, AT, () => true);
+    expect(noSharedAnchor.restatedAccepted).toEqual([]);
+    expect(noSharedAnchor.kept.map(item => item.ledgerId)).toEqual(["F4"]);
 
     // Open entries match by fingerprint (category + shared exact anchor) without a tag, and a
     // restatement never lowers an open finding's priority.
@@ -464,7 +476,7 @@ describe("t345 AIDA findings ledger", () => {
     // A non-blocking omitted finding with present code simply stays open (not retained, not resolved).
     expect(result.ledger.findings.find(item => item.id === "F7")).toMatchObject({ status: "open", lastSeen: seen(OLD_HEAD) });
     expect(result.ledger.nextId).toBe(9);
-    expect(result.ledger.events.map(event => event.kind)).toEqual(["seen", "opened", "seen", "resolved", "seen", "resolved", "seen"]);
+    expect(result.ledger.events.map(event => event.kind)).toEqual(["seen", "seen", "resolved", "seen", "resolved", "seen", "opened"]);
     expect(loaded.ledger.findings.find(item => item.id === "F3")?.status).toBe("open");
   });
 
@@ -483,6 +495,11 @@ describe("t345 AIDA findings ledger", () => {
     expect(() => renderLedgerComment(result.ledger)).not.toThrow();
     for (const finding of full.findings) finding.status = "open";
     expect(() => reconcileLedger({ ...loaded, ledger: full }, [next], HEAD, AT, () => true)).toThrow("holds 200 undecided findings");
+    // A head that fixed an old finding frees its slot before the new one is allocated.
+    const oneFixed = reconcileLedger({ ...loaded, ledger: full }, [next], HEAD, AT, anchor => anchor.sha256 !== lineAnchor(PATH, "RIGHT", "line 1").sha256);
+    expect(oneFixed.resolvedIds).toEqual(["F1"]);
+    expect(oneFixed.kept.map(item => item.ledgerId)).toEqual(["F201"]);
+    expect(oneFixed.ledger.findings).toHaveLength(200);
   });
 
   test("the verdict is re-derived from persisted state under the review's own rules", () => {
@@ -907,6 +924,11 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
       const unreviewed = gh(HEAD, [], []);
       expect(refreshVerdict("acme/repo", 42, HEAD, "merge", "x", unreviewed.path)).toBe("no-review");
       expect(calls(unreviewed.log).filter(call => call.args.includes("--method"))).toEqual([]);
+      // During a review run the labels sit in the cleared "started" state: the published review
+      // for the head is the gate, so the publish-time re-check still applies.
+      const started = gh(HEAD, [], [{ id: 9, state: "CHANGES_REQUESTED", body: `${marker}\n<!-- ai-pr-review decision=author/change -->` }]);
+      expect(refreshVerdict("acme/repo", 42, HEAD, "merge", "accepted during publication", started.path)).toBe("applied");
+      expect(calls(started.log).some(call => call.args.includes("repos/acme/repo/pulls/42/reviews/9/dismissals"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -961,6 +983,8 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(publish).toContain(`published_digest="\${ledger_published_record##*digest=}"`);
     expect(publish.indexOf('published="$(gh api --method POST')).toBeLessThan(publish.indexOf("ai-pr-ledger.ts verdict"));
     expect(publish).toContain('--decision "$live_decision" --reason "maintainer /aida command during publication"');
+    expect(publish).toContain('if [ "$refresh" != "applied" ]; then');
+    expect(publish).toContain("> .ai-pr-review-final/decision.json");
     // The existing-review path derives labels and the blocking state from the ledger's verdict.
     const finalize = REVIEW_WORKFLOW.slice(REVIEW_WORKFLOW.indexOf("      - name: Finalize existing SHA-bound review"), REVIEW_WORKFLOW.indexOf("      - name: Install pinned review CLIs"));
     expect(finalize).toContain("ai-pr-ledger.ts verdict");
@@ -986,6 +1010,7 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(CONTRIBUTING).toContain("Do not edit it: AIDA refuses");
     expect(CONTRIBUTING).toContain("a reason over 500 characters");
     expect(CONTRIBUTING).toContain("it posts a blocking review for the head");
+    expect(CONTRIBUTING).toContain("A resolved finding cannot be\n  reopened");
     expect(CONTRIBUTING).toContain("cannot be evaluated at the new head, resolves");
     expect(CONTRIBUTING).toContain("/aida accept F3 F7 we own this launch risk");
     expect(CONTRIBUTING).toContain("all-or-nothing");
