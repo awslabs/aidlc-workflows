@@ -540,3 +540,16 @@ Base: `3c54ec1a` (fetched upstream/main tip). Validation ran on commit `8efc3d6d
 - **Gitleaks 8.30.1** (pinned, checksum-verified): `upstream/main..HEAD` — 1 commit, no leaks; `HEAD` full history — 521 commits, no leaks.
 - **Hygiene**: 0 tracked `dist/`/`dist-release/` files; `git diff --check upstream/main...HEAD` clean; 544 whitespace findings resolved; CHANGELOG 279→280 headings (only `2.10.0` added, Devin-only); version/badge/changelog all `2.10.0`.
 - **Evidence**: four grandfathered attended-run dirs retained; 157 evidence files; no fifth raw run; deleted campaign fixtures absent from the rewritten range.
+
+## Post-review addendum — 2026-09-22: release metadata reverted to main values
+
+Review 5248693673 (Finding 7) directed keeping release metadata at the
+current-main values under the repository release-prep policy
+(`AGENTS.md`: feature PRs do not bump `aidlc-version.ts`, the README
+badge, or the changelog). The owner accepted that directive, superseding
+the owner-designated `2.10.0` recorded above. On the follow-up head the
+three release surfaces were restored to main's values —
+`AIDLC_VERSION = "2.9.0"`, badge `2.9.0`, and the `## [2.10.0]` entry
+removed with all 279 prior headings preserved — so this PR ships the
+Devin harness with no version bump; the coordinated bump belongs to a
+release-preparation PR. All other validation results above stand.

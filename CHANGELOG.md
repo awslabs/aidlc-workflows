@@ -1,16 +1,6 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.10.0] - 2026-09-22
-
-AI-DLC 2.10.0 adds first-class Devin CLI support as the eighth harness generated from the shared core. **Upgrade:** run `aidlc update`; to add Devin to a project, run `aidlc config --harness devin`, restart Devin CLI, then run `/aidlc --doctor`.
-
-* `aidlc version` reports `2.10.0` and `aidlc config --harness devin` is a supported harness choice alongside Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
-* Add the Devin CLI distribution with native skills, rules, agent profiles, hook wiring, project configuration, optional default-off MCP servers, onboarding, installation, and diagnostics.
-* Translate Devin-native dispatch, question, lifecycle, session, and tool payloads at the adapter boundary so shared Plan Approval, stage-rule delivery, background-subagent tracking, and reviewer-scope contracts remain harness-neutral.
-* Isolate imported compatibility configuration, require Devin CLI 3000.10.21 or later, and keep deterministic tests independent of whether Devin is installed while gating live CLI acceptance explicitly.
-* Add Devin-specific user and harness-engineering guidance, version-scoped sanitized regression fixtures, and documented live acceptance results and limitations.
-
 ## [2.9.0] - 2026-09-15
 
 AI-DLC 2.9.0 rolls up the user-visible changes merged since 2.8.2, including the Classic scope v1 ceremony model, commit provenance, intent archiving, on-demand Construction autonomy, review-loop corrections, and the native preview release channel. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.9.0.tar.gz`. Existing in-flight Classic intents keep their recorded stage graph; the new ceremony defaults apply immediately where noted below.
