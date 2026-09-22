@@ -155,10 +155,18 @@ export function workspaceShellRefreshCommand(
   distribution: string,
 ): string {
   const invoke = invocationForHarness(harnessDir);
+  // Normalize HERE rather than at the call sites: both of them read a project's
+  // stamped distribution, and a project installed before a row was retired still
+  // carries the retired id -- which this renders straight into `--harness`, into
+  // `runtime/<dist>/` and into `dist/<dist>/`. All three then name something that
+  // does not exist, so the remedy sent the user to a dead path. A first cut fixed
+  // one caller and missed the other (workspaceShellActions), which is the argument
+  // for putting it in the one place every caller passes through.
+  const row = currentDistribution(distribution);
   const from = invoke === "aidlc"
     ? ""
-    : ` --from <the runtime/${distribution}/ root you copied from, or a checkout's dist/${distribution}/ tree>`;
-  return `${invoke} config --harness ${distribution}${from}`;
+    : ` --from <the runtime/${row}/ root you copied from, or a checkout's dist/${row}/ tree>`;
+  return `${invoke} config --harness ${row}${from}`;
 }
 
 export type RuntimeBinaryProbe = {

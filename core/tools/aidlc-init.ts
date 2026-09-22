@@ -7620,7 +7620,7 @@ export async function main(
     const copiedRefresh = copiedHarness
       ? workspaceShellRefreshCommand(
         copiedHarness.harnessDir,
-        currentDistribution(copiedHarness.distribution),
+        copiedHarness.distribution,
       )
       : null;
     const message = copiedRefreshWithoutSource && copiedRefresh

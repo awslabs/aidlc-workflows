@@ -2391,12 +2391,21 @@ function appendDelegationRecords(sessionId: string, records: DelegationRecord[])
     return true;
   } catch {
     // The CALLER decides what a failure costs, because the two edges are not
-    // symmetric. A close that cannot be written leaves the window inflight, which
-    // errs toward attributing rather than toward silence, so closeDelegation stays
-    // best-effort. An OPEN that cannot be written is the opposite: the delegate would
-    // run with no agent_type at all, and both persona guards return 0 on an empty
-    // agent_type (aidlc-reviewer-scope.ts, aidlc-state-transition-guard.ts), so the
-    // delegate would execute with their restrictions skipped. That one is refused.
+    // symmetric. An OPEN that cannot be written must refuse the dispatch: the
+    // delegate would otherwise run with no agent_type at all, and both persona
+    // guards return 0 on an empty agent_type (aidlc-reviewer-scope.ts,
+    // aidlc-state-transition-guard.ts), so it would execute with their restrictions
+    // skipped. A close is best-effort -- see closeDelegation for the precise reason,
+    // which is narrower than "a failed close is always conservative".
+    //
+    // 🔴 What this does NOT close: tampering AFTER a window opened. readDelegationLedger
+    // turns any read failure into [] and drops malformed rows, so a delegate that runs
+    // repository code can truncate or remove the ledger between two of its own calls
+    // and the next one carries no identity. Refusing an empty agent_type in the two
+    // core guards is not the answer -- it would refuse the main session's own
+    // lifecycle verbs, which are legitimately unattributed. Closing it needs a
+    // delegate identity the project cannot write, i.e. host-owned, which is wider
+    // than this change.
     return false;
   }
 }
@@ -2414,7 +2423,8 @@ function appendDelegationRecords(sessionId: string, records: DelegationRecord[])
 // outright rather than followed.
 function delegationLedgerObstruction(sessionId: string): string | null {
   const root = resolve(sessionsDir(projectDir));
-  const leaf = dirname(resolve(delegationLedgerPath(sessionId)));
+  const ledger = resolve(delegationLedgerPath(sessionId));
+  const leaf = dirname(ledger);
   try {
     if (!statSync(root).isDirectory()) return `${root} is not a directory`;
   } catch {
@@ -2432,6 +2442,18 @@ function delegationLedgerObstruction(sessionId: string): string | null {
     }
     if (entry.isSymbolicLink()) return `${cursor} is a symbolic link`;
     if (!entry.isDirectory()) return `${cursor} is not a directory`;
+  }
+  // And the ledger FILE itself. Walking only the parent directories left this
+  // uncovered, and appendFileSync through a symlink writes wherever it points. A
+  // fifo or a directory in its place fails in a way the catch would have swallowed.
+  // Checked last because everything above it has to exist first, which also means
+  // this shape is only reachable once a window has already opened normally.
+  try {
+    const entry = lstatSync(ledger);
+    if (entry.isSymbolicLink()) return `${ledger} is a symbolic link`;
+    if (!entry.isFile()) return `${ledger} is not a regular file`;
+  } catch {
+    return null; // Absent: the append creates it.
   }
   return null;
 }
@@ -2470,10 +2492,13 @@ function openDelegation(
 }
 
 function closeDelegation(sessionId: string, input: KiroHookInput): void {
-  // Deliberately best-effort, and deliberately NOT symmetric with the open edge: a
-  // close that does not land leaves the window inflight until its TTU, which keeps
-  // attributing rather than silently stopping. The open edge is the one that must
-  // fail closed.
+  // Best-effort, and asymmetric with the open edge on purpose -- but the reason is
+  // narrower than "a failed close is always conservative", which is not true. It
+  // holds when the append alone fails (permissions) and the existing ledger still
+  // reads: the window then stays inflight until its TTU, which keeps attributing.
+  // It does NOT hold when the ledger is removed or its directory replaced, because
+  // the next read returns [] and the window disappears with it. That case is the
+  // post-open tampering this fix does not close; see appendDelegationRecords.
   appendDelegationRecords(sessionId, [
     { op: "close", key: delegationKey(input), ts: Date.now() },
   ]);

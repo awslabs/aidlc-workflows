@@ -1132,6 +1132,34 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  // The leaf check is separate from the parent walk, and it needs a window that
+  // already opened normally -- a symlink AT `windows.ndjson` is only reachable once
+  // the bucket exists. Walking only the parent directories left this uncovered, and
+  // appendFileSync through a symlink writes wherever it points.
+  test("5d1d: the ledger file replaced by a symlink refuses the next dispatch", () => {
+    const dir = scratchProject(false);
+    try {
+      openDelegationWindow(dir, "aidlc-design-agent");
+      const ledger = findDelegationLedger(dir);
+      const elsewhere = join(mkdtempSync(join(tmpdir(), "t147-ledger-swap-")), "windows.ndjson");
+      writeFileSync(elsewhere, "");
+      rmSync(ledger);
+      symlinkSync(elsewhere, ledger);
+
+      const refused = runAdapter(dir, "log-subagent", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "subagent_aidlc-quality-agent",
+        tool_input: { prompt: "delegate to aidlc-quality-agent" },
+      });
+      expect(refused.code, refused.stdout + refused.stderr).toBe(2);
+      expect(refused.stderr).toContain("is a symbolic link");
+      rmSync(dirname(elsewhere), { recursive: true, force: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("5d2: one dispatch of the same persona twice needs two closes", () => {
     // Regression: the window is keyed by the dispatch payload, so two identical
     // concurrent dispatches used to collapse into one entry and a single close

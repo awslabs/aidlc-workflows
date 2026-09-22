@@ -7107,12 +7107,21 @@ function exactCopilotMarker(
 }
 
 function installedHarnessNameForTarget(target: ActiveDirectiveTarget): string | null {
-  // The single consumer asks this to decide whether Kiro-specific legacy
-  // plan-approval choices apply, i.e. a current capability question. A project
-  // installed before the kiro-ide row was retired still records that name in its
-  // descriptor and can still export it as AIDLC_HARNESS_NAME, so answering raw
-  // silently dropped those choices for exactly the installs that predate the
-  // consolidation -- a Code Generation UX regression with no error to follow.
+  // This has SEVEN callers, not one: legacy plan-approval choices via
+  // installedHarnessName(), Copilot detection, and the continuation route's
+  // cursorHarness snapshot and its drift comparison. Every one of them resolves a
+  // CURRENT capability or the identity of the route executing now, so normalizing
+  // here is right for all of them -- a successor relation is not a different
+  // harness. A project installed before the kiro-ide row was retired still records
+  // that name in its descriptor and can still export it as AIDLC_HARNESS_NAME, so
+  // answering raw silently dropped the legacy plan-approval choices for exactly the
+  // installs that predate the consolidation, with no error to follow.
+  //
+  // The checks that must keep the RAW value do not come through here. They either
+  // compare a marker against the directory it describes (the stamp-identity check in
+  // aidlc-runtime-paths.ts markerRecord), or use the successor-aware predicate built
+  // for exactly that purpose instead of normalizing -- `distributionUpgradesTo()` at
+  // aidlc-init.ts:5848.
   const stamped = stampedInstalledHarnessName(target);
   return stamped === null ? null : currentDistribution(stamped);
 }
