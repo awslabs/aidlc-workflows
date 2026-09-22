@@ -2,13 +2,55 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
+import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
 
 const source = resolve(import.meta.dir, "../..");
 const fixture = join(source, "tests/fixtures/windows-live-provisioning.ps1");
 
 describe.skipIf(process.platform !== "win32")("Windows live provisioning boundary", () => {
+  test.each([
+    ["version", ["--version"]],
+    ["initialized", ["sandbox", "two words", 'a"quote', "\\tail\\", "& () %PATH%"]],
+  ] as const)("native Codex launcher preserves child output and arguments: %s", (_name, args) => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-native launcher &-"));
+    try {
+      const native = writeWindowsExecutable(join(root, "native-fixture.exe"), `using System;
+using System.Text;
+public static class NativeOutputFixture {
+  public static int Main(string[] args) {
+    Console.Out.WriteLine("stdout-marker:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(string.Join("\\0", args))));
+    Console.Error.WriteLine("stderr-marker");
+    return 7;
+  }
+}`);
+      const initializer = join(root, "initialize.ps1");
+      writeFileSync(initializer, "exit 0\n");
+      // Compile the actual authored bridge with inert child commands. This
+      // exercises its native process boundary without creating sandbox users.
+      const script = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+      const match = script.match(/\$launcher = @'\r?\n([\s\S]*?)\r?\n'@/);
+      expect(match).not.toBeNull();
+      let launcher = match![1];
+      for (const [marker, value] of [
+        ["__NATIVE__", native], ["__PACKAGE_ROOT__", root], ["__INITIALIZER__", initializer],
+        ["__POWERSHELL__", join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe")],
+      ]) launcher = launcher.replaceAll(marker, JSON.stringify(value));
+      const executable = writeWindowsExecutable(join(root, "managed.exe"), launcher);
+      const result = spawnSync(executable, args, {
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(7);
+      expect(result.stdout.trim()).toBe(`stdout-marker:${Buffer.from(args.join("\0")).toString("base64")}`);
+      expect(result.stderr.trim()).toBe("stderr-marker");
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 30_000);
+
   test.each([
     ["seal", { singleLinkTools: true, lowUserWriteDenied: true }],
     ["deny", { protectedReadDenied: true, reparseRejected: true }],

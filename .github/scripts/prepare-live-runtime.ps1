@@ -908,6 +908,7 @@ function Initialize-CodexRuntime {
 using System;
 using System.Diagnostics;
 using System.Text;
+using System.Threading.Tasks;
 public static class AidlcCodexLauncher {
     private const string Native = __NATIVE__;
     private const string PackageRoot = __PACKAGE_ROOT__;
@@ -930,15 +931,25 @@ public static class AidlcCodexLauncher {
         ProcessStartInfo info = new ProcessStartInfo(executable);
         info.UseShellExecute = false;
         info.CreateNoWindow = true;
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
         info.Arguments = String.Join(" ", Array.ConvertAll(args, Quote));
         info.EnvironmentVariables["CODEX_MANAGED_PACKAGE_ROOT"] = PackageRoot;
         info.EnvironmentVariables["CODEX_MANAGED_BY_NPM"] = "1";
         info.EnvironmentVariables.Remove("CODEX_MANAGED_BY_BUN");
         info.EnvironmentVariables.Remove("CODEX_MANAGED_BY_PNPM");
         using (Process child = Process.Start(info)) {
+            // A console-less intermediate launcher must relay both pipes.
+            // Native descendants otherwise have no usable console output.
+            Task stdout = Task.Run(() => child.StandardOutput.BaseStream.CopyTo(Console.OpenStandardOutput()));
+            Task stderr = Task.Run(() => child.StandardError.BaseStream.CopyTo(Console.OpenStandardError()));
             if (!child.WaitForExit(timeout)) {
                 child.Kill();
                 Console.Error.WriteLine("Codex home initialization timed out.");
+                return 1;
+            }
+            if (!Task.WaitAll(new Task[] { stdout, stderr }, 5000)) {
+                Console.Error.WriteLine("Codex native output did not finish after process exit.");
                 return 1;
             }
             return child.ExitCode;
@@ -1050,6 +1061,7 @@ Write-Output 'Codex native identity, workspace write, secret denial and protecte
     $invoke = Join-Path $project 'invoke.cjs'
     [IO.File]::WriteAllText($invoke, @"
 const {spawnSync} = require("node:child_process");
+const {writeSync} = require("node:fs");
 const [launcher, shell, script, sid, secret, forbidden, network] = process.argv.slice(2);
 const args = ["-c", "sandbox_mode=workspace-write", "-c", "windows.sandbox=elevated",
   "-c", "sandbox_workspace_write.network_access=" + network, "sandbox", "--",
@@ -1057,10 +1069,14 @@ const args = ["-c", "sandbox_mode=workspace-write", "-c", "windows.sandbox=eleva
   "-File", script, "-ExpectedSid", sid, "-SecretPath", secret, "-ForbiddenPath", forbidden,
   "-Literal", 'space "quoted" & symbols \\tail\\'];
 const result = spawnSync(launcher, args, {encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:90000});
-process.stdout.write(result.stdout || "");
-process.stderr.write(result.stderr || "");
-if (result.error) console.error(result.error.message);
-process.exit(result.status === null ? 1 : result.status);
+writeSync(1, result.stdout || "");
+// This credential-free probe records both channels on stdout so PowerShell 5
+// cannot turn a diagnostic stderr line into an exception before exit handling.
+writeSync(1, result.stderr || "");
+writeSync(1, JSON.stringify({probe:"codex-native-readiness",network,status:result.status,
+  signal:result.signal,error:result.error?.message,stdoutBytes:Buffer.byteLength(result.stdout || ""),
+  stderrBytes:Buffer.byteLength(result.stderr || "")}) + "\n");
+process.exitCode = result.status === null ? 1 : result.status;
 "@)
     Set-Location -LiteralPath $project
     & $bun $invoke $native $powershell $probe $expectedSids[$index] $secretPath __FORBIDDEN__ $network
