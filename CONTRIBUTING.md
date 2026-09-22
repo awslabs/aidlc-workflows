@@ -193,9 +193,11 @@ After its first review of a PR, AIDA reviews **incrementally**: the direction,
 user-experience, and AIDLC lenses and the judge's non-security categories only
 cover the lines of the PR diff that changed since the head AIDA last reviewed;
 the code that did not change was reviewable then and its findings are in the
-ledger. The security and prompt-attack lenses always review the full head. A
-non-security finding the judge still reports on unchanged lines is listed under
-*Deferred* and never affects the decision. The review header states the scope.
+ledger; lines or files deleted since, and renamed files, stay in scope. The
+security and prompt-attack lenses always review the full head, and a finding on
+a line they cited is never deferred whatever its category. A non-security
+finding the judge still reports on unchanged lines is listed under *Deferred*
+and never affects the decision. The review header states the scope.
 AIDA falls back to a full review on the first review, after a force-push, or
 when a maintainer comments `/aida full`.
 

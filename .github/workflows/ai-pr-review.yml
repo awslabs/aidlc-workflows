@@ -616,6 +616,7 @@ jobs:
             --ledger .ai-review-context/ledger.json \
             --ledger-output .ai-pr-review-final/ledger.json \
             --scope .ai-review-context/review-scope.json \
+            --lens-dir .ai-review-lenses \
             --context-dir .ai-review-context \
             --repo-dir .)"
           echo "event=$event" >> "$GITHUB_OUTPUT"
@@ -686,6 +687,7 @@ jobs:
               --ledger .ai-pr-review-final/ledger.live.json \
               --ledger-output .ai-pr-review-final/ledger.json \
               --scope .ai-review-context/review-scope.json \
+              --lens-dir .ai-review-lenses \
               --context-dir .ai-review-context \
               --repo-dir .)"
             publish_status=0

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -203,7 +204,13 @@ export interface UserExperienceAssessment {
 // full head, whatever the mode.
 export interface ReviewScopeFile {
   path: string;
+  // The base path of a renamed file (LEFT evidence cites it).
+  previousPath?: string;
+  // Head lines of the PR diff changed since the last review.
   added: LineRange[];
+  // Lines (or the whole file) deleted since the last review: LEFT evidence on
+  // this file is in scope.
+  deletions: boolean;
 }
 
 export interface ReviewScope {
@@ -961,17 +968,50 @@ export function buildScope(
   const ranges = rangesFromDiff(diff.toString("utf8"), entries.length);
   const files: ReviewScopeFile[] = [];
   entries.forEach((entry, index) => {
-    if (entry.status.startsWith("D")) return;
-    const inPullRequest = manifest.files.find(file => file.path === entry.path);
+    // A file deleted or renamed since the review is matched by whichever of its
+    // names the PR diff knows.
+    const inPullRequest = manifest.files.find(
+      file => file.path === entry.path || (entry.previousPath !== undefined && file.path === entry.previousPath),
+    );
     if (!inPullRequest) return;
-    const added = inPullRequest.fileLevelEvidence ? [] : intersectRanges(ranges[index].added, inPullRequest.added);
-    if (added.length === 0 && !inPullRequest.fileLevelEvidence && !ranges[index].fileLevelEvidence) return;
-    files.push({ path: entry.path, added });
+    const range = ranges[index];
+    const added = inPullRequest.fileLevelEvidence ? [] : intersectRanges(range.added, inPullRequest.added);
+    const deletions = entry.status.startsWith("D") || range.deleted.length > 0;
+    if (added.length === 0 && !deletions && !range.fileLevelEvidence && !inPullRequest.fileLevelEvidence) return;
+    files.push({
+      path: inPullRequest.path,
+      ...(inPullRequest.previousPath ? { previousPath: inPullRequest.previousPath } : {}),
+      added,
+      deletions,
+    });
   });
   return { mode: "incremental", since, reason: `lines of the PR diff changed since the review at ${since.slice(0, 8)}`, files };
 }
 
-export function findingInScope(finding: Pick<Finding, "category" | "evidence">, scope: ReviewScope): boolean {
+// The lines the security and prompt-attack lenses cited, extracted
+// deterministically from their outputs (`path:line` or `path:start-end` in
+// backticks, the candidate format). A finding that cites one of these lines is
+// never deferred, whatever category the judge chose: the exemption rests on the
+// full-head lenses' own evidence, not on a model-selected label.
+export function securityCitations(lensDir: string): Set<string> {
+  const cited = new Set<string>();
+  for (const name of ["security.md", "prompt-injection.md"]) {
+    const file = join(lensDir, name);
+    if (!existsSync(file)) continue;
+    for (const match of readFileSync(file, "utf8").matchAll(/`([^`\s:]+):(\d+)(?:-(\d+))?`/g)) {
+      const start = Number(match[2]);
+      const end = Math.min(Number(match[3] ?? match[2]), start + 500);
+      for (let line = start; line <= end; line++) cited.add(`${match[1]}:${line}`);
+    }
+  }
+  return cited;
+}
+
+export function findingInScope(
+  finding: Pick<Finding, "category" | "evidence">,
+  scope: ReviewScope,
+  securityCited: ReadonlySet<string> = new Set(),
+): boolean {
   if (scope.mode === "full" || finding.category === "security") return true;
   return finding.evidence.some(item => {
     switch (item.source) {
@@ -982,10 +1022,12 @@ export function findingInScope(finding: Pick<Finding, "category" | "evidence">, 
       case "DIFF_FILE":
         return scope.files.some(entry => entry.path === item.path);
       case "DIFF": {
+        if (securityCited.has(`${item.path}:${item.line}`)) return true;
+        if (item.side === "LEFT") {
+          return scope.files.some(entry => (entry.previousPath ?? entry.path) === item.path && entry.deletions);
+        }
         const file = scope.files.find(entry => entry.path === item.path);
-        if (!file) return false;
-        if (item.side === "LEFT") return true;
-        return file.added.some(range => item.line >= range.start && item.line <= range.end);
+        return file !== undefined && file.added.some(range => item.line >= range.start && item.line <= range.end);
       }
       default:
         return false;
@@ -1076,6 +1118,7 @@ export function parseStructuredReview(
   manifest: ChangedFileManifest,
   metadata: ReviewMetadata,
   scope?: ReviewScope,
+  securityCited: ReadonlySet<string> = new Set(),
 ): StructuredReview {
   assertSha(expectedBase, "base");
   assertSha(expectedHead, "head");
@@ -1322,9 +1365,9 @@ export function parseStructuredReview(
   // that cites only lines unchanged since the last review is deferred — shown,
   // never decisive. The decision is re-derived under the same invariants when
   // the deferral leaves it without a valid reason.
-  const kept = findings.filter(finding => findingInScope(finding, scope));
+  const kept = findings.filter(finding => findingInScope(finding, scope, securityCited));
   const deferred: DeferredFinding[] = findings
-    .filter(finding => !findingInScope(finding, scope))
+    .filter(finding => !findingInScope(finding, scope, securityCited))
     .map(finding => ({
       priority: finding.priority,
       category: finding.category,
@@ -1785,6 +1828,7 @@ function main(): void {
     const scope = args.includes("--scope")
       ? (JSON.parse(readFileSync(argValue(args, "--scope"), "utf8")) as ReviewScope)
       : undefined;
+    const securityCited = args.includes("--lens-dir") ? securityCitations(argValue(args, "--lens-dir")) : new Set<string>();
     let review: StructuredReview;
     if (args.includes("--ledger")) {
       const ledgerFile = readLedgerFile(argValue(args, "--ledger"));
@@ -1795,7 +1839,7 @@ function main(): void {
         migrated: ledgerFile.migrated,
       };
       const applied = applyLedgerToReview(
-        parseStructuredReview(lastValidateInput, base, head, manifest, metadata, scope),
+        parseStructuredReview(lastValidateInput, base, head, manifest, metadata, scope, securityCited),
         loaded,
         argValue(args, "--context-dir"),
         args.includes("--repo-dir") ? argValue(args, "--repo-dir") : process.cwd(),
@@ -1807,7 +1851,7 @@ function main(): void {
         writeLedgerFile(argValue(args, "--ledger-output"), applied.ledger, loaded.migrated, loaded.digest);
       }
     } else {
-      review = enforceDecision(parseStructuredReview(lastValidateInput, base, head, manifest, metadata, scope));
+      review = enforceDecision(parseStructuredReview(lastValidateInput, base, head, manifest, metadata, scope, securityCited));
     }
     const payload = renderReview(review, contextId);
     writeFileSync(output, `${JSON.stringify(payload, null, 2)}\n`);

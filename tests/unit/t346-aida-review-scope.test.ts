@@ -21,6 +21,7 @@ import {
   type ChangedFileManifest,
   findingInScope,
   parseStructuredReview,
+  securityCitations,
   renderReview,
   type ReviewMetadata,
   type ReviewScope,
@@ -83,7 +84,7 @@ function review(
 }
 
 const diffLine = (line: number, side: "LEFT" | "RIGHT" = "RIGHT"): Evidence => ({ source: "DIFF", path: PATH, line, side });
-const INCREMENTAL: ReviewScope = { mode: "incremental", since: SINCE, reason: `lines of the PR diff changed since the review at ${SINCE.slice(0, 8)}`, files: [{ path: PATH, added: [{ start: 43, end: 43 }] }] };
+const INCREMENTAL: ReviewScope = { mode: "incremental", since: SINCE, reason: `lines of the PR diff changed since the review at ${SINCE.slice(0, 8)}`, files: [{ path: PATH, added: [{ start: 43, end: 43 }], deletions: false }] };
 const FULL: ReviewScope = { mode: "full", since: null, reason: "first review of this pull request", files: [] };
 
 function git(cwd: string, ...args: string[]): string {
@@ -101,6 +102,7 @@ function repository(): { root: string; base: string; since: string; head: string
   const numbered = (count: number, prefix: string) => Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`);
   write("core/example.ts", numbered(50, "line"));
   write("core/other.ts", numbered(10, "other"));
+  write("core/renamed-src.ts", numbered(20, "renamed"));
   write("docs/readme.md", ["intro"]);
   git(root, "add", "-A");
   git(root, "commit", "-q", "-m", "base");
@@ -127,6 +129,12 @@ function repository(): { root: string; base: string; since: string; head: string
   write("core/example.ts", second);
   write("core/other.ts", numbered(10, "other"));
   write("docs/new.md", ["new file"]);
+  // Deletion-only and rename-with-change follow-ups: both must stay in scope.
+  rmSync(join(root, "docs", "readme.md"));
+  git(root, "mv", "core/renamed-src.ts", "core/renamed-dst.ts");
+  const renamed = numbered(20, "renamed");
+  renamed[4] = "renamed 5 changed at head";
+  write("core/renamed-dst.ts", renamed);
   git(root, "add", "-A");
   git(root, "commit", "-q", "-m", "head");
   const head = git(root, "rev-parse", "HEAD");
@@ -148,7 +156,7 @@ describe("t346 AIDA incremental review scope", () => {
     const context = mkdtempSync(join(tmpdir(), "aida-scope-ctx-"));
     try {
       const manifest = buildContext(repo.base, repo.head, context, repo.root);
-      expect(manifest.files.map(file => file.path)).toEqual(["core/example.ts", "docs/new.md"]);
+      expect(manifest.files.map(file => `${file.status[0]} ${file.path}`)).toEqual(["M core/example.ts", "R core/renamed-dst.ts", "A docs/new.md", "D docs/readme.md"]);
 
       const scope = buildScope(repo.head, manifest, repo.since, false, repo.root);
       expect(scope.mode).toBe("incremental");
@@ -156,9 +164,18 @@ describe("t346 AIDA incremental review scope", () => {
       // Line 11 changed since AND is in the PR diff; line 30 is new; lines 10 and 12 were
       // reviewed at `since` and are out; other.ts left the PR diff; docs/new.md is new.
       expect(scope.files).toEqual([
-        { path: "core/example.ts", added: [{ start: 11, end: 11 }, { start: 30, end: 30 }] },
-        { path: "docs/new.md", added: [{ start: 1, end: 1 }] },
+        // Line 11 was modified since: in diff terms a deletion plus an addition, so the file
+        // also admits LEFT evidence (over-inclusion is safe; under-inclusion is not).
+        { path: "core/example.ts", added: [{ start: 11, end: 11 }, { start: 30, end: 30 }], deletions: true },
+        { path: "core/renamed-dst.ts", previousPath: "core/renamed-src.ts", added: [{ start: 5, end: 5 }], deletions: true },
+        { path: "docs/new.md", added: [{ start: 1, end: 1 }], deletions: false },
+        { path: "docs/readme.md", added: [], deletions: true },
       ]);
+      // LEFT evidence on the deleted file and on the rename's base path is in scope.
+      expect(findingInScope({ category: "contracts", evidence: [{ source: "DIFF", path: "docs/readme.md", line: 1, side: "LEFT" }] }, scope)).toBe(true);
+      expect(findingInScope({ category: "contracts", evidence: [{ source: "DIFF", path: "core/renamed-src.ts", line: 5, side: "LEFT" }] }, scope)).toBe(true);
+      expect(findingInScope({ category: "contracts", evidence: [{ source: "DIFF", path: "core/example.ts", line: 40, side: "LEFT" }] }, scope)).toBe(true);
+      expect(findingInScope({ category: "contracts", evidence: [{ source: "DIFF", path: "docs/new.md", line: 1, side: "LEFT" }] }, scope)).toBe(false);
 
       expect(buildScope(repo.head, manifest, null, false, repo.root)).toMatchObject({ mode: "full", reason: "first review of this pull request", files: [] });
       expect(buildScope(repo.head, manifest, repo.since, true, repo.root)).toMatchObject({ mode: "full", reason: "requested by a maintainer with /aida full" });
@@ -182,12 +199,29 @@ describe("t346 AIDA incremental review scope", () => {
     expect(findingInScope(finding("correctness", diffLine(42), diffLine(43)), INCREMENTAL)).toBe(true);
     expect(findingInScope(finding("security", diffLine(42)), INCREMENTAL)).toBe(true);
     expect(findingInScope(finding("correctness", diffLine(42)), FULL)).toBe(true);
-    // Deleted-line and file-level evidence are in scope when the file changed since the review;
-    // metadata quotes always are (the metadata may have changed since).
-    expect(findingInScope(finding("contracts", diffLine(40, "LEFT")), INCREMENTAL)).toBe(true);
+    // Deleted-line evidence is in scope only when the file had deletions since the review;
+    // file-level evidence when the file is listed; metadata quotes always (it may have changed).
+    expect(findingInScope(finding("contracts", diffLine(40, "LEFT")), INCREMENTAL)).toBe(false);
+    expect(findingInScope(finding("contracts", diffLine(40, "LEFT")), { ...INCREMENTAL, files: [{ ...INCREMENTAL.files[0], deletions: true }] })).toBe(true);
     expect(findingInScope(finding("contracts", { source: "DIFF_FILE", path: "assets/logo.png" }), INCREMENTAL)).toBe(false);
-    expect(findingInScope(finding("contracts", { source: "DIFF_FILE", path: "assets/logo.png" }), { ...INCREMENTAL, files: [...INCREMENTAL.files, { path: "assets/logo.png", added: [] }] })).toBe(true);
+    expect(findingInScope(finding("contracts", { source: "DIFF_FILE", path: "assets/logo.png" }), { ...INCREMENTAL, files: [...INCREMENTAL.files, { path: "assets/logo.png", added: [], deletions: false }] })).toBe(true);
     expect(findingInScope(finding("direction", { source: "PR_BODY", quote: "Please review." }), INCREMENTAL)).toBe(true);
+
+    // The exemption for security rests on the full-head lenses' own citations, not on the
+    // judge's category: a correctness-labelled finding on a line the prompt-attack lens cited
+    // is never deferred.
+    const lensDir = mkdtempSync(join(tmpdir(), "aida-scope-lenses-"));
+    try {
+      writeFileSync(join(lensDir, "prompt-injection.md"), `**P1 candidate: instruction smuggled into a comment**\n\nEvidence: \`${PATH}:42\` and \`docs/guide.md:7-9\`.\n`);
+      writeFileSync(join(lensDir, "security.md"), "No candidates.\n");
+      const cited = securityCitations(lensDir);
+      expect([...cited].sort()).toEqual([`${PATH}:42`, "docs/guide.md:7", "docs/guide.md:8", "docs/guide.md:9"]);
+      expect(findingInScope(finding("correctness", diffLine(42)), INCREMENTAL, cited)).toBe(true);
+      expect(findingInScope(finding("correctness", diffLine(44)), INCREMENTAL, cited)).toBe(false);
+      expect(securityCitations(join(lensDir, "missing"))).toEqual(new Set());
+    } finally {
+      rmSync(lensDir, { recursive: true, force: true });
+    }
   });
 
   test("the validator defers out-of-scope non-security findings, re-derives the decision, and renders both", () => {
@@ -281,9 +315,12 @@ describe("t346 AIDA incremental review scope", () => {
       expect(REVIEW_WORKFLOW).not.toContain(`.ai-review-controls/prompts/ai-pr-review-scope.md \\\n              .ai-review-controls/prompts/ai-pr-review-${lens}.md`);
     }
     expect(REVIEW_WORKFLOW.split("--scope .ai-review-context/review-scope.json")).toHaveLength(3);
+    expect(REVIEW_WORKFLOW.split("--lens-dir .ai-review-lenses")).toHaveLength(3);
 
     expect(prompt("scope")).toContain('`mode: "incremental"`');
     expect(prompt("scope")).toContain("report candidates only when their evidence cites a line inside the scope");
+    expect(prompt("scope")).toContain("a file with `deletions: true` also admits `LEFT`");
+    expect(CONTRIBUTING).toContain("a finding on\na line they cited is never deferred whatever its category");
     expect(prompt("security")).toContain("this lens always reviews the full head");
     expect(prompt("prompt-injection")).toContain("this lens always reviews the full head and the full PR metadata");
     expect(prompt("judge")).toContain("Honor `.ai-review-context/review-scope.json`");

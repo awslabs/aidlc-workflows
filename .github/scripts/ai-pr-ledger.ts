@@ -18,9 +18,12 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 export const LEDGER_MARKER = "<!-- aida-ledger";
-export const LEDGER_VERSION = 3 as const;
+export const LEDGER_VERSION = 4 as const;
 const LEGACY_LEDGER_VERSION = 1;
 const PREVIOUS_LEDGER_VERSION = 2;
+// Version 3 added archivedDecisions; version 4 adds nextReview (/aida full) and
+// the full-requested event. Both are verified under their own canonical shape.
+const VERSION_3 = 3;
 const MAX_REASON_LENGTH = 500;
 const MAX_LEDGER_BYTES = 200_000;
 // The writer compacts to this before publishing so the reader's cap is never hit.
@@ -378,6 +381,19 @@ export function validateLedger(value: unknown): Ledger {
   return ledger;
 }
 
+// A version-3 ledger cannot carry version-4 fields; it is verified under the
+// version-3 canonical shape and upgraded without touching any decision.
+function migrateVersion3Ledger(value: unknown): { ledger: Ledger; digest: string } {
+  if (!isRecord(value) || value.version !== VERSION_3) throw new Error("not a version-3 ledger");
+  if (value.nextReview !== undefined) throw new Error("version-3 ledger cannot contain a next-review request");
+  if (Array.isArray(value.events) && value.events.some(event => isRecord(event) && event.kind === "full-requested")) {
+    throw new Error("version-3 ledger cannot contain full-requested events");
+  }
+  const ledger = validateLedger({ ...value, version: LEDGER_VERSION });
+  const { version: _version, nextReview: _next, ...rest } = ledger;
+  return { ledger, digest: sha256(JSON.stringify({ version: VERSION_3, ...rest }, null, 2)) };
+}
+
 function migratePreviousLedger(value: unknown): { ledger: Ledger; digest: string } {
   if (!isRecord(value) || value.version !== PREVIOUS_LEDGER_VERSION) {
     throw new Error("not a version-2 ledger");
@@ -556,6 +572,11 @@ export function parseLedgerComment(
   }
   if (isRecord(parsed) && parsed.version === PREVIOUS_LEDGER_VERSION) {
     const previous = migratePreviousLedger(parsed);
+    if (digest !== previous.digest) throw new Error("ledger comment was edited outside AIDA (digest mismatch)");
+    return { ledger: previous.ledger, migrated: false, digest };
+  }
+  if (isRecord(parsed) && parsed.version === VERSION_3) {
+    const previous = migrateVersion3Ledger(parsed);
     if (digest !== previous.digest) throw new Error("ledger comment was edited outside AIDA (digest mismatch)");
     return { ledger: previous.ledger, migrated: false, digest };
   }

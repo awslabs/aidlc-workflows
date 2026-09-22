@@ -290,6 +290,13 @@ describe("t345 AIDA findings ledger", () => {
     );
     expect(upgraded).toEqual({ ledger, migrated: false, digest: previousDigest });
 
+    // Version 3 (archived decisions, no /aida full) is verified under its own shape, then upgraded.
+    const v3 = { version: 3, ...previousFields };
+    const v3Digest = sha256(JSON.stringify(v3, null, 2));
+    expect(parseLedgerComment(`${LEDGER_MARKER} v3 digest=${v3Digest} -->\n\`\`\`json\n${JSON.stringify(v3, null, 2)}\n\`\`\``)).toEqual({ ledger, migrated: false, digest: v3Digest });
+    expect(() => parseLedgerComment(`${LEDGER_MARKER} v3 digest=${v3Digest} -->\n\`\`\`json\n${JSON.stringify({ ...v3, nextReview: { scope: "full", by: "x", at: AT } }, null, 2)}\n\`\`\``)).toThrow("version-3 ledger cannot contain a next-review request");
+    expect(LEDGER_VERSION).toBe(4);
+
     // A version-1 ledger (side-less anchors, other digest) migrates: ids survive, anchors become
     // position anchors (never evaluable, so never retained), decisions are reset.
     const legacy = {
