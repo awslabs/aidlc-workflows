@@ -727,7 +727,9 @@ prevents future contributions from colliding with ad-hoc additions.
 | `retry` | the loop driver | Retry policy on failure. Homed in loop config, not stage frontmatter |
 
 `when` is no longer reserved: the schema accepts it with the `producer-in-plan`
-predicate and checks its shape, and its evaluation is still to come (see
+predicate, and a plan checks it at workflow set-up. The stage stays on every
+plan its `scopes:` put it on; when no stage on the plan produces the named
+artifact, the person is told at set-up that the stage will run without it (see
 `consumes[].required` above).
 
 Design rationale: Claude Code's own task primitives (TaskCreate family plus
