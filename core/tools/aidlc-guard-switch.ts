@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
-import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
+import type { AuditEntryInput } from "./aidlc-audit.ts";
 import {
-  assertChangeControlLedgerWritable,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
@@ -9,8 +8,6 @@ import {
   type CeremonyKey,
   type CeremonyPolicy,
   type CeremonySetting,
-  errorMessage,
-  fenceKeyBypassed,
   type FenceSetting,
   fencesLoweredByPolicy,
   formatCeremony,
@@ -24,14 +21,11 @@ import {
   guardPolicyMemoryStrictRefusal,
   type GuardSwitch,
   guardSwitchRefusal,
-  isoTimestamp,
-  listIntentDirs,
-  memoryGuardPolicyDeclarations,
   parseCeremonySetting,
   parseGuardPolicy,
+  parseGuardPolicyStateLine,
   parseGuardsOffLine,
   parseGuardsOnLine,
-  parseTypedGuardSwitchRequest,
   readStateFile,
   resolveCeremony,
   resolveFences,
@@ -79,6 +73,53 @@ export const CONFIG_KEYS = [
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 export type IntentSettingsRequest = Partial<Record<ConfigKey, { value: string; source: string }>>;
 export type ReviewOverride = "adversarial" | "advisory" | "none";
+
+export interface GuardPolicyFieldMigration {
+  normalized: boolean;
+  value: "relaxed" | "off" | null;
+}
+
+/**
+ * Rename an active intent's valid retired policy field without changing its
+ * stored value, source label, effective policy, or audit history.
+ */
+export function normalizeRetiredGuardPolicyField(
+  projectDir: string,
+  sessionId: string,
+): GuardPolicyFieldMigration {
+  const selection = resolveWorkflowSelection(projectDir, { sessionId });
+  if (selection.intent === null) return { normalized: false, value: null };
+  const intent = selection.intent;
+  const space = selection.space;
+  if (!existsSync(stateFilePath(projectDir, intent, space))) {
+    return { normalized: false, value: null };
+  }
+  return withAuditLock(projectDir, () => {
+    const content = readStateFile(projectDir, intent, space);
+    if (getField(content, GUARD_POLICY_FIELD) !== null) {
+      return { normalized: false, value: null };
+    }
+    const retired = getField(content, CHANGE_CONTROL_FIELD);
+    const parsed = parseGuardPolicyStateLine(retired);
+    if (retired === null || (parsed?.value !== "relaxed" && parsed?.value !== "off")) {
+      return { normalized: false, value: null };
+    }
+    const before = resolveGuardPolicy(projectDir, content, {
+      selection: { intent, space },
+      tolerateInvalidState: true,
+    }).value;
+    const updated = setGuardPolicyLine(content, retired);
+    const after = resolveGuardPolicy(projectDir, updated, {
+      selection: { intent, space },
+      tolerateInvalidState: true,
+    }).value;
+    if (before !== after) {
+      throw new Error("Guard Policy field migration changed the effective policy.");
+    }
+    writeStateFile(projectDir, updated, intent, space);
+    return { normalized: true, value: parsed.value };
+  }, intent, space);
+}
 
 export function parseReviewOverride(
   raw: string | undefined,
@@ -151,14 +192,14 @@ function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySett
   return setField(content, field, formatCeremony(value, source));
 }
 
-// Pure state transformation plus audit/output preparation. CLI setters and the
-// human-turn hook call this under the intent lock and commit audit before state.
+// Pure state transformation plus audit/output preparation. CLI setters call
+// this under the intent lock and commit audit before state.
 export function applyIntentSettings(
   projectDir: string,
   content: string,
   requested: IntentSettingsRequest,
-  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, ...selection }: {
-    intent?: string; space?: string; sessionId?: string | null; typedByPerson?: boolean;
+  { fail: die = throwSettingsError, ...selection }: {
+    intent?: string; space?: string;
     fail?: (message: string) => never;
   },
 ): { content: string; audit: AuditEntryInput[]; lines: string[] } {
@@ -217,12 +258,19 @@ export function applyIntentSettings(
     tolerateInvalidState: ccRequest?.source === "you",
     selection,
   });
-  if (typedByPerson && cc.memoryStrict !== null) {
-    // A memory edit may land after the hook's preflight. Report it without
-    // taking the CLI refusal path, which terminates the process.
-    throw new Error(guardPolicyMemoryStrictRefusal(cc.memoryStrict));
-  }
-  if (ccRequest?.source === "you" && changeControl !== null && changeControl !== "strict" && cc.memoryStrict !== null) {
+  const fieldOnlyMigration =
+    ccRequest?.source === "you" &&
+    changeControl !== null &&
+    cc.conflict === undefined &&
+    cc.stateField === CHANGE_CONTROL_FIELD &&
+    cc.intent?.value === changeControl;
+  if (
+    ccRequest?.source === "you" &&
+    changeControl !== null &&
+    changeControl !== "strict" &&
+    cc.memoryStrict !== null &&
+    !fieldOnlyMigration
+  ) {
     die(guardPolicyMemoryStrictRefusal(cc.memoryStrict));
   }
   if (cc.memoryStrict !== null) {
@@ -253,6 +301,7 @@ export function applyIntentSettings(
     }
   }
   if (ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off") &&
+    !fieldOnlyMigration &&
     (cc.rawStateValue !== formatGuardPolicy(changeControl, ccRequest.source) || cc.conflict !== undefined)) {
     lowering.push({ key: "guard-policy", value: changeControl });
   }
@@ -260,7 +309,7 @@ export function applyIntentSettings(
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
     die(guardSwitchRefusal(lowering[0], "config"));
   }
-  if (lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId)) {
+  if (lowering.length > 0) {
     die(guardSwitchRefusal(lowering[0], "config"));
   }
 
@@ -304,10 +353,13 @@ export function applyIntentSettings(
       : `Review override is already ${display}`);
   }
   // Persist scope-owned updates even while memory controls the effective value.
-  // Explicit strict is also recordable; explicit relaxed was refused above.
+  // Explicit strict is recordable. A relaxed/off request is accepted only when
+  // it renames a retired field without changing its value.
   if (ccRequest !== undefined && changeControl !== null) {
     const previous = cc.rawStateValue;
-    const line = formatGuardPolicy(changeControl, ccRequest.source);
+    const line = fieldOnlyMigration && previous !== null
+      ? previous
+      : formatGuardPolicy(changeControl, ccRequest.source);
     if (previous === line && cc.stateField === GUARD_POLICY_FIELD && getField(content, CHANGE_CONTROL_FIELD) === null) {
       lines.push(`Guard Policy is already ${line}`);
     } else {
@@ -328,7 +380,8 @@ export function applyIntentSettings(
       }
     }
   }
-  // Per-work switches can lower a fence or raise it above the policy word.
+  // Compatible persisted switches can remain off; current requests may only
+  // raise a fence above the policy word.
   // Record only an effective change: environment kill switches still win.
   if (fenceRequests.length > 0) {
     const scopeName = getField(content, "Scope") ?? "";
@@ -387,65 +440,4 @@ export function applyIntentSettings(
     lines.push(`${field} changed: ${oldDisplay} to ${line}`);
   }
   return { content, audit, lines };
-}
-
-export interface TypedGuardSwitchOutcome {
-  applied: boolean;
-  lines: string[];
-}
-
-export function applyTypedGuardSwitchPrompt(
-  projectDir: string,
-  sessionId: string,
-  prompt: string,
-): TypedGuardSwitchOutcome | null {
-  const parsed = parseTypedGuardSwitchRequest(prompt);
-  if (parsed.switches.length === 0 || process.env.AIDLC_UNATTENDED === "1") return null;
-  try {
-    const selection = resolveWorkflowSelection(projectDir, {
-      sessionId,
-      ...(parsed.space === null ? {} : { space: parsed.space }),
-      ...(parsed.intent === null ? {} : { intent: parsed.intent }),
-    });
-    const intent = selection.intent ?? undefined;
-    const space = selection.space;
-    if (parsed.intent !== null && !listIntentDirs(projectDir, space).includes(parsed.intent)) {
-      return { applied: false, lines: [`${parsed.intent} is not a piece of work in space ${space}.`] };
-    }
-    if (selection.intent === null || !existsSync(stateFilePath(projectDir, intent, space))) {
-      const wanted = parsed.switches[0];
-      const label = wanted.key === "guard-policy"
-        ? `Guard Policy ${wanted.value} and fence switches`
-        : `${wanted.key} off switches`;
-      return {
-        applied: false,
-        lines: [`${label} apply to a piece of work: create it, then type this again.`],
-      };
-    }
-    const requested: IntentSettingsRequest = {};
-    for (const wanted of parsed.switches) {
-      requested[wanted.key] = { value: wanted.value, source: "you" };
-    }
-    return withAuditLock(projectDir, (): TypedGuardSwitchOutcome => {
-      const content = readStateFile(projectDir, intent, space);
-      const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { intent, space, sessionId })
-        .find((declaration) => declaration.value === "strict");
-      if (memoryStrict !== undefined) {
-        return { applied: false, lines: [guardPolicyMemoryStrictRefusal(memoryStrict)] };
-      }
-      // The parser supplies only valid lowering values. Memory is checked before
-      // the shared setter so its CLI-only refusal cannot terminate this hook.
-      const update = applyIntentSettings(projectDir, content, requested, {
-        intent, space, sessionId, typedByPerson: true,
-      });
-      if (update.content !== content) {
-        if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
-        if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
-        writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
-      }
-      return { applied: true, lines: update.lines };
-    }, intent, space);
-  } catch (error) {
-    return { applied: false, lines: [errorMessage(error)] };
-  }
 }

@@ -8246,7 +8246,7 @@ function retiredGuardPolicyNotice(projectDir: string, stateContent: string): str
     if (resolution.conflict !== undefined) {
       const { guardPolicy, changeControl } = resolution.conflict;
       return `Guard Policy: this piece of work carries both \`Guard Policy: ${guardPolicy}\` and the retired \`Change Control: ${changeControl}\`, ` +
-        "so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.";
+        "so strict applies until the conflict is resolved. Raise it to strict from chat, or resolve the two fields outside the agent after choosing the intended value; this notice repeats while both remain.";
     }
     if (guardPolicyStateField(stateContent) !== CHANGE_CONTROL_FIELD) return null;
     value = resolution.value;
@@ -8260,7 +8260,8 @@ function retiredGuardPolicyNotice(projectDir: string, stateContent: string): str
   return `Guard Policy: ${value} was carried over from this piece of work's retired Change Control line. ` +
     `Under Guard Policy, ${value} now also lowers the ${fences} for work nobody directed, ` +
     "and every pass is recorded in the audit trail. " +
-    `Say 'guard policy ${value}' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.`;
+    "The next prompt-submit hook will rename the field without changing its value, " +
+    "or you can say 'guard policy strict' to raise the fences.";
 }
 
 // The guard-recovery ask an enforcing tool carried on the last line of its

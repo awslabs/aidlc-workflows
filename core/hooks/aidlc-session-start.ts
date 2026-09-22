@@ -45,7 +45,6 @@ import {
   harnessDir,
   getField,
   hooksHealthDir,
-  humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
   isoTimestamp,
   intentUuidForSelection,
@@ -53,7 +52,6 @@ import {
   readSessionRebindOffer,
   readSessionIntentUuid,
   recordHookDrop,
-  recordSessionPresenceBypass,
   recoveryFilePath,
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
@@ -129,11 +127,6 @@ try {
 // intent it creates. Separate from the per-session intent stamp below.
 if (sessionId) {
   writeCurrentSessionId(projectDir, sessionId);
-  try {
-    if (humanPresenceGuardDisabled()) recordSessionPresenceBypass(projectDir, sessionId);
-  } catch {
-    // Presence bypass bookkeeping must never break session startup.
-  }
   writeSessionPidAncestry(projectDir, sessionId);
 }
 

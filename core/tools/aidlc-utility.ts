@@ -98,7 +98,6 @@ import {
   GUARD_FENCES,
   type GuardSwitch,
   entrySkillInvocation,
-  fenceKeyBypassed,
   guardSwitchRefusal,
   guardFenceFromConfigKey,
   guardPolicyStateField,
@@ -568,8 +567,8 @@ Utilities:
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
-  --guard-policy <value>  How far the guards stand aside for this piece of work (strict, relaxed, off); --change-control is its retired name
-  config set guard.<fence> <on|off>  Lower or restore one fence for this piece of work (plan-approval, review-freeze, state-transition, reviewer-scope); human presence has no per-work switch
+  --guard-policy <value>  Guard Policy (strict from chat; configure relaxed/off in the scope); --change-control is its retired name
+  config set guard.<fence> on  Restore one fence for this piece of work (plan-approval, review-freeze, state-transition, reviewer-scope); off is refused from chat
   --sensors <on|off>  Enable or disable stage sensors for this intent
   --learnings <on|off>  Enable or disable the learnings ritual for this intent
   --summary-confirmation <on|off>  Enable or disable summary confirmation for this intent
@@ -595,8 +594,8 @@ Examples:
   /aidlc --depth minimal                       Change depth of active workflow
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
   /aidlc --review advisory                     Single-pass reviews, findings at the gate
-  ${entrySkillInvocation()} --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
-  ${entrySkillInvocation()} config set guard.plan-approval off    Let this piece of work write code before its plan is approved (logged)`;
+  ${entrySkillInvocation()} --guard-policy strict                 Require re-approval after approved inputs change
+  ${entrySkillInvocation()} config set guard.plan-approval on     Raise Plan Approval above a lower scope policy`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -6493,11 +6492,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   }
   if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
-    // An unattended driver never lowers fences, including a recorded presence bypass.
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
-    if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) {
-      die(guardSwitchRefusal(wanted, "intent-create"));
-    }
+    die(guardSwitchRefusal(wanted, "intent-create"));
   }
   // A flat aidlc-docs/ layout is migrated into the DEFAULT space by the first
   // creation (below, under the lock). An explicit other space cannot be honored
@@ -8381,7 +8377,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // Apply against the original scope so previous settings and effective
     // output describe the state before this transaction.
     const update = applyIntentSettings(projectDir, contentBefore, requested, {
-      intent, space, sessionId: selection.sessionId, fail: die,
+      intent, space, fail: die,
     });
     let content = update.content;
     const auditEntries = update.audit;
@@ -8844,7 +8840,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   withAuditLock(projectDir, () => {
     const content = readConfigState(projectDir, { intent, space });
     const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), {
-      intent, space, sessionId: selection.sessionId, fail: die,
+      intent, space, fail: die,
     });
     if (update.content !== content) {
       if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();

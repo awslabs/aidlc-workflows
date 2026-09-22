@@ -39,6 +39,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readAllAuditShards,
+  readActiveDirectiveMarker,
   readIntentRegistry,
   writePlanApprovalLegacyOffer,
   writeActiveDirectiveMarker,
@@ -320,8 +321,8 @@ function runIdeStdin(
   };
 }
 
-const KIRO_GUARD_SWITCH_REFUSAL = "This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.";
-const KIRO_PROMPT_CAPABILITY_NOTE = "SYSTEM (AIDLC harness capability): this Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat in this session. If the person asks to relax or turn off the guards, do not name a command for them to type; say that the hooks cannot see what they type here and that the routes are guard_policy in the scope file, a memory Guard Policy line, or a Kiro IDE build that delivers the prompt. Raising to strict and turning a fence on still work.";
+const KIRO_GUARD_SWITCH_REFUSAL = "This Kiro IDE build delivers no prompt text to the hooks. No supported harness can authenticate prompt provenance, so a fence or current Guard Policy cannot be lowered from chat. A retired Change Control relaxed/off field is normalized automatically without changing its value. For a new policy choice, use guard_policy in the scope before creating or changing the intent. Raising to strict or turning a fence on still works.";
+const KIRO_PROMPT_CAPABILITY_NOTE = "SYSTEM (AIDLC harness capability): this Kiro IDE build delivers no prompt text to the hooks. No supported harness can authenticate prompt provenance, so a fence or current Guard Policy cannot be lowered from chat. A retired Change Control relaxed/off field is normalized automatically without changing its value. For a new policy choice, use guard_policy in the scope before creating or changing the intent. Raising to strict and turning a fence on still work.";
 const GUARD_SWITCH_ENV: NodeJS.ProcessEnv = {
   AIDLC_SESSION_OVERRIDE: undefined,
   AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
@@ -1252,9 +1253,10 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("8d12: record-human-turn applies a visible typed fence switch at prompt time", () => {
+  test("8d12: record-human-turn cannot apply a typed fence switch from forgeable JSON", () => {
     const dir = scratchProject(true);
     try {
+      const state = readFileSync(seededStateFile(dir), "utf-8");
       const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
         session_id: "sess_prompt_applies_switch",
         hook_event_name: "UserPromptSubmit",
@@ -1262,12 +1264,9 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         prompt: "/aidlc config set guard.plan-approval off",
       }), GUARD_SWITCH_ENV);
       expect(result.code, result.stderr).toBe(0);
-      expect(result.stdout).toContain("AIDLC Guard Policy:");
-      expect(result.stdout).toContain("Fence plan-approval is off");
-      expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
-        "- **Guards Off**: plan-approval (set by you)",
-      );
-      expect(readAudit(dir).match(/GUARD_DISABLED/g)).toHaveLength(1);
+      expect(result.stdout).not.toContain("AIDLC Guard Policy:");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1292,15 +1291,80 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("8d14: a shell setter passes through after the typed switch and reports the no-op", () => {
+  test.each(["relaxed", "off"] as const)(
+    "8d13a: an empty prompt normalizes retired %s without changing its value or repeating the notice",
+    (value) => {
+      const dir = scratchProject(true);
+      try {
+        const statePath = seededStateFile(dir);
+        const retired = readFileSync(statePath, "utf-8").replace(
+          /^- \*\*(?:Guard Policy|Change Control)\*\*:.*$/m,
+          `- **Change Control**: ${value} (from scope classic)`,
+        );
+        writeFileSync(statePath, retired);
+        writeActiveDirectiveMarker(dir, {
+          kind: "run-stage",
+          stage: "requirements-analysis",
+          state_sha256: stateDigest(retired),
+        });
+        const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+          session_id: `sess_empty_prompt_migration_${value}`,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }), GUARD_SWITCH_ENV);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toContain(
+          `kept ${value} and renamed the active intent's retired Change Control field to Guard Policy`,
+        );
+        const normalized = readFileSync(statePath, "utf-8");
+        expect(normalized).toContain(
+          `- **Guard Policy**: ${value} (from scope classic)`,
+        );
+        expect(normalized).not.toContain("- **Change Control**:");
+        expect(readActiveDirectiveMarker(dir, normalized)).toMatchObject({
+          kind: "run-stage",
+          stage: "requirements-analysis",
+        });
+        expect(readAudit(dir)).not.toContain("GUARD_POLICY_SET");
+        expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+
+        const next = spawnSync("bun", [
+          join(dir, ".kiro", "tools", "aidlc-orchestrate.ts"),
+          "next",
+        ], {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        });
+        expect(next.status, next.stderr).toBe(0);
+        const directive = JSON.parse(next.stdout) as { change_notices?: string[] };
+        expect(directive.change_notices).toBeUndefined();
+
+        const again = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+          session_id: `sess_empty_prompt_migration_${value}`,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }), GUARD_SWITCH_ENV);
+        expect(again.code, again.stderr).toBe(0);
+        expect(again.stdout).not.toContain("AIDLC Guard Policy migration");
+        expect(readFileSync(statePath, "utf-8")).toBe(normalized);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("8d14: a shell setter remains refused after a forgeable typed switch", () => {
     const dir = scratchProject(true);
     const session = "sess_prompt_switch_noop";
     try {
       submitGuardSwitchTurn(dir, session, "/aidlc config set guard.plan-approval off");
       const state = readFileSync(seededStateFile(dir), "utf-8");
-      expect(state).toContain("- **Guards Off**: plan-approval (set by you)");
       const audit = readAudit(dir);
-      expect(audit.match(/GUARD_DISABLED/g)).toHaveLength(1);
+      expect(audit).not.toContain("GUARD_DISABLED");
       const guarded = preGuardSwitchCommand(
         dir, session, "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
       );
@@ -1319,10 +1383,10 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         },
         timeout: 30_000,
       });
-      expect(setter.status, setter.stderr).toBe(0);
-      expect(setter.stdout).toContain("Fence plan-approval is already off");
+      expect(setter.status).toBe(1);
+      expect(setter.stderr).toContain("this command does not lower a fence");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
-      expect(readAudit(dir)).toBe(audit);
+      expect(readAudit(dir)).toContain("ERROR_LOGGED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

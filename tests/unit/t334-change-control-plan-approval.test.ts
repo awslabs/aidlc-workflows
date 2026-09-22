@@ -539,10 +539,10 @@ describe("t334 (5) strict drift at the dispatch guard is a typed ask, not a wall
     );
     expect(guard.code, guard.stderr).toBe(2);
     const lines = guard.stderr.split(/\r?\n/).filter((line) => line.trim().length > 0);
-    // First line: the same words a human read before, plus the switch sentence.
+    // First line: the same words a human read before, plus scope guidance.
     expect(lines[0]).toContain("1 file changed since this plan was approved: src/after.ts.");
     expect(lines[0]).toContain("approve the plan again");
-    expect(lines[0]).toContain("/aidlc config set guard.plan-approval off");
+    expect(lines[0]).toContain("cannot be turned off from chat");
     // Last line: the typed ask every harness skill renders as a question. A
     // prose-only refusal means the hook never built or never wrote the ask; say
     // so with the whole stderr and the hook's own drop record in the message.
@@ -568,7 +568,6 @@ describe("t334 (5) strict drift at the dispatch guard is a typed ask, not a wall
       "reapprove-plan",
       "show-plan-drift",
       "stop-here",
-      "lower-fence",
     ]);
     // Both command remedies carry the stage-level target and are human-selected:
     // every remedy with a command carries a structured operation and needs the
@@ -642,7 +641,7 @@ describe("t334 (5) strict drift at the dispatch guard is a typed ask, not a wall
     expect(acceptedRows(project)).toHaveLength(0);
   }, 60000);
 
-  test("the native fence switch the ask prints is admitted by the hook it lowers, and nothing near it is", () => {
+  test("the compatible native fence-setter shape is admitted by its hook, and nothing near it is", () => {
     const project = createProject("strict");
     const questions = presentPlan(project);
     startSession(project, "strict-native");
@@ -655,7 +654,8 @@ describe("t334 (5) strict drift at the dispatch guard is a typed ask, not a wall
     }));
     const admitted = bash("aidlc engine config set guard.plan-approval off");
     expect(admitted.code, admitted.stderr).toBe(0);
-    // Admitted as a prerequisite, not stood aside: the fence is still up.
+    // Admitted for compatibility classification, not stood aside: the setter
+    // itself refuses lowering and the fence remains up.
     expect(admitted.stdout).not.toContain("Continuing past");
     for (const command of [
       "aidlc engine config set guard.plan-approval on",

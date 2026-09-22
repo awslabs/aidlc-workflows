@@ -8,9 +8,9 @@
 //
 // Presence remains the gate signal; the prompt payload also answers the single
 // active protected challenge (plan, verification command, policy, or checkpoint).
-// As the host's channel for the prompt, the hook applies a typed fence switch
-// to this session's selected piece of work at prompt time. There is no request
-// file for a later setter to consume.
+// The payload is not authenticated by any supported host. It must therefore
+// never authorize a Guard Policy or fence change: this module is public project
+// code, and a model can import run() or execute the hook with fabricated JSON.
 // appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
 // to gate, so the hook skips ledger writes (same self-gate as
 // aidlc-session-start.ts) - otherwise every prompt in a project that carries the
@@ -67,7 +67,7 @@ import {
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
-import { applyTypedGuardSwitchPrompt } from "../tools/aidlc-guard-switch.ts";
+import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
@@ -142,6 +142,7 @@ try {
   let sessionId = "";
   let humanResponseText = "";
   let questionText: string | null = null;
+  let promptSubmitted = false;
   // The break-glass phrase counts only when the human TYPED it: the prompt
   // text of a UserPromptSubmit payload that names no tool. A picked option
   // (AskUserQuestion PostToolUse, Codex request_user_input, any adapter's
@@ -179,6 +180,7 @@ try {
       parsed.hook_event_name === "UserPromptSubmit" &&
       typeof parsed.tool_name !== "string"
     ) {
+      promptSubmitted = true;
       typedPrompt =
         [parsed.prompt, parsed.user_prompt, parsed.message].find(
           (value): value is string =>
@@ -186,16 +188,21 @@ try {
         ) ?? "";
     }
   } catch { /* presence still records without identity on legacy payloads */ }
-  // Apply before the state-file gate so a first-use switch reports that the
-  // person must create the piece of work, then type the switch again.
-  if (humanTurnMintAllowed() && sessionId && typedPrompt) {
+  // A field-only rename preserves the stored and effective value, so it carries
+  // no switch authority. Kiro IDE's prompt-empty adapter performs the same
+  // operation before forwarding because some builds discard core hook output.
+  if (promptSubmitted && sessionId) {
     try {
-      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt);
-      if (outcome !== null) {
-        process.stdout.write(`${JSON.stringify({ additionalContext: `AIDLC Guard Policy: ${outcome.lines.join(" ")}` })}\n`);
+      const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
+      if (migration.normalized) {
+        process.stdout.write(`${JSON.stringify({
+          additionalContext:
+            `AIDLC Guard Policy migration: kept ${migration.value} and renamed ` +
+            "the active intent's retired Change Control field to Guard Policy.",
+        })}\n`);
       }
     } catch {
-      // A switch failure must never block the human's turn.
+      // An unchanged retired field retains the normal migration notice.
     }
   }
   if (existsSync(stateFilePath(projectDir))) {

@@ -619,10 +619,10 @@ The recordable bypass set includes the documented recovery and ceremony switches
 The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.
 
-Four of these switch off a fence for the whole machine. When the problem is one
-piece of work rather than one machine, `/aidlc config set guard.<fence> off`
-lowers a single fence for that work only, records it, and puts it back for the
-next piece of work. See
+Four of these switch off a fence for the whole machine. Per-work lowering is
+not accepted from chat or CLI because supported hook payloads cannot
+authenticate who supplied them. Choose the scope's Guard Policy before creating
+or changing the piece of work. See
 [Guard Policy](13-customization.md#guard-policy) and
 [The five fences](13-customization.md#the-five-fences).
 

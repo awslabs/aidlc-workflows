@@ -815,7 +815,7 @@ export function blockReason(target: string, dispatch: ReviewerDispatch, defaulte
 /**
  * Whether this fence stands aside instead of refusing. Containment fence: a
  * human's newer instruction is NOT a key here (decideGuard knows that), so this
- * only ever returns true when `guard_policy: off` or the per-run switch lowered
+ * only ever returns true when `guard_policy: off`, compatible persisted state lowered
  * it. Then the cross-unit write proceeds with one line and one audit row.
  */
 function reviewerScopeStandsAside(

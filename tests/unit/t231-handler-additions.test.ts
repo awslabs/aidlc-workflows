@@ -9,7 +9,6 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
@@ -32,7 +31,6 @@ const NO_STATE_MESSAGE =
 const RENAME_NOTICE =
   "Change Control is now Guard Policy (--guard-policy, config key guard-policy, scope key guard_policy, " +
   "memory heading ## Guard Policy). The old names still work in this release and are removed in the next minor.";
-const FENCE_SESSION = "t231-fence-session";
 /** Every fence kill switch held at "0" so the test host's environment cannot lower a fence. */
 const FENCE_ENV_CLEAR = {
   AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
@@ -96,18 +94,6 @@ function run(cmd: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): RunR
   return { status: result.status ?? -1, stdout, stderr, out: stdout + stderr };
 }
 
-function recordHumanPrompt(project: string, prompt: string): void {
-  const result = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
-    cwd: project,
-    env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: project },
-    input: JSON.stringify({
-      hook_event_name: "UserPromptSubmit", cwd: project, session_id: FENCE_SESSION, prompt,
-    }),
-    encoding: "utf-8",
-  });
-  expect(result.status, result.stderr).toBe(0);
-}
-
 function utility(args: string[], project: string, extraEnv: NodeJS.ProcessEnv = {}): RunResult {
   return run([BUN, UTILITY, ...args, "--project-dir", project], project, extraEnv);
 }
@@ -124,6 +110,26 @@ function stateField(project: string, field: string): string {
   const content = readFileSync(seededStateFile(project), "utf-8");
   const m = content.match(new RegExp(`^- \\*\\*${field}\\*\\*:\\s*(.*)$`, "m"));
   return m ? m[1].trim() : "";
+}
+
+function seedCompatibleLoweredState(
+  project: string,
+  policy: "strict" | "relaxed" | "off",
+  fence?: string,
+): void {
+  const path = seededStateFile(project);
+  let content = readFileSync(path, "utf-8").replace(
+    "- **Change Control**: strict (from scope feature)",
+    `- **Guard Policy**: ${policy} (set by you)`,
+  );
+  if (fence !== undefined) {
+    content = content.replace(
+      `- **Guard Policy**: ${policy} (set by you)`,
+      `- **Guard Policy**: ${policy} (set by you)\n` +
+        `- **Guards Off**: ${fence} (set by you)`,
+    );
+  }
+  writeFileSync(path, content, "utf-8");
 }
 
 function copiedToolsTree(harnessJson: Record<string, unknown>): string {
@@ -177,9 +183,9 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", "test-strategy"], project).stdout).toBe("Standard\n");
   });
 
-  test("a typed hook switch and config-change expose all eleven settings through get and both list formats", () => {
+  test("compatible lowered state and config-change expose all eleven settings through get and both list formats", () => {
     const project = stateProject();
-    recordHumanPrompt(project, "/aidlc --guard-policy relaxed --guard.state-transition off");
+    seedCompatibleLoweredState(project, "relaxed", "state-transition");
     expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
     expect(stateField(project, "Guards Off")).toBe("state-transition (set by you)");
     const changed = utility([
@@ -221,21 +227,21 @@ describe("t231 config get/list/set handlers", () => {
     expect(Object.keys(parseJson<Record<string, string>>(json.stdout))).toEqual(Object.keys(expected));
   });
 
-  test("the retired change-control key is read as guard-policy, renames the fixture's line in place, and prints the notice once", () => {
+  test("the retired change-control key is read as guard-policy and a same-value write renames it without lowering", () => {
     const project = stateProject();
     expect(stateField(project, "Change Control")).toBe("strict (from scope feature)");
     expect(stateField(project, "Guard Policy")).toBe("");
-    const changed = dispatcher(["engine", "config", "set", "change-control", "relaxed"], project);
+    const changed = dispatcher(["engine", "config", "set", "change-control", "strict"], project);
     expect(changed.status, changed.stderr).toBe(0);
     expect(renameNotices(changed.stderr)).toBe(1);
-    expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
+    expect(stateField(project, "Guard Policy")).toBe("strict (from scope feature)");
     expect(stateField(project, "Change Control")).toBe("");
     const retiredRead = utility(["config-get", "change-control"], project);
     expect(retiredRead.status, retiredRead.stderr).toBe(0);
-    expect(retiredRead.stdout).toBe("relaxed (set by you)\n");
+    expect(retiredRead.stdout).toBe("strict (from scope feature)\n");
     expect(renameNotices(retiredRead.stderr)).toBe(1);
     const currentRead = utility(["config-get", "guard-policy"], project);
-    expect(currentRead.stdout).toBe("relaxed (set by you)\n");
+    expect(currentRead.stdout).toBe("strict (from scope feature)\n");
     expect(renameNotices(currentRead.stderr)).toBe(0);
     const listed = utility(["config-list", "--json"], project);
     expect(Object.keys(parseJson<Record<string, string>>(listed.stdout))).not.toContain("change-control");
@@ -273,8 +279,6 @@ describe("t231 config get/list/set handlers", () => {
     ["depth", "minimal", "Depth", "Minimal"],
     ["test-strategy", "comprehensive", "Test Strategy", "Comprehensive"],
     ["review", "advisory", "Review Override", "advisory"],
-    ["guard-policy", "relaxed", "Guard Policy", "relaxed (set by you)"],
-    ["guard-policy", "off", "Guard Policy", "off (set by you)"],
     ["sensors", "off", "Sensors", "off (set by you)"],
     ["learnings", "off", "Learnings", "off (set by you)"],
     ["summary-confirmation", "off", "Summary Confirmation", "off (set by you)"],
@@ -287,12 +291,24 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", key], project).stdout).toBe(`${expected}\n`);
   });
 
+  test.each(["relaxed", "off"])(
+    "engine config set refuses a new guard-policy %s lowering",
+    (value) => {
+      const project = stateProject();
+      const before = readFileSync(seededStateFile(project), "utf-8");
+      const changed = dispatcher(["engine", "config", "set", "guard-policy", value], project);
+      expect(changed.status).toBe(1);
+      expect(changed.stderr).toContain("does not lower fences");
+      expect(readFileSync(seededStateFile(project), "utf-8")).toBe(before);
+    },
+  );
+
   test.each(["plan-approval", "review-freeze", "state-transition", "reviewer-scope"])(
-    "the hook applies guard.%s and engine config set can repeat or restore it",
+    "engine config set can repeat or restore compatible persisted guard.%s state",
     (fence) => {
       const project = stateProject();
       const key = `guard.${fence}`;
-      recordHumanPrompt(project, `/aidlc config set ${key} off`);
+      seedCompatibleLoweredState(project, "strict", fence);
       expect(stateField(project, "Guards Off")).toBe(`${fence} (set by you)`);
       const before = readFileSync(seededStateFile(project), "utf-8");
       const unchanged = dispatcher(["engine", "config", "set", key, "off"], project, FENCE_ENV_CLEAR);

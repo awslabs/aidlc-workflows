@@ -64,8 +64,13 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
-When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
-On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, and `verb-intercept` emits a once-per-session capability note directing the person to the scope-file `guard_policy`, memory Guard Policy, or a prompt-capable IDE build while raising to `strict` or turning a fence `on` remains available.
+UserPromptSubmit text is not authenticated and never authorizes Guard Policy or
+fence lowering. On empty-prompt builds such as IDE 1.0.242, the adapter
+normalizes a sole retired `Change Control: relaxed|off` field without changing
+its value, then forwards the event to the core human-turn hook. Its per-turn
+`prompt-empty` marker refuses lowering shell commands, including
+environment-prefixed invocations. Raising to `strict` or turning a fence `on`
+remains available.
 
 ### Critical limitations
 
