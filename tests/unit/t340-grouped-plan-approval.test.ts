@@ -380,6 +380,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
   }, 60_000);
 
   test("real checkpoint next and completion next preserve every grouped receipt and keep the review routes reachable", () => {
+    // Include two-unit setup, both command forms, native approval, and completion.
     const pd = fixture();
     for (const unit of UNITS) beginCodeGeneration(pd, { unit });
     converge(pd);
@@ -411,7 +412,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       expect(approval.ok, approval.reason).toBe(true);
     }
     expect(guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved").code).toBe(0);
-  }, 30_000);
+  }, 60_000);
 
   test("split successful starts of the same approved group preserve its checkpoint successor", () => {
     const pd = fixture();

@@ -1,14 +1,17 @@
 // Legacy Windows Node/node-pty ownership, CIM and until-file compatibility.
-// Extracted from t-tui-preflight.serial.test.ts without changing its case body,
-// name, skip conditions or five-minute deadline. Select this file separately
-// with AIDLC_TUI_BACKEND=node-pty on Windows; it performs no model calls.
+// Includes deterministic snapshot regressions and the live case extracted from
+// t-tui-preflight.serial.test.ts. Select AIDLC_TUI_BACKEND=node-pty on Windows
+// for the live ownership case; this file performs no model calls.
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { legacyWinSessionDir, resolveWinNode, WIN_KILL_TIMEOUT_MS, winSessionDir } from "../harness/tui-drive.ts";
+import {
+  type BoundedCommandResult, legacyWinSessionDir, liveOwnedWindowsProcesses, resolveWinNode, runBoundedCommand,
+  WIN_KILL_TIMEOUT_MS, type WindowsProcessIdentity, winSessionDir,
+} from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
 
@@ -248,6 +251,103 @@ function mixedDrivePath(path: string): string {
 const LEGACY_ABSENT_REASON = IS_WIN && RUNTIME.backend === "node-pty"
   ? tuiUnavailableReason({ env: { ...process.env, AIDLC_TUI_BACKEND: "node-pty" } })
   : "select AIDLC_TUI_BACKEND=node-pty on Windows for legacy ownership/CIM checks";
+
+describe("Windows cleanup identity snapshots", () => {
+  const identities: WindowsProcessIdentity[] = [101, 202, 303].map((pid) => ({
+    pid, parentPid: 100, creationDate: "2026-09-22T05:46:00.000Z", commandLine: "owned target",
+  }));
+  const reply = (value: unknown): BoundedCommandResult => ({
+    status: 0, stdout: Buffer.from(JSON.stringify(value)).toString("base64"), stderr: "", timedOut: false,
+  });
+
+  test("one snapshot shares the remaining cleanup budget despite slow PowerShell startup", () => {
+    let queries = 0;
+    const result = liveOwnedWindowsProcesses(identities, 2800, "regression-liveness", (file, args, budget) => {
+      queries++;
+      expect(file).toBe("powershell.exe");
+      expect(args.at(-1)).toContain("ProcessId = 101 OR ProcessId = 202 OR ProcessId = 303");
+      expect(budget).toBe(2800);
+      // Model a loaded host requiring 1100ms per PowerShell/CIM invocation:
+      // the former 750ms per-PID cap cannot complete even the first lookup.
+      return budget < 1100
+        ? { status: null, stdout: "", stderr: "", timedOut: true, errorCode: "ETIMEDOUT" }
+        : reply(identities);
+    });
+    expect(result).toEqual({ status: "ok", value: identities });
+    expect(queries).toBe(1);
+    expect(WIN_KILL_TIMEOUT_MS).toBe(8000);
+  });
+
+  test("a complete snapshot excludes absent and reused PIDs but retains the same creation identity", () => {
+    const result = liveOwnedWindowsProcesses(identities, 2000, "regression-liveness", () => reply([
+      identities[0],
+      { ...identities[1], creationDate: "2026-09-22T05:47:00.000Z" },
+    ]));
+    expect(result).toEqual({ status: "ok", value: [identities[0]] });
+    expect(liveOwnedWindowsProcesses(identities, 2000, "regression-liveness", () => reply([])))
+      .toEqual({ status: "ok", value: [] });
+  });
+
+  test.skipIf(!IS_WIN)("real CIM liveness tolerates startup beyond the former per-PID cap", () => {
+    const current = currentProcessIdentities([process.pid]);
+    expect(current).toHaveLength(1);
+    const owned = { ...current[0], parentPid: 0, commandLine: "" };
+    const reused = { ...owned, creationDate: "2000-01-01T00:00:00.000Z" };
+    const result = liveOwnedWindowsProcesses([owned, reused], WIN_KILL_TIMEOUT_MS, "regression-slow-cim",
+      (file, args, budget) => runBoundedCommand(file, [
+        ...args.slice(0, -1), `Start-Sleep -Milliseconds 900\n${args.at(-1)}`,
+      ], budget));
+    expect(result).toEqual({ status: "ok", value: [owned] });
+  }, 25_000);
+
+  for (const { label, failure } of [
+    { label: "timed out with no exit status", failure: { status: null, timedOut: true, errorCode: "ETIMEDOUT" } },
+    { label: "timed out with zero exit status", failure: { status: 0, timedOut: true, errorCode: "ETIMEDOUT" } },
+    { label: "nonzero exit status", failure: { status: 3, timedOut: false } },
+    { label: "access denied with zero exit status", failure: { status: 0, timedOut: false, errorCode: "EACCES" } },
+  ]) {
+    test(`query failure never establishes process absence: ${label}`, () => {
+      // Even a partial or empty-looking response cannot override query failure.
+      const result = liveOwnedWindowsProcesses(identities, 250, "regression-liveness", () => ({
+        ...reply([]), ...failure,
+      }));
+      expect(result.status).toBe("error");
+      if (result.status === "error") {
+        expect(result.message).toContain("context=regression-liveness, budget=250ms");
+      }
+      expect("value" in result).toBe(false);
+    });
+  }
+
+  for (const { label, rows } of [
+    { label: "null snapshot", rows: null },
+    { label: "non-array snapshot", rows: {} },
+    { label: "duplicate PID", rows: [identities[0], identities[0]] },
+    { label: "unrequested PID", rows: [{ ...identities[0], pid: 999 }] },
+    { label: "invalid creation time", rows: [{ ...identities[0], creationDate: "unknown" }] },
+  ]) {
+    test(`malformed or incomplete identities cannot establish absence: ${label}`, () => {
+      expect(liveOwnedWindowsProcesses(identities, 2000, "regression-liveness", () => reply(rows)).status)
+        .toBe("error");
+    });
+  }
+
+  test("an exhausted deadline refuses without starting another query", () => {
+    let queried = false;
+    expect(liveOwnedWindowsProcesses(identities, 0, "regression-liveness", () => {
+      queried = true;
+      return reply([]);
+    }).status).toBe("error");
+    expect(queried).toBe(false);
+  });
+
+  test("an invalid recorded creation time refuses without treating its PID as gone", () => {
+    let queried = false;
+    expect(liveOwnedWindowsProcesses([{ ...identities[0], creationDate: "unknown" }], 2000,
+      "regression-liveness", () => { queried = true; return reply([]); }).status).toBe("error");
+    expect(queried).toBe(false);
+  });
+});
 
 describe("t-tui-preflight (terminal substrate capability gate)", () => {
   test.skipIf(!IS_WIN || LEGACY_ABSENT_REASON !== null)(

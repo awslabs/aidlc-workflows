@@ -59,6 +59,23 @@ rerun that entire test gate. The other workflows have their own triggers:
 - Preview Release runs contract checks and Full Suite for its selected source
   commit, without repeating the PR CI test matrix.
 
+For explicitly approved live testing before merge, a maintainer can run:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f live_verification=true
+```
+
+This manual-only mode requires the source SHA to equal the selected workflow
+head. It executes hosted live and release-contract tests using the existing
+isolated credential flow, while native/deterministic/production-guard jobs are
+intentionally skipped. It does not replace the ordinary CI checks.
+Inspect `full-suite-live-verification-result/full-suite-result.json` for
+`purpose: "live-verification"` and the live job results. A successful run still
+has `complete: false` and is never release evidence, even when run on `main`.
+Normal Full Suite runs keep `live_verification=false`, the main-source gate,
+all required jobs, and the ordinary `full-suite-result` artifact.
+
 ## 3. Let the nightly preview run
 
 [Preview Release](.github/workflows/preview-release.yml) runs daily at
@@ -72,7 +89,7 @@ gh workflow run preview-release.yml --ref main
 The workflow:
 
 1. Selects a commit from `main` and runs packaging, type, lint and shell checks.
-2. Calls [Full Suite](.github/workflows/full-suite.yml) for smoke tests, four
+2. Calls [Full Suite](.github/workflows/full-suite.yml) for smoke tests, eight
    independent unit shards per OS,
    deterministic integration and E2E tests on Linux, macOS, and Windows,
    native-terminal validation, production guards and required live test families.
@@ -88,7 +105,7 @@ workers, while unit files stay serial within each independent shard.
 
 Live model tests are required and use the existing `ai-pr-review` environment's
 `AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested
-commit, run identity, coverage policy, job outcomes and excluded families.
+commit, run identity, release purpose, coverage policy, job outcomes and excluded families.
 Required jobs must all succeed; disabled live jobs cannot qualify for release.
 Documented provider exclusions remain explicit, so a successful job matrix is
 not a claim that every possible test ran.
@@ -120,7 +137,8 @@ rename or republish the preview binaries.
 2. **Obtain evidence for the final commit.** Wait for, or manually start, a
    preview on that commit. Confirm the run succeeds and its `full-suite-result`
    artifact contains `full-suite-result.json` with the exact commit SHA,
-   matching run identity, current coverage policy and successful required jobs.
+   matching run identity, `purpose: "release"`, no omitted jobs, current coverage
+   policy and successful required jobs.
    The release-preparation commit needs its own evidence;
    evidence from before the metadata change cannot satisfy the release gate.
 3. **Push the matching stable tag.** Tag the verified commit as `vX.Y.Z`,
@@ -143,7 +161,8 @@ gh workflow run full-suite.yml --ref main -f 'ref=<intended-release-sha>'
 ```
 
 The stable gate also accepts this successful manual run when its artifact
-matches the tag SHA and run identity, uses the current coverage policy, and has
+matches the tag SHA and run identity, declares `purpose: "release"` with no
+omitted jobs, uses the current coverage policy, and has
 every required job successful. It reports documented excluded families as
 warnings and rejects disabled live jobs. A passing PR check alone cannot
 satisfy this gate.

@@ -446,9 +446,10 @@ from disk reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, four unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, four unit shards and deep in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
+| Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards and deep in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared deep-tier matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
+| Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is ineligible for release | GitHub Actions |
 | Stable tag | Exact-source evidence and release assets | `release.yml` requires passing Full Suite evidence for the exact tag SHA, then contract checks, builds and native/installer/lifecycle validation; it does not rerun the source test tiers | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
@@ -464,14 +465,19 @@ is not stable-release evidence.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
-runner, tier, unit shard and artifact label. PR CI selects Linux smoke, four
-weighted unit shards, and integration; Full Suite selects smoke, the same four
+runner, tier, unit shard and artifact label. PR CI selects Linux smoke, eight
+weighted unit shards, and integration; Full Suite selects smoke, the same eight
 shards, and deep (integration plus isolated e2e) on Linux/macOS/Windows.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.3.14,
 regenerates projections, and invokes the Bash wrapper with `--debug -P 8
 --no-llm`. Deep runs retain `--isolated-e2e`; smoke and unit remain serial within
 each checkout. Sharing the workflow shares the commands and setup, not previous
 test results.
+
+Shared deterministic jobs allow 15 minutes for smoke and 60 minutes for other
+tiers. Deep runs also cap each isolated e2e file at 900 seconds. Unit work is
+partitioned into eight weighted shards per OS without duplicating files, and
+compiled producer/consumer affinity remains intact.
 
 POSIX unit jobs require tmux: the shared setup first checks `command -v`, then
 uses apt on Linux or Homebrew on macOS only when it is missing. Linux unit jobs
@@ -770,7 +776,7 @@ journeys. Full Suite additionally requires complete coverage for that selection.
 
 All 8 parallel calls observed `cache_read=73789`. This historical help-command probe observed prompt-cache reuse without throttling or corruption; it does not establish capacity for concurrent full workflows.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses four weighted unit shards on Linux and eight workers for integration. Full Suite uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration/E2E uses eight workers. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses eight weighted unit shards on Linux and eight workers for integration. Full Suite uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration/E2E uses eight workers. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
 
@@ -1064,7 +1070,7 @@ fail readiness; documented excluded families remain untested.
 ### Nightly full-suite matrix and provisioning
 
 `Full Suite` is callable with an explicit `ref` and manually dispatchable
-(default `main`). Its plan job resolves that ref once and requires the SHA to
+(default `main`, `live_verification=false`). Its ordinary release-purpose plan resolves that ref once and requires the SHA to
 already be an ancestor of `origin/main` before installing dependencies or
 dispatching source-executing jobs. All matrix legs check out the authorized
 immutable SHA. Scheduled and manual `preview-release.yml` runs call it after
@@ -1076,7 +1082,7 @@ tests before reporting an intentional publication skip. Stable releases download
 `full-suite-result` from successful preview runs or main-branch `workflow_dispatch`
 runs of `full-suite.yml`, requiring the artifact's `sha` to equal the tag SHA,
 `runId` to match the downloaded run, `coveragePolicy: "required-hosted-live-v1"`,
-`passed: true`, `disabledLegs: []`, and every declared job in `legs` to be
+`purpose: "release"`, `passed: true`, `disabledLegs: []`, `omittedLegs: []`, and every declared job in `legs` to be
 `success`. Missing, expired, obsolete-policy, wrong-source/run or failed evidence
 blocks publication. To renew evidence for an unchanged SHA, dispatch
 `full-suite.yml` on `main` with `ref=<sha>`. The tested source must contain the
@@ -1087,6 +1093,34 @@ validates the built native binaries, installers and lifecycle flows. It does not
 repeat the smoke/unit/integration/e2e source tiers. Preview also runs contract
 checks and Full Suite once, with publication deduplication applied only to the
 subsequent build and publication chain.
+
+For user-approved candidate validation, manually dispatch Full Suite on the
+candidate branch with `live_verification=true` and set `ref` to that branch's
+exact workflow-head SHA:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f live_verification=true
+```
+
+This option exists only on `workflow_dispatch`, never `workflow_call`.
+Authorization requires that event and that the checked-out SHA equals
+`github.sha`; selecting the workflow on `main` cannot authorize a different
+branch's source. No push or pull-request trigger starts privileged verification.
+The mode runs `plan`, `live_prepare`, `live_hosted`, `live_windows`, and
+`release_contract_windows`. It intentionally skips native terminal/reconciliation,
+deterministic tiers, and production guards, so it does not repeat deterministic
+CI. Existing provider opt-ins, strict live coverage and credential isolation
+remain in effect.
+
+The separate `full-suite-live-verification-result` artifact contains
+`full-suite-result.json` with `purpose: "live-verification"`, the omitted jobs in
+`omittedLegs`, and `complete: false`. Its `passed` requires every live job to
+succeed and every intentionally omitted job to be `skipped`; missing, failed,
+cancelled or unexpectedly executed jobs fail. Even a successful verification
+of `main` cannot qualify for release. Ordinary runs keep the `full-suite-result`
+artifact name and require all jobs. Older artifacts without the release purpose
+do not satisfy the stable gate.
 
 `live_prepare` installs dependencies and packages projections on all three hosted
 OSes with contents-read permission only; POSIX pinned CLIs travel in the same
@@ -1101,7 +1135,7 @@ Windows release-contract job also runs.
 
 The declared coverage is:
 
-- Deterministic smoke, four independent unit shards, and isolated integration/e2e
+- Deterministic smoke, eight independent unit shards, and isolated integration/e2e
   with eight workers on each of Linux, macOS and Windows. Every unit file is
   assigned to one shard per OS; each shard retains its own debug logs and results.
 - A Linux production-guard slice selects `--production-guards` and
@@ -1159,11 +1193,11 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-production-guards`,
 `full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
-`unit-4`, or `deep`), `full-suite-live-<family>-<OS>`, and
+`unit-8`, or `deep`), `full-suite-live-<family>-<OS>`, and
 `full-suite-result` (90-day retention). The final JSON records `sha`, `runId`,
-`runAttempt`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
-`disabledLegs: []`, and live families declared with `hosting: "excluded"` in the
-sorted `excluded` list. Under `required-hosted-live-v1`, `passed` means every
+`runAttempt`, `purpose`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
+`disabledLegs: []`, `omittedLegs`, and live families declared with `hosting: "excluded"` in the
+sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-v1`, `passed` means every
 declared job succeeded and `sha` is a 40-hex commit ID. A missing, failed,
 cancelled or skipped job fails. `disabledLegs` is retained so stable promotion
 can reject historical disabled-live reports. `complete` additionally requires
@@ -1175,7 +1209,7 @@ this policy marker asserts full case coverage across OSes.
 Shared deterministic artifacts contain `tests/logs/<stamp>/` and
 `tmp/ci-deterministic/` (full stdout/stderr plus the literal stamp path). CI
 artifacts use `ci-deterministic-<suite>-<OS>`, where suite is smoke,
-unit-1 through unit-4, or integration (deep for the expanded manual matrix).
+unit-1 through unit-8, or integration (deep for the expanded manual matrix).
 An upload requires both log locations
 to pass sanitization, including after a failed test command.
 
@@ -1333,6 +1367,6 @@ Sharded unit execution requires t249 to resolve this handoff; a missing artifact
 fails instead of silently skipping the compiled cases, even when an explicit
 executable or an old repository build exists. Direct, non-sharded t249 runs can
 still opt into `AIDLC_TEST_COMPILED_EXECUTABLE` or a local native build result.
-The smoke runner contract verifies that all four CI shards are non-empty,
+The smoke runner contract verifies that all eight CI shards are non-empty,
 disjoint, cover the complete unit inventory, preserve producer/consumer ordering,
 and fail compiled coverage when the producer is filtered out.

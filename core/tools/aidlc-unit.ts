@@ -1642,7 +1642,10 @@ function candidateEvidence(
   const incomplete: string[] = [];
   if (stagesCompleted.length !== stages.length) incomplete.push("UNIT_COMPLETED receipts");
   if (gatesApproved.length !== gatesExpected.length) incomplete.push("team gate approvals");
-  if (reviewersReady.length !== reviewersExpected.length) incomplete.push("reviewer READY receipts");
+  if (reviewersReady.length !== reviewersExpected.length) {
+    const missingReviewStages = reviewersExpected.filter((stage) => !reviewersReady.includes(stage));
+    incomplete.push(`reviewer READY receipts (${missingReviewStages.join(", ")})`);
+  }
   if (stages.includes("code-generation") && !planFingerprint) {
     incomplete.push("Plan Approval fingerprint");
   }

@@ -370,9 +370,61 @@ async function runWorkflowStep(
 }
 
 describe("t332 preview publication pipeline", () => {
+  for (const [name, event, flag, sha, head, ancestor, purpose] of [
+    ["release call can test an older main commit", "workflow_call", "false", SOURCE_A, TARGET, true, "release"],
+    ["release schedule stays main-bound", "schedule", "false", SOURCE_A, SOURCE_A, true, "release"],
+    ["normal dispatch rejects branch source", "workflow_dispatch", "false", SOURCE_A, SOURCE_A, false, null],
+    ["manual candidate live verification", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, "live-verification"],
+    ["manual main live verification remains ineligible", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, "live-verification"],
+    ["live verification rejects a different workflow head", "workflow_dispatch", "true", SOURCE_A, TARGET, true, null],
+    ["call cannot enable live verification", "workflow_call", "true", SOURCE_A, SOURCE_A, true, null],
+    ["schedule cannot enable live verification", "schedule", "true", SOURCE_A, SOURCE_A, true, null],
+    ["PR cannot enable live verification", "pull_request", "true", SOURCE_A, SOURCE_A, true, null],
+    ["unknown mode fails closed", "workflow_dispatch", "1", SOURCE_A, SOURCE_A, true, null],
+  ] as const) {
+    test(`Full Suite source authorization: ${name}`, async () => {
+      const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
+        jobs: { plan: { steps: Array<{ name?: string; run?: string }> } };
+      };
+      const script = workflow.jobs.plan.steps.find((step) => step.name === "Resolve immutable source")!.run!;
+      const root = mkdtempSync(join(tmpdir(), "aidlc-t332-source-gate-"));
+      roots.push(root);
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      const shim = join(bin, "git");
+      writeFileSync(shim, [
+        "#!/usr/bin/env bash", 'printf "%s\\n" "$*" >> "$FIXTURE_GIT_CALLS"',
+        'case "$1" in',
+        '  rev-parse) printf "%s\\n" "$FIXTURE_SHA" ;;',
+        '  fetch) exit 0 ;;',
+        '  merge-base) exit "$FIXTURE_ANCESTOR" ;;',
+        '  *) exit 2 ;;', "esac",
+      ].join("\n"));
+      chmodSync(shim, 0o755);
+      const output = join(root, "output");
+      const calls = join(root, "git-calls");
+      writeFileSync(output, "");
+      const result = await runWorkflowStep(script, root, {
+        PATH: `${bin}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
+        FIXTURE_SHA: sha, FIXTURE_ANCESTOR: ancestor ? "0" : "1", FIXTURE_GIT_CALLS: calls,
+        LIVE_VERIFICATION: flag, GITHUB_EVENT_NAME: event, GITHUB_SHA: head, GITHUB_OUTPUT: output,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(purpose === null ? 1 : 0);
+      expect(readFileSync(output, "utf8")).toBe(purpose === null ? "" : `sha=${sha}\npurpose=${purpose}\n`);
+      const commands = readFileSync(calls, "utf8");
+      if (flag === "false") {
+        expect(commands).toContain("fetch --no-tags origin main");
+        expect(commands).toContain(`merge-base --is-ancestor ${sha} origin/main`);
+      } else {
+        expect(commands).not.toContain("fetch");
+      }
+    }, 15_000);
+  }
+
   for (const scenario of [
     "preview", "renewal", "wrong-sha", "incomplete", "non-dispatch", "old-policy", "wrong-policy",
     "disabled-live", "missing-disabled-legs", "wrong-run", "missing-exclusions", "no-jobs", "unexpected-skipped",
+    "missing-purpose", "verification-main", "verification-branch", "omitted-release", "missing-omissions",
     ...FULL_SUITE_JOBS.flatMap((job) => ["missing", "skipped", "failure", "cancelled"].map((status) => `${job}/${status}`)),
   ]) {
     test(`stable release evidence: ${scenario}`, async () => {
@@ -425,6 +477,12 @@ describe("t332 preview publication pipeline", () => {
       if (scenario === "missing-exclusions") delete evidence.excluded;
       if (scenario === "no-jobs") delete evidence.legs;
       if (scenario === "unexpected-skipped") legs.future_job = "skipped";
+      if (scenario === "missing-purpose") delete evidence.purpose;
+      // Keep passed:true and every leg successful: purpose must independently
+      // disqualify verification, even if its artifact is presented as release evidence.
+      if (scenario.startsWith("verification-")) evidence.purpose = "live-verification";
+      if (scenario === "omitted-release") evidence.omittedLegs = ["deterministic"];
+      if (scenario === "missing-omissions") delete evidence.omittedLegs;
       if (scenario.includes("/")) {
         const [job, status] = scenario.split("/");
         if (status === "missing") delete legs[job];
@@ -433,7 +491,7 @@ describe("t332 preview publication pipeline", () => {
       const records = [
         { id: 1, workflow: "preview-release.yml", headSha: SOURCE_A, branch: "main", event: "schedule", status: "success", artifact: scenario === "preview" ? evidence : null },
         // workflow_dispatch's head is today's main; its artifact binds the older inputs.ref.
-        { id: 2, workflow: "full-suite.yml", headSha: "c".repeat(40), branch: "main", event: scenario === "non-dispatch" ? "workflow_call" : "workflow_dispatch", status: "success", artifact: evidence },
+        { id: 2, workflow: "full-suite.yml", headSha: scenario.startsWith("verification-") ? SOURCE_A : "c".repeat(40), branch: scenario === "verification-branch" ? "candidate" : "main", event: scenario === "non-dispatch" ? "workflow_call" : "workflow_dispatch", status: "success", artifact: evidence },
       ];
       const result = await runWorkflowStep(script, root, {
         PATH: `${bin}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
@@ -1205,6 +1263,8 @@ describe("t332 preview publication pipeline", () => {
     const evidence = stable.jobs.validate.steps?.find((step) => step.name === "Require passing full-suite evidence");
     expect(evidence?.run).toContain("full-suite-result");
     expect(evidence?.run).toContain(".sha == $sha and .passed == true");
+    expect(evidence?.run).toContain('.purpose == "release"');
+    expect(evidence?.run).toContain(".omittedLegs == []");
     expect(evidence?.run).toContain(`.coveragePolicy == "${FULL_SUITE_COVERAGE_POLICY}"`);
     expect(evidence?.run).toContain(".disabledLegs == []");
     expect(evidence?.run).toContain("::warning::");

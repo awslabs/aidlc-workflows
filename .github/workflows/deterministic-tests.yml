@@ -29,7 +29,7 @@ permissions:
 jobs:
   test:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 180
+    timeout-minutes: ${{ inputs.tier == 'smoke' && 15 || 60 }}
     defaults:
       run:
         shell: bash
@@ -50,10 +50,22 @@ jobs:
             echo "::error::Deterministic tests require an immutable commit SHA"
             exit 2
           }
-          [[ "$ARTIFACT_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+          [[ "$ARTIFACT_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+            echo "::error::Invalid deterministic artifact label"
+            exit 2
+          }
           case "$TEST_TIER:$UNIT_SHARD" in
             smoke:|integration:|deep:) ;;
-            unit:*) [[ "$UNIT_SHARD" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] ;;
+            unit:*)
+              [[ "$UNIT_SHARD" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] || {
+                echo "::error::Unit tier requires an N/M shard"
+                exit 2
+              }
+              [ "${UNIT_SHARD%/*}" -le "${UNIT_SHARD#*/}" ] || {
+                echo "::error::Unit shard index cannot exceed its total"
+                exit 2
+              }
+              ;;
             *) echo "::error::Invalid deterministic tier or unit shard"; exit 2 ;;
           esac
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -98,7 +110,7 @@ jobs:
             smoke) args=(--smoke) ;;
             unit) args=(--unit --shard "$UNIT_SHARD") ;;
             integration) args=(--integration) ;;
-            deep) args=(--integration --e2e --isolated-e2e) ;;
+            deep) args=(--integration --e2e --isolated-e2e --e2e-file-timeout 900) ;;
             *) exit 2 ;;
           esac
           capture="$GITHUB_WORKSPACE/tmp/ci-deterministic"

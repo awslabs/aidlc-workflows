@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, posix } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
@@ -31,6 +31,7 @@ import {
   providerIssues,
   readConfigDiagnosticRecords,
   reconcileProviderActions,
+  resolveExecutableOnPath,
   runtimeDoctorChecks,
   runtimeIssues,
   trustStatus,
@@ -47,8 +48,10 @@ const DIST = join(REPO_ROOT, "dist");
 const DIST_RELEASE = join(REPO_ROOT, "dist-release");
 const temporary: string[] = [];
 
-afterAll(() => {
-  for (const path of temporary) rmSync(path, { recursive: true, force: true });
+// Each case owns its installations. Release them before the next case rather
+// than retaining every copied runtime until the entire file finishes.
+afterEach(() => {
+  for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true });
 }, 30_000);
 
 function temp(prefix: string): string {
@@ -230,6 +233,10 @@ describe("t294 config section dispatch", () => {
 });
 
 describe("t294 runtime diagnostics", () => {
+  // The injected platform selects Linux configuration sources; the returned
+  // PATH and filesystem resolver still use this process's native path format.
+  const linuxBaseline = ["/bin", "/usr/bin"].join(delimiter);
+
   test("baseline, interactive-only, and absent PATH cases are hermetic", () => {
     const project = temp("aidlc-t294-runtime-probe-");
     const hooks = join(project, ".claude", "hooks");
@@ -304,9 +311,12 @@ describe("t294 runtime diagnostics", () => {
   // environment.d; the probe reads them under the injected systemRoot.
   test("Linux baseline PATH includes /etc/environment, login.defs, and environment.d entries", () => {
     const root = temp("aidlc-t294-system-root-");
-    const home = temp("aidlc-t294-system-home-");
+    // Linux PATH records cannot contain a Windows drive colon. Keep logical
+    // Linux paths separate from the native directories holding the fixtures.
+    const home = "/home/aidlc-fixture";
+    const configHome = temp("aidlc-t294-system-home-");
     mkdirSync(join(root, "etc", "environment.d"), { recursive: true });
-    mkdirSync(join(home, ".config", "environment.d"), { recursive: true });
+    mkdirSync(join(configHome, "environment.d"), { recursive: true });
     writeFileSync(
       join(root, "etc", "environment"),
       'PATH="/usr/local/bin:/opt/from-environment/bin" # site\nLANG=C.UTF-8\n',
@@ -325,7 +335,7 @@ describe("t294 runtime diagnostics", () => {
       ].join(""),
     );
     writeFileSync(
-      join(home, ".config", "environment.d", "10-user.conf"),
+      join(configHome, "environment.d", "10-user.conf"),
       [
         "PATH=$",
         "{PATH}:/opt/from-user-environment-d/bin\nPATH=$HOME/.local/bin:$PATH\nPATH=$",
@@ -336,10 +346,10 @@ describe("t294 runtime diagnostics", () => {
       platform: "linux",
       systemRoot: root,
       home,
-      env: {},
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      env: { XDG_CONFIG_HOME: configHome },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     });
-    const entries = baseline.split(":");
+    const entries = baseline.split(delimiter);
     expect(entries.slice(0, 2)).toEqual(["/bin", "/usr/bin"]);
     expect(entries).toEqual(expect.arrayContaining([
       "/usr/local/bin",
@@ -350,8 +360,8 @@ describe("t294 runtime diagnostics", () => {
       "/opt/from-user-environment-d/bin",
       "/opt/foo/bin",
       "/opt/lead/bin",
-      join(home, ".local", "bin"),
-      join(home, "bin"),
+      posix.join(home, ".local", "bin"),
+      posix.join(home, "bin"),
     ]));
     // ENV_SUPATH is root's path, not a login-independent user PATH; $PATH
     // references, expression fragments, quotes, and comments never survive as entries.
@@ -369,11 +379,11 @@ describe("t294 runtime diagnostics", () => {
     const bare = deriveNonInteractivePath({
       platform: "linux",
       systemRoot: temp("aidlc-t294-system-root-empty-"),
-      home: temp("aidlc-t294-system-home-empty-"),
-      env: {},
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      home: "/home/empty-fixture",
+      env: { XDG_CONFIG_HOME: temp("aidlc-t294-system-home-empty-") },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     });
-    expect(bare).toBe("/bin:/usr/bin");
+    expect(bare).toBe(linuxBaseline);
   });
 
   test("Linux runtime probe resolves aidlc from /etc/environment and user environment.d", () => {
@@ -395,15 +405,32 @@ describe("t294 runtime diagnostics", () => {
     writeExecutable(join(siteBin, "aidlc"));
     const systemRoot = temp("aidlc-t294-system-root-site-");
     const home = temp("aidlc-t294-system-home-probe-");
+    const linuxHome = "/home/aidlc-fixture";
+    const linuxSite = "/opt/aidlc-site/bin";
+    const linuxInteractive = "/opt/aidlc-interactive/bin";
+    const directories = new Map([
+      [linuxSite, siteBin],
+      [linuxInteractive, interactiveBin],
+      [posix.join(linuxHome, ".local", "bin"), join(home, ".local", "bin")],
+    ]);
     mkdirSync(join(systemRoot, "etc"), { recursive: true });
-    writeFileSync(join(systemRoot, "etc", "environment"), `PATH="${siteBin}" # site\n`);
+    writeFileSync(join(systemRoot, "etc", "environment"), `PATH="${linuxSite}" # site\n`);
     const options = {
       platform: "linux" as const,
       systemRoot,
-      home,
-      env: { PATH: interactiveBin },
+      home: linuxHome,
+      env: { PATH: linuxInteractive, XDG_CONFIG_HOME: join(home, ".config") },
       includeHarnessCli: false,
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      which(command: string, pathValue: string): string | null {
+        for (const entry of pathValue.split(delimiter)) {
+          const directory = directories.get(entry);
+          if (!directory) continue;
+          const executable = resolveExecutableOnPath(command, directory);
+          if (executable) return executable;
+        }
+        return null;
+      },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     };
     const site = probeRuntime(project, ".claude", "claude", options);
 
@@ -442,9 +469,9 @@ describe("t294 runtime diagnostics", () => {
     const bare = probeRuntime(project, ".claude", "claude", {
       ...options,
       systemRoot: emptyRoot,
-      env: { PATH: join(home, ".local", "bin") },
+      env: { ...options.env, PATH: posix.join(linuxHome, ".local", "bin") },
     });
-    expect(bare.baselinePath).toBe("/bin:/usr/bin");
+    expect(bare.baselinePath).toBe(linuxBaseline);
     expect(bare.binaries.find((item) => item.name === "aidlc")?.status).toBe(
       "interactive-only",
     );
@@ -452,22 +479,25 @@ describe("t294 runtime diagnostics", () => {
     // Blanking an unresolved variable must not expose an unrelated executable.
     const unresolvedHome = temp("aidlc-t294-system-home-unresolved-");
     const toolchainRoot = temp("aidlc-t294-toolchain-");
+    const linuxToolchain = "/opt/toolchain";
+    directories.set(posix.join(linuxToolchain, "bin"), join(toolchainRoot, "bin"));
     mkdirSync(join(toolchainRoot, "bin"));
     writeExecutable(join(toolchainRoot, "bin", "aidlc"));
     mkdirSync(join(unresolvedHome, ".config", "environment.d"), { recursive: true });
     writeFileSync(
       join(unresolvedHome, ".config", "environment.d", "10-user.conf"),
-      `TOOLCHAIN=gcc\nPATH=${toolchainRoot}/$TOOLCHAIN/bin:$PATH\n`,
+      `TOOLCHAIN=gcc\nPATH=${linuxToolchain}/$TOOLCHAIN/bin:$PATH\n`,
     );
     const unresolved = probeRuntime(project, ".claude", "claude", {
       ...options,
       systemRoot: temp("aidlc-t294-system-root-unresolved-"),
-      home: unresolvedHome,
+      home: "/home/unresolved-fixture",
+      env: { ...options.env, XDG_CONFIG_HOME: join(unresolvedHome, ".config") },
     });
     expect({
       status: unresolved.binaries.find((item) => item.name === "aidlc")?.status,
-      toolchainEntries: unresolved.baselinePath.split(":").filter((entry) =>
-        entry.startsWith(toolchainRoot)
+      toolchainEntries: unresolved.baselinePath.split(delimiter).filter((entry) =>
+        entry.startsWith(linuxToolchain)
       ),
     }).toEqual({
       status: "interactive-only",

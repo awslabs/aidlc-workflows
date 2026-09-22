@@ -6,7 +6,7 @@
 // audit:SWARM_STARTED, audit:BOLT_STARTED
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -1101,7 +1101,8 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: approval.approvalFingerprint!,
     })!;
     expect(receipt.batch!.members).toHaveLength(2);
-    expect(receipt.delegation!.parentProjectDir).toBe(pd);
+    // The fixture uses portable slashes; delegation stores the native real path.
+    expect(receipt.delegation!.parentProjectDir).toBe(realpathSync(pd));
     const childPlan = join(codeGenerationRecordDir(child, "alpha"), "code-generation-plan.md");
     const approvedPlan = readFileSync(childPlan, "utf-8");
     appendFileSync(childPlan, "\nUnapproved child plan change.\n");

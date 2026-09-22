@@ -13,7 +13,7 @@ import * as childProcess from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   approveConstructionCheckpoint,
@@ -173,8 +173,9 @@ function writeCheck(project: string, body: string): string {
   // An actual project command, invoked through the platform's native shell.
   // The script lives in the framework record so changing test behavior does
   // not itself change the Unit's claimed application source.
-  writeFileSync(join(seededRecordDir(project), "checkpoint-check.cjs"), body);
-  const script = join(seededRecordDir(project), "checkpoint-check.cjs");
+  // A space makes shell quoting necessary on every test host.
+  const script = join(seededRecordDir(project), "checkpoint check.cjs");
+  writeFileSync(script, body);
   const quote = (value: string): string => process.platform === "win32"
     ? `"${value.replaceAll('"', '""')}"`
     : `'${value.replaceAll("'", "'\\''")}'`;
@@ -220,7 +221,7 @@ function pass(project: string, kind: "unit" | "skeleton" = "unit", unit = "alpha
   recordCommand(project, command);
   const result = verifyConstructionCheckpoint(project, unit, kind);
   expect(result.errors).toEqual([]);
-  expect(result.verified).toBe(true);
+  expect(result.verified, JSON.stringify(result.verification)).toBe(true);
   return result;
 }
 
@@ -319,7 +320,8 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(verified.verification!.stderr_sha256).toBe(createHash("sha256").update("").digest("hex"));
     expect(verified.verification!.stdout_tail).toBe(output);
     expect(verified.verification!.stderr_tail).toBe("");
-    expect(verified.proof_path).toStartWith(join(seededRecordDir(dir), ".aidlc-construction-checkpoints"));
+    // The returned path can mix native and portable separators on Windows.
+    expect(normalize(verified.proof_path)).toBe(join(seededRecordDir(dir), ".aidlc-construction-checkpoints", "alpha", "unit.json"));
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
     const marker = `FAILURE_MARKER_${randomUUID()}`;
@@ -953,7 +955,11 @@ describe("t341 verification command consent", () => {
   test("canonical command bytes survive dollar substitutions without abbreviating the label", () => {
     const dir = project();
     recordCommand(dir, "exit 0");
-    const command = 'printf "%s" \'$& $` $1 $$\'; exit 0 # ' + "x".repeat(150);
+    // Keep the dollar replacement patterns in the authorized command and its
+    // output without depending on POSIX printf, single quotes, or comments.
+    const literal = "$& $` $1 $$";
+    const argument = process.platform === "win32" ? `"${literal}"` : `'${literal}'`;
+    const command = `${writeCheck(dir, "process.stdout.write(process.argv[2]);\n")} ${argument} ${"x".repeat(150)}`;
     recordCommand(dir, `  ${command}  `);
     const authorization = authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))!;
     expect(authorization.command).toBe(command);
@@ -1173,7 +1179,9 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     mkdirSync(destination);
     symlinkSync(destination, join(root, ".aidlc-construction-checkpoints"), process.platform === "win32" ? "junction" : "dir");
     expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow();
-    rmSync(join(root, ".aidlc-construction-checkpoints"));
+    // Unlink the junction itself; Bun's rmSync can fail on Windows junctions.
+    fs.unlinkSync(join(root, ".aidlc-construction-checkpoints"));
+    expect(fs.existsSync(destination)).toBe(true);
     const manifest = join(root, "construction", "alpha", "code-generation", "source-manifest.json");
     writeFileSync(join(destination, "manifest.json"), readFileSync(manifest));
     rmSync(manifest);

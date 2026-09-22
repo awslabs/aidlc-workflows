@@ -120,8 +120,8 @@ bash tests/run-tests.sh --integration --filter "t25|t26"
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
-# Run one deterministic unit shard. CI uses four isolated serial shards.
-bash tests/run-tests.sh --unit --shard 1/4
+# Run one deterministic unit shard. CI uses eight isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/8
 
 # Inspect isolated e2e selection without running tests or generating dist.
 bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan
@@ -168,8 +168,8 @@ Release-contract suites contain intentional platform-conditional cases and do
 not use strict coverage; live provider families require executed coverage.
 
 PR CI and Full Suite share `.github/workflows/deterministic-tests.yml`.
-PR CI runs Linux smoke, four weighted unit shards, and deterministic integration.
-Full Suite runs smoke, the same four unit shards, and deep (integration plus
+PR CI runs Linux smoke, eight weighted unit shards, and deterministic integration.
+Full Suite runs smoke, the same eight unit shards, and deep (integration plus
 isolated e2e) on Linux/macOS/Windows. Each call checks out its supplied commit,
 installs frozen dependencies with Bun 1.3.14, packages the projections, and runs
 the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
@@ -180,7 +180,7 @@ POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. Manual CI with `platform_regressions=true`
 expands this same matrix to all three OSes and uses deep instead of integration,
 without a preceding Linux pass or another broad regression slice. It includes
-all unit regressions through the same four shards and provisioning. Only the
+all unit regressions through the same eight shards and provisioning. Only the
 distinct Windows node-pty backend is added as a manual extra.
 
 Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
@@ -188,8 +188,19 @@ even when the source already has a published preview: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
 and required hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
 because its CLI exposes vendor API keys to agent environments; Copilot is
-excluded by account policy. Only source already on `main` passes the plan's
-ancestry gate.
+excluded by account policy. Ordinary release-purpose runs require source
+already on `main`.
+
+Candidate live coverage can be requested explicitly with a manual Full Suite
+dispatch: select the candidate branch, set `ref` to its exact workflow-head SHA,
+and set `live_verification=true`. This flag is not a reusable-workflow input.
+The plan requires `workflow_dispatch` and source equality with `github.sha`.
+It runs live preparation, hosted live families and Windows release contracts;
+native, deterministic and production-guard jobs are intentionally skipped.
+The distinct `full-suite-live-verification-result` artifact records
+`purpose: "live-verification"`, `omittedLegs` and `complete: false`.
+All required live jobs must succeed and omitted jobs must be skipped, never
+missing or failed. This artifact cannot qualify for release, even on `main`.
 
 `live_prepare` installs dependencies and packages projections without OIDC,
 handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
@@ -216,7 +227,8 @@ requires no excluded families and remains false with the documented exclusions.
 Missing, failed, cancelled or skipped required jobs fail readiness.
 `full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
 Stable promotion requires the matching SHA and run ID,
-`coveragePolicy: "required-hosted-live-v1"`, `passed: true`, `disabledLegs: []`,
+`purpose: "release"`, `coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
+`disabledLegs: []`, `omittedLegs: []`,
 and every declared job successful. Historical disabled-live reports cannot
 qualify; documented excluded families remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled

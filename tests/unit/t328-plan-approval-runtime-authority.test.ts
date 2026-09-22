@@ -429,6 +429,7 @@ describe("t328 Plan Approval runtime authority", () => {
   }, 60000);
 
   test("rejects malformed Plan Approval violation records", () => {
+    // The source/Git baseline is built before any malformed-record assertion runs.
     const project = createProject();
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     const violationPath = join(runtimeDir, "violation.json");
@@ -461,7 +462,7 @@ describe("t328 Plan Approval runtime authority", () => {
   };
   writeFileSync(violationPath, `${JSON.stringify(unresolved)}\n`);
   expect(readPlanApprovalViolation(project)).toEqual(unresolved);
-});
+  }, 30_000);
 
   test("accepts the native Claude AskUserQuestion PostToolUse response", () => {
     const project = createProject();
@@ -1463,17 +1464,18 @@ describe("t328 the Codex (Recommended) label decorator", () => {
     return existsSync(join(sessionsDir(project), "plan-approval", `response-${session}.json`));
   }
 
+  // Each pairing case builds a Git-backed project and runs decision/human-turn CLIs.
   test('"Approve Plan (Recommended)" pairs as Approve Plan', () => {
     expect(pairs("Approve Plan (Recommended)")).toBe(true);
-  });
+  }, 30_000);
 
   test('"Approve Plan (recommended) " pairs, case and whitespace tolerant', () => {
     expect(pairs("Approve Plan (recommended) ")).toBe(true);
-  });
+  }, 30_000);
 
   test('"Approve Planx" does not pair', () => {
     expect(pairs("Approve Planx")).toBe(false);
-  });
+  }, 30_000);
 
   test("the decorator is stripped once and only at the end", () => {
     expect(stripRecommendedDecorator("Approve Plan (Recommended)")).toBe("Approve Plan");

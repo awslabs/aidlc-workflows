@@ -22,7 +22,8 @@ the release unless all of these conditions hold:
   main-branch `workflow_dispatch` run of `full-suite.yml`, supplies a
   `full-suite-result` artifact with that exact `.sha`, the downloaded run's
   `.runId`, `.coveragePolicy == "required-hosted-live-v1"`, `.passed == true`,
-  `.disabledLegs == []`, and every declared job in `.legs` equal to `success`.
+  `.purpose == "release"`, `.disabledLegs == []`, `.omittedLegs == []`,
+  and every declared job in `.legs` equal to `success`.
 
 Old-policy, missing, expired, wrong-source/run, disabled-live or unsuccessful
 evidence blocks publication. Kiro ACP/TUI/IDE, Cursor and Copilot remain explicit
@@ -31,7 +32,23 @@ not a release requirement. Job readiness does not prove complete case coverage
 across OSes; see [Nightly full-suite matrix and provisioning](09-testing.md#nightly-full-suite-matrix-and-provisioning).
 Every authorized Full Suite run executes hosted live jobs through the existing
 environment; no separate live opt-in switch suppresses release coverage.
-The source-on-main authorization and credential isolation apply before live execution.
+Ordinary runs retain source-on-main authorization, and credential isolation
+applies before live execution in every mode.
+
+An explicit manual `full-suite.yml` dispatch may set `live_verification=true`
+to validate a candidate's live jobs before merge. This input is unavailable to
+reusable callers. The plan requires `workflow_dispatch` and an exact match
+between the checked-out source and the manually selected workflow head
+(`github.sha`). Ordinary runs retain the source-on-main gate and all required
+jobs. There is no automatic privileged branch-push or PR trigger.
+
+Verification uses the same isolated live preparation, environment-owned role
+and low-privilege broker clients. It intentionally omits the native,
+deterministic and production-guard jobs. Its artifact is named
+`full-suite-live-verification-result` and records `purpose: "live-verification"`
+and `complete: false`; a successful result requires the live jobs to succeed
+and the omissions to be explicitly skipped. Stable release rejects this
+purpose even if `passed` is true, including for verification run on `main`.
 
 Feature, fix, documentation, refactor, and test PRs do not update release
 metadata. The release-preparation PR summarizes the user-visible changes merged
@@ -93,8 +110,8 @@ The planner renders notes from changes since the previous preview. Contract
 checks and Full Suite gate the authorized commit before the normal release
 build chain. Preview does not repeat the PR CI test matrix.
 PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
-with different matrices: Linux smoke/four unit shards/integration for PRs, and
-Linux/macOS/Windows smoke/four unit shards/deep for nightly coverage. Each call
+with different matrices: Linux smoke/eight unit shards/integration for PRs, and
+Linux/macOS/Windows smoke/eight unit shards/deep for nightly coverage. Each call
 tests a fresh checkout of the supplied commit and retains sanitized evidence;
 no previous test result is substituted for a run.
 `AIDLC_BUILD_VERSION` stamps the preview id into projections, binaries,
@@ -158,7 +175,8 @@ gate.
 2. Wait for (or dispatch) `preview-release.yml` on the intended release SHA while
    it is `main`'s tip, and confirm the `full-suite-result` artifact records that
    exact SHA, matching run ID, `.coveragePolicy == "required-hosted-live-v1"`,
-   `.passed == true`, `.disabledLegs == []`, and every declared job successful.
+   `.purpose == "release"`, `.passed == true`, `.disabledLegs == []`,
+   `.omittedLegs == []`, and every declared job successful.
    Required live jobs use the existing `ai-pr-review` environment's
    `AWS_AI_PR_REVIEW_ROLE_ARN`; verify its OIDC/model permissions and six-hour
    session support before running them.

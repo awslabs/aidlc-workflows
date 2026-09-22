@@ -155,6 +155,14 @@ function nativeResult(doc: BuildResults): TargetResult {
   return native as TargetResult;
 }
 
+function retainVerifiedNativeLayout(artifact: string): void {
+  // The runner owns this copy's lifetime, beyond per-file fixture cleanup.
+  const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
+  if (!compiledDir) return;
+  cpSync(dirname(artifact), compiledDir, { recursive: true });
+  expect(existsSync(join(compiledDir, process.platform === "win32" ? "aidlc.exe" : "aidlc"))).toBe(true);
+}
+
 function gate(result: TargetResult, name: string): GateResult {
   const found = result.gates.find((item) => item.name === name);
   expect(found).toBeDefined();
@@ -594,7 +602,10 @@ describe("t238 build-binaries release builder", () => {
       expect(obsoleteHarness.status).toBe(2);
 
       // The remaining checks exercise install.sh, Homebrew, and POSIX profiles.
-      if (process.platform === "win32") return;
+      if (process.platform === "win32") {
+        retainVerifiedNativeLayout(native.artifact);
+        return;
+      }
 
       const managerRoot = join(installFixture, "manager");
       const managerBin = join(managerRoot, "Cellar", "aidlc", "1.0.0", "bin");
@@ -763,10 +774,8 @@ describe("t238 build-binaries release builder", () => {
     } finally {
       rmSync(installFixture, { recursive: true, force: true });
     }
-    // Publish only a fully verified native layout. The runner owns this copy's
-    // lifetime; afterEach and per-file TMPDIR cleanup still remove our fixtures.
-    const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
-    if (compiledDir) cpSync(dirname(native.artifact), compiledDir, { recursive: true });
+    // Publish only after every applicable native-layout check has passed.
+    retainVerifiedNativeLayout(native.artifact);
   }, 300_000);
 
   test("package-release emits one asset when native and the explicit host target match", () => {

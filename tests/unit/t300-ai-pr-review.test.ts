@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -116,6 +115,18 @@ function validate(raw: string): StructuredReview {
   return validateStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA);
 }
 
+function writeGhFixture(path: string, source: string): string {
+  if (process.platform === "win32") {
+    const script = `${path}.js`;
+    const executable = `${path}.cmd`;
+    writeFileSync(script, source);
+    writeFileSync(executable, `@"${process.execPath}" "${script}" %*\r\n`);
+    return executable;
+  }
+  writeFileSync(path, source, { mode: 0o755 });
+  return path;
+}
+
 describe("t300 adversarial AI PR review", () => {
   test("discussion builder collects PR threads and prior reviews", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-gh-"));
@@ -124,8 +135,7 @@ describe("t300 adversarial AI PR review", () => {
     const current = join(root, "current-ai-reviews.json");
     const identity = join(root, "discussion-identity.json");
     mkdirSync(bin);
-    const fakeGh = join(bin, "gh");
-    writeFileSync(fakeGh, `#!/usr/bin/env bun
+    const fakeGh = writeGhFixture(join(bin, "gh"), `#!/usr/bin/env bun
 const args = process.argv.slice(2).join(" ");
 const user = (login) => ({ login });
 const comment = (id, login, association, body) => ({
@@ -157,7 +167,6 @@ if (args.includes("pulls/42/reviews")) {
 }
 process.stdout.write(JSON.stringify(value));
 `);
-    chmodSync(fakeGh, 0o755);
     buildDiscussion("acme/repo", 42, HEAD, output, current, identity, fakeGh);
     const discussion = JSON.parse(readFileSync(output, "utf8"));
     const currentReviews = JSON.parse(readFileSync(current, "utf8"));
@@ -418,8 +427,7 @@ process.stdout.write(JSON.stringify(value));
     const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-labels-"));
     try {
       const log = join(root, "calls.jsonl");
-      const fakeGh = join(root, "gh");
-      writeFileSync(fakeGh, `#!/usr/bin/env bun
+      const fakeGh = writeGhFixture(join(root, "gh"), `#!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
@@ -442,7 +450,6 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   process.stdout.write("{}");
 }
 `);
-      chmodSync(fakeGh, 0o755);
       expect(reconcileReviewLabels(
         "acme/repo",
         42,
@@ -479,8 +486,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       ]);
 
       writeFileSync(log, "");
-      const staleGh = join(root, "stale-gh");
-      writeFileSync(staleGh, `#!/usr/bin/env bun
+      const staleGh = writeGhFixture(join(root, "stale-gh"), `#!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 process.stdout.write(JSON.stringify({
@@ -490,7 +496,6 @@ process.stdout.write(JSON.stringify({
   labels: []
 }));
 `);
-      chmodSync(staleGh, 0o755);
       expect(reconcileReviewLabels(
         "acme/repo",
         42,
@@ -505,19 +510,17 @@ process.stdout.write(JSON.stringify({
         ["closed", "closed", false],
       ] as const) {
         writeFileSync(log, "");
-        const ineligibleGh = join(root, `${name}-gh`);
         const response = {
           head: { sha: HEAD },
           state,
           draft,
           labels: [{ name: "aida:reviewed" }],
         };
-        writeFileSync(ineligibleGh, `#!/usr/bin/env bun
+        const ineligibleGh = writeGhFixture(join(root, `${name}-gh`), `#!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 process.stdout.write(${JSON.stringify(JSON.stringify(response))});
 `);
-        chmodSync(ineligibleGh, 0o755);
         expect(reconcileReviewLabels(
           "acme/repo",
           42,
@@ -529,8 +532,7 @@ process.stdout.write(${JSON.stringify(JSON.stringify(response))});
       }
 
       writeFileSync(log, "");
-      const transitionGh = join(root, "transition-gh");
-      writeFileSync(transitionGh, `#!/usr/bin/env bun
+      const transitionGh = writeGhFixture(join(root, "transition-gh"), `#!/usr/bin/env bun
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
@@ -554,7 +556,6 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   process.stdout.write("{}");
 }
 `);
-      chmodSync(transitionGh, 0o755);
       expect(reconcileReviewLabels(
         "acme/repo",
         42,
@@ -577,8 +578,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       ]);
 
       writeFileSync(log, "");
-      const postTransitionGh = join(root, "post-transition-gh");
-      writeFileSync(postTransitionGh, `#!/usr/bin/env bun
+      const postTransitionGh = writeGhFixture(join(root, "post-transition-gh"), `#!/usr/bin/env bun
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
@@ -603,7 +603,6 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   process.stdout.write("{}");
 }
 `);
-      chmodSync(postTransitionGh, 0o755);
       expect(reconcileReviewLabels(
         "acme/repo",
         42,
@@ -1149,16 +1148,20 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     writeFileSync(join(repo, "old.ts"), "one\ntwo\nthree\nfour\nfive\n");
     writeFileSync(join(repo, "tool.sh"), "#!/bin/sh\nexit 0\n");
     run("add", "old.ts", "tool.sh");
+    run("update-index", "--chmod=-x", "tool.sh");
     run("commit", "--quiet", "-m", "base");
     const base = run("rev-parse", "HEAD");
 
     run("mv", "old.ts", "new.ts");
     writeFileSync(join(repo, "new.ts"), "one\ntwo\nTHREE\nfour\nfive\n");
-    chmodSync(join(repo, "tool.sh"), 0o755);
     run("add", "new.ts", "tool.sh");
+    // Set the Git tree mode directly: Windows cannot express it with chmod.
+    run("update-index", "--chmod=+x", "tool.sh");
     run("commit", "--quiet", "-m", "head");
     const head = run("rev-parse", "HEAD");
 
+    expect(run("ls-tree", base, "tool.sh")).toContain("100644 blob");
+    expect(run("ls-tree", head, "tool.sh")).toContain("100755 blob");
     const manifest = buildContext(base, head, join(repo, "context"), repo);
     const renamed = manifest.files.find(file => file.path === "new.ts");
     expect(renamed?.previousPath).toBe("old.ts");
@@ -1226,7 +1229,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(() => buildContext(base, head, join(repo, "context"), repo)).toThrow(
       "PR changes 501 files; limit is 500",
     );
-  });
+  }, 30_000);
 
   test("workflow reviews internal PRs only and isolates model credentials from publication", () => {
     expect(WORKFLOW).toContain("  pull_request:");

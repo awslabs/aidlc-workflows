@@ -10,10 +10,14 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Commit or ref to test"
+        description: "Commit or ref to test; live verification must match the selected workflow head"
         required: true
         default: main
         type: string
+      live_verification:
+        description: "Run only live coverage for this workflow head; evidence cannot qualify for release"
+        type: boolean
+        default: false
 permissions:
   contents: read
 defaults:
@@ -33,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sha: "${{ steps.source.outputs.sha }}"
+      purpose: "${{ steps.source.outputs.purpose }}"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -40,28 +45,48 @@ jobs:
           fetch-depth: 0
       - name: "Resolve immutable source"
         id: source
+        env:
+          LIVE_VERIFICATION: "${{ inputs.live_verification == true }}"
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
-          git fetch --no-tags origin main
-          git merge-base --is-ancestor "$sha" origin/main || {
-            echo "::error::full-suite only runs source already on main"
-            exit 1
-          }
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          case "${LIVE_VERIFICATION:-false}" in
+            true)
+              if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$sha" != "$GITHUB_SHA" ]; then
+                echo "::error::live verification requires workflow_dispatch and source equal to the selected workflow head"
+                exit 1
+              fi
+              purpose=live-verification
+              ;;
+            false)
+              git fetch --no-tags origin main
+              git merge-base --is-ancestor "$sha" origin/main || {
+                echo "::error::full-suite only runs source already on main"
+                exit 1
+              }
+              purpose=release
+              ;;
+            *) echo "::error::invalid live verification mode"; exit 1 ;;
+          esac
+          printf 'sha=%s\npurpose=%s\n' "$sha" "$purpose" >> "$GITHUB_OUTPUT"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: steps.source.outputs.purpose == 'release'
         with:
           bun-version: "${{ env.BUN_VERSION }}"
       - run: "bun install --frozen-lockfile"
+        if: steps.source.outputs.purpose == 'release'
       - name: "Prepare native obligations"
+        if: steps.source.outputs.purpose == 'release'
         run: |
           bun tests/reconcile-tests.ts prepare --profile tests/native-terminal-profile.json --cohort "nightly-${{ github.run_id }}-${{ github.run_attempt }}" --repo . --output "$RUNNER_TEMP/native-plan.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.source.outputs.purpose == 'release'
         with:
           name: full-suite-native-plan
           path: "${{ runner.temp }}/native-plan.json"
   native_terminal:
     needs: plan
+    if: needs.plan.outputs.purpose == 'release'
     runs-on: "${{ matrix.runner }}"
     timeout-minutes: 120
     strategy:
@@ -133,7 +158,7 @@ jobs:
           path: tests/logs/
           include-hidden-files: true
   native_reconcile:
-    if: "${{ always() && needs.plan.result == 'success' }}"
+    if: "${{ always() && needs.plan.result == 'success' && needs.plan.outputs.purpose == 'release' }}"
     needs: [plan, native_terminal]
     runs-on: ubuntu-latest
     steps:
@@ -168,6 +193,7 @@ jobs:
   deterministic:
     name: "Deterministic (${{ matrix.runner }}, ${{ matrix.suite.name }})"
     needs: plan
+    if: needs.plan.outputs.purpose == 'release'
     strategy:
       fail-fast: false
       matrix:
@@ -176,10 +202,14 @@ jobs:
         # tests rewrite dist/. Independent weighted shards provide parallelism.
         suite:
           - {name: smoke, tier: smoke}
-          - {name: unit-1, tier: unit, shard: "1/4"}
-          - {name: unit-2, tier: unit, shard: "2/4"}
-          - {name: unit-3, tier: unit, shard: "3/4"}
-          - {name: unit-4, tier: unit, shard: "4/4"}
+          - {name: unit-1, tier: unit, shard: "1/8"}
+          - {name: unit-2, tier: unit, shard: "2/8"}
+          - {name: unit-3, tier: unit, shard: "3/8"}
+          - {name: unit-4, tier: unit, shard: "4/8"}
+          - {name: unit-5, tier: unit, shard: "5/8"}
+          - {name: unit-6, tier: unit, shard: "6/8"}
+          - {name: unit-7, tier: unit, shard: "7/8"}
+          - {name: unit-8, tier: unit, shard: "8/8"}
           - {name: deep, tier: deep}
     uses: ./.github/workflows/deterministic-tests.yml
     with:
@@ -190,6 +220,7 @@ jobs:
       artifact-label: full-suite-deterministic-${{ matrix.suite.name }}
   production_guards:
     needs: plan
+    if: needs.plan.outputs.purpose == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -554,12 +585,13 @@ jobs:
         env:
           FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
           FULL_SUITE_REF: "${{ inputs.ref }}"
+          FULL_SUITE_PURPOSE: "${{ needs.plan.outputs.purpose }}"
         run: |
           bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
       - if: "${{ always() }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: full-suite-result
+          name: "${{ needs.plan.outputs.purpose == 'live-verification' && 'full-suite-live-verification-result' || 'full-suite-result' }}"
           path: "${{ runner.temp }}/full-suite-result.json"
           retention-days: 90
           if-no-files-found: error

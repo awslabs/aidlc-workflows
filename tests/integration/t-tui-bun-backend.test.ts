@@ -1,16 +1,17 @@
 // Token-free calibration of the public driver commands, using real native PTYs.
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
   existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
+import fs from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bunSessionPaths, createBunBackend } from "../harness/tui-bun-backend.ts";
 import { publishSupervisorStop } from "../harness/tui-bun-process.ts";
 import { acquireNativeLock, getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
-import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord } from "../harness/tui-record-file.ts";
+import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord } from "../harness/tui-record-file.ts";
 import { physicalTuiText, type TuiSnapshot } from "../harness/tui-screen.ts";
 
 const supported = process.platform === "linux" || process.platform === "win32" || process.platform === "darwin";
@@ -156,39 +157,149 @@ describe.skipIf(!supported)("native launch namespace security", () => {
     expect(readdirSync(destination)).toEqual([]);
   });
 
-  test.each(["session", "parent"])("daemon refuses a replaced %s before PTY/supervisor creation", async (replaced) => {
-    const privateRoot = join(root, `replacement-${randomUUID()}`);
-    ensurePrivateRoot(privateRoot);
-    const childEnv = { ...env, AIDLC_TUI_BUN_ROOT: privateRoot };
-    const session = `replaced-${randomUUID()}`;
-    const paths = bunSessionPaths(session, childEnv);
-    ensurePrivateRoot(paths.directory);
-    const directoryIdentity = privateDirectoryIdentity(paths.directory);
-    const marker = join(root, `${session}-executed`);
-    const record = {
-      schema: 1, backend: "bun", session, token: randomUUID(), generation: randomUUID(), endpoint: paths.endpoint,
-      rootIdentity: privateDirectoryIdentity(privateRoot), directoryIdentity,
-      phase: "starting", cwd: root, fixtureCwd: null, width: 80, height: 16,
-      command: [process.execPath, "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)},'executed')`],
-    };
-    publishTuiRecord(paths.record, record, directoryIdentity);
-    renameSync(replaced === "parent" ? privateRoot : paths.directory,
-      `${replaced === "parent" ? privateRoot : paths.directory}-old`);
-    if (replaced === "parent") ensurePrivateRoot(privateRoot);
-    ensurePrivateRoot(paths.directory);
-    publishTuiRecord(paths.record, record, privateDirectoryIdentity(paths.directory));
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory, record.generation], {
-      env: childEnv, stdout: "pipe", stderr: "pipe", timeout: 5000,
+  for (const replaced of ["session", "parent"]) {
+    test(`daemon refuses a replaced ${replaced} before PTY/supervisor creation`, async () => {
+      const privateRoot = join(root, `replacement-${randomUUID()}`);
+      ensurePrivateRoot(privateRoot);
+      const childEnv = { ...env, AIDLC_TUI_BUN_ROOT: privateRoot };
+      const session = `replaced-${randomUUID()}`;
+      const paths = bunSessionPaths(session, childEnv);
+      ensurePrivateRoot(paths.directory);
+      const directoryIdentity = privateDirectoryIdentity(paths.directory);
+      const marker = join(root, `${session}-executed`);
+      const record = {
+        schema: 1, backend: "bun", session, token: randomUUID(), generation: randomUUID(), endpoint: paths.endpoint,
+        rootIdentity: privateDirectoryIdentity(privateRoot), directoryIdentity,
+        phase: "starting", cwd: root, fixtureCwd: null, width: 80, height: 16,
+        command: [process.execPath, "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)},'executed')`],
+      };
+      publishTuiRecord(paths.record, record, directoryIdentity);
+      renameSync(replaced === "parent" ? privateRoot : paths.directory,
+        `${replaced === "parent" ? privateRoot : paths.directory}-old`);
+      if (replaced === "parent") ensurePrivateRoot(privateRoot);
+      ensurePrivateRoot(paths.directory);
+      publishTuiRecord(paths.record, record, privateDirectoryIdentity(paths.directory));
+      const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory, record.generation], {
+        env: childEnv, stdout: "pipe", stderr: "pipe", timeout: 5000,
+      });
+      const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      expect(code).not.toBe(0);
+      expect(stderr).toContain("directory identity mismatch");
+      expect(existsSync(paths.status)).toBe(false);
+      expect(existsSync(join(paths.directory, "supervisor-config.json"))).toBe(false);
+      expect(existsSync(marker)).toBe(false);
+      expect(JSON.parse(readFileSync(paths.record, "utf8"))).toMatchObject({ phase: "error", cleanupComplete: true });
     });
-    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    expect(code).not.toBe(0);
-    expect(stderr).toContain("directory identity mismatch");
-    expect(existsSync(paths.status)).toBe(false);
-    expect(existsSync(join(paths.directory, "supervisor-config.json"))).toBe(false);
-    expect(existsSync(marker)).toBe(false);
-    expect(JSON.parse(readFileSync(paths.record, "utf8"))).toMatchObject({ phase: "error", cleanupComplete: true });
+  }
+
+});
+
+describe.skipIf(!supported)("native record publication races", () => {
+  function fixture() {
+    const parent = join(root, `record-race-${randomUUID()}`);
+    const directory = join(parent, "session");
+    ensurePrivateRoot(parent);
+    ensurePrivateRoot(directory);
+    const directoryIdentity = privateDirectoryIdentity(directory);
+    const file = join(directory, "session.json");
+    const value = { directoryIdentity, token: randomUUID(), phase: "starting" };
+    publishTuiRecord(file, value, directoryIdentity);
+    return { parent, directory, directoryIdentity, file, value };
+  }
+
+  test("a reader retries atomic publications and returns only a fully validated record", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    let attempts = 0;
+    const hook = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      if (String(path) === f.file && ++attempts <= 2) {
+        publishTuiRecord(f.file, { ...f.value, phase: `update-${attempts}` }, f.directoryIdentity);
+      }
+      return open(path, flags, mode);
+    });
+    try {
+      expect(readPrivateRecord<typeof f.value>(f.directory, f.file)).toEqual({ ...f.value, phase: "update-2" });
+      expect(attempts).toBe(3);
+    } finally { hook.mockRestore(); }
   });
 
+  test("continuous replacement is bounded and closes every discarded descriptor", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    const close = fs.closeSync;
+    const pending = new Set<number>();
+    let attempts = 0;
+    const opener = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      const reading = String(path) === f.file;
+      if (reading) publishTuiRecord(f.file, { ...f.value, update: ++attempts }, f.directoryIdentity);
+      const fd = open(path, flags, mode);
+      if (reading) pending.add(fd);
+      return fd;
+    });
+    const closer = spyOn(fs, "closeSync").mockImplementation((fd) => {
+      close(fd);
+      pending.delete(fd);
+    });
+    try {
+      expect(() => readPrivateRecord(f.directory, f.file)).toThrow("record identity changed while opening");
+      expect(attempts).toBe(3);
+      expect(pending.size).toBe(0);
+    } finally { opener.mockRestore(); closer.mockRestore(); }
+  });
+
+  for (const replaced of ["session", "parent"]) {
+    test(`a retry cannot adopt a replaced ${replaced} directory`, () => {
+      const f = fixture();
+      const open = fs.openSync;
+      let attempts = 0;
+      const hook = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+        if (String(path) === f.file && ++attempts === 1) {
+          const moved = replaced === "parent" ? f.parent : f.directory;
+          renameSync(moved, `${moved}-old`);
+          if (replaced === "parent") ensurePrivateRoot(f.parent);
+          ensurePrivateRoot(f.directory);
+          const replacement = privateDirectoryIdentity(f.directory);
+          publishTuiRecord(f.file, { ...f.value, directoryIdentity: replacement }, replacement);
+        }
+        return open(path, flags, mode);
+      });
+      try {
+        expect(() => readPrivateRecord(f.directory, f.file)).toThrow("directory identity mismatch");
+        expect(attempts).toBe(1);
+      } finally { hook.mockRestore(); }
+    });
+  }
+
+  test("a replacement still needs the pinned directory identity in its content", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    let attempts = 0;
+    const hook = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      if (String(path) === f.file && ++attempts === 1) {
+        publishTuiRecord(f.file, { ...f.value, directoryIdentity: { dev: "other", ino: "other" } }, f.directoryIdentity);
+      }
+      return open(path, flags, mode);
+    });
+    try {
+      expect(() => readPrivateRecord(f.directory, f.file)).toThrow("directory identity mismatch");
+      expect(attempts).toBe(2);
+    } finally { hook.mockRestore(); }
+  });
+
+  test("open failures propagate immediately without retrying or consuming record content", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    const failure = Object.assign(new Error("record access denied"), { code: "EACCES" });
+    let attempts = 0;
+    const hook = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      if (String(path) === f.file) { attempts++; throw failure; }
+      return open(path, flags, mode);
+    });
+    try {
+      expect(() => readPrivateRecord(f.directory, f.file)).toThrow(failure);
+      expect(attempts).toBe(1);
+    } finally { hook.mockRestore(); }
+  });
 });
 
 describe.skipIf(!supported)("native Bun terminal driver commands", () => {

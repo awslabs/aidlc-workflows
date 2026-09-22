@@ -2664,6 +2664,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   }, 30000);
 
   test("legacy writes that destroy state or marker authority remain poisoned before PostToolUse", () => {
+    // Budget all four Git-backed corruption/deletion fixtures and real recovery hooks.
     for (const target of [
       "state-corrupt",
       "state-delete",
@@ -2743,7 +2744,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 30000);
+  }, 90_000);
 
   test("partial and custom mutation payloads fail closed while reads remain available", () => {
     const dir = scratchProject(true);
@@ -2945,6 +2946,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   // completed PostToolUse mediation. Listed reads must pass while the write and
   // shell denies on the latch stay in place. Adapted from #1040.
   test("Kiro reads including disclose_context pass the legacy write-recovery latch while writes and shell stay denied (#1039)", () => {
+    // The two-channel read matrix and retained write/shell denials invoke 20 hooks.
     const dir = scratchProject(true);
     try {
       initGitWorkspace(dir);
@@ -2992,7 +2994,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("malformed Plan Approval payloads remain advisory outside Code Generation", () => {
     for (const withState of [false, true]) {
@@ -3633,6 +3635,7 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
 
 describe("t218 log-subagent identity extraction (#459)", () => {
   test("S1: a **Reviewer:** first line is recorded as the Agent Type", () => {
+    // Include the copied runtime and real log-subagent subprocess on hosted runners.
     const dir = scratchProject(true);
     try {
       const result = "**Reviewer:** aidlc-product-lead-agent\n\nVerdict: READY\nAll findings resolved.";
@@ -3646,7 +3649,7 @@ describe("t218 log-subagent identity extraction (#459)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("S2: an **Agent:** first line is recorded, and the result text is forwarded as the Message", () => {
     const dir = scratchProject(true);

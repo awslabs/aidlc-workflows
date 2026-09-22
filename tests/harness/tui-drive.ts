@@ -1140,35 +1140,69 @@ function discoverTargetExitWindowsDescendants(
   );
 }
 
-function liveOwnedWindowsProcesses(
+export function liveOwnedWindowsProcesses(
   recorded: WindowsProcessIdentity[],
   timeoutMs: number,
   context: string,
+  run: typeof runBoundedCommand = runBoundedCommand,
 ): WindowsProcessQuery<WindowsProcessIdentity[]> {
-  const deadline = Date.now() + timeoutMs;
-  const live: WindowsProcessIdentity[] = [];
-  for (const identity of recorded) {
-    const remaining = Math.max(0, deadline - Date.now());
-    if (remaining <= 0) {
-      return {
-        status: "error",
-        message: `process identity liveness query timed out for ${context}`,
-      };
-    }
-    const query = windowsProcessQuery(
-      identity.pid,
-      Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, remaining),
-      context,
-    );
-    if (query.status === "error") return query;
-    if (
-      query.status === "ok" &&
-      sameWindowsProcess(query.value, identity)
-    ) {
-      live.push(identity);
-    }
+  if (recorded.length === 0) return { status: "ok", value: [] };
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return { status: "error", message: `process identity liveness query timed out for ${context}` };
   }
-  return { status: "ok", value: live };
+  if (shouldInjectCimFailure(context)) {
+    return { status: "error", message: `injected CIM failure for ${context}` };
+  }
+  const pids = [...new Set(recorded.map((identity) => identity.pid))];
+  if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff) ||
+    recorded.some((identity) => !Number.isFinite(Date.parse(identity.creationDate)))) {
+    return { status: "error", message: `invalid recorded process identity for ${context}` };
+  }
+  // Rechecking N known identities must not pay N PowerShell startups, each
+  // killed at 750ms on a busy host. One filtered snapshot shares the caller's
+  // remaining deadline, without extending the cleanup budget or caching PIDs.
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$rows = @(Get-CimInstance Win32_Process -Filter "${pids.map((pid) => `ProcessId = ${pid}`).join(" OR ")}" | ForEach-Object {`,
+    "  [pscustomobject]@{",
+    "    pid = [int]$_.ProcessId",
+    "    parentPid = [int]$_.ParentProcessId",
+    '    creationDate = $_.CreationDate.ToUniversalTime().ToString("o")',
+    "    commandLine = [string]$_.CommandLine",
+    "  }",
+    "})",
+    "$json = ConvertTo-Json -InputObject $rows -Compress",
+    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
+  ].join("\n");
+  const startedAt = Date.now();
+  const result = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], timeoutMs);
+  if (result.timedOut || result.errorCode || result.status !== 0) {
+    return {
+      status: "error",
+      message: `process identity liveness query ${result.timedOut ? "timed out" : "failed"} ` +
+        `for pid(s) ${pids.join(", ")} (context=${context}, budget=${timeoutMs}ms, ` +
+        `elapsed=${Date.now() - startedAt}ms): ${result.stderr || result.errorCode || `exit ${result.status}`}`,
+    };
+  }
+  try {
+    const rows = parsePowerShellBase64Json<WindowsProcessIdentity[]>(result.stdout);
+    const seen = new Set<number>();
+    if (!Array.isArray(rows) || rows.some((row) => {
+      if (!row || !pids.includes(row.pid) || seen.has(row.pid) ||
+        !Number.isSafeInteger(row.parentPid) || row.parentPid < 0 ||
+        typeof row.creationDate !== "string" || !Number.isFinite(Date.parse(row.creationDate)) ||
+        typeof row.commandLine !== "string") return true;
+      seen.add(row.pid);
+      return false;
+    })) throw new Error("invalid process snapshot");
+    // Only a completed, valid snapshot can establish absence or PID reuse.
+    return {
+      status: "ok",
+      value: recorded.filter((identity) => rows.some((row) => sameWindowsProcess(row, identity))),
+    };
+  } catch {
+    return { status: "error", message: `process identity liveness query returned invalid JSON for ${context}` };
+  }
 }
 
 function mergeWindowsProcessIdentities(

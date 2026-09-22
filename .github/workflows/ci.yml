@@ -63,10 +63,14 @@ jobs:
         runner: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform_regressions && '["ubuntu-latest","macos-15","windows-latest"]' || '["ubuntu-latest"]') }}
         suite:
           - {name: smoke, tier: smoke}
-          - {name: unit-1, tier: unit, shard: "1/4"}
-          - {name: unit-2, tier: unit, shard: "2/4"}
-          - {name: unit-3, tier: unit, shard: "3/4"}
-          - {name: unit-4, tier: unit, shard: "4/4"}
+          - {name: unit-1, tier: unit, shard: "1/8"}
+          - {name: unit-2, tier: unit, shard: "2/8"}
+          - {name: unit-3, tier: unit, shard: "3/8"}
+          - {name: unit-4, tier: unit, shard: "4/8"}
+          - {name: unit-5, tier: unit, shard: "5/8"}
+          - {name: unit-6, tier: unit, shard: "6/8"}
+          - {name: unit-7, tier: unit, shard: "7/8"}
+          - {name: unit-8, tier: unit, shard: "8/8"}
           - name: ${{ github.event_name == 'workflow_dispatch' && inputs.platform_regressions && 'deep' || 'integration' }}
             tier: ${{ github.event_name == 'workflow_dispatch' && inputs.platform_regressions && 'deep' || 'integration' }}
     uses: ./.github/workflows/deterministic-tests.yml

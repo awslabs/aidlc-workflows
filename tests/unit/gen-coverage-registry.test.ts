@@ -920,6 +920,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t342-construction-checkpoint-routing.test.ts",
     "unit/t343-swarm-checkpoints.test.ts",
     "unit/t344-swarm-checkpoint-retry.test.ts",
+    "unit/t345-full-suite-workflow.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

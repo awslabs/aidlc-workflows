@@ -860,7 +860,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       const recovery = JSON.parse(restored.out);
       expect(recovery.parked_ref).toBe(parked.parked_ref);
       expect(readFileSync(join(recovery.worktree_path, "saved.bin"))).toEqual(savedBytes);
-    });
+    }, 10_000); // Real git create/park/restore sequence exceeded 5s on Windows CI.
 
     test("saved root and sibling abort hints still recover their repository after a collision", () => {
       const proj = setupLifecycleProject();

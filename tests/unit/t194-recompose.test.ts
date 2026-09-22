@@ -86,7 +86,7 @@ function createdProject(scope = "feature"): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);
   const r = run(proj, "aidlc-utility.ts", ["intent-create", "--scope", scope]);
-  expect(r.status).toBe(0);
+  expect(r.status, r.out).toBe(0);
   return proj;
 }
 
@@ -150,8 +150,10 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
     const add = run(proj, "aidlc-utility.ts", ["recompose", "--add", "market-research"]);
     expect(add.status).toBe(0);
     expect(rowOf(readState(proj))).toBe(creationRow);
-  });
+  }, 30_000);
 
+  // Installation plus intent-create, recompose, and status can exceed Bun's
+  // five-second default on Windows; keep all plan/count assertions bounded.
   test("derived fields rebuilt: Total/Completed/Next Stage + --status counts track the plan", () => {
     const proj = createdProject();
     const before = readState(proj);
@@ -173,7 +175,7 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
       // wherever it renders counts.
       expect(status.out).toContain(String(totalAfter));
     }
-  });
+  }, 30_000);
 });
 
 describe("t194 recompose - rejections", () => {

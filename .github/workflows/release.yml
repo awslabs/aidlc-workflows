@@ -73,6 +73,8 @@ jobs:
             # Require each declared job independently of the producer's passed flag.
             if jq -e --arg sha "$tag_sha" --arg run "$run" '
               .sha == $sha and .passed == true
+              and .purpose == "release"
+              and .omittedLegs == []
               and .runId == $run
               and .coveragePolicy == "required-hosted-live-v1"
               and .disabledLegs == []
@@ -90,11 +92,11 @@ jobs:
               accepted=true
               break
             fi
-            echo "Evidence run $run: wrong source/run, obsolete coverage policy, or missing/disabled/failing full-suite legs"
-            jq '{sha, runId, coveragePolicy, passed, complete, excluded, disabledLegs, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
+            echo "Evidence run $run: wrong source/run/purpose, obsolete coverage policy, or missing/disabled/failing full-suite legs"
+            jq '{sha, runId, purpose, coveragePolicy, passed, complete, excluded, disabledLegs, omittedLegs, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
           done
           if [ "$accepted" != true ]; then
-            echo "::error::No successful preview or full-suite dispatch has required-hosted-live-v1 full-suite-result evidence for $tag_sha. Missing/disabled/failing legs or obsolete evidence block publication; no artifact means every leg is unproven. Verify ai-pr-review environment prerequisites, then renew evidence by dispatching full-suite.yml on main with ref=$tag_sha."
+            echo "::error::No successful preview or full-suite dispatch has release-purpose required-hosted-live-v1 full-suite-result evidence for $tag_sha. Live verification, omitted/missing/disabled/failing legs or obsolete evidence block publication. Verify ai-pr-review environment prerequisites, then renew evidence by dispatching full-suite.yml on main with ref=$tag_sha and live_verification=false."
             exit 1
           fi
 

@@ -78,15 +78,19 @@ function run(
   enforceHumanPresence = false,
   extraEnv: Record<string, string> = {},
 ): { status: number; stdout: string; out: string } {
-  // Keep Git's own diagnostics for Windows claim/pin failures: the production
-  // helper currently replaces git-show stderr with a missing-artifact message.
+  // Keep Git's diagnostics for Windows claim/pin failures and receipt
+  // revalidation during gate/land on every platform.
   // Store traces outside the checkout so dirty-tree policies stay meaningful.
-  const traceDir = process.platform === "win32" && tool === UNIT &&
-      (args[0] === "claim" || args[0] === "pin")
+  const reviewOperation = tool === UNIT && (args[0] === "gate" || args[0] === "land");
+  const windowsClaimOrPin = process.platform === "win32" && tool === UNIT &&
+    (args[0] === "claim" || args[0] === "pin");
+  const traceNeeded = reviewOperation || windowsClaimOrPin;
+  const traceDir = traceNeeded && extraEnv.GIT_TRACE2_EVENT === undefined
     ? mkdtempSync(join(tmpdir(), "aidlc-inc3-git-trace-"))
     : null;
   if (traceDir) tempDirs.push(traceDir);
-  const tracePath = traceDir ? join(traceDir, "git-events.ndjson") : null;
+  const tracePath = extraEnv.GIT_TRACE2_EVENT ??
+    (traceDir ? join(traceDir, "git-events.ndjson") : null);
   const result = spawnSync(
     process.execPath,
     [tool, ...args, "--project-dir", cwd],
@@ -103,13 +107,21 @@ function run(
       },
     },
   );
-  if (result.status !== 0 && tracePath && existsSync(tracePath)) {
+  const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  const reviewUnit = reviewOperation ? args[1] : undefined;
+  if (result.status !== 0 && reviewUnit && tracePath &&
+      out.includes("reviewer READY receipts")) {
+    console.error(`t326 receipt revalidation failed:\n${JSON.stringify({
+      args, status: result.status, signal: result.signal, error: result.error?.message, out,
+    }, null, 2)}`);
+    reportPinnedReviewFailure(cwd, reviewUnit, tracePath);
+  } else if (result.status !== 0 && windowsClaimOrPin && tracePath && existsSync(tracePath)) {
     console.error(`t326 ${args[0]} Git trace (${tracePath}):\n${readFileSync(tracePath, "utf-8")}`);
   }
   return {
     status: result.status ?? -1,
     stdout: result.stdout ?? "",
-    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+    out,
   };
 }
 
@@ -313,10 +325,10 @@ function reviewAuditExtras(
 
 // The fixture cleanup removes candidate checkouts even when an assertion fails.
 // Keep the pinned inputs and the original Git command outcomes in the test log
-// when landing unexpectedly rejects review evidence that pin and gate accepted.
+// when any gate/land call rejects review evidence after a successful pin.
 function reportPinnedReviewFailure(
   projectDir: string,
-  pinnedOid: string,
+  unit: string,
   tracePath: string,
 ): void {
   try {
@@ -331,18 +343,22 @@ function reportPinnedReviewFailure(
         });
         return [path, {
           status: result.status,
+          signal: result.signal,
           stdout: result.stdout,
           stderr: result.stderr,
           error: result.error?.message,
         }];
       }));
     };
+    const transaction = readUnitMergeTransaction(projectDir, unit);
+    const pinnedOid = transaction?.pinned_oid ?? null;
     const landingHead = git(projectDir, ["rev-parse", "HEAD"]);
     console.error(`t326 pinned review diagnostics:\n${JSON.stringify({
+      unit,
       pinnedOid,
       landingHead,
-      transaction: readUnitMergeTransaction(projectDir, "alpha"),
-      pinnedFiles: filesAt(pinnedOid),
+      transaction,
+      pinnedFiles: pinnedOid ? filesAt(pinnedOid) : null,
       landingFiles: filesAt(landingHead),
     }, null, 2)}`);
   } catch (error) {
@@ -1683,13 +1699,6 @@ describe("t326 pinned team Unit merge", () => {
     const landed = run(UNIT, ["land", "alpha", "--step", "git"], conflict.seed, false, {
       GIT_TRACE2_EVENT: tracePath.replaceAll("\\", "/"),
     });
-    if (landed.out.includes("reviewer READY receipts")) {
-      reportPinnedReviewFailure(
-        conflict.seed,
-        JSON.parse(conflictPin.stdout).pinned_oid,
-        tracePath,
-      );
-    }
     expect(landed.status).not.toBe(0);
     expect(landed.out).toContain("src/alpha.ts");
     expect(readFileSync(seededStateFile(conflict.seed), "utf-8")).toBe(stateBefore);
@@ -2504,6 +2513,7 @@ describe("t326 pinned team Unit merge", () => {
     const reviewPin = run(UNIT, ["pin", "alpha"], reviewFixture.seed);
     expect(reviewPin.status).not.toBe(0);
     expect(reviewPin.out).toContain("reviewer READY receipts");
+    expect(reviewPin.out).toContain(`reviewer READY receipts (${reviewerStage.slug})`);
 
     const planFixture = makeSeed();
     const planned = prepareCandidate(

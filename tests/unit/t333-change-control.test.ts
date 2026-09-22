@@ -480,7 +480,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const before = readFileSync(state, "utf-8");
     const refused = run(UTILITY, ["config-change", "--change-control", "relaxed"], proj);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(memoryFile(proj, "project"));
+    expect(utilityError(refused.stderr)).toContain(memoryFile(proj, "project"));
     expect(resolveChangeControl(proj).value).toBe("strict");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(changeControlRows(proj)).toHaveLength(0);
