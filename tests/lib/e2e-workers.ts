@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, statfsSync, writeFileSync,
+  existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statfsSync, writeFileSync,
 } from "node:fs";
 import { cp, mkdir, mkdtemp, realpath, rename, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,6 +26,7 @@ export interface E2eWorkerPool {
 
 const NATIVE_CLEANUP_MS = 45_000;
 const transportReceipts = new WeakMap<NodeJS.ProcessEnv, string>();
+const nativeRoots = new Map<string, string>();
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
 /** Keep headroom for results and runtime fixtures before admitting more work. */
@@ -275,17 +276,45 @@ export async function prepareE2eWorkers(
   }
 }
 
+/** Artifact ancestors may be shared; native launch evidence must not be. */
+export function createE2eNativeRoot(artifactDir: string): string {
+  const scope = resolve(artifactDir);
+  const existing = nativeRoots.get(scope);
+  if (existing) {
+    ensurePrivateRoot(existing, "explicit");
+    return existing;
+  }
+  const failures: unknown[] = [];
+  for (const base of new Set([
+    tmpdir(),
+    process.platform === "win32" ? join(process.env.SystemRoot || "C:\\Windows", "Temp") : "/var/tmp",
+  ])) {
+    let parent: string | undefined;
+    try {
+      parent = mkdtempSync(join(base, "aidlc-tui-root-"));
+      const root = join(parent, "tui-bun");
+      // A child directory also gets an explicit private DACL on Windows.
+      ensurePrivateRoot(root, "explicit");
+      nativeRoots.set(scope, root);
+      return root;
+    } catch (error) {
+      if (parent) rmSync(parent, { recursive: true, force: true });
+      failures.push(error);
+    }
+  }
+  throw new AggregateError(failures, "e2e needs an OS temporary directory with trusted native root ancestors");
+}
+
 export async function e2eWorkerEnvironment(
   worker: E2eWorker, file: string, artifactDir: string, inherited: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv> {
-  // Never inherit the operator's native namespace. Keep records outside TEMP,
-  // beside the per-file profile, so even interrupted starts remain inspectable.
+  // Never inherit the operator's native namespace or trust artifact ancestors.
+  // Keep launch records outside TEMP until authenticated cleanup has completed.
   const nativeEnv = {
     ...normalizeE2eExternalPaths(inherited, worker.sourceRoot ?? process.cwd()),
     AIDLC_TEST_WORKER_ROOT: artifactDir,
-    AIDLC_TUI_BUN_ROOT: join(artifactDir, "tui-bun"),
+    AIDLC_TUI_BUN_ROOT: createE2eNativeRoot(artifactDir),
   };
-  ensurePrivateRoot(nativeEnv.AIDLC_TUI_BUN_ROOT);
   // Re-running a file may reuse its artifact directory. Confirm any previous
   // daemon's retirement before the test can start another generation there.
   await cleanupNativeTransports(worker, nativeEnv);
@@ -326,6 +355,15 @@ export async function finishE2eTemporaryFiles(
     if (receipt === undefined || receipt !== nativeInventorySignature(root)) {
       throw new Error(`e2e transport cleanup is unconfirmed or changed; fixtures retained: ${root}`);
     }
+    if (resolve(artifactDir) !== resolve(env.AIDLC_TEST_WORKER_ROOT!)) {
+      throw new Error("e2e native evidence destination differs from the file's artifact scope");
+    }
+    // Archives are diagnostics, never a live namespace: copied inode identities
+    // cannot authorize commands. Copy before deleting either root or fixtures.
+    await cp(root, join(artifactDir, "tui-bun"), { recursive: true });
+    await rm(dirname(root), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    nativeRoots.delete(resolve(artifactDir));
+    transportReceipts.delete(env);
   }
   const source = env.TEMP!;
   if (!preserve) {
@@ -350,7 +388,7 @@ function privateNativeRoot(env: NodeJS.ProcessEnv): string | undefined {
     return undefined;
   }
   if (!env.AIDLC_TEST_WORKER_ROOT ||
-    resolve(root) !== resolve(env.AIDLC_TEST_WORKER_ROOT, "tui-bun")) {
+    resolve(root) !== nativeRoots.get(resolve(env.AIDLC_TEST_WORKER_ROOT))) {
     throw new Error("e2e native cleanup refuses a root outside the file's artifact scope");
   }
   if (!lstatSync(root).isDirectory()) {

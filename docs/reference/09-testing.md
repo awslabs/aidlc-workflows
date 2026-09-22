@@ -285,13 +285,18 @@ owner SID and no allow ACEs for Everyone, BUILTIN\Users or Authenticated Users.
 Symlinks, junctions and other Windows reparse points are refused. The driver
 creates a missing root with private permissions; it refuses an unsafe existing
 root rather than changing its permissions. On POSIX, every explicit-root ancestor
-must be owned by the current user or root and must not be writable by other users
-unless sticky (other-write, or group-write by a group other than the caller's own
-primary group); the implicit root's temporary parent must be current-user-owned or
-mode **1777**. Windows validates root/session owner and DACL, but does not yet validate
+must be owned by the current user or root, with no group/other write bits unless
+sticky; the implicit root's temporary parent must be current-user-owned or mode
+**1777**. Windows validates root/session owner and DACL, but does not yet validate
 ancestor ACL trust; the generation handshake below remains enforced. Remove an
 unsafe pre-created root or point `AIDLC_TUI_BUN_ROOT` at a private directory under
 trusted ancestors, and keep that setting consistent across commands.
+
+The test runner gives each file a separate private native root under a trusted
+OS temporary directory, independent of log-directory permissions. After confirmed
+transport cleanup it archives session records and snapshots in the file's
+`tui-bun/` artifacts and removes the temporary native root; uncertain cleanup
+retains the live namespace for diagnosis.
 
 Launch records are private regular files pinned to the root and session
 directories' filesystem identities. Both clients and the daemon validate
@@ -748,7 +753,9 @@ logs after process cleanup. Fresh Claude profiles receive first-run preparation;
 an owned startup model-upgrade offer is declined through its visible “No” choice
 to preserve the shipped model pin.
 
-Each file receives a private `AIDLC_TUI_BUN_ROOT` beside its profile and logs.
+Each file receives a private `AIDLC_TUI_BUN_ROOT` under a trusted OS temporary
+directory; confirmed session records and snapshots are then archived beside its
+profile and logs.
 Worker cleanup uses the native driver's authenticated session controls and
 checks daemon retirement, including interrupted starts. It runs after success,
 timeout, and cancellation before temporary files can be removed or a worker

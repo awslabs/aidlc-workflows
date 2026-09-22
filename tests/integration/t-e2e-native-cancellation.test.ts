@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
+  appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
   realpathSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -180,9 +180,23 @@ async function retired(env: NodeJS.ProcessEnv, previous: Owner): Promise<void> {
   }
 }
 
+async function archived(env: NodeJS.ProcessEnv, artifacts: string, previous: Owner): Promise<void> {
+  const session = basename(bunSessionPaths(previous.session, env).directory);
+  const directory = join(artifacts, "tui-bun", session);
+  expect(json<Owner>(join(directory, "session.json"))).toMatchObject({
+    token: previous.token, cleanupComplete: true,
+  });
+  expect(json<{ text: string }>(join(directory, "screen.json")).text).toContain("NATIVE READY");
+  expect(existsSync(dirname(env.AIDLC_TUI_BUN_ROOT!))).toBe(false);
+  if (previous.daemonPid !== undefined) {
+    expect(await getNativeProcessIdentity(previous.daemonPid)).not.toBe(previous.daemonIdentity);
+  }
+}
+
 afterEach(async () => {
   const failures: string[] = [];
   for (const { worker, env, artifacts } of contexts.splice(0)) {
+    if (!existsSync(env.TEMP!)) continue; // Explicitly finalized within the test.
     try {
       await cleanupE2eTransports(worker, env);
       if (existsSync(env.TEMP!)) await finishE2eTemporaryFiles(env, artifacts, false);
@@ -292,7 +306,6 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
     const first = await context("first", { AIDLC_TUI_BUN_ROOT: outside.env.AIDLC_TUI_BUN_ROOT });
     const second = await context("second");
     expect(new Set([outside, first, second].map(({ env }) => env.AIDLC_TUI_BUN_ROOT)).size).toBe(3);
-    expect(dirname(first.env.AIDLC_TUI_BUN_ROOT!)).toBe(dirname(first.env.CLAUDE_CONFIG_DIR!));
     expect(first.env.AIDLC_TUI_BUN_ROOT!.startsWith(first.env.TEMP!)).toBe(false);
     if (process.platform !== "win32") {
       expect(statSync(first.env.AIDLC_TUI_BUN_ROOT!).mode & 0o077).toBe(0);
@@ -311,7 +324,7 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
     await retired(first.env, owned);
     await finishE2eTemporaryFiles(first.env, first.artifacts, false);
     expect(existsSync(first.env.TEMP!)).toBe(false);
-    expect(existsSync(bunSessionPaths(session, first.env).record)).toBe(true);
+    await archived(first.env, first.artifacts, owned);
     expect(await drive(outside.env, ["capture", "--session", session])).toContain("NATIVE READY");
     expect(await getNativeProcessIdentity(unrelated.daemonPid!)).toBe(unrelated.daemonIdentity!);
   }, 60_000);
@@ -346,7 +359,6 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
         stdout: Bun.file(evidence.stdout), stderr: Bun.file(evidence.stderr),
         timeout: mode === "capture" ? 45_000 : 90_000,
       });
-      let adopted = false;
       const adopt = () => {
         const observed = json<{
           artifacts: string; temporary: string; root: string; checkout: string; record: Owner;
@@ -356,11 +368,6 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
           ...runnerEnv, AIDLC_TEST_WORKER_ROOT: observed.artifacts, AIDLC_TUI_BUN_ROOT: observed.root,
           TEMP: observed.temporary, TMP: observed.temporary, TMPDIR: observed.temporary,
         };
-        // The runner can dispose its checkout on success. Teardown fallback
-        // always uses this source's current driver, whose bytes the fixture copied.
-        const worker = { id: 1, root: SOURCE, socket: `fallback-${randomUUID()}` };
-        if (!adopted) contexts.push({ worker, env, artifacts: observed.artifacts });
-        adopted = true;
         return { observed, env };
       };
       const failures: unknown[] = [];
@@ -372,7 +379,6 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
         if (mode === "capture") {
           expect(observed.checkout).toBe(fixture);
           expect(observed.temporary).not.toBe(outside.env.TEMP!);
-          expect(observed.root).toBe(join(observed.artifacts, "tui-bun"));
           await until(() => child.exitCode !== null, "ordinary runner exit after capture failure", 30_000);
         }
         const code = await child.exited;
@@ -410,7 +416,8 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
             if (mode === "cancel") expect(report.files[1].state).toBe("INCOMPLETE");
           }
         }
-        await retired(env, observed.record);
+        if (mode === "capture") await retired(env, observed.record);
+        else await archived(env, observed.artifacts, observed.record);
         if (mode === "capture") {
           expect(observed.processes?.map(({ role }) => role)).toEqual([
             "daemon", "supervisor", "target", "fileSupervisor", "test",
@@ -449,7 +456,21 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
           preserveRoot = true;
           failures.push(new Error(`inner runner evidence copy failed; source retained at ${fixture}`, { cause: error }));
         }
-        try { if (!adopted && existsSync(witness)) adopt(); } catch (error) { failures.push(error); }
+        try {
+          // The inner coordinator owns its root registration. If it could not
+          // finalize, retire the witnessed session via the authenticated driver,
+          // not by granting this process cleanup authority over an arbitrary root.
+          if (existsSync(witness)) {
+            const { observed, env } = adopt();
+            if (existsSync(observed.root)) {
+              await drive(env, ["kill", "--session", observed.record.session]);
+              await retired(env, observed.record);
+              cpSync(observed.root, join(evidence.directory, "native-root"), { recursive: true });
+              rmSync(dirname(observed.root), { recursive: true, force: true });
+              rmSync(observed.temporary, { recursive: true, force: true });
+            }
+          }
+        } catch (error) { preserveRoot = true; failures.push(error); }
       }
       if (failures.length) {
         throw new AggregateError(failures,
@@ -503,12 +524,13 @@ await createBunBackend({ fixtureCwd() {
     const paths = bunSessionPaths(session, value.env);
     ensurePrivateRoot(paths.directory);
     const directoryIdentity = privateDirectoryIdentity(paths.directory);
+    const generation = randomUUID();
     // Reproduce the durable state left when a starter exits immediately after
     // spawning. Delay only daemon entry; all IPC, supervision and retirement use
     // the current native implementation and the published ownership token.
     publishTuiRecord(paths.record, {
       schema: 1, backend: "bun", session, token: randomUUID(), endpoint: paths.endpoint,
-      directoryIdentity,
+      directoryIdentity, generation, rootIdentity: privateDirectoryIdentity(paths.root),
       phase: "starting", cwd: value.env.TEMP, command: [process.execPath, target()],
       fixtureCwd: null, width: 80, height: 24,
     }, directoryIdentity);
@@ -524,7 +546,7 @@ while (!existsSync(${JSON.stringify(release)})) {
   if (Date.now() > deadline) throw new Error("test did not release daemon");
   await Bun.sleep(20);
 }
-await runBunDaemon(${JSON.stringify(paths.directory)});
+await runBunDaemon(${JSON.stringify(paths.directory)}, ${JSON.stringify(generation)});
 `);
     const daemon = Bun.spawn([process.execPath, program], {
       env: value.env, stdout: "ignore", stderr: "pipe",
@@ -598,9 +620,10 @@ await runBunDaemon(${JSON.stringify(paths.directory)});
     const session = "reuse";
     const running = await start(previous.env, session);
     const nextEnv = await e2eWorkerEnvironment(previous.worker, "reuse.test.ts", previous.artifacts, previous.env);
-    contexts.push({ ...previous, env: nextEnv });
     await retired(previous.env, running);
     expect(existsSync(previous.env.TEMP!)).toBe(true);
+    rmSync(previous.env.TEMP!, { recursive: true, force: true });
+    previous.env = nextEnv; // Finalize the shared native namespace only once.
     await cleanupE2eTransports(previous.worker, nextEnv);
     const paths = bunSessionPaths(session, nextEnv);
     const original = readFileSync(paths.record, "utf8");

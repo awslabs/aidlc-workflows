@@ -29,13 +29,13 @@ import {
   type ParsedArgs,
 } from "./harness/runner-profile.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
-import { ensurePrivateRoot } from "./harness/tui-record-file.ts";
 import {
   selectShard,
   type ShardConfig,
 } from "./lib/test-sharding.ts";
 import type { E2eWorker } from "./lib/e2e-workers.ts";
 import type { E2eCaseCounts } from "./lib/e2e-plan.ts";
+import { createE2eNativeRoot, createE2eTemporaryRoot } from "./lib/e2e-workers.ts";
 import type { IsolatedProcess } from "./lib/e2e-process.ts";
 import type { E2eLimits, E2eTask } from "./lib/e2e-scheduler.ts";
 
@@ -733,17 +733,15 @@ async function runSpawnCapture(
       const artifacts = context?.artifacts ?? join(logDir, "processes", resultName(cmdArgs[1]));
       mkdirSync(artifacts, { recursive: true });
       if (!context) {
-        const { createE2eTemporaryRoot } = await import("./lib/e2e-workers.ts");
         const temp = await createE2eTemporaryRoot();
         const socket = `aidlc-file-${process.pid}-${resultName(cmdArgs[1])}`;
         env = {
           ...env,
           AIDLC_TEST_WORKER_ROOT: artifacts,
-          AIDLC_TUI_BUN_ROOT: join(artifacts, "tui-bun"),
+          AIDLC_TUI_BUN_ROOT: createE2eNativeRoot(artifacts),
           AIDLC_TUI_TMUX_SOCKET: socket,
           TEMP: temp, TMP: temp, TMPDIR: temp,
         };
-        ensurePrivateRoot(env.AIDLC_TUI_BUN_ROOT!);
         transport = { worker: { id: 0, root: cwd, socket }, env };
       }
       const supervisorPath = join(cwd, "tests", "lib", "e2e-process.ts");

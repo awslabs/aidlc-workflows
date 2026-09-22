@@ -104,7 +104,6 @@ function validateRootAncestors(root: string, policy: "explicit" | "temporary"): 
   if (process.platform === "win32") return;
   const uid = process.getuid?.();
   if (uid === undefined) throw unsafe(root, "cannot establish current uid for ancestor validation");
-  const gid = process.getgid?.();
   const parent = dirname(resolve(root));
   if (policy === "temporary") {
     const stat = fs.statSync(parent, { bigint: true });
@@ -124,13 +123,7 @@ function validateRootAncestors(root: string, policy: "explicit" | "temporary"): 
     }
     if (!stat.isDirectory()) throw unsafe(path, "ancestor is not a directory");
     if (stat.uid !== 0n && stat.uid !== BigInt(uid)) throw unsafe(path, "ancestor is not owned by current uid or uid 0");
-    // Under user-private groups (umask 002) every directory the caller creates is
-    // group-writable by a group only the caller belongs to; that is not a
-    // foreign writer. Other-writable, or writable by a foreign or root group,
-    // is - unless the sticky bit prevents renames by non-owners.
-    const ownGroup = stat.uid === BigInt(uid) && gid !== undefined && stat.gid === BigInt(gid);
-    const foreignWritable = (stat.mode & 0o002n) !== 0n || ((stat.mode & 0o020n) !== 0n && !ownGroup);
-    if (foreignWritable && (stat.mode & 0o1000n) === 0n) {
+    if ((stat.mode & 0o022n) !== 0n && (stat.mode & 0o1000n) === 0n) {
       throw unsafe(path, "ancestor is writable by other users without the sticky bit");
     }
     // Also walk resolved ancestry: a symlink may cross into a different tree.
