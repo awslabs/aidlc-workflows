@@ -6478,7 +6478,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // state build re-reads it under the lock to write the state line; checking
   // here means a refused creation creates nothing: no record dir, no registry
   // row, no cursor move, no audit rows.
-  const requestedChangeControl = parseGuardPolicy(flags["guard-policy"]);
+  const flaggedChangeControl = parseGuardPolicy(flags["guard-policy"]);
   let preflightMemoryStrict: GuardPolicyMemoryDeclaration | null;
   try {
     preflightMemoryStrict =
@@ -6487,9 +6487,14 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   } catch (e) {
     die(errorMessage(e));
   }
-  if (preflightMemoryStrict !== null && requestedChangeControl !== null && requestedChangeControl !== "strict") {
+  if (preflightMemoryStrict !== null && flaggedChangeControl !== null && flaggedChangeControl !== "strict") {
     die(guardPolicyMemoryStrictRefusal(preflightMemoryStrict));
   }
+  // Naming the scope's own default is not a lowering: the same creation without
+  // the flag would carry that value from the scope, so it is recorded that way.
+  const scopeDefaultPolicy = loadScopeMapping()[scope]?.guardPolicy ?? "strict";
+  const requestedChangeControl =
+    flaggedChangeControl !== "strict" && flaggedChangeControl === scopeDefaultPolicy ? null : flaggedChangeControl;
   if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
@@ -8354,6 +8359,20 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const oldScope = getField(contentBefore, "Scope");
     if (!oldScope) die("Cannot read current Scope from state file.");
     const requested = intentSettingsFromFlags(flags);
+    // Naming the selected scope's own Guard Policy default takes that scope's
+    // policy back. It is scope-derived, not a chat lowering, so a line once
+    // raised to strict by hand can return to the scope's value here instead of
+    // through a hand edit of the state file. A memory layer holding strict
+    // still answers the typed value with its own refusal, naming the file.
+    const scopeDefault = newScopeDef.guardPolicy ?? "strict";
+    if (
+      requested["guard-policy"]?.source === "you" &&
+      scopeDefault !== "strict" &&
+      parseGuardPolicy(requested["guard-policy"].value) === scopeDefault &&
+      !memoryGuardPolicyDeclarations(projectDir, { space }).some((declaration) => declaration.value === "strict")
+    ) {
+      requested["guard-policy"] = { value: scopeDefault, source: `scope ${newScope}` };
+    }
     if (oldScope !== newScope) {
       const source = `scope ${newScope}`;
       requested.depth ??= { value: newScopeDef.depth, source };

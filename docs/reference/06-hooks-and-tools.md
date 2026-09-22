@@ -99,6 +99,8 @@ The [state-transition guard](#pretooluse-aidlc-state-transition-guardts) uses a
 runtime-integrity check to refuse recognized direct and indirect tool-call
 routes to hooks and their records, including paths, environment assignments,
 inline and wrapper scripts, aliases, shell functions, and written content.
+A route is a concrete import, require, or execution of a hook module; a
+script, comment, string, or document that merely names one is not.
 This is defense in depth: hooks and tool calls run as the same user, so the
 harness's permission model and the person's review of what the agent runs
 remain the outer boundary.
@@ -802,6 +804,8 @@ recognized direct and indirect tool-call routes to AIDLC hooks and runtime
 records, including paths containing `.aidlc-sessions` or
 `.aidlc-plan-approval`, session or bypass environment assignments, inline and
 wrapper scripts, aliases, shell functions, and written content.
+A route is a concrete import, require, or execution of a hook module; a
+script, comment, string, or document that merely names one is not.
 It is defense in depth: hooks and tool calls run as the same user, so the
 harness's permission model and the person's review of what the agent runs
 remain the outer boundary; no in-repo check can provide stronger provenance

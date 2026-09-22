@@ -18,14 +18,14 @@ const RUNTIME_RECORD_PATH = /(?:^|[\\/])\.(?:aidlc-sessions|aidlc-plan-approval)
 const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-approval)(?=[\\/'"`\s]|$)/;
 const HARNESS_HOOK_COMMAND = /(?:^|[\\/\s"'`])hooks[\\/]aidlc-[a-z-]+\.ts\b|\baidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts\b|\baidlc(?:\.ts)?["']?\s+engine\s+hook\b/;
 const HARNESS_CONTROL_ASSIGNMENT = /\b(?:AIDLC_SESSION_OVERRIDE|AIDLC_SESSION_OVERRIDE_SOURCE|AIDLC_SKIP_HUMAN_PRESENCE_GUARD|AIDLC_UNATTENDED|AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS|AIDLC_STATE_TRANSITION_OWNER)=/;
-// Hook module references that only occur in code: a hook file path, or the two
-// modules whose exports mint a human turn or apply intent settings. Applied to
-// text that will execute (inline scripts, heredocs, aliases, functions, wrapper
-// files), where a literal module name is a reference.
-const PROTECTED_MODULE = /hooks[\\/]aidlc-[a-z-]+\.ts\b|\baidlc-(?:record-human-turn|guard-switch)(?:\.ts)?\b|\baidlc(?:\.ts)?["']?\s+engine\s+hook\b/;
-// A concrete import, require, or execution of a protected module. Applied to
-// written file content, where prose naming a hook or a helper is ordinary
-// project documentation and must stay writable.
+// A concrete import, require, or execution of a hook module: a hook file path
+// or one of the two modules whose exports mint a human turn or apply intent
+// settings, in an import/require/from with a string literal, an interpreter
+// invocation of a hook file, or the engine hook command form. Applied to
+// inline scripts, heredocs, aliases, functions, wrapper files, and written
+// content alike: a comment, an inert string, or prose that merely names a
+// hook or a helper is ordinary project content and stays runnable and
+// writable.
 const PROTECTED_MODULE_USE = new RegExp(
   String.raw`(?:\bimport\b[^\n;]*?|\brequire\s*\(\s*|\bfrom\s+)["'\x60][^"'\x60\n]*(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?["'\x60]` +
   String.raw`|\b(?:bun|node|tsx|deno)\b[^\n;|&]*hooks[\\/]aidlc-[a-z-]+\.ts\b` +
@@ -70,15 +70,11 @@ function protectedScriptFile(path: string, cwd: string): boolean {
     // Shipped tools legitimately import hook helpers. Inspect model-authored
     // wrappers, not the runtime installation that those tools belong to.
     if (harnessInstallRoots(cwd).some((root) => pathWithin(absolute, root))) return false;
-    return PROTECTED_MODULE.test(readFileSync(absolute, "utf-8"));
+    return PROTECTED_MODULE_USE.test(readFileSync(absolute, "utf-8"));
   } catch {
     // An unreadable or missing script is outside this lexical check's reach.
     return false;
   }
-}
-
-function protectedCode(value: unknown): boolean {
-  return typeof value === "string" && PROTECTED_MODULE.test(value);
 }
 
 function protectedContent(value: unknown): boolean {
@@ -131,12 +127,12 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): "runtime" | "con
       return "runtime";
     }
     let contentViolation = (command.includes("<<") || SHELL_FUNCTION.test(command)) &&
-      PROTECTED_MODULE.test(command);
+      PROTECTED_MODULE_USE.test(command);
     for (const { name, args, executable } of shellCommandInvocationDetails(command)) {
       if (name === "mkdir" && args.some((path) => protectedRuntimePath(path, cwd))) {
         return "runtime";
       }
-      if (name === "alias" && args.some(protectedCode)) contentViolation = true;
+      if (name === "alias" && args.some(protectedContent)) contentViolation = true;
       const python = /^python(?:\d+(?:\.\d+)*)?$/.test(name);
       const shell = /^(?:sh|bash|zsh)$/.test(name);
       const javascript = name === "node" || name === "bun" || name === "tsx";
@@ -157,7 +153,7 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): "runtime" | "con
           inline = true;
           // Inline code can compute writes without a concrete shell target.
           if (RUNTIME_RECORD_MENTION.test(script)) return "runtime";
-          if (PROTECTED_MODULE.test(script)) contentViolation = true;
+          if (PROTECTED_MODULE_USE.test(script)) contentViolation = true;
         }
       }
       if (contentViolation || inline) continue;

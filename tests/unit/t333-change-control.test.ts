@@ -1029,6 +1029,46 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(getField(readFileSync(retired.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
   });
 
+  test("naming the selected scope's own default is recorded as the scope's value, not a chat lowering", () => {
+    // Creation: the flag names what the scope would have given anyway.
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    const created = run(
+      UTILITY,
+      ["intent-create", "--scope", "classic", "--arguments", "x", "--label", "own", "--guard-policy", "relaxed"],
+      proj,
+    );
+    expect(created.status, created.stderr).toBe(0);
+    expect(getField(readFileSync(project_state(proj), "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    const lower = run(
+      UTILITY,
+      ["intent-create", "--scope", "classic", "--arguments", "y", "--label", "lower", "--guard-policy", "off"],
+      proj,
+    );
+    expect(lower.status).toBe(1);
+    expect(lower.stderr).toContain("Creating this intent with Guard Policy off from chat is unavailable");
+
+    // Scope change: a line raised to strict by hand takes the scope's value back
+    // when that value is named beside --scope; any other lowering stays refused.
+    const raised = project("enterprise");
+    writeFileSync(
+      raised.state,
+      setGuardPolicyLine(readFileSync(raised.state, "utf-8"), "strict (set by you)"),
+    );
+    const refused = run(UTILITY, ["scope-change", "--scope", "classic", "--guard-policy", "off"], raised.proj);
+    expect(refused.status).toBe(1);
+    expect(getField(readFileSync(raised.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");
+    const taken = run(UTILITY, ["scope-change", "--scope", "classic", "--guard-policy", "relaxed"], raised.proj);
+    expect(taken.status, taken.stderr).toBe(0);
+    expect(getField(readFileSync(raised.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    const rows = guardPolicyRows(raised.proj);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("scope classic");
+  });
+
   test("a scope change renames a retired state line in place while following the new scope", () => {
     const { proj, state } = project("classic");
     writeFileSync(

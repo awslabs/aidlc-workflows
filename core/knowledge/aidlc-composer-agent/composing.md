@@ -89,7 +89,10 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 - In-flight, the running intent's value stays as it is; the human flips it
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
-  approving. A memory layer that declares strict wins over any proposal; the
+  approving a front composition. In-flight, the row is read-only: a
+  recompose lands only stage skips and adds, so the proposal names the routes
+  (raise with the strict setter; lower by changing to a scope whose
+  `guard_policy` declares the value). A memory layer that declares strict wins over any proposal; the
   validator and the intent-create command both refuse a relaxed or off value
   under it.
 - Intent creation reads Guard Policy from the scope file; the conductor

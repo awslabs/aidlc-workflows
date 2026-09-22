@@ -670,10 +670,16 @@ approvals; relaxed for a spike, a fix, or a solo run where re-approving on
 every changed file would only slow the human down. For `mode: "in-flight"`
 return the running intent's current value unchanged (read `Guard Policy` from
 `aidlc-state.md`, or the retired `Change Control` line on an intent created
-before the rename); the composer never flips it, the human does from chat.
+before the rename); the composer never flips it. Mark that row read-only in
+the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
+so a policy edit there would be discarded. Name the routes instead: raise
+with `/aidlc --guard-policy strict`; lower by changing to a scope whose
+`guard_policy` declares the value (name that value beside `--scope` when it
+was raised by hand).
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
-validator checks it with the grid. The conductor renders it as its own gate
-row so the human can flip it before approving. Store the approved custom
+validator checks it with the grid. For a front composition the conductor
+renders it as its own gate row so the human can flip it before approving.
+Store the approved custom
 scope's value as `guard_policy: <value>` in its frontmatter; a matched stock
 scope keeps its own default and no scope file is written. Intent creation
 reads Guard Policy from that scope file; the conductor passes
