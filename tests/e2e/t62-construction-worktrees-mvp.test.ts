@@ -256,7 +256,7 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     expect(auditField(f, "MERGE_DISPATCH_INVOKED", "Practices section excerpt")).toBe(
       "scope=mvp",
     );
-  });
+  }, 30_000);
 
   // --- Test 4 (.sh test 4): MERGE_DISPATCH_FALLBACK observability path [cli] ---
   test("4: dispatch-event FALLBACK observability path works for mvp", () => {

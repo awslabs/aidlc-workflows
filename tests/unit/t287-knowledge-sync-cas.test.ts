@@ -67,13 +67,104 @@ function doc(p: string, name: string, body = "text\n"): string {
   return full;
 }
 
-function runSync(p: string): { status: number; out: string } {
-  const r = spawnSync(
-    "bun",
-    [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "sync", "--project-dir", p],
-    { encoding: "utf-8", env: CHILD_ENV },
-  );
-  return { status: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
+// Backup-intent opens can write through a DACL when SeRestorePrivilege is
+// enabled (including in children of Git Bash). For permission injections,
+// disable that privilege in a short-lived PowerShell child before it starts
+// Bun. Never adjust the test runner's token or a machine/account policy.
+const WINDOWS_ACL_CHILD = `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class T287Token {
+  [StructLayout(LayoutKind.Sequential)] public struct Luid { public uint Low; public int High; }
+  [StructLayout(LayoutKind.Sequential)] public struct Privileges { public uint Count; public Luid Id; public uint Attributes; }
+  [DllImport("advapi32.dll", SetLastError=true)] public static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool LookupPrivilegeValue(string system, string name, out Luid id);
+  [DllImport("advapi32.dll", SetLastError=true)] public static extern bool AdjustTokenPrivileges(IntPtr token, bool all, ref Privileges state, uint length, out Privileges previous, out uint needed);
+  [DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
+  public static IntPtr Open() {
+    IntPtr token;
+    if (!OpenProcessToken(GetCurrentProcess(), 0x28, out token)) throw new Win32Exception();
+    return token;
+  }
+  public static Privileges Adjust(IntPtr token, Privileges state) {
+    Privileges previous; uint needed;
+    if (!AdjustTokenPrivileges(token, false, ref state, (uint)Marshal.SizeOf(typeof(Privileges)), out previous, out needed)) throw new Win32Exception();
+    int error = Marshal.GetLastWin32Error();
+    // An absent privilege cannot override this fixture's DACL either.
+    if (error != 0 && error != 1300) throw new Win32Exception(error);
+    return previous;
+  }
+  public static Privileges DisableRestore(IntPtr token) {
+    Luid id;
+    if (!LookupPrivilegeValue(null, "SeRestorePrivilege", out id)) throw new Win32Exception();
+    return Adjust(token, new Privileges {Count=1, Id=id, Attributes=0});
+  }
+}
+'@
+$token = [T287Token]::Open()
+$previous = $null
+try {
+  $previous = [T287Token]::DisableRestore($token)
+  $command = ConvertFrom-Json $env:AIDLC_T287_COMMAND
+  $bunArgs = @($command.args)
+  # Native stderr contains the CLI's expected JSON error. Write its text to the
+  # capture without PowerShell's ErrorRecord/CLIXML transport or Stop handling.
+  $ErrorActionPreference = 'Continue'
+  & $command.executable @bunArgs 2>&1 | ForEach-Object { [Console]::WriteLine($_.ToString()) }
+  $result = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = 'Stop'
+  try {
+    if ($null -ne $previous) { [void][T287Token]::Adjust($token, $previous) }
+  } finally { [void][T287Token]::CloseHandle($token) }
+}
+exit $result
+`;
+
+function runSync(p: string, enforceWindowsAcl = false) {
+  const args = [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "sync", "--project-dir", p];
+  const aclChild = process.platform === "win32" && enforceWindowsAcl;
+  const executable = aclChild
+    ? join(process.env.SystemRoot!, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    : process.execPath;
+  const r = spawnSync(executable, aclChild
+    ? ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WINDOWS_ACL_CHILD, "utf16le").toString("base64")]
+    : args, {
+    encoding: "utf-8",
+    env: aclChild ? {
+      ...CHILD_ENV,
+      AIDLC_T287_COMMAND: JSON.stringify({ executable: process.execPath, args }),
+    } : CHILD_ENV,
+    windowsHide: true,
+  });
+  return {
+    status: r.status ?? -1,
+    out: (r.stdout ?? "") + (r.stderr ?? ""),
+    invocation: {
+      executable: process.execPath, bunVersion: process.versions.bun, args,
+      cwd: process.cwd(), aclLauncher: aclChild ? executable : undefined,
+    },
+    signal: r.signal,
+    error: r.error?.message,
+  };
+}
+
+function expectPermissionWriteFailure(result: ReturnType<typeof runSync>, destination: string): void {
+  const diagnostic = JSON.stringify(result, null, 2);
+  console.error(`t287 permission-injected sync: ${diagnostic}`);
+  expect(result.status, diagnostic).toBe(1);
+  // Require the actual CLI's filesystem error at the atomic-write destination.
+  // A launcher failure or a read/planning failure must not satisfy this test.
+  expect(() => JSON.parse(result.out), diagnostic).not.toThrow();
+  const error = JSON.parse(result.out).error;
+  expect(error, diagnostic).toMatch(/\b(?:EACCES|EPERM)\b/);
+  expect(error, diagnostic).toContain(`${destination}.`);
 }
 
 /** Deny directory writes only inside this test's freshly created project. */
@@ -89,14 +180,14 @@ function withDirectoryWritesDenied<T>(project: string, directory: string, operat
     try { return operation(); } finally { chmodSync(target, 0o700); }
   }
 
-  // A Windows directory's ReadOnly attribute does not deny writes. Save only
-  // this directory's DACL, then deny file/subdirectory creation without
-  // inheritance flags. Reads and WRITE_DAC remain available for restoration.
+  // Deny creation of the writer's sibling temporary file. Existing documents
+  // stay readable, so sync reaches its commit-time write rather than failing
+  // during planning. runSync's ACL child cannot override this deny.
   const backupDir = mkdtempSync(join(root, ".t287-acl-"));
   const backup = join(backupDir, "directory.acl");
   const parent = dirname(target);
   const leaf = basename(target);
-  const icacls = (args: string[]): void => {
+  const icacls = (args: string[]): string => {
     const result = spawnSync("icacls.exe", args, {
       cwd: parent, encoding: "utf8", timeout: 10_000, windowsHide: true,
     });
@@ -106,6 +197,7 @@ function withDirectoryWritesDenied<T>(project: string, directory: string, operat
         error: result.error?.message, stdout: result.stdout, stderr: result.stderr,
       })}`);
     }
+    return result.stdout ?? "";
   };
   let saved = false;
   const restore = (): void => {
@@ -478,7 +570,7 @@ describe("t287 the self-heal property: a plain sync always recovers from an inje
   // coverage and is called out below rather than silently assumed safe --
   // per the rule that a guard must state what it does NOT cover.
   const injectionPoints = [
-    "content.md write (unwritable document dir)",
+    "metadata.json write (unwritable document dir)",
     "index.json write (unwritable documentkb dir)",
   ] as const;
 
@@ -488,8 +580,8 @@ describe("t287 the self-heal property: a plain sync always recovers from an inje
     const { indexed } = onboard(p, SPACE, undefined, NOW);
     const dir = documentDir(p, SPACE, indexed[0].id);
     writeFileSync(abs, "v2\n");
-    const failed = withDirectoryWritesDenied(p, dir, () => runSync(p));
-    expect(failed.status).not.toBe(0);
+    const failed = withDirectoryWritesDenied(p, dir, () => runSync(p, true));
+    expectPermissionWriteFailure(failed, join(dir, "metadata.json"));
 
     // The self-heal: a plain, unmodified sync must now succeed and land the
     // pending change.
@@ -504,8 +596,8 @@ describe("t287 the self-heal property: a plain sync always recovers from an inje
     doc(p, "a.md", "v1\n");
     onboard(p, SPACE, undefined, NOW);
     doc(p, "b.md", "v2\n"); // a pending "new" row for the next sync to find
-    const failed = withDirectoryWritesDenied(p, documentkbDir(p, SPACE), () => runSync(p));
-    expect(failed.status).not.toBe(0);
+    const failed = withDirectoryWritesDenied(p, documentkbDir(p, SPACE), () => runSync(p, true));
+    expectPermissionWriteFailure(failed, join(documentkbDir(p, SPACE), "index.json"));
 
     const healed = runSync(p);
     expect(healed.status, `follow-up sync did not self-heal: ${healed.out}`).toBe(0);

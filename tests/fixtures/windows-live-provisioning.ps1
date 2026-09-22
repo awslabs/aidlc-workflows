@@ -301,6 +301,8 @@ exit 0
             New-Item -ItemType HardLink -Path $poisonedLog -Target (Join-Path $runnerHome 'protected.txt') | Out-Null
         }
         Save-PreparationFailure $failure $true
+        $savedFailure = Get-Content -LiteralPath (Join-Path $stateRoot 'preparation-failed.json') -Raw | ConvertFrom-Json
+        Check ($savedFailure.CodexSandboxSids -is [Array] -and $savedFailure.CodexSandboxSids.Count -eq 0) 'Non-Codex failure must retain an empty SID array.'
         if ([IO.File]::Exists($poisonedLog)) { [IO.File]::Delete($poisonedLog) }
         Remove-OwnedTree $root
         # Run the real collect entry point with no runtime root, user or

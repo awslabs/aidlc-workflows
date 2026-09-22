@@ -1137,10 +1137,15 @@ function Save-PreparationFailure($Failure, [bool]$IncludeLaunchLogs) {
             [IO.File]::AppendAllText((Join-Path $evidence 'preparation.log'), "Launch output could not be retained safely.`r`n")
         }
     }
+    # PowerShell 5.1 serializes the empty output of $(if (...) { @() }) as
+    # AutomationNull/{} inside a property. Preserve a real array so collection
+    # never interprets an empty non-Codex record as an account SID.
+    $recordedCodexSids = @()
+    if ($Family -eq 'codex') { $recordedCodexSids = @($codexSandboxSids) }
     [pscustomobject]@{
         Version = 1; RunnerSid = $runnerSid.Value
         SandboxSid = $(if ($null -ne $createdUserSid) { $createdUserSid.Value } else { $null })
-        CodexSandboxSids = $(if ($Family -eq 'codex') { @($codexSandboxSids) } else { @() })
+        CodexSandboxSids = $recordedCodexSids
         Family = $Family; Workspace = $workspace; RunnerHome = $runnerHome; RunnerTemp = $runnerTemp
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stateRoot 'preparation-failed.json') -Encoding UTF8
 }

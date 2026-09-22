@@ -330,6 +330,14 @@ jobs:
         with:
           node-version: "${{ env.NODE_VERSION }}"
           package-manager-cache: false
+      - name: Reuse pinned Node headers for native dependencies
+        if: "runner.os != 'Windows'"
+        run: |
+          node_root="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
+          test -r "$node_root/include/node/node.h"
+          test -r "$node_root/include/node/config.gypi"
+          test -r "$node_root/include/node/common.gypi"
+          printf 'npm_package_config_node_gyp_nodedir=%s\n' "$node_root" >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
