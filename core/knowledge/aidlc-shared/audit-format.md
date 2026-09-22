@@ -129,24 +129,52 @@ Sensors, Learnings, and Summary Confirmation are independent per-intent `on`/`of
 | `REVIEW_COMPLETED` | Reviewer verdict recorded; gates approval and is reserved from the public audit CLI. Malformed rows are ignored without consuming their pending request | Timestamp, Stage, Reviewer, Iteration, Verdict, Request Fingerprint (must match the request), Artifact Fingerprint (the same stable snapshot: the reviewer writes no artifact, so the reviewed bytes are the requested bytes), Request Id (must match the request), Review Record (record-relative path `.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` or `.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json`) + Review Record Digest (`sha256:<hex>` over the record bytes; a record that no longer hashes to it is not the review), optional Unit + Attempt Generation (per-unit claims), Request Source Fingerprint + Source Fingerprint (identical request-time source identity on `workspace_requires` stages), Unit Source Fingerprint or Unit Source Binding Bypass on per-unit `workspace_requires` stages, Review Challenge only for the deprecated appendix migration path, Recovery only for the one stale-receipt recovery pass, optional Workflow for isolated runs | `tools/aidlc-log.ts review --verdict` |
 | `PIPELINE_LINK_COMPLETED` | A declared pipeline link returned in order; current-attempt receipts gate pipeline approval and are reserved from the public audit CLI | Timestamp, Stage, Link, Position (`k/N`), optional Repo (required by the protocol for multi-repo chains), optional Workflow (`single-stage:<slug>` for isolated runs) | `tools/aidlc-log.ts link` |
 
-`Hash Scope: confirmed-content-v1` identifies the semantic questions-file digest
-used by newly emitted receipts. It normalizes line endings, preserves the
-original order of the preamble and confirmed sections, and trims trailing
-whitespace from the resulting canonical content. It includes every visible
-Q<n> section and each `Requested Changes Feedback` section, including follow-up
-questions added after an assumption decision. Exactly one visible top-level
-`Assumption Confirmation` section is valid only after the summary and is
-excluded, along with its contents; a same-named pre-summary section remains part
-of the confirmed digest. The excluded section's assumptions and answer are not
-covered by the digest and remain subject to the stage's existing decision/answer
-and sensor checks. Any other visible Markdown or
-raw-HTML heading after the summary is invalid. Heading-like text in HTML
-comments, code spans, fenced or indented code, and HTML attribute values is not
-a section.
-A receipt with no `Hash Scope` retains the legacy whole-file digest contract;
-an in-flight legacy receipt therefore needs a fresh human confirmation to
-create a scoped receipt before an allowed post-confirmation append can recover.
-Any other scope is rejected.
+`Hash Scope: confirmed-content-v2` identifies the questions-file digest used by
+newly emitted receipts. The digest algorithm is unchanged: normalize CRLF and
+lone CR to LF, preserve the original order and raw bytes of retained sections,
+trim trailing whitespace once from the resulting content, then hash UTF-8 with
+SHA-256. The visibility view does not replace the raw digest input: comments,
+code, HTML, and a leading BOM in retained content remain bound.
+
+Heading and answer recognition now follows the vendored CommonMark/GFM parser
+through `markdownBlocks` and its `visibleMarkdownLines` projection. Text inside
+raw HTML blocks (CommonMark kinds 1–7) is never a heading, answer, or control
+tag. The digest includes every visible Q<n> section and each
+`Requested Changes Feedback` section, including follow-up questions added after
+an assumption decision. Exactly one visible top-level `Assumption Confirmation`
+section is valid only after the summary and is excluded, along with its
+contents and an immediately preceding blank-separated thematic separator. A
+same-named pre-summary section remains part of the confirmed digest. The
+excluded assumptions and answer remain subject to the stage's existing
+decision/answer and sensor checks. Any other recognized heading after the
+summary is invalid. Heading-like text in comments, code spans, fenced or
+indented code, and HTML attribute values is not a section.
+
+`confirmed-content-v1` is the supported legacy scope: it used the same
+raw-content digest algorithm with the former hand-written Markdown visibility
+rules. For documents unaffected by the parser upgrade, v2 digests are
+byte-identical to v1. Existing receipts migrate as follows:
+
+- A `confirmed-content-v1` receipt whose recorded digest equals the current v2
+  digest is accepted. v1 is compared under current semantics, so in-flight
+  workflows on unaffected documents are not forced to reconfirm.
+- If that v1 digest differs, completion refuses because the content semantics
+  may have changed: the receipt predates the Markdown-parser upgrade, so either the confirmed content
+  changed after confirmation or raw HTML content that v1 treated as confirmed
+  text is no longer part of it. Raw HTML headings and control tags are now
+  excluded from Markdown recognition. Re-present the summary and reconfirm,
+  which records a v2 receipt. The refusal names the raw-HTML exclusion and
+  never asserts that an edit happened.
+- A `confirmed-content-v2` digest mismatch retains the existing
+  “changed after confirmation” refusal and recovery.
+- A receipt with no `Hash Scope` retains the legacy whole-file SHA-256 and
+  existing recovery text. An in-flight unscoped receipt needs fresh human
+  confirmation to create a scoped receipt before an allowed post-confirmation
+  append can recover.
+- An unknown scope still refuses as an invalid hash scope.
+
+The duplicate-confirmation / earlier-identical-confirmation path resolves v1
+receipts through the same v2 hash function. Stored receipts are not rewritten.
 
 Summary-confirmation authority comparisons preserve append order within one
 audit shard. Across shards, different timestamps establish order; equal

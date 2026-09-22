@@ -19,6 +19,8 @@
       "**",
       "!tests/logs/**",
       "!tests/fixtures/v05-mr9-sensor-fire/failing-linter/**",
+      "!core/tools/vendor/markdown-parser.js",
+      "!tests/fixtures/markdown-goldens/**",
       "!dist/**"
     ]
   },

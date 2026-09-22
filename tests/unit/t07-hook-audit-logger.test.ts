@@ -61,6 +61,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -313,6 +314,11 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-audit.ts"),
       join(proj, ".claude", "tools", "aidlc-audit.ts"),
+    );
+    cpSync(
+      join(AIDLC_SRC, "tools", "vendor"),
+      join(proj, ".claude", "tools", "vendor"),
+      { recursive: true },
     );
     fire(writeJson(join(recordRoot, "test.md")), proj, localHook, /* setEnv */ false);
     const heartbeat = join(recordRoot, ".aidlc-engine/hooks-health", "write-audit-log.last");

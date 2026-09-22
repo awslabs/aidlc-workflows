@@ -649,7 +649,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "**Checkpoint**: Consolidated Summary Confirmation",
       );
       expect(audit).toContain("**Questions SHA-256**:");
-      expect(audit).toContain("**Hash Scope**: confirmed-content-v1");
+      expect(audit).toContain("**Hash Scope**: confirmed-content-v2");
     });
 
     test("summary confirmation refuses a same-second cross-shard human turn", () => {

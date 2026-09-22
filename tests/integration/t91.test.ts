@@ -73,6 +73,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -165,6 +166,11 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "data", "stage-graph.json"),
     join(proj, ".claude", "tools", "data", "stage-graph.json"),
+  );
+  cpSync(
+    join(SRC_TOOLS, "vendor"),
+    join(proj, ".claude", "tools", "vendor"),
+    { recursive: true },
   );
   copyFileSync(
     join(SRC_HOOKS, "aidlc-rebuild-stage-graph.ts"),

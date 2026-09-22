@@ -536,6 +536,7 @@ function scratchProject(): string {
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
+  cpSync(join(AIDLC_SRC, "tools", "vendor"), join(dir, ".claude", "tools", "vendor"), { recursive: true });
   mkdirSync(join(dir, "aidlc", "spaces", "default", "intents", ".aidlc-engine"), { recursive: true });
   return dir;
 }
