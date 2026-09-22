@@ -158,20 +158,20 @@ byte-identical to v1. Existing receipts migrate as follows:
 - A `confirmed-content-v1` receipt whose recorded digest equals the current v2
   digest is accepted. v1 is compared under current semantics, so in-flight
   workflows on unaffected documents are not forced to reconfirm.
-- If that v1 digest differs, `SUMMARY_CONTENT_SEMANTICS_CHANGED` refuses: the
-  receipt predates the Markdown-parser upgrade, so either the confirmed content
+- If that v1 digest differs, completion refuses because the content semantics
+  may have changed: the receipt predates the Markdown-parser upgrade, so either the confirmed content
   changed after confirmation or raw HTML content that v1 treated as confirmed
   text is no longer part of it. Raw HTML headings and control tags are now
   excluded from Markdown recognition. Re-present the summary and reconfirm,
   which records a v2 receipt. The refusal names the raw-HTML exclusion and
   never asserts that an edit happened.
 - A `confirmed-content-v2` digest mismatch retains the existing
-  `SUMMARY_CONTENT_STALE` “changed after confirmation” refusal and recovery.
+  “changed after confirmation” refusal and recovery.
 - A receipt with no `Hash Scope` retains the legacy whole-file SHA-256 and
   existing recovery text. An in-flight unscoped receipt needs fresh human
   confirmation to create a scoped receipt before an allowed post-confirmation
   append can recover.
-- An unknown scope still refuses with `SUMMARY_HASH_SCOPE_INVALID`.
+- An unknown scope still refuses as an invalid hash scope.
 
 The duplicate-confirmation / earlier-identical-confirmation path resolves v1
 receipts through the same v2 hash function. Stored receipts are not rewritten.
