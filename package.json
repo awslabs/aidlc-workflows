@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "type": "module",
   "private": true,
+  "packageManager": "bun@1.3.14",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.adapters.json",
     "lint": "biome check --error-on-warnings core harness scripts plugins tests",
@@ -20,6 +21,9 @@
     "@biomejs/biome": "2.4.16",
     "@xterm/headless": "^5.5.0",
     "bun-types": "^1.3.13",
+    "micromark": "4.0.2",
+    "micromark-extension-gfm": "3.0.0",
+    "micromark-util-normalize-identifier": "2.0.1",
     "node-pty": "1.1.0",
     "smol-toml": "1.7.0",
     "typescript": "^6.0.3"
