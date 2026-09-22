@@ -851,9 +851,9 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(lines[0]).toContain("src/after.ts");
       const ask = JSON.parse(lines[lines.length - 1]) as { remedies: GuardRefusal["remedies"] };
       expect(ask.remedies.map((remedy) => remedy.op)).toEqual([
-        "reapprove-plan", "show-plan-drift", "stop-here",
+        "reapprove-plan", "show-plan-drift", "stop-here", "lower-fence",
       ]);
-      const [reapprove, show] = ask.remedies;
+      const [reapprove, show, , lowerFence] = ask.remedies;
       const prefix = projection === "native" ? "aidlc engine " : `bun ${p.harness.dir}/tools/aidlc-`;
       for (const remedy of [reapprove, show]) {
         expect(remedy.command, remedy.op).toStartWith(prefix);
@@ -863,6 +863,12 @@ describe("source and native guard remedies execute their owning operations", () 
         succeeded(p.guard("Bash", { command: remedy.command }));
         expect(p.guard("Bash", { command: `${remedy.command}; printf code > src/unapproved.ts` }).status).toBe(2);
       }
+      expect(lowerFence).toMatchObject({
+        op: "lower-fence", interaction: "human-input", requiresHuman: true, executableNow: true,
+      });
+      expect(lowerFence.command).toBeUndefined();
+      expect(lowerFence.operation).toBeUndefined();
+      expect(lowerFence.action).toContain("typing /aidlc config set guard.plan-approval off yourself");
       expect(p.marker()).toMatchObject({ kind: "run-stage", stage: "code-generation" });
       // The one approval the fixture recorded before the drift is the only one
       // the ledger may ever hold: no remedy below mints another.
@@ -886,7 +892,8 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(readFileSync(questions, "utf-8")).toMatch(/\[Answer\]:[ \t]*$/m);
       expect(p.exact(show.command!).status).toBe(2);
 
-      // Neither the setter nor a fabricated hook payload can lower the fence.
+      // The typed human prompt lowers the fence at hook time. The dispatcher
+      // can repeat that setting, then the same dispatch stands aside.
       expect(p.state()).not.toContain("- **Guards Off**:");
       const lowerFenceCommand = projection === "native"
         ? "aidlc engine config set guard.plan-approval off"
@@ -896,24 +903,28 @@ describe("source and native guard remedies execute their owning operations", () 
       markEngineTouch(p.project);
       const unchosen = p.exact(lowerFenceCommand);
       expect(unchosen.status).not.toBe(0);
-      expect(unchosen.stderr).toContain("is unavailable from chat");
+      expect(unchosen.stderr).toContain("is the person's move");
       expect(p.state()).not.toContain("- **Guards Off**:");
       succeeded(p.hook("record-human-turn", {
         hook_event_name: "UserPromptSubmit", prompt: "/aidlc config set guard.plan-approval off", session_id: session,
       }));
-      expect(p.state()).not.toContain("- **Guards Off**:");
-      const audit = p.audit();
-      expect(audit).not.toContain("**Event**: GUARD_DISABLED");
+      expect(p.state()).toMatch(/^- \*\*Guards Off\*\*: plan-approval \(set by you\)$/m);
+      let audit = p.audit();
+      expect(audit).toContain("**Event**: GUARD_DISABLED");
+      expect(audit).toContain("**Guard**: plan-approval");
       expect(audit).not.toContain("**Event**: GUARD_STOOD_ASIDE");
       expect(approvalRows(audit)).toBe(1);
       const stateAfterPrompt = p.state();
       const unchanged = p.exact(lowerFenceCommand);
-      expect(unchanged.status).not.toBe(0);
-      expect(unchanged.stderr).toContain("is unavailable from chat");
+      expect(unchanged.status, unchanged.stderr).toBe(0);
+      expect(unchanged.stdout).toContain("Fence plan-approval is already off");
       expect(p.state()).toBe(stateAfterPrompt);
-      const stillBlocked = p.guard("Task", dispatch);
-      expect(stillBlocked.status).toBe(2);
-      expect(p.audit()).not.toContain("**Event**: GUARD_STOOD_ASIDE");
+      expect(p.audit()).toBe(audit);
+      const stoodAside = p.guard("Task", dispatch);
+      expect(stoodAside.status, stoodAside.stderr).toBe(0);
+      expect(stoodAside.stdout).toContain("Continuing past the plan-approval check because it is off for this piece of work");
+      audit = p.audit();
+      expect(audit).toContain("**Event**: GUARD_STOOD_ASIDE");
       expect(approvalRows(audit)).toBe(1);
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       p.assertNoNestedState();

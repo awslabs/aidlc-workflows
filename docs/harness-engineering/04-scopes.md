@@ -89,12 +89,11 @@ explicitly.
 
 The optional `guard_policy:` field is the value a new intent on this scope
 starts with, written to its state file at creation as
-`- **Guard Policy**: <value> (from scope <name>)`. Chat and CLI commands can
-raise an intent to `strict`, but cannot lower its effective policy because the
-supported harnesses cannot authenticate prompt provenance. Choose `relaxed` or
-`off` in the scope before intent creation or scope change. An older intent
-without this line remains strict until explicitly raised or assigned a scope,
-while
+`- **Guard Policy**: <value> (from scope <name>)`. The human can flip it for
+that one intent by typing `/aidlc --guard-policy <value>` themselves; a
+plain-chat request raises it to `strict` directly, while `relaxed` and `off`
+need that exact typed command. An older intent without this line remains strict
+until explicitly set, while
 the next new intent starts from the scope default again. To hold a value for
 everyone on the repo, do not edit eleven scope files: declare it once in memory
 (`## Guard Policy` with `Mode: strict` in `aidlc/spaces/<space>/memory/org.md`,
@@ -105,13 +104,15 @@ three values names the file and the allowed values; the per-intent command
 repairs an invalid state line.
 
 A scope word is a product statement about how much ceremony this kind of work
-deserves. Chat and CLI commands may turn a switchable fence `on` to raise a
-policy-lowered fence, writing `Guards On` and `GUARD_RESTORED`, but they refuse
-to turn one `off`.
+deserves. It is not the only control: a human can lower one of the four switchable
+fences for one piece of work with `/aidlc config set guard.<fence> off`, which
+writes the `Guards Off` state line and one `GUARD_DISABLED` audit row. Setting
+`on` can raise a policy-lowered fence, writing `Guards On` and `GUARD_RESTORED`.
 Human presence is the key holder and has no per-work switch; only
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers it. Environment kill switches remain
-the machine-wide override. The next piece of work starts from its own scope
-default.
+the machine-wide override. Do not author a scope at `off` to spare people a fence
+they meet occasionally; the per-work switch exists for that, and the next piece
+of work starts from its own scope default.
 
 `change_control:` is the retired spelling of this key. It is read for one release
 and never written; a scope file that names both keys with the same value is

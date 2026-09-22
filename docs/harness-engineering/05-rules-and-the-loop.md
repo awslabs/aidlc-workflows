@@ -68,11 +68,10 @@ tell the human in one line, and continue. And which authority fences hold:
 `strict` lowers none, `relaxed` lowers `plan-approval` and `review-freeze`, and
 `off` lowers those two plus `state-transition` and `reviewer-scope`.
 `human-presence` is never lowered by the word. By default each intent takes its
-scope's value. Supported harnesses cannot authenticate prompt provenance, so
-chat and CLI commands cannot lower the effective policy. Choose `relaxed` or
-`off` in the scope before intent creation or scope change. To hold `strict` for
-everyone, put one line under the heading in `team.md` (or `org.md`, or
-`project.md` for one project):
+scope's value. To lower it from chat, a person must type the exact policy switch,
+such as `/aidlc --guard-policy relaxed` or `guard policy off`; an unrelated
+message is not a switch. To hold `strict` for everyone, put one line under the
+heading in `team.md` (or `org.md`, or `project.md` for one project):
 
 ```markdown
 ## Guard Policy
@@ -81,14 +80,14 @@ Mode: strict
 ```
 
 A `Mode: strict` in any layer wins over the scope default and over the intent's
-own line; an attempted chat or flag change to `relaxed` or `off` is refused, and
-the next governed check on a running intent records the memory-held change as a
-`GUARD_POLICY_SET` row naming the file as its source. `Mode: relaxed` and `Mode:
-off` here have no effect (the scope default can relax an intent), and so does
-leaving the section empty. Any other value is a validation error naming the file
-and the three allowed values. The line is read with the same `Field: value`
-grammar as `## Testing Posture`, commented-out lines included: a `Mode:` inside
-an HTML comment declares nothing.
+own line; a chat or flag flip to `relaxed` or `off` is then refused with a
+sentence naming this file, and the next governed check on a running intent records
+the change as a `GUARD_POLICY_SET` row naming the file as its source. `Mode:
+relaxed` and `Mode: off` here have no effect (the scope default or the person's
+exact typed switch can relax an intent), and so does leaving the section empty. Any other value is a
+validation error naming the file and the three allowed values. The line is read
+with the same `Field: value` grammar as `## Testing Posture`, commented-out lines
+included: a `Mode:` inside an HTML comment declares nothing.
 
 A layer holding `strict` refuses `/aidlc config set guard.<fence> off`, naming
 the memory file in the refusal, and forces any fence lowered earlier back on

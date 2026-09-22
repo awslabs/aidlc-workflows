@@ -52,9 +52,9 @@
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Missing session_id uses the host-derived or retained identity.
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
-//     per session and refuses lowering before a shell command runs. The core
-//     human-turn hook never lowers guards because prompt provenance cannot be
-//     authenticated on any supported harness.
+//     per session and refuses lowering before a shell command runs. Non-empty
+//     prompts need no special shell path: the core human-turn hook applied the
+//     person's typed switch when the prompt arrived.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +
@@ -947,7 +947,7 @@ function notePromptCapability(sessionId: string): void {
     return;
   }
   process.stdout.write(
-    "SYSTEM (AIDLC harness capability): this Kiro IDE build delivers no prompt text to the hooks. No supported harness can authenticate prompt provenance, so a fence or current Guard Policy cannot be lowered from chat. A retired Change Control relaxed/off field is normalized automatically without changing its value. For a new policy choice, use guard_policy in the scope before creating or changing the intent. Raising to strict and turning a fence on still work.\n",
+    "SYSTEM (AIDLC harness capability): this Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat in this session. If the person asks to relax or turn off the guards, do not name a command for them to type; say that the hooks cannot see what they type here and that the routes are guard_policy in the scope file, a memory Guard Policy line, or a Kiro IDE build that delivers the prompt. Raising to strict and turning a fence on still work. A sole retired Change Control: relaxed|off line is renamed to Guard Policy automatically without changing its value.\n",
   );
 }
 
@@ -1117,7 +1117,7 @@ if (target === "terminal-command-guard") {
     invocation !== null ? hasLoweringGuardFlags(invocation.args, false) : lowering
   )) {
     process.stderr.write(
-      "This Kiro IDE build delivers no prompt text to the hooks. No supported harness can authenticate prompt provenance, so a fence or current Guard Policy cannot be lowered from chat. A retired Change Control relaxed/off field is normalized automatically without changing its value. For a new policy choice, use guard_policy in the scope before creating or changing the intent. Raising to strict or turning a fence on still works.\n",
+      "This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.\n",
     );
     return 2;
   }
@@ -1144,7 +1144,7 @@ if (target === "terminal-command-guard") {
 }
 
 // UserPromptSubmit forwards to the core human-turn hook below. That hook
-// normalizes a compatible retired policy field before its state-file gate, then records HUMAN_TURN
+// applies typed switches before its state-file gate, then records HUMAN_TURN
 // and the conversational Stop marker only when workflow state exists.
 // The adapter separately tracks empty prompts against the terminal turn so
 // lowering is refused when IDE 1.0.242 hides what the person typed.

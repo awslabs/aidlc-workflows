@@ -29,6 +29,7 @@ import {
   type GuardFence,
   type SwitchableGuardFence,
   isSwitchableGuardFence,
+  guardFenceConfigKey,
 } from "./aidlc-guard-fences.ts";
 export {
   GUARD_FENCES,
@@ -4150,6 +4151,39 @@ export function clearPlanApprovalOverrideRequest(
   } catch {
     // Missing runtime state is already clear.
   }
+}
+
+export function recordSessionPresenceBypass(projectDir: string, session: string): void {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) throw new Error("Session presence bypass requires a nonblank session");
+  const dir = ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(join(dir, `presence-bypass-${segment}`), `${isoTimestamp()}\n`);
+}
+
+export function sessionPresenceBypassRecorded(projectDir: string, session: string): boolean {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) return false;
+  try {
+    const timestamp = readAtomicReplacedFileNoFollowOrThrow(
+      join(planApprovalRuntimeDir(projectDir), `presence-bypass-${segment}`),
+      "Session presence bypass",
+    ).toString("utf-8").trim();
+    return Number.isFinite(Date.parse(timestamp));
+  } catch {
+    return false;
+  }
+}
+
+// The fixture or harness-launch presence bypass lets the CLI setter lower a
+// fence without the person; nothing else does. A workflow command may not set
+// it for itself. A resolved session honors it only when the session-start hook
+// recorded it from its own environment; an unresolved session honors it only
+// when no harness session has been recorded in this project at all.
+export function fenceKeyBypassed(projectDir: string, sessionId: string | null): boolean {
+  return humanPresenceGuardDisabled() &&
+    (sessionId !== null
+      ? sessionPresenceBypassRecorded(projectDir, sessionId)
+      : readCurrentSessionId(projectDir) === null);
 }
 
 // Every receipt on disk, newest-irrelevant (callers filter). Reading the dir is
@@ -23183,26 +23217,29 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
   };
 }
 
-/** Compatibility shape retained for persisted directives from this release. */
+/**
+ * "Turn this fence off for this piece of work": the in-band offer that makes the
+ * key reachable at the moment it is needed. The person must type the command;
+ * selecting the remedy does not authorize a switch.
+ */
 export function lowerFenceRemedy(fence: SwitchableGuardFence): GuardRemedy {
   return {
     op: "lower-fence",
     action:
-      `The ${fence} check cannot be turned off from chat because supported hook payloads ` +
-      "do not authenticate who supplied them. Configure Guard Policy in the scope before " +
-      "creating or changing the piece of work.",
+      `Turn the ${fence} check off for this piece of work by typing ${entrySkillInvocation()} config set guard.${fence} off yourself; ` +
+      "it is recorded in the audit trail and comes back on for the next piece of work.",
     interaction: "human-input",
     requiresHuman: true,
-    executableNow: false,
+    executableNow: true,
   };
 }
 
-/** Explain why an enforcing fence has no in-chat lowering route. */
+/** The sentence a prose refusal adds so the switch is visible where it is needed. */
 export function lowerFenceSentence(fence: SwitchableGuardFence): string {
   return (
-    `The ${fence} check cannot be turned off from chat because supported hook payloads ` +
-    "do not authenticate who supplied them. Configure Guard Policy in the scope before " +
-    "creating or changing the piece of work."
+    `If you meant to do this now, turn the check off for this piece of work with ` +
+    `${entrySkillInvocation()} config set ${guardFenceConfigKey(fence)} off. It is recorded, and it ` +
+    "comes back on for the next piece of work."
   );
 }
 
@@ -23315,6 +23352,7 @@ export function planSourceDriftRefusal(input: {
     showPlanDriftRemedy(input.unit),
     stopHereRemedy(),
   ];
+  if (input.fenceSwitch !== "withhold") remedies.push(lowerFenceRemedy("plan-approval"));
   return {
     code: "PLAN_SOURCE_DRIFT",
     blockedAction: "code-generation-start",
@@ -23605,6 +23643,13 @@ export function evaluateGuardRefusal(
       });
     }
     remedies.push(...lifecycleResetRemedies(input, state));
+  }
+
+  // The fence's own way out, always LAST: the workflow's own remedies come
+  // first (letting it finish the step is nearly always the right answer), and
+  // lowering the fence is the deliberate second choice.
+  if (input.fence !== undefined && input.fenceSwitch !== "withhold") {
+    remedies.push(lowerFenceRemedy(input.fence));
   }
 
   return {
@@ -30466,15 +30511,15 @@ export function guardPolicyMemoryStrictRefusal(
 export const changeControlMemoryStrictRefusal = guardPolicyMemoryStrictRefusal;
 
 // ---------------------------------------------------------------------------
-// Fence settings: environment, compatible per-work state, and the policy word.
+// Fence settings: environment, per-work switches, and the policy word.
 // ---------------------------------------------------------------------------
 
 export type FenceSetting = "on" | "off";
 export const GUARDS_OFF_FIELD = "Guards Off";
 export const GUARDS_ON_FIELD = "Guards On";
 /** The environment kill switch of each fence, `1` forcing it off machine-wide.
- *  The state-transition guard has none: the policy word and compatible
- *  persisted per-work state are its only lowering controls. */
+ *  The state-transition guard has none: the policy word and the per-run switch
+ *  are its only controls. */
 export const GUARD_FENCE_ENV: Partial<Record<GuardFence, string>> = {
   "plan-approval": "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
   "review-freeze": "AIDLC_DISABLE_REVIEW_FREEZE_HOOK",
@@ -30496,20 +30541,94 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
   return [];
 }
 
+// The human-turn hook applies these switches at prompt time, as the host's
+// channel for what the person typed. No request waits for a later setter.
+// Accept /aidlc, $aidlc, or bare aidlc followed by flags first or config set
+// <key> <value> with only optional --intent and --space pairs, each at most once.
+// Both command forms capture those selectors; flags stop at a description or
+// explanation. The whole prompt may instead be the confirmation words guard
+// policy relaxed (also hyphenated, change control, or off).
+// Strip trailing prompt punctuation and match case-insensitively. strict and
+// on never switch; human presence has no switch. Last value wins per key.
+export function parseTypedGuardSwitchRequest(prompt: string): {
+  switches: GuardSwitch[]; space: string | null; intent: string | null;
+} {
+  const text = prompt.trim().replace(/[.,;:!?]+$/, "").toLowerCase();
+  const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/);
+  if (command === null) {
+    const confirmation = text.match(/^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/);
+    return {
+      switches: confirmation === null
+        ? []
+        : [{ key: "guard-policy", value: confirmation[1] as GuardSwitch["value"] }],
+      space: null,
+      intent: null,
+    };
+  }
+  const tokens = text.slice(command[0].length).trim().split(/\s+/);
+  const configForm = tokens[0] === "config" && tokens[1] === "set";
+  const switches = new Map<GuardSwitchKey, GuardSwitch>();
+  let space: string | null = null;
+  let intent: string | null = null;
+  if (configForm) {
+    if (tokens.length < 4) return { switches: [], space: null, intent: null };
+    for (let i = 4; i < tokens.length; i += 2) {
+      const selector = tokens[i];
+      const value = tokens[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        return { switches: [], space: null, intent: null };
+      }
+      if (selector === "--space" && space === null) space = value;
+      else if (selector === "--intent" && intent === null) intent = value;
+      else return { switches: [], space: null, intent: null };
+    }
+  }
+  for (let i = configForm ? 2 : 0; i < (configForm ? 4 : tokens.length);) {
+    const token = tokens[i++];
+    if (!configForm && !token.startsWith("--")) break;
+    const configKey = configForm ? token : token.slice(2);
+    const value = tokens[i] !== undefined && !tokens[i].startsWith("--") ? tokens[i++] : undefined;
+    if (!configForm && configKey === "space" && value !== undefined) {
+      space = value;
+      continue;
+    }
+    if (!configForm && configKey === "intent" && value !== undefined) {
+      intent = value;
+      continue;
+    }
+    let key: GuardSwitchKey;
+    if (configKey === "guard-policy" || configKey === "change-control") {
+      key = "guard-policy";
+    } else {
+      if (!configKey.startsWith("guard.")) continue;
+      const fence = configKey.slice("guard.".length);
+      if (!isSwitchableGuardFence(fence) || value !== "off") continue;
+      key = `guard.${fence}`;
+    }
+    if (value === "relaxed" || value === "off") switches.set(key, { key, value });
+  }
+  return { switches: [...switches.values()], space, intent };
+}
+
+export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
+  return parseTypedGuardSwitchRequest(prompt).switches;
+}
+
 export function guardSwitchRefusal(
   wanted: GuardSwitch,
   context: "config" | "intent-create",
 ): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
+  const entry = entrySkillInvocation();
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
-    return `Turning the ${fence} check off is unavailable from chat because supported hook payloads do not authenticate who supplied them. Configure Guard Policy in the scope before creating or changing the piece of work; this command does not lower a fence.${hint}`;
+    return `Turning the ${fence} check off is the person's move: they type \`${entry} config set guard.${fence} off\` and the harness applies it as they say it. This command does not lower a fence on its own.${hint}`;
   }
   const value = wanted.value;
   if (context === "intent-create") {
-    return `Creating this intent with Guard Policy ${value} from chat is unavailable because supported hook payloads do not authenticate who supplied them. Configure guard_policy: ${value} in the scope first; its scope default applies when the intent is created.${hint}`;
+    return `Creating this intent with Guard Policy ${value} would lower fences. Create it, then have the person type \`${entry} --guard-policy ${value}\`; the harness applies it as they say it. A scope default applies without asking.${hint}`;
   }
-  return `Setting Guard Policy ${value} from chat is unavailable because supported hook payloads do not authenticate who supplied them. Configure guard_policy: ${value} in the scope before creating or changing the piece of work; this command does not lower fences.${hint}`;
+  return `Setting Guard Policy ${value} lowers fences and is the person's move: they type \`${entry} --guard-policy ${value}\` and the harness applies it as they say it. This command does not lower fences on its own.${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {
@@ -30863,7 +30982,7 @@ export function authorityFor(
 // not cover the loop skipping one of its steps. So an in-force instruction is
 // not itself a key: the fences go on controlling the agents in the workflow,
 // which is what they were built for, and it is the HUMAN's newer instruction
-// (or compatible persisted per-work state) that lowers them.
+// (or an explicit per-run switch) that lowers them.
 // ---------------------------------------------------------------------------
 
 export type GuardDecision = "pass" | "stand-aside" | "ask" | "hold";
@@ -30903,9 +31022,11 @@ export function decideGuard(
   // write before the plan was approved because the human had answered a
   // question earlier in the same turn.
   //
-  // Supported hooks expose no authenticated distinction between a human prompt
-  // and a fabricated hook payload. A held fence therefore cannot be lowered
-  // from chat; its refusal points to scope configuration instead.
+  // The human still holds the key: a held fence prints the lower-fence remedy,
+  // which tells them to type the command themselves. The typed request allows
+  // the setter to write the per-run switch, recorded. Selecting the remedy
+  // alone does not authorize it, and once turned off nothing asks again for
+  // that piece of work.
   return subject.lowered ? "stand-aside" : "hold";
 }
 

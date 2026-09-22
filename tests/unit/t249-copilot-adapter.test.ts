@@ -1253,7 +1253,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readAudit(noStateDir)).toBe("");
   });
 
-  test("12a: an unauthenticated first-use switch reaches the core hook and applies nothing", () => {
+  test("12a: a first-use typed switch reaches the core hook before workflow state exists and applies nothing yet", () => {
     const dir = scratchProject(false);
     const session = "copilot-first-use-switch";
     const result = runAdapter(dir, "record-human-turn", {

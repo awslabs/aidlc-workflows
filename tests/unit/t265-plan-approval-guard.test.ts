@@ -1424,7 +1424,7 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("plan-approval mutation refusals explain scope configuration only to the main session", () => {
+  test("plan-approval mutation refusals offer the switch only to the main session", () => {
     const proj = scratchProject();
     try {
       seedState(proj);
@@ -1434,13 +1434,11 @@ describe("t265b hook lifecycle", () => {
       const main = runHook(proj, payload);
       expect(main.code).toBe(2);
       expect(main.stderr).toContain("Code generation cannot modify workspace path");
-      expect(main.stderr).toContain(
-        "Configure Guard Policy in the scope before creating or changing the piece of work.",
-      );
+      expect(main.stderr).toContain("config set guard.plan-approval off");
       const delegated = runHook(proj, { ...payload, agent_type: "aidlc-developer-agent" });
       expect(delegated.code).toBe(2);
       expect(delegated.stderr).toContain("Code generation cannot modify workspace path");
-      expect(delegated.stderr).not.toContain("Configure Guard Policy in the scope");
+      expect(delegated.stderr).not.toContain("config set guard.plan-approval off");
       expect(delegated.stderr).not.toContain("cannot be turned off from chat");
     } finally {
       rmSync(proj, { recursive: true, force: true });

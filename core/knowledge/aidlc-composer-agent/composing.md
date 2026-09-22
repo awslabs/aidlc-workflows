@@ -91,15 +91,16 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 - The human sees the value as its own gate row and can flip it before
   approving a front composition. In-flight, the row is read-only: a
   recompose lands only stage skips and adds, so the proposal names the routes
-  (raise with the strict setter; lower by changing to a scope whose
-  `guard_policy` declares the value). A memory layer that declares strict wins over any proposal; the
+  (raise or lower by typing `/aidlc --guard-policy <value>`, with `$aidlc` on
+  Codex, or change to a scope whose `guard_policy` declares the value).
+  A memory layer that declares strict wins over any proposal; the
   validator and the intent-create command both refuse a relaxed or off value
   under it.
 - Intent creation reads Guard Policy from the scope file; the conductor
   passes `--guard-policy` only for `strict`. A flip to `relaxed` or `off` on
   a matched proposal is an edit: convert it to a custom scope that declares
-  `guard_policy: <value>` and create the intent from that scope. Lowering
-  from chat is refused, so a value deferred to a setter would never apply.
+  `guard_policy: <value>` and create the intent from that scope. The custom
+  scope carries the value at creation; no setter runs afterwards.
 
 ## Rationale quality
 

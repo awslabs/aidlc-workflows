@@ -674,14 +674,11 @@ describe("t230 dispatcher route parity", () => {
   });
 
   test("config set forwards all settings and selectors without mutating unselected workflows", () => {
-    // Lowering is refused from chat, so the combined transaction raises: the
-    // retired relaxed line becomes strict and a persisted fence comes back on.
     const projectDir = makeProject();
     writeMinimalState(projectDir);
     const currentState = readFileSync(seededStateFile(projectDir), "utf-8") +
       "- **Review Override**: none\n" +
-      "- **Change Control**: relaxed (set by you)\n" +
-      "- **Guards Off**: state-transition (set by you)\n" +
+      "- **Change Control**: strict (set by you)\n" +
       "- **Sensors**: on (set by you)\n" +
       "- **Learnings**: on (set by you)\n" +
       "- **Summary Confirmation**: on (set by you)\n";
@@ -696,15 +693,15 @@ describe("t230 dispatcher route parity", () => {
     const changed = viaDispatcher([
       "engine", "config", "set", "depth", "minimal",
       "--test-strategy", "comprehensive", "--review", "advisory",
-      "--guard-policy", "strict", "--sensors", "off", "--learnings", "off",
-      "--summary-confirmation", "off", "--guard.state-transition", "on",
+      "--guard-policy", "relaxed", "--sensors", "off", "--learnings", "off",
+      "--summary-confirmation", "off", "--guard.state-transition", "off",
       "--intent", selectedIntent, "--space", selectedSpace,
     ], projectDir);
     expect(changed.exitCode, changed.stderr.toString()).toBe(0);
     const selectedState = readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8");
     for (const [field, value] of [
       ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
-      ["Guard Policy", "strict (set by you)"], ["Guards Off", "none"],
+      ["Guard Policy", "relaxed (set by you)"], ["Guards Off", "state-transition (set by you)"],
       ["Sensors", "off (set by you)"],
       ["Learnings", "off (set by you)"], ["Summary Confirmation", "off (set by you)"],
     ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);
@@ -714,10 +711,10 @@ describe("t230 dispatcher route parity", () => {
       .filter((name) => name.endsWith(".md"))
       .map((name) => readFileSync(join(selectedRecord, "audit", name), "utf-8"))
       .join("\n");
-    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|GUARD_POLICY_SET|CHANGE_CONTROL_SET|GUARD_DISABLED|GUARD_RESTORED|CEREMONY_SET)\n/g)]
+    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|GUARD_POLICY_SET|CHANGE_CONTROL_SET|GUARD_DISABLED|CEREMONY_SET)\n/g)]
       .map((match) => match[1]).sort()).toEqual([
         "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET",
-        "DEPTH_CHANGED", "GUARD_POLICY_SET", "GUARD_RESTORED", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
+        "DEPTH_CHANGED", "GUARD_DISABLED", "GUARD_POLICY_SET", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
       ]);
 
     for (const [cliKey, field, auditKey] of [

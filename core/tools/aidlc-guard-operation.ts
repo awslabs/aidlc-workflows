@@ -22,9 +22,8 @@ export interface GuardOperationInvocation extends EngineInvocation {
   // Source installs run bun <harness>/tools/aidlc-<route>.ts <args>, so route is
   // also the tool stem. The fence switch breaks that: its native route is config
   // (aidlc engine config set guard.<fence> off), which handleConfig in aidlc.ts
-  // translates onto aidlc-utility.ts config-change --guard.<fence> off. The
-  // setter refuses effective lowering; this shape remains for compatibility.
-  // There is no aidlc-config.ts, and the argv differs too, so a tool-name field alone
+  // translates onto aidlc-utility.ts config-change --guard.<fence> off. There is
+  // no aidlc-config.ts, and the argv differs too, so a tool-name field alone
   // would not suffice. Routing source installs through aidlc.ts engine config
   // was rejected: the plan-approval hook trusts direct aidlc-*.ts tools but gives
   // the unified entry point only the planning exceptions. An invocation may

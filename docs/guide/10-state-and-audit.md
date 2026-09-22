@@ -39,7 +39,7 @@ line is used. Any write of the policy line removes the retired line, leaving one
 setting. Until a conflict is resolved, `next` carries this notice with `<a>` and
 `<b>` replaced by the raw line values, without changing the state file:
 
-> Guard Policy: this piece of work carries both `Guard Policy: <a>` and the retired `Change Control: <b>`, so strict applies until the conflict is resolved. Raise it to strict from chat, or resolve the two fields outside the agent after choosing the intended value; this notice repeats while both remain.
+> Guard Policy: this piece of work carries both `Guard Policy: <a>` and the retired `Change Control: <b>`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.
 
 `Construction Verification Command` records the project check reused at every
 Unit/batch checkpoint. A matching current-workflow human approval receipt is

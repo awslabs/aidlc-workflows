@@ -190,6 +190,7 @@ function auditRows(project: string): string {
 
 const STOOD_ASIDE_LINE =
   "Continuing past the plan-approval check because it is off for this piece of work";
+const LOWER_FENCE_SWITCH = "config set guard.plan-approval off";
 
 // GUARD_STOOD_ASIDE rows whose Guard is plan-approval.
 function stoodAsideRows(project: string): number {
@@ -258,14 +259,12 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
   test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {
     const project = fixture("strict");
     publishAuthority(project);
-    // Nothing has lowered the fence, so the ordering invariant holds: the write
-    // is refused, the refusal names the scope-configuration route, and no
-    // stand-aside is recorded.
+    // Nothing has lowered the fence (no policy word, no per-run switch), so the
+    // ordering invariant holds: the write is refused, the refusal names the one
+    // switch that would lower it, and no stand-aside is recorded.
     const blocked = sourceWriteOf(project);
     expect(blocked.code, blocked.stdout).toBe(2);
-    expect(blocked.stderr).toContain(
-      "Configure Guard Policy in the scope before creating or changing the piece of work.",
-    );
+    expect(blocked.stderr).toContain(LOWER_FENCE_SWITCH);
     expect(stoodAsideRows(project)).toBe(0);
   }, 120_000);
 

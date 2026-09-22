@@ -8,9 +8,9 @@
 //
 // Presence remains the gate signal; the prompt payload also answers the single
 // active protected challenge (plan, verification command, policy, or checkpoint).
-// The payload is not authenticated by any supported host. It must therefore
-// never authorize a Guard Policy or fence change: this module is public project
-// code, and a model can import run() or execute the hook with fabricated JSON.
+// As the host's channel for the prompt, the hook applies a typed fence switch
+// to this session's selected piece of work at prompt time. There is no request
+// file for a later setter to consume.
 // appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
 // to gate, so the hook skips ledger writes (same self-gate as
 // aidlc-session-start.ts) - otherwise every prompt in a project that carries the
@@ -67,7 +67,7 @@ import {
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
-import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
+import { applyTypedGuardSwitchPrompt, normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
@@ -140,9 +140,9 @@ export async function run(input: string): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   let sessionId = "";
+  let promptSubmitted = false;
   let humanResponseText = "";
   let questionText: string | null = null;
-  let promptSubmitted = false;
   // The break-glass phrase counts only when the human TYPED it: the prompt
   // text of a UserPromptSubmit payload that names no tool. A picked option
   // (AskUserQuestion PostToolUse, Codex request_user_input, any adapter's
@@ -203,6 +203,18 @@ try {
       }
     } catch {
       // An unchanged retired field retains the normal migration notice.
+    }
+  }
+  // Apply before the state-file gate so a first-use switch reports that the
+  // person must create the piece of work, then type the switch again.
+  if (humanTurnMintAllowed() && sessionId && typedPrompt) {
+    try {
+      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt);
+      if (outcome !== null) {
+        process.stdout.write(`${JSON.stringify({ additionalContext: `AIDLC Guard Policy: ${outcome.lines.join(" ")}` })}\n`);
+      }
+    } catch {
+      // A switch failure must never block the human's turn.
     }
   }
   if (existsSync(stateFilePath(projectDir))) {

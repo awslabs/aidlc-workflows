@@ -867,7 +867,7 @@ describe("t242 state-transition ownership guard", () => {
     expect(r.stderr).toContain("aidlc-orchestrate.ts report");
   });
 
-  test("direct state-tool refusals explain scope configuration only to the main session", () => {
+  test("direct state-tool refusals offer the switch only to the main session", () => {
     const project = createTestProject();
     projects.push(project);
     seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
@@ -884,9 +884,7 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(main.status).toBe(2);
     expect(main.stderr).toContain("aidlc-orchestrate.ts report");
-    expect(main.stderr).toContain(
-      "Configure Guard Policy in the scope before creating or changing the piece of work.",
-    );
+    expect(main.stderr).toContain("config set guard.state-transition off");
     const delegated = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({ ...payload, agent_type: "aidlc-developer-agent" }),
       encoding: "utf-8",
@@ -894,7 +892,7 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(delegated.status).toBe(2);
     expect(delegated.stderr).toContain("aidlc-orchestrate.ts report");
-    expect(delegated.stderr).not.toContain("Configure Guard Policy in the scope");
+    expect(delegated.stderr).not.toContain("config set guard.state-transition off");
     expect(delegated.stderr).not.toContain("cannot be turned off from chat");
   });
 

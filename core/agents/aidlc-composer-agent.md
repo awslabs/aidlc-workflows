@@ -672,10 +672,10 @@ return the running intent's current value unchanged (read `Guard Policy` from
 `aidlc-state.md`, or the retired `Change Control` line on an intent created
 before the rename); the composer never flips it. Mark that row read-only in
 the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
-so a policy edit there would be discarded. Name the routes instead: raise
-with `/aidlc --guard-policy strict`; lower by changing to a scope whose
-`guard_policy` declares the value (name that value beside `--scope` when it
-was raised by hand).
+so a policy edit there would be discarded. Name the routes instead: raise or
+lower by typing `/aidlc --guard-policy <value>` (`$aidlc` on Codex), or change
+to a scope whose `guard_policy` declares the value (name that value beside
+`--scope` when it was raised by hand).
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
 validator checks it with the grid. For a front composition the conductor
 renders it as its own gate row so the human can flip it before approving.
@@ -686,9 +686,8 @@ reads Guard Policy from that scope file; the conductor passes
 `--guard-policy` only for `strict`. A Guard Policy flip on a matched
 proposal is an edit like any other grid change: convert it to `mode:
 "custom"` with a custom `scopeName`, persist `guard_policy: <value>` in that
-scope file at Step 10, and let intent creation read it from there. Never
-create from the stock scope and defer the value to a setter: lowering Guard
-Policy from chat is refused, so that value would never be applied.
+scope file at Step 10, and let intent creation read it from there. The custom
+scope carries the value at creation; no setter runs afterwards.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.

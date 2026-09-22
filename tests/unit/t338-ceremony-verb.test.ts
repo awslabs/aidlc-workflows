@@ -442,14 +442,15 @@ describe("t338 atomic per-intent settings", () => {
     expect(readFileSync(state, "utf-8")).toBe(before);
   });
 
-  test("scope changes apply their policy while slash flags retain ceremony values and refuse incompatible modes", () => {
+  test("slash flags retain creation and scope-change values and refuse incompatible modes", () => {
     const { proj, state } = project();
     const scope = directive(run(ORCHESTRATE, [
-      "next", "--scope", "feature", "--summary-confirmation", "off",
+      "next", "--scope", "feature", "--summary-confirmation", "off", "--guard-policy", "relaxed",
     ], proj).stdout);
     expect(scope.kind).toBe("print");
     const command = scope.message.match(/`[^`]*\b(engine scope change [^`]+)`/);
     expect(command).not.toBeNull();
+    expect(command![1]).toContain("--guard-policy relaxed");
     const changed = run(DISPATCHER, command![1].split(/\s+/), proj);
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
