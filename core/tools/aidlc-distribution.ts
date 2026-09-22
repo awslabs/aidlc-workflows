@@ -39,15 +39,24 @@ export type ProjectionDescriptor = {
 const AIDLC_DISPATCHER =
   '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
 const AIDLC_HOOK_COMMAND = new RegExp(
-  `${AIDLC_DISPATCHER}\\s+engine\\s+(?:hook\\s+[A-Za-z0-9_-]+\\b|statusline\\b)`,
+  `${AIDLC_DISPATCHER}\\s+engine\\s+(?:hook\\s+([A-Za-z0-9_-]+)\\b|(statusline)\\b)`,
 );
+export const AIDLC_HOOK_ENTRY_PREFIX = "hooksAidlc:";
 
 export function isAidlcHookCommand(command: string): boolean {
-  return /aidlc-[A-Za-z0-9_-]+\.ts/.test(command) || AIDLC_HOOK_COMMAND.test(command);
+  return AIDLC_HOOK_COMMAND.test(command);
+}
+
+export function aidlcHookTarget(command: string): string | null {
+  const match = AIDLC_HOOK_COMMAND.exec(command);
+  return match?.[1] ?? match?.[2] ?? null;
 }
 
 /** Keep event, matcher, and item metadata while excluding project hook entries. */
-export function aidlcHookRegistrations(hooks: unknown): Record<string, unknown[]> {
+export function aidlcHookRegistrations(
+  hooks: unknown,
+  ownedTargets?: ReadonlySet<string>,
+): Record<string, unknown[]> {
   const registrations: Record<string, unknown[]> = {};
   if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return registrations;
   for (const [event, groups] of Object.entries(hooks)) {
@@ -58,13 +67,62 @@ export function aidlcHookRegistrations(hooks: unknown): Record<string, unknown[]
       if (!Array.isArray(entry.hooks)) return [];
       const items = entry.hooks.filter((item: unknown) =>
         item !== null && typeof item === "object" && "command" in item &&
-        typeof item.command === "string" && isAidlcHookCommand(item.command)
+        typeof item.command === "string" &&
+        (() => {
+          const target = aidlcHookTarget(item.command);
+          return target !== null && (!ownedTargets || ownedTargets.has(target));
+        })()
       );
       return items.length > 0 ? [{ ...entry, hooks: items }] : [];
     });
     if (owned.length > 0) registrations[event] = owned;
   }
   return registrations;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonical(object[key])}`
+    ).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Hash each shipped hook target with its exact events, matchers, commands, and metadata. */
+export function aidlcHookRegistrationHashes(
+  hooks: unknown,
+  ownedTargets?: ReadonlySet<string>,
+): Record<string, string> {
+  const registrations = new Map<string, unknown[]>();
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return {};
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+      const entry = group as Record<string, unknown>;
+      if (!Array.isArray(entry.hooks)) continue;
+      const groupMetadata = Object.fromEntries(
+        Object.entries(entry).filter(([key]) => key !== "hooks"),
+      );
+      for (const hook of entry.hooks) {
+        if (!hook || typeof hook !== "object" || Array.isArray(hook)) continue;
+        const command = (hook as Record<string, unknown>).command;
+        if (typeof command !== "string") continue;
+        const target = aidlcHookTarget(command);
+        if (target === null || (ownedTargets && !ownedTargets.has(target))) continue;
+        const rows = registrations.get(target) ?? [];
+        rows.push({ event, ...groupMetadata, hook });
+        registrations.set(target, rows);
+      }
+    }
+  }
+  return Object.fromEntries(
+    [...registrations.entries()].sort(([left], [right]) => left.localeCompare(right))
+      .map(([target, rows]) => [target, sha256Bytes(canonical(rows))]),
+  );
 }
 
 function parseJson<T>(path: string): T {

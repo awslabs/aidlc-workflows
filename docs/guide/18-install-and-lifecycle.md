@@ -745,10 +745,12 @@ one. Environment and other top-level settings (including `disableAllHooks`)
 stay yours, except for values attributed to recorded provider or project
 answers.
 
-For Codex, refresh restores the shipped `developer_instructions` assignment
-and `[shell_environment_policy]`, `[sandbox_workspace_write]`, `[agents]`,
-`[features]`, `[tools]`, and `[tui]` tables, keeping your other project entries
-and tables. Personal Codex settings belong in `~/.codex/config.toml`.
+For Codex, refresh restores the shipped `developer_instructions` and
+`sandbox_mode` assignments plus `[shell_environment_policy]`,
+`[sandbox_workspace_write]`, `[agents]`, `[features]`, `[tools]`, and `[tui]`
+tables, keeping your other project entries and tables. Personal Codex settings
+belong in `~/.codex/config.toml`; an ordinary refresh handles this repair
+without `--force`.
 
 Human output prints `Note:` when AI-DLC entries were restored, and when a
 custom Claude statusline or announcement was kept while this release ships a

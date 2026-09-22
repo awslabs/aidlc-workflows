@@ -38,7 +38,10 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  AIDLC_HOOK_ENTRY_PREFIX,
+  aidlcHookRegistrationHashes,
   aidlcHookRegistrations,
+  aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
   isAidlcHookCommand,
   type ProjectionDescriptor,
@@ -3752,14 +3755,23 @@ function preserveClaudeProviderFields(
   if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
   const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
   const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
-  const pristine = sha256File(currentPath) === prior?.files[relative];
   const priorEntries = prior?.entries?.[relative];
+  const incomingHookHashes = aidlcHookRegistrationHashes(staged.hooks);
+  const ownedHookTargets = new Set([
+    ...Object.keys(incomingHookHashes),
+    ...Object.keys(priorEntries ?? {})
+      .filter((key) => key.startsWith(AIDLC_HOOK_ENTRY_PREFIX))
+      .map((key) => key.slice(AIDLC_HOOK_ENTRY_PREFIX.length)),
+  ]);
   // Start with the shipped object's key order so a pristine refresh is byte-identical.
   if (canonical(current.hooks) !== canonical(staged.hooks)) {
-    if (
-      canonical(aidlcHookRegistrations(current.hooks)) !==
-        canonical(aidlcHookRegistrations(staged.hooks))
-    ) {
+    const currentOwnedHooks = aidlcHookRegistrations(current.hooks, ownedHookTargets);
+    const currentOwnedHash = sha256Bytes(canonical(currentOwnedHooks));
+    const hadLocalHookDrift = priorEntries?.hooksAidlc !== undefined
+      ? currentOwnedHash !== priorEntries.hooksAidlc
+      : canonical(currentOwnedHooks) !==
+        canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
+    if (hadLocalHookDrift) {
       notes.push(
         "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed); your own hook entries were kept.",
       );
@@ -3770,7 +3782,8 @@ function preserveClaudeProviderFields(
       const userGroups = groups.flatMap((group: unknown) => {
         if (!isRecord(group) || !Array.isArray(group.hooks)) return [group];
         const items = group.hooks.filter((item: unknown) =>
-          !isRecord(item) || typeof item.command !== "string" || !isAidlcHookCommand(item.command)
+          !isRecord(item) || typeof item.command !== "string" ||
+          !ownedHookTargets.has(aidlcHookTarget(item.command) ?? "")
         );
         return items.length > 0 ? [{ ...group, hooks: items }] : [];
       });
@@ -3811,7 +3824,7 @@ function preserveClaudeProviderFields(
     staged.statusLine = current.statusLine;
   }
   if (
-    Object.hasOwn(current, "companyAnnouncements") && !pristine &&
+    Object.hasOwn(current, "companyAnnouncements") &&
     sha256Bytes(canonical(current.companyAnnouncements)) !== priorEntries?.companyAnnouncements
   ) {
     if (shippedChanged("companyAnnouncements")) {
@@ -3898,59 +3911,135 @@ const CODEX_FRAMEWORK_TABLES = new Set([
   "tui",
 ]);
 
+const TOML_STRING_VALUE =
+  `(?:'''[\\s\\S]*?'''|"""(?:\\\\[\\s\\S]|"(?!"")|[^"\\\\])*"""|` +
+  `"(?:\\\\.|[^"\\\\\\r\\n])*"|'[^'\\r\\n]*')`;
+
+function codexStringAssignmentPattern(name: string): RegExp {
+  return new RegExp(
+    `[\\t ]*(?:${name}|"${name}"|'${name}')[\\t ]*=[\\t ]*${TOML_STRING_VALUE}` +
+      `[\\t ]*(?:#[^\\r\\n]*)?(?:\\r?\\n|$)`,
+    "y",
+  );
+}
+
 const CODEX_FRAMEWORK_ASSIGNMENTS = [
   {
     name: "developer_instructions",
-    pattern:
-      /[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/y,
+    pattern: codexStringAssignmentPattern("developer_instructions"),
   },
   {
     name: "sandbox_mode",
-    pattern: /[\t ]*(?:sandbox_mode|"sandbox_mode"|'sandbox_mode')[\t ]*=[^\r\n]*(?:\r?\n|$)/y,
+    pattern: codexStringAssignmentPattern("sandbox_mode"),
   },
 ] as const;
 
+type TomlStructuralLine = {
+  start: number;
+  token: number;
+  text: string;
+  table: boolean;
+  tableName: string | null;
+};
+
+function tomlTableHeader(line: string): { table: boolean; name: string | null } {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("[") || !/^\[{1,2}[\s\S]*\]{1,2}(?:\s*#.*)?$/.test(trimmed)) {
+    return { table: false, name: null };
+  }
+  try {
+    Bun.TOML.parse(`${line}\n`);
+  } catch {
+    return { table: false, name: null };
+  }
+  const single = /^\s*\[\s*(?:[A-Za-z0-9_-]+|"(?:\\.|[^"])*"|'[^']*')\s*\]\s*(?:#.*)?$/
+    .test(line);
+  if (!single) return { table: true, name: null };
+  const parsed = Bun.TOML.parse(`${line}\n`) as Record<string, unknown>;
+  const keys = Object.keys(parsed);
+  return { table: true, name: keys.length === 1 ? keys[0] : null };
+}
+
+// Return only lines whose first token is outside TOML strings and collection
+// values. This keeps lookalike assignments and table headers in multiline
+// developer instructions inert.
+function tomlStructuralLines(content: string): TomlStructuralLine[] {
+  const lines: TomlStructuralLine[] = [];
+  let depth = 0;
+  let multiline: `'''` | `"""` | null = null;
+  const pattern = /[^\r\n]*(?:\r\n|\n|$)/g;
+  for (const match of content.matchAll(pattern)) {
+    if (match[0].length === 0) continue;
+    const start = match.index;
+    const text = match[0].replace(/\r?\n$/, "");
+    const leading = /^[\t ]*/.exec(text)?.[0].length ?? 0;
+    if (multiline === null && depth === 0 && leading < text.length && text[leading] !== "#") {
+      const header = tomlTableHeader(text);
+      lines.push({
+        start,
+        token: start + leading,
+        text,
+        table: header.table,
+        tableName: header.name,
+      });
+      if (header.table) continue;
+    }
+    for (let index = 0; index < text.length; index++) {
+      if (multiline !== null) {
+        if (multiline === `"""` && text[index] === "\\") {
+          index++;
+          continue;
+        }
+        if (text.startsWith(multiline, index)) {
+          index += multiline.length - 1;
+          multiline = null;
+        }
+        continue;
+      }
+      const char = text[index];
+      if (char === "#") break;
+      if (char === '"' || char === "'") {
+        const delimiter = char.repeat(3) as `'''` | `"""`;
+        if (text.startsWith(delimiter, index)) {
+          multiline = delimiter;
+          index += delimiter.length - 1;
+          continue;
+        }
+        index++;
+        while (index < text.length && text[index] !== char) {
+          if (char === '"' && text[index] === "\\") index++;
+          index++;
+        }
+        continue;
+      }
+      if (char === "[" || char === "{") depth++;
+      else if (char === "]" || char === "}") depth = Math.max(0, depth - 1);
+    }
+  }
+  return lines;
+}
+
 // Match only real root assignments, not lookalikes in onboarding prose, arrays,
 // or user-owned tables. TOML tables keep their scope through blank lines.
-function codexFrameworkAssignmentMatch(content: string, pattern: RegExp): RegExpExecArray | null {
-  let lineStart = true;
-  let depth = 0;
-  for (let index = 0; index < content.length; index++) {
-    const char = content[index];
-    if (char === "\n") { lineStart = true; continue; }
-    if (char === " " || char === "\t" || char === "\r") continue;
-    if (char === "#") {
-      const end = content.indexOf("\n", index);
-      if (end === -1) break;
-      index = end - 1;
-      continue;
-    }
-    if (lineStart && depth === 0) {
-      if (char === "[") return null;
-      pattern.lastIndex = index;
-      const match = pattern.exec(content);
-      if (match) return match;
-    }
-    lineStart = false;
-    if (char === '"' || char === "'") {
-      const delimiter = content.startsWith(char.repeat(3), index) ? char.repeat(3) : char;
-      index += delimiter.length;
-      while (index < content.length && !content.startsWith(delimiter, index)) {
-        if (char === '"' && content[index] === "\\") index++;
-        index++;
-      }
-      index += delimiter.length - 1;
-    } else if (char === "[" || char === "{") depth++;
-    else if (char === "]" || char === "}") depth--;
+function codexFrameworkAssignmentMatches(
+  content: string,
+  pattern: RegExp,
+): RegExpExecArray[] {
+  const matches: RegExpExecArray[] = [];
+  for (const line of tomlStructuralLines(content)) {
+    if (line.table) break;
+    pattern.lastIndex = line.token;
+    const match = pattern.exec(content);
+    if (match) matches.push(match);
   }
-  return null;
+  return matches;
 }
 
 function codexFrameworkAssignments(
   content: string,
 ): Array<{ name: string; text: string }> {
   return CODEX_FRAMEWORK_ASSIGNMENTS.flatMap(({ name, pattern }) => {
-    const text = codexFrameworkAssignmentMatch(content, pattern)?.[0]
+    const text = codexFrameworkAssignmentMatches(content, pattern)[0]?.[0]
       .replaceAll("\r\n", "\n")
       .trimEnd();
     return text === undefined ? [] : [{ name, text }];
@@ -3959,36 +4048,23 @@ function codexFrameworkAssignments(
 
 function codexSections(
   content: string,
-): Array<{ name: string; text: string }> {
-  const lines = content.split(/\r?\n/);
-  const sections: Array<{ name: string; text: string }> = [];
-  let current: { name: string; lines: string[] } | null = null;
-  for (const line of lines) {
-    const table = /^\s*\[([^\]]+)\]\s*$/.exec(line)?.[1];
-    if (table !== undefined) {
-      if (current) {
-        sections.push({
-          name: current.name,
-          text: current.lines.join("\n").trimEnd(),
-        });
-      }
-      current = { name: table, lines: [line] };
-      continue;
-    }
-    if (current) current.lines.push(line);
-  }
-  if (current) {
-    sections.push({
-      name: current.name,
-      text: current.lines.join("\n").trimEnd(),
-    });
-  }
-  return sections;
+): Array<{ name: string | null; text: string; start: number; end: number }> {
+  const headers = tomlStructuralLines(content).filter((line) => line.table);
+  return headers.map((header, index) => {
+    const end = headers[index + 1]?.start ?? content.length;
+    return {
+      name: header.tableName,
+      text: content.slice(header.start, end).replaceAll("\r\n", "\n").trimEnd(),
+      start: header.start,
+      end,
+    };
+  });
 }
 
 function mergeCodexUserConfiguration(
   staged: string,
   current: string,
+  priorEntries: Record<string, string> | undefined,
   notes: string[],
 ): string {
   // Refresh AI-DLC's tables and assignments; retain every other project entry.
@@ -4000,17 +4076,29 @@ function mergeCodexUserConfiguration(
       ({ name }) => name === assignment.name,
     );
     if (!definition) continue;
-    const existing = codexFrameworkAssignmentMatch(merged, definition.pattern);
-    const currentText = existing?.[0].replaceAll("\r\n", "\n").trimEnd();
-    if (currentText !== assignment.text) {
+    const existing = codexFrameworkAssignmentMatches(merged, definition.pattern);
+    const currentText = existing[0]?.[0].replaceAll("\r\n", "\n").trimEnd();
+    const currentMatchesPrior = existing.length === 1 &&
+      priorEntries?.[assignment.name] === sha256Bytes(currentText ?? "");
+    const locallyChanged = priorEntries?.[assignment.name] === undefined
+      ? existing.length > 0
+      : !currentMatchesPrior;
+    if (
+      (existing.length !== 1 || currentText !== assignment.text) &&
+      locallyChanged
+    ) {
       notes.push(
         `restored the shipped ${assignment.name} assignment in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`,
       );
     }
-    if (currentText === assignment.text) continue;
-    if (existing) {
-      merged = merged.slice(0, existing.index) + `${assignment.text}\n` +
-        merged.slice(existing.index + existing[0].length);
+    if (existing.length === 1 && currentText === assignment.text) continue;
+    if (existing.length > 0) {
+      for (let index = existing.length - 1; index >= 0; index--) {
+        const match = existing[index];
+        const replacement = index === 0 ? `${assignment.text}\n` : "";
+        merged = merged.slice(0, match.index) + replacement +
+          merged.slice(match.index + match[0].length);
+      }
     } else {
       missingAssignments.push(assignment.text);
     }
@@ -4019,35 +4107,56 @@ function mergeCodexUserConfiguration(
     merged = `${missingAssignments.join("\n\n")}\n\n${merged.trimStart()}`;
   }
   const generatedFrameworkSections = codexSections(staged).filter((section) =>
-    CODEX_FRAMEWORK_TABLES.has(section.name)
+    section.name !== null && CODEX_FRAMEWORK_TABLES.has(section.name)
   );
   for (const section of generatedFrameworkSections) {
-    const escaped = section.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(
-      `^[\\t ]*\\[${escaped}\\][\\t ]*(?:\\r?\\n|$)[\\s\\S]*?(?=^[\\t ]*\\[|(?![\\s\\S]))`,
-      "m",
+    const existing = codexSections(merged).filter((candidate) =>
+      candidate.name === section.name
     );
-    const existing = pattern.exec(merged)?.[0];
-    const currentText = existing?.replaceAll("\r\n", "\n").trimEnd();
-    if (currentText !== section.text) {
+    const currentText = existing[0]?.text;
+    const currentMatchesPrior = existing.length === 1 &&
+      priorEntries?.[section.name!] === sha256Bytes(currentText ?? "");
+    const locallyChanged = priorEntries?.[section.name!] === undefined
+      ? existing.length > 0
+      : !currentMatchesPrior;
+    if (
+      (existing.length !== 1 || currentText !== section.text) &&
+      locallyChanged
+    ) {
       notes.push(
         `restored the shipped [${section.name}] table in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`,
       );
     }
-    if (currentText === section.text) continue;
-    if (existing !== undefined) {
-      merged = merged.replace(pattern, () => `${section.text}\n\n`);
+    if (existing.length === 1 && currentText === section.text) continue;
+    if (existing.length > 0) {
+      for (let index = existing.length - 1; index >= 0; index--) {
+        const candidate = existing[index];
+        const replacement = index === 0 ? `${section.text}\n\n` : "";
+        merged = merged.slice(0, candidate.start) + replacement +
+          merged.slice(candidate.end);
+      }
     } else {
       merged = `${merged.trimEnd()}\n\n${section.text}\n`;
     }
   }
-  return merged.endsWith("\n") ? merged : `${merged}\n`;
+  const normalized = merged.endsWith("\n") ? merged : `${merged}\n`;
+  try {
+    Bun.TOML.parse(normalized);
+  } catch (error) {
+    throw new Error(
+      `.codex/config.toml merge produced invalid TOML: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  return normalized;
 }
 
 function preserveCodexProviderFields(
   projectDir: string,
   stagedRoot: string,
   harnessDir: string,
+  prior: Baseline | null,
   notes: string[],
 ): void {
   const relative = `${harnessDir}/config.toml`;
@@ -4058,6 +4167,7 @@ function preserveCodexProviderFields(
   const merged = mergeCodexUserConfiguration(
     readFileSync(stagedPath, "utf-8"),
     current,
+    prior?.entries?.[relative],
     notes,
   );
   writeFileSync(stagedPath, merged);
@@ -4110,7 +4220,7 @@ function preserveUserProviderFields(
       notes,
     );
   } else if (harness === "codex") {
-    preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, notes);
+    preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior, notes);
   } else if (harness === "opencode") {
     preserveOpenCodeProviderFields(projectDir, stagedRoot);
   }
@@ -4170,6 +4280,9 @@ function prepareRefreshSource(
         .map((key) => [key, sha256Bytes(canonical(settings[key]))]),
     );
     entries[rel].hooksAidlc = sha256Bytes(canonical(aidlcHookRegistrations(settings.hooks)));
+    for (const [target, hash] of Object.entries(aidlcHookRegistrationHashes(settings.hooks))) {
+      entries[rel][`${AIDLC_HOOK_ENTRY_PREFIX}${target}`] = hash;
+    }
   } else if (!projectProjection && entries && descriptor.distribution === "codex") {
     const rel = `${descriptor.harnessDir}/config.toml`;
     const config = readFileSync(join(sourceRoot, rel), "utf-8");
@@ -4177,8 +4290,11 @@ function prepareRefreshSource(
       ...codexFrameworkAssignments(config)
         .map((assignment) => [assignment.name, sha256Bytes(assignment.text)]),
       ...codexSections(config)
-        .filter((section) => CODEX_FRAMEWORK_TABLES.has(section.name))
-        .map((section) => [section.name, sha256Bytes(section.text)]),
+        .flatMap((section) =>
+          section.name !== null && CODEX_FRAMEWORK_TABLES.has(section.name)
+            ? [[section.name, sha256Bytes(section.text)]]
+            : []
+        ),
     ]);
   }
   const currentHarness = join(projectDir, descriptor.harnessDir);

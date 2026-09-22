@@ -999,9 +999,16 @@ describe("t294 trust diagnostics", () => {
     )).toBe(true);
   });
 
-  test("doctor warns on changed Claude registrations and ordinary refresh repairs unwired hooks", () => {
+  test("doctor fails changed flow hooks, warns on advisory drift, and ignores project hooks", () => {
     const env = runtimeEnv();
-    const driftLabel = "AI-DLC hook registrations in .claude/settings.json differ from the shipped wiring (you changed them)";
+    const flowHooks = [
+      "continue-workflow",
+      "deliver-stage-rules",
+      "plan-approval-guard",
+      "review-freeze",
+      "reviewer-scope",
+      "state-transition-guard",
+    ];
     for (const [source, hook] of [[DIST, "session-end"], [DIST_RELEASE, "session-start"]]) {
       const project = temp("aidlc-t294-doctor-unwired-");
       mkdirSync(join(project, ".git"));
@@ -1043,59 +1050,96 @@ describe("t294 trust diagnostics", () => {
       const pristine = doctor();
       expect(pristine.checks.some((check) => check.label.includes("shipped but not wired")))
         .toBe(false);
-      expect(pristine.checks.some((check) => check.label === driftLabel)).toBe(false);
+      expect(pristine.checks.some((check) =>
+        check.label.includes("differs from the shipped")
+      )).toBe(false);
 
       const strayHook = "aidlc-evil-instructions.ts";
       writeFileSync(join(project, ".claude", "hooks", strayHook), "// project-owned hook\n");
+      settings.hooks.PreToolUse.push({
+        matcher: "Bash",
+        hooks: [{
+          type: "command",
+          command: `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/${strayHook}"`,
+        }],
+      });
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
       const withStray = doctor();
       expect(withStray.checks.some((check) => check.label.includes(strayHook))).toBe(false);
+      expect(withStray.checks.some((check) =>
+        check.label.includes("differs from the shipped")
+      )).toBe(false);
       expect(withStray.failed).toBe(pristine.failed);
       expect(withStray.status).toBe(pristine.status);
 
-      const guardIndex = settings.hooks.PreToolUse.findIndex(
-        (registration: { hooks: Array<{ command: string }> }) =>
-          registration.hooks.some((entry) => entry.command.includes("plan-approval-guard")),
-      );
-      expect(guardIndex).toBeGreaterThanOrEqual(0);
-      const [guard] = settings.hooks.PreToolUse.splice(guardIndex, 1);
-      settings.hooks.PostToolUse.push(guard);
-      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
-      const moved = doctor();
-      expect(moved.checks).toContainEqual(expect.objectContaining({
-        pass: true,
-        label: driftLabel,
-        severity: "warn",
-      }));
-      expect(moved.checks.some((check) => check.label.includes("shipped but not wired")))
-        .toBe(false);
-      expect(moved.failed).toBe(pristine.failed);
-      expect(moved.status).toBe(pristine.status);
-
-      for (const variant of ["matcher", "command"]) {
+      const registrationFor = (
+        target: string,
+      ): { event: string; registration: { matcher?: string; hooks: Array<{ command: string }> } } => {
+        for (const [event, registrations] of Object.entries(settings.hooks)) {
+          const registration = (registrations as Array<{
+            matcher?: string;
+            hooks: Array<{ command: string }>;
+          }>).find((candidate) =>
+            candidate.hooks.some((entry) => entry.command.includes(`hook ${target}`))
+          );
+          if (registration) return { event, registration };
+        }
+        throw new Error(`missing test registration for ${target}`);
+      };
+      for (const target of flowHooks) {
         settings.hooks = structuredClone(shippedHooks);
-        const registration = settings.hooks.PreToolUse.find(
-          (candidate: { hooks: Array<{ command: string }> }) =>
-            candidate.hooks.some((entry) => entry.command.includes("plan-approval-guard")),
+        const { registration } = registrationFor(target);
+        const item = registration.hooks.find((entry) =>
+          entry.command.includes(`hook ${target}`)
         );
-        expect(registration).toBeDefined();
+        expect(item).toBeDefined();
+        item!.command += " --changed";
+        writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+        const altered = doctor();
+        expect(altered.checks).toContainEqual(expect.objectContaining({
+          pass: false,
+          label:
+            `Flow-altering AI-DLC hook ${target} differs from the shipped event, matcher, or command`,
+        }));
+        expect(altered.failed).toBeGreaterThan(pristine.failed);
+        expect(altered.status).toBe(1);
+      }
+
+      for (const variant of ["event", "matcher"]) {
+        settings.hooks = structuredClone(shippedHooks);
+        const { event, registration } = registrationFor("plan-approval-guard");
         if (variant === "matcher") {
           registration.matcher = "Write";
         } else {
-          registration.hooks[0].command += " --changed";
+          settings.hooks[event] = settings.hooks[event].filter(
+            (candidate: unknown) => candidate !== registration,
+          );
+          settings.hooks.PostToolUse.push(registration);
         }
         writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
         const altered = doctor();
         expect(altered.checks).toContainEqual(expect.objectContaining({
-          pass: true,
-          label: driftLabel,
-          severity: "warn",
+          pass: false,
+          label:
+            "Flow-altering AI-DLC hook plan-approval-guard differs from the shipped event, matcher, or command",
         }));
-        expect(altered.failed).toBe(pristine.failed);
-        expect(altered.status).toBe(pristine.status);
+        expect(altered.status).toBe(1);
       }
 
       settings.hooks = structuredClone(shippedHooks);
+      const sessionStart = registrationFor("session-start").registration;
+      sessionStart.hooks[0].command += " --changed";
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const advisory = doctor();
+      expect(advisory.checks).toContainEqual(expect.objectContaining({
+        pass: true,
+        severity: "warn",
+        label: expect.stringContaining("session-start"),
+      }));
+      expect(advisory.failed).toBe(pristine.failed);
+      expect(advisory.status).toBe(pristine.status);
 
+      settings.hooks = structuredClone(shippedHooks);
       if (hook === "session-end") {
         delete settings.hooks.SessionEnd;
       } else {
@@ -1121,7 +1165,9 @@ describe("t294 trust diagnostics", () => {
       const repaired = doctor();
       expect(repaired.checks.some((check) => check.label.includes("shipped but not wired")))
         .toBe(false);
-      expect(repaired.checks.some((check) => check.label === driftLabel)).toBe(false);
+      expect(repaired.checks.some((check) =>
+        check.label.includes("differs from the shipped")
+      )).toBe(false);
     }
     if (process.platform !== "win32") {
       const project = install("claude");
@@ -1140,7 +1186,7 @@ describe("t294 trust diagnostics", () => {
       expect(human.stdout).not.toContain("\u001b");
       expect(human.stdout).not.toContain("aidlc-x");
     }
-  }, 120_000);
+  }, 180_000);
 });
 
 describe("t294 post-apply outstanding actions", () => {
@@ -2048,6 +2094,56 @@ describe("t294 config diagnostics CLI", () => {
     expect(restoredConfig.model_providers).toEqual(repaired.model_providers);
   }, 90_000);
 
+  test("Codex refresh normalizes equivalent string assignments and quoted framework tables", () => {
+    const env = runtimeEnv();
+    for (const replacement of [
+      'developer_instructions = "team instructions"\n',
+      'developer_instructions = """team\\\n  instructions"""\n',
+    ]) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const shipped = readFileSync(configPath, "utf-8");
+      const edited = shipped.replace(
+        /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m,
+        replacement,
+      ).replace("[tui]", '["tui"]');
+      writeFileSync(configPath, edited);
+
+      const refreshed = run([
+        "config", "--project-dir", project, "--yes",
+      ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const after = readFileSync(configPath, "utf-8");
+      expect(() => parseToml(after)).not.toThrow();
+      expect(after.match(/^\s*(?:"developer_instructions"|'developer_instructions'|developer_instructions)\s*=/gm))
+        .toHaveLength(1);
+      expect(after).toContain("developer_instructions = '''");
+      expect(after).toContain("[tui]");
+      expect(after).not.toContain('["tui"]');
+    }
+  }, 120_000);
+
+  test("Codex refresh collapses duplicate equivalent framework entries before validation", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const shipped = readFileSync(configPath, "utf-8");
+    const duplicate = shipped.replace(
+      "developer_instructions = '''",
+      '"developer_instructions" = "stale"\n\ndeveloper_instructions = \'\'\'',
+    );
+    writeFileSync(configPath, duplicate);
+
+    const refreshed = run([
+      "config", "--project-dir", project, "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = readFileSync(configPath, "utf-8");
+    expect(() => parseToml(after)).not.toThrow();
+    expect(after.match(/^\s*(?:"developer_instructions"|'developer_instructions'|developer_instructions)\s*=/gm))
+      .toHaveLength(1);
+  }, 60_000);
+
   test("release refresh adds framework developer instructions to a legacy Codex config", () => {
     const project = install("codex");
     const env = runtimeEnv();
@@ -2453,10 +2549,11 @@ describe("t294 config diagnostics CLI", () => {
       if (variant === "personal") settings.companyAnnouncements = ["Team reminder"];
       if (variant === "absent") delete settings.companyAnnouncements;
       writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
-      const refreshed = run([
+      const args = [
         "config", "--project-dir", project,
         "--from", source, "--harness", "claude", "--yes",
-      ], project, env);
+      ];
+      const refreshed = run(args, project, env);
       expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
       const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
       expect(after.companyAnnouncements).toEqual(
@@ -2468,6 +2565,10 @@ describe("t294 config diagnostics CLI", () => {
       } else {
         expect(refreshed.stdout).not.toContain("Note:");
       }
+      const second = run(args, project, env);
+      expect(second.status, second.stdout + second.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(settingsPath, "utf-8")).companyAnnouncements)
+        .toEqual(variant === "personal" ? ["Team reminder"] : release.companyAnnouncements);
     }
   }, 120_000);
 
@@ -2485,6 +2586,35 @@ describe("t294 config diagnostics CLI", () => {
       expect(result.stdout).not.toContain("Note:");
       expect(readFileSync(settingsPath, "utf-8")).toBe(installed);
     }
+  }, 60_000);
+
+  test("Claude refresh preserves a wired project hook whose filename starts with aidlc-", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const projectHook = {
+      matcher: "Bash",
+      hooks: [{
+        type: "command",
+        command: 'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-custom-policy.ts"',
+      }],
+    };
+    settings.hooks.PreToolUse.push(projectHook);
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    writeFileSync(
+      join(project, ".claude", "hooks", "aidlc-custom-policy.ts"),
+      "// project-owned policy hook\n",
+    );
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).not.toContain("restored the AI-DLC hook registrations");
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).hooks.PreToolUse)
+      .toContainEqual(projectHook);
   }, 60_000);
 
   test("refresh merges changed shipped Claude entries while preserving user settings", () => {
@@ -2536,20 +2666,22 @@ describe("t294 config diagnostics CLI", () => {
     ];
     const dryRun = run([...args, "--dry-run"], project, env);
     expect(dryRun.status, dryRun.stdout + dryRun.stderr).toBe(0);
-    expect(dryRun.stdout).toContain("Note: restored the AI-DLC hook registrations");
+    expect(dryRun.stdout).not.toContain("Note: restored the AI-DLC hook registrations");
     expect(dryRun.stdout).toContain("Note: added the AI-DLC command allow entries that were missing");
     expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual(settings);
     const dryJson = run([...args, "--dry-run", "--json"], project, env);
     expect(dryJson.status, dryJson.stdout + dryJson.stderr).toBe(0);
     expect(JSON.parse(dryJson.stdout).data.notes).toEqual(expect.arrayContaining([
-      "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed); your own hook entries were kept.",
       "added the AI-DLC command allow entries that were missing from .claude/settings.json; your other permissions were kept.",
     ]));
+    expect(JSON.parse(dryJson.stdout).data.notes).not.toContain(
+      "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed); your own hook entries were kept.",
+    );
     expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual(settings);
 
     const refreshed = run(args, project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).toContain("Note: restored the AI-DLC hook registrations");
+    expect(refreshed.stdout).not.toContain("Note: restored the AI-DLC hook registrations");
     expect(refreshed.stdout).toContain("Note: added the AI-DLC command allow entries that were missing");
     const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
     expect(after.permissions.allow).toEqual(release.permissions.allow);
@@ -2559,13 +2691,25 @@ describe("t294 config diagnostics CLI", () => {
       join(project, ".claude", "tools", "data", "aidlc-manifest.json"),
       "utf-8",
     ));
-    expect(baseline.entries[".claude/settings.json"]).toEqual({
+    expect(baseline.entries[".claude/settings.json"]).toEqual(expect.objectContaining({
       companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooksAidlc: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-    });
+    }));
+    for (const target of [
+      "continue-workflow",
+      "deliver-stage-rules",
+      "plan-approval-guard",
+      "review-freeze",
+      "reviewer-scope",
+      "state-transition-guard",
+    ]) {
+      expect(baseline.entries[".claude/settings.json"][
+        `hooksAidlc:${target}`
+      ]).toMatch(/^sha256:[0-9a-f]{64}$/);
+    }
   }, 120_000);
 
   test("refresh restores Codex framework tables and preserves user MCP tables", () => {
@@ -2611,7 +2755,7 @@ describe("t294 config diagnostics CLI", () => {
       "--yes",
     ], project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).toContain("Note: restored the shipped [tui] table");
+    expect(refreshed.stdout).not.toContain("Note: restored the shipped [tui] table");
     const after = parseToml(readFileSync(configPath, "utf-8"));
     expect(after.tui).toEqual({ status_line: releaseStatus });
     expect(after.mcp_servers).toEqual(ordinaryConfig.mcp_servers);
@@ -2628,6 +2772,7 @@ describe("t294 config diagnostics CLI", () => {
       "--yes",
     ], pristine, env);
     expect(pristineRefresh.status, pristineRefresh.stdout + pristineRefresh.stderr).toBe(0);
+    expect(pristineRefresh.stdout).not.toContain("Note: restored the shipped [tui] table");
     expect(parseToml(readFileSync(join(pristine, ".codex", "config.toml"), "utf-8")).tui)
       .toEqual({ status_line: releaseStatus });
     const baseline = JSON.parse(readFileSync(

@@ -39,7 +39,13 @@ import {
   type LegacyDoctorResult,
   redactSecretPatterns,
 } from "./aidlc-doctor-bundle.ts";
-import { aidlcHookRegistrations, isAidlcHookCommand, sha256Bytes } from "./aidlc-distribution.ts";
+import {
+  AIDLC_HOOK_ENTRY_PREFIX,
+  aidlcHookRegistrationHashes,
+  aidlcHookRegistrations,
+  isAidlcHookCommand,
+  sha256Bytes,
+} from "./aidlc-distribution.ts";
 import {
   artifactsRegistryFor,
   consumedArtifactProducerCollisions,
@@ -2761,6 +2767,15 @@ function projectSettingsRepair(distribution: string): string {
   return `run \`${invoke} config --harness ${distribution}${source}\` to restore ${explanation}`;
 }
 
+const FLOW_ALTERING_CLAUDE_HOOKS = new Set([
+  "continue-workflow",
+  "deliver-stage-rules",
+  "plan-approval-guard",
+  "review-freeze",
+  "reviewer-scope",
+  "state-transition-guard",
+]);
+
 function projectedFileRepair(
   distribution: string,
   relativePath: string,
@@ -3247,19 +3262,56 @@ export async function collectDoctorReport(
             });
           }
         }
-        // Only the AI-DLC-only projection is comparable; a baseline that
-        // predates it has nothing to say about drift.
-        const shippedHooksHash = manifest?.entries?.[".claude/settings.json"]?.hooksAidlc;
-        if (
-          typeof shippedHooksHash === "string" &&
-          sha256Bytes(canonical(aidlcHookRegistrations(settingsHooks))) !== shippedHooksHash
-        ) {
-          results.push({
-            pass: true,
-            severity: "warn",
-            label: "AI-DLC hook registrations in .claude/settings.json differ from the shipped wiring (you changed them)",
-            fix: projectSettingsRepair("claude"),
-          });
+        const hookEntries = manifest?.entries?.[".claude/settings.json"] ?? {};
+        const expectedHookHashes = Object.fromEntries(
+          Object.entries(hookEntries)
+            .filter(([key]) => key.startsWith(AIDLC_HOOK_ENTRY_PREFIX))
+            .map(([key, hash]) => [key.slice(AIDLC_HOOK_ENTRY_PREFIX.length), hash]),
+        );
+        const ownedTargets = new Set(Object.keys(expectedHookHashes));
+        if (ownedTargets.size > 0) {
+          const currentHookHashes = aidlcHookRegistrationHashes(settingsHooks, ownedTargets);
+          const drifted = [...ownedTargets].filter((target) =>
+            currentHookHashes[target] !== expectedHookHashes[target]
+          );
+          const blocking = drifted.filter((target) =>
+            FLOW_ALTERING_CLAUDE_HOOKS.has(target)
+          );
+          const advisory = drifted.filter((target) =>
+            !FLOW_ALTERING_CLAUDE_HOOKS.has(target)
+          );
+          for (const target of blocking) {
+            results.push({
+              pass: false,
+              label:
+                `Flow-altering AI-DLC hook ${target} differs from the shipped event, matcher, or command`,
+              fix: projectSettingsRepair("claude"),
+            });
+          }
+          if (advisory.length > 0) {
+            results.push({
+              pass: true,
+              severity: "warn",
+              label:
+                `AI-DLC hook registrations in .claude/settings.json differ from the shipped wiring: ${advisory.join(", ")}`,
+              fix: projectSettingsRepair("claude"),
+            });
+          }
+        } else {
+          // Baselines from before per-target hook ownership can detect drift,
+          // but cannot safely distinguish a flow-altering registration.
+          const shippedHooksHash = hookEntries.hooksAidlc;
+          if (
+            typeof shippedHooksHash === "string" &&
+            sha256Bytes(canonical(aidlcHookRegistrations(settingsHooks))) !== shippedHooksHash
+          ) {
+            results.push({
+              pass: true,
+              severity: "warn",
+              label: "AI-DLC hook registrations in .claude/settings.json differ from the shipped wiring (you changed them)",
+              fix: projectSettingsRepair("claude"),
+            });
+          }
         }
       } catch {
         // Legacy and unmanifested projects have no shipped baseline to compare.
