@@ -1328,6 +1328,43 @@ describe("t265b hook lifecycle", () => {
     }
   }, 30_000);
 
+  test("admitting the answer does not admit a jump the human never selected", () => {
+    const proj = scratchProject();
+    try {
+      const state = seedRestartRecoveryState(proj);
+      // An ask that offers no restart remedy: the only ways out it names are a
+      // review and Request Changes.
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: GUARD_RECOVERY_ASK_TYPE,
+        stage: "code-generation",
+        state_sha256: stateDigest(state),
+        remedies: [
+          { op: "request-review", action: "Request a review of the current work." },
+          { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
+        ],
+      });
+      recordRecoverySelection(proj, "Ask what should change.");
+      recordRecoverySelection(proj, "Rework the payload contract.");
+
+      const reject =
+        'aidlc engine state reject code-generation --user-input "Request Changes" ' +
+        '--reason "Rework the payload contract."';
+      expect(runHook(proj, BASH(reject)).code).toBe(0);
+      // The restart continuation still needs its own selected remedy, so the
+      // Request Changes selection admits the reject and nothing else.
+      expect(
+        runHook(
+          proj,
+          BASH("aidlc engine jump execute --target code-generation --direction redo --scope poc"),
+        ).code,
+      ).toBe(2);
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("a different selected remedy does not admit the Request Changes answer", () => {
     const proj = scratchProject();
     try {
