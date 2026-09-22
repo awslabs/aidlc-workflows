@@ -31,6 +31,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -1070,6 +1071,62 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
 
       closeDelegationWindow(dir, "aidlc-design-agent");
       expect(runAdapter(dir, "state-transition-guard", lifecycle).code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The ledger sits under the project-controlled `aidlc/.aidlc-sessions` tree, which
+  // .gitignore does not cover -- so the repository itself can make the write fail.
+  // Before this guard the adapter swallowed that failure and admitted the dispatch,
+  // and because both persona guards return 0 on an empty agent_type, the delegate
+  // then ran with the delegated-review read boundary and the lifecycle-command
+  // restrictions skipped. A repo could therefore switch the guards off by committing
+  // one file. Both obstruction shapes are asserted: a plain file where a directory is
+  // needed, and a planted symlink.
+  test("5d1b: a dispatch is refused when the delegation ledger path is obstructed", () => {
+    const dir = scratchProject(false);
+    try {
+      // A regular file exactly where the sessions root has to be a directory.
+      const sessions = join(dir, "aidlc", ".aidlc-sessions");
+      rmSync(sessions, { recursive: true, force: true });
+      mkdirSync(dirname(sessions), { recursive: true });
+      writeFileSync(sessions, "planted by the repository\n");
+
+      const refused = runAdapter(dir, "log-subagent", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "subagent_aidlc-design-agent",
+        tool_input: { prompt: "delegate to aidlc-design-agent" },
+      });
+      expect(refused.code, refused.stdout + refused.stderr).toBe(2);
+      expect(refused.stderr).toContain("not a directory");
+      expect(refused.stderr).toContain("Refusing this dispatch");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d1c: a symlink planted inside the ledger path refuses the dispatch too", () => {
+    const dir = scratchProject(false);
+    try {
+      // Everything below the sessions root is created by the adapter, so a symlink
+      // there was planted. It is refused rather than followed -- following it would
+      // let a repository redirect attribution writes out of the workspace.
+      const elsewhere = mkdtempSync(join(tmpdir(), "t147-ledger-escape-"));
+      const sessions = join(dir, "aidlc", ".aidlc-sessions");
+      mkdirSync(sessions, { recursive: true });
+      symlinkSync(elsewhere, join(sessions, "kiro-delegation"));
+
+      const refused = runAdapter(dir, "log-subagent", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "subagent_aidlc-design-agent",
+        tool_input: { prompt: "delegate to aidlc-design-agent" },
+      });
+      expect(refused.code, refused.stdout + refused.stderr).toBe(2);
+      expect(refused.stderr).toContain("is a symbolic link");
+      rmSync(elsewhere, { recursive: true, force: true });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -125,9 +125,11 @@ import {
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 
@@ -1518,7 +1520,25 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
       // Admitted. Anything the guard printed on the way through belongs to the human -
       // the relaxed Change Control notice is written exactly once, here.
       if (admission.stdout.trim().length > 0) process.stdout.write(admission.stdout);
-      openDelegation(latchSession, payload, kiroDispatch(payload)?.agents ?? []);
+      const ledgerRefusal = openDelegation(
+        latchSession,
+        payload,
+        kiroDispatch(payload)?.agents ?? [],
+      );
+      if (ledgerRefusal !== null) {
+        // Fail CLOSED. Without a durable window the delegate's calls carry no
+        // agent_type, and both persona guards return 0 on an empty one -- so letting
+        // the dispatch through would run the delegate with the delegated-review read
+        // boundary and the lifecycle-command restrictions skipped. The ledger sits
+        // under a project-controlled path, so that outcome is reachable by the
+        // repository itself, which is what makes refusing the only safe answer.
+        process.stderr.write(
+          `${ledgerRefusal} Refusing this dispatch: a delegate whose window was never ` +
+            "recorded runs with the reviewer-scope and state-transition guards " +
+            "skipped. Remove the obstruction under aidlc/.aidlc-sessions, then retry.\n",
+        );
+        return 2;
+      }
     } else if (ide.event === "PostToolUse") {
       closeDelegation(latchSession, payload);
     }
@@ -2358,8 +2378,8 @@ function readDelegationLedger(sessionId: string): DelegationRecord[] {
   return out;
 }
 
-function appendDelegationRecords(sessionId: string, records: DelegationRecord[]): void {
-  if (records.length === 0) return;
+function appendDelegationRecords(sessionId: string, records: DelegationRecord[]): boolean {
+  if (records.length === 0) return true;
   try {
     const path = delegationLedgerPath(sessionId);
     mkdirSync(dirname(path), { recursive: true });
@@ -2368,10 +2388,52 @@ function appendDelegationRecords(sessionId: string, records: DelegationRecord[])
       `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
       "utf-8",
     );
+    return true;
   } catch {
-    // Best-effort attribution. A ledger we cannot append to costs the agent_type
-    // on the calls inside this window; it must never fail the tool call itself.
+    // The CALLER decides what a failure costs, because the two edges are not
+    // symmetric. A close that cannot be written leaves the window inflight, which
+    // errs toward attributing rather than toward silence, so closeDelegation stays
+    // best-effort. An OPEN that cannot be written is the opposite: the delegate would
+    // run with no agent_type at all, and both persona guards return 0 on an empty
+    // agent_type (aidlc-reviewer-scope.ts, aidlc-state-transition-guard.ts), so the
+    // delegate would execute with their restrictions skipped. That one is refused.
+    return false;
   }
+}
+
+// The ledger lives under the PROJECT-controlled `aidlc/.aidlc-sessions` tree, and
+// .gitignore does not cover it -- so a repository can commit a regular file, or plant
+// a symlink, where this code needs a directory. `mkdirSync(..., { recursive: true })`
+// then fails ENOTDIR and no record is ever written. Detecting it before dispatch is
+// what lets the refusal name the cause instead of the delegate silently running
+// unattributed.
+//
+// The rule differs by component on purpose. The sessions root may legitimately be a
+// symlink the user chose, so it is only required to resolve to a directory. Everything
+// below it is created by this code, so a symlink there was planted and is refused
+// outright rather than followed.
+function delegationLedgerObstruction(sessionId: string): string | null {
+  const root = resolve(sessionsDir(projectDir));
+  const leaf = dirname(resolve(delegationLedgerPath(sessionId)));
+  try {
+    if (!statSync(root).isDirectory()) return `${root} is not a directory`;
+  } catch {
+    return null; // Absent: mkdirSync will create the whole chain.
+  }
+  let cursor = root;
+  for (const part of relative(root, leaf).split(sep)) {
+    if (part.length === 0) continue;
+    cursor = join(cursor, part);
+    let entry;
+    try {
+      entry = lstatSync(cursor);
+    } catch {
+      return null; // Absent from here down.
+    }
+    if (entry.isSymbolicLink()) return `${cursor} is a symbolic link`;
+    if (!entry.isDirectory()) return `${cursor} is not a directory`;
+  }
+  return null;
 }
 
 // One dispatch, one key. Pre and Post carry byte-identical tool_input for the
@@ -2384,19 +2446,34 @@ function delegationKey(input: KiroHookInput): string {
     .digest("hex");
 }
 
-function openDelegation(sessionId: string, input: KiroHookInput, agents: string[]): void {
+// Returns null when the window is durably open, or a one-clause reason when it is
+// not. A reason means the caller MUST refuse the dispatch: see appendDelegationRecords
+// for why an unattributed delegate is worse than a refused one.
+function openDelegation(
+  sessionId: string,
+  input: KiroHookInput,
+  agents: string[],
+): string | null {
   const named = agents.map((agent) => agent.trim()).filter((agent) => agent.length > 0);
-  if (named.length === 0) return;
+  if (named.length === 0) return null;
+  const obstruction = delegationLedgerObstruction(sessionId);
+  if (obstruction !== null) return `The delegation ledger cannot be written: ${obstruction}.`;
   const key = delegationKey(input);
   const ts = Date.now();
   const group = `${ts.toString(36)}-${randomUUID()}`;
-  appendDelegationRecords(
+  return appendDelegationRecords(
     sessionId,
     named.map((agent) => ({ op: "open" as const, agent, key, group, ts })),
-  );
+  )
+    ? null
+    : "The delegation ledger could not be appended to.";
 }
 
 function closeDelegation(sessionId: string, input: KiroHookInput): void {
+  // Deliberately best-effort, and deliberately NOT symmetric with the open edge: a
+  // close that does not land leaves the window inflight until its TTU, which keeps
+  // attributing rather than silently stopping. The open edge is the one that must
+  // fail closed.
   appendDelegationRecords(sessionId, [
     { op: "close", key: delegationKey(input), ts: Date.now() },
   ]);
