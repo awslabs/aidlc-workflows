@@ -45,6 +45,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  activeSpace,
   classifyTerminalCommand,
   decodeHarnessPlainText,
   hasOpenGate,
@@ -170,6 +171,52 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
     agents: agent ? [agent] : [],
     prompt,
   };
+}
+
+function nativePreloadError(projectDir: string, agents: string[]): string | null {
+  // Use the same active-space cursor as repointHarnessIncludes. Validate the
+  // persisted result rather than repointing here: Kiro may already have read
+  // the config, and a skipped or failed repoint must not silently admit work.
+  const space = activeSpace(projectDir);
+  const pattern = `aidlc/spaces/${space}/memory/**/*.md`;
+  const expected = `file://${pattern}`;
+  const workerFile = (agent: string) => join(projectDir, ".kiro", "agents", `${agent}.json`);
+  const failure = (file: string, reason: string) =>
+    `[aidlc] Worker dispatch blocked: ${file}: ${reason}. ` +
+    `Expected resources to include ${expected}, resolving to at least one existing Markdown file. ` +
+    `Repair the worker JSON and memory files, then rerun /aidlc space switch ${space} ` +
+    `to repoint the resources and /aidlc --doctor before retrying.\n`;
+  if (agents.length === 0) {
+    return failure(workerFile("<name>"), "the dispatch does not identify a worker");
+  }
+  for (const agent of new Set(agents)) {
+    const file = workerFile(agent);
+    if (!/^[a-zA-Z0-9_-]+$/.test(agent)) {
+      return failure(file, "the worker name is not a project-local agent filename");
+    }
+    try {
+      const config: unknown = JSON.parse(readFileSync(file, "utf-8"));
+      if (
+        config === null || typeof config !== "object" ||
+        !("resources" in config) || !Array.isArray(config.resources) ||
+        !config.resources.includes(expected)
+      ) {
+        return failure(file, "the active-space memory preload is absent or stale (the repoint may have been skipped)");
+      }
+    } catch (error) {
+      return failure(file, `cannot read or parse the worker config: ${String(error).replace(/[\r\n]+/g, " ")}`);
+    }
+  }
+  try {
+    for (const _file of new Bun.Glob(pattern).scanSync({
+      cwd: projectDir,
+      onlyFiles: true,
+      followSymlinks: false,
+    })) return null;
+    return failure(workerFile(agents[0]), "the active-space memory glob resolves to no Markdown files");
+  } catch (error) {
+    return failure(workerFile(agents[0]), `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`);
+  }
 }
 
 export async function run(
@@ -829,16 +876,23 @@ if (target === "review-freeze") {
 // updated tool input, and a block-with-retry contract deadlocks live: the
 // conductor cannot reliably reproduce a multi-KB bundle byte-exactly, so
 // every retry re-blocks (observed on the ACP gate - zero dispatches
-// converged). Kiro is also the ONE harness where the rules invariant already
-// holds without the brief: every delegated agent's config preloads the full
-// active memory tree via its `resources` glob, so the worker holds the rules
-// before it reads the brief. Run the shared augmenter as an OBSERVER: complete
-// and preload-served incomplete briefs pass silently; the latter logs only
-// through opt-in hookDebug. Core exit 2 still blocks with repair guidance;
-// exit 3 remains an advisory. Other harnesses keep verbatim brief delivery.
+// converged). Kiro's delegated agents instead preload the full active memory
+// tree via their `resources` glob. Check every selected worker's persisted
+// preload before running the shared augmenter as an OBSERVER: complete and
+// preload-served incomplete briefs pass silently; the latter logs only through
+// opt-in hookDebug. Failed preloads and core exit 2 block with repair guidance;
+// exit 3 is advisory only after preload validation succeeds.
 if (target === "deliver-stage-rules") {
   const dispatch = kiroDispatch(kiro);
   if (dispatch === null) return 0;
+  const preloadError = nativePreloadError(projectDir, dispatch.agents);
+  if (preloadError !== null) {
+    process.stderr.write(preloadError);
+    hookDebug(projectDir, "kiro-adapter", "Native active-space memory preload failed", {
+      target, transport: "native-preload", error: preloadError.trim(),
+    });
+    return 2;
+  }
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "deliver-stage-rules"]
@@ -862,8 +916,7 @@ if (target === "deliver-stage-rules") {
   });
   if (r.exitCode === 2) {
     // A required rule file could not be loaded at all (missing/unreadable):
-    // that is real missing steering with no preload to fall back on - the
-    // one case that still blocks, with the core hook's repair guidance.
+    // a resolving glob alone cannot supply that missing steering.
     process.stderr.write(r.stderr?.toString() ?? "");
     return 2;
   }

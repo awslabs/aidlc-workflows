@@ -110,6 +110,11 @@ function seedShell(dir: string): void {
 function scratchProject(withState: boolean): string {
   const dir = mkdtempSync(join(tmpdir(), "t147-"));
   cpSync(KIRO_TREE, join(dir, ".kiro"), { recursive: true });
+  // Exercise the authored shim even when the packaged dependency tree is older.
+  cpSync(
+    join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"),
+    join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
+  );
   seedShell(dir);
   if (withState) {
     // State fixture into the default record so the active-intent cursor resolves.
@@ -859,7 +864,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     try {
       const memory = join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory");
       cpSync(join(REPO_ROOT, "core", "memory"), memory, { recursive: true });
-      const rule = "# Native rule delivery\n" + "Keep the full rule: café 日本語; never invent a token.\n".repeat(900);
+      const rule = `# Native rule delivery\n${"Keep the full rule: café 日本語; never invent a token.\n".repeat(900)}`;
       writeFileSync(join(memory, "org.md"), rule);
       const stateBefore = readFileSync(seededStateFile(dir), "utf8");
       const started = () => (readAudit(dir).match(/\*\*Event\*\*: STAGE_STARTED/g) ?? []).length;
@@ -1109,7 +1114,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         `# Organization\n\n${"x".repeat(600_000)}\n`,
         "utf-8",
       );
-      const oversized = runAdapter(oversizedDir, "deliver-stage-rules", {
+      const payload = {
         cwd: oversizedDir,
         tool_name: "subagent",
         tool_input: {
@@ -1117,13 +1122,24 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
             role: "aidlc-product-agent",
             prompt_template:
               "Run .kiro/aidlc-common/stages/inception/user-stories.md.",
+          }, {
+            role: "aidlc-quality-agent",
+            prompt_template: "Review the user stories.",
           }],
         },
-      });
+      };
+      const oversized = runAdapter(oversizedDir, "deliver-stage-rules", payload);
       expect(oversized.code, oversized.stderr).toBe(0);
       expect(oversized.stdout).toBe("");
       expect(oversized.stderr).toContain("exceeds the safe");
       expect(oversized.stderr).toContain("active-memory preload fallback");
+      const workerFile = join(oversizedDir, ".kiro", "agents", "aidlc-quality-agent.json");
+      writeFileSync(workerFile, JSON.stringify({ resources: [] }));
+      const blocked = runAdapter(oversizedDir, "deliver-stage-rules", payload);
+      expect(blocked.code, blocked.stderr).toBe(2);
+      expect(blocked.stdout).toBe("");
+      expect(blocked.stderr).toContain(workerFile);
+      expect(blocked.stderr).not.toContain("active-memory preload fallback");
     } finally {
       rmSync(oversizedDir, { recursive: true, force: true });
     }
@@ -1160,6 +1176,94 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(missing.stderr).toContain("Cannot load required stage rule");
     } finally {
       rmSync(missingDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["empty resources", JSON.stringify({ resources: [] })],
+    ["absent resources", "{}"],
+    ["stale-space glob", JSON.stringify({ resources: ["file://aidlc/spaces/old-space/memory/**/*.md"] })],
+    ["malformed JSON", "{not json"],
+    ["missing worker file", null],
+    ["partial memory glob", JSON.stringify({ resources: ["file://aidlc/spaces/default/memory/org*.md"] })],
+  ])("native preload blocks %s and names the worker repair", (_name, config) => {
+    const dir = scratchProject(false);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      const memory = join(dir, "aidlc", "spaces", "default", "memory");
+      writeFileSync(join(memory, "org.md"), "# Organization\n\nKeep the mandated review.\n");
+      const oldMemory = join(dir, "aidlc", "spaces", "old-space", "memory");
+      mkdirSync(oldMemory, { recursive: true });
+      writeFileSync(join(oldMemory, "org.md"), "# Previous organization\n");
+      if (config === null) rmSync(workerFile);
+      else writeFileSync(workerFile, config);
+
+      const result = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "invoke_sub_agent",
+        tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
+      });
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(workerFile);
+      expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      expect(result.stderr).toContain("/aidlc space switch default");
+      expect(result.stderr).toContain("/aidlc --doctor");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload allows a repaired resource with a nested memory file", () => {
+    const dir = scratchProject(false);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      const phases = join(dir, "aidlc", "spaces", "default", "memory", "phases");
+      mkdirSync(phases, { recursive: true });
+      writeFileSync(join(phases, "inception.md"), "# Inception\n\nKeep the phase mandates.\n");
+      const payload = {
+        cwd: dir,
+        tool_name: "subagent_aidlc-product-agent",
+        tool_input: { prompt: "Inspect the project." },
+      };
+      writeFileSync(workerFile, JSON.stringify({ resources: [] }));
+      expect(runAdapter(dir, "deliver-stage-rules", payload).code).toBe(2);
+
+      writeFileSync(workerFile, JSON.stringify({
+        resources: ["skill://aidlc", "file://aidlc/spaces/default/memory/**/*.md"],
+      }));
+      const result = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload blocks a correct glob with no Markdown files", () => {
+    const dir = scratchProject(false);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      writeFileSync(workerFile, JSON.stringify({
+        resources: ["file://aidlc/spaces/default/memory/**/*.md"],
+      }));
+      const memory = join(dir, "aidlc", "spaces", "default", "memory");
+      writeFileSync(join(memory, "notes.txt"), "Not a rule file.\n");
+      mkdirSync(join(memory, "not-a-file.md"));
+      const result = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [{ role: "aidlc-product-agent", prompt_template: "Inspect the project." }],
+        },
+      });
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(workerFile);
+      expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
