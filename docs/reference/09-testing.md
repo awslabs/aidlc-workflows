@@ -14,11 +14,11 @@ classic three-layer test pyramid that balances speed vs. thoroughness:
 ```
             /\
            /  \    ACCEPTANCE — full workflows, artifact + experience verification
-          / L3 \   Level: e2e  ·  When: preview and stable release gates
+          / L3 \   Level: e2e  ·  When: local --release/--all; release gates
          /------\
         /        \
        /   L2     \  STAGE — individual stages with stub input, verify artifacts
-      /------------\ Level: integration  ·  When: preview and stable release gates
+      /------------\ Level: integration  ·  When: local default/--ci; release gates
      /              \
     /      L1        \  PROTOCOL — contracts, structure, cross-references
    /------------------\ Levels: smoke + unit  ·  When: local changes and PR CI
