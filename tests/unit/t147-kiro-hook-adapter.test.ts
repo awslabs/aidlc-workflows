@@ -118,6 +118,7 @@ function scratchProject(withState: boolean): string {
     join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
   );
   seedShell(dir);
+  seedActiveSpaceMemory(dir);
   if (withState) {
     // State fixture into the default record so the active-intent cursor resolves.
     writeFileSync(
@@ -227,6 +228,36 @@ function runAdapter(
   };
 }
 
+// The dispatch-ADMISSION edge, which on this row is reached through the
+// `log-subagent` PreToolUse registration and nothing else. There is deliberately no
+// `aidlc-deliver-stage-rules.json`: always-included steering plus the delegate's own
+// `resources` preload is the delivery channel, and `t245` pins that absence. So the
+// admission half - refusing a dispatch whose delegate would start with no rules
+// preloaded - rides the one manifest whose matcher is exactly the dispatch tools.
+//
+// These tests used to call a bare `deliver-stage-rules` target. That proved the
+// handler worked and said NOTHING about whether production ever reached it, which
+// is how a target with no registration at all stayed green here for a full review
+// cycle. Go through the registered target instead.
+/** Invoke the admission edge the way a manifest does: registered target, registered
+ *  trigger. The event is pinned because the adapter admits only on PreToolUse - a
+ *  payload omitting it would silently skip every check these tests assert. The
+ *  spelling matches the live-captured fixture; the adapter canonicalizes both. */
+function runDispatchAdmission(
+  projectDir: string,
+  payload: Record<string, unknown>,
+  extraArgs: string[] = [],
+  envOverrides: NodeJS.ProcessEnv = {},
+): { stdout: string; stderr: string; code: number } {
+  return runAdapter(
+    projectDir,
+    "log-subagent",
+    { hook_event_name: "preToolUse", ...payload },
+    extraArgs,
+    envOverrides,
+  );
+}
+
 // The delegation window is how a guard learns WHO is acting now that the
 // per-agent registration (and its persona argv) is gone. Opening it is the same
 // event Kiro sends when the conductor delegates: the dispatch tool's PreToolUse.
@@ -241,6 +272,25 @@ function findDelegationLedger(projectDir: string): string {
   return join(root, buckets[0], "windows.ndjson");
 }
 
+/** The active-space memory tree every real project has, copied from the shipped one.
+ *  `scratchProject` seeds it because the dispatch admission edge now reaches production:
+ *  it refuses a delegation whose worker preload resolves to no rule file, and it forwards
+ *  the core rule loader's refusal when a REQUIRED stage rule is missing. Both are
+ *  upstream's designed contract, which these tests are not exempt from. So the DEFAULT
+ *  fixture is admissible, as a real project is, and a test that wants a refusal creates
+ *  the defect itself. Seeds only when absent, so a case that supplies its own tree or
+ *  deliberately empties one is left alone. */
+function seedActiveSpaceMemory(projectDir: string): void {
+  const memory = join(projectDir, "aidlc", "spaces", "default", "memory");
+  if (existsSync(join(memory, "org.md"))) return;
+  mkdirSync(dirname(memory), { recursive: true });
+  cpSync(
+    join(REPO_ROOT, "dist", "kiro", "aidlc", "spaces", "default", "memory"),
+    memory,
+    { recursive: true },
+  );
+}
+
 function openDelegationWindow(projectDir: string, agent: string): void {
   const r = runAdapter(projectDir, "log-subagent", {
     hook_event_name: "PreToolUse",
@@ -248,7 +298,7 @@ function openDelegationWindow(projectDir: string, agent: string): void {
     tool_name: `subagent_${agent}`,
     tool_input: { prompt: `delegate to ${agent}` },
   });
-  expect(r.code, `open window for ${agent}`).toBe(0);
+  expect(r.code, `open window for ${agent}: ${r.stdout}${r.stderr}`).toBe(0);
 }
 
 function closeDelegationWindow(projectDir: string, agent: string): void {
@@ -634,7 +684,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         tool_name: "subagent_response",
         tool_input: { subagent_type: "aidlc-developer-agent" },
       };
-      for (const target of ["deliver-stage-rules", "plan-approval-guard"]) {
+      for (const target of ["log-subagent", "plan-approval-guard"]) {
         const r = runAdapter(dir, target, payload);
         expect(r.code, target).toBe(0);
         expect(r.stdout, target).toBe("");
@@ -1128,18 +1178,13 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
 
       // Native preload is the delivery channel, so an incomplete brief is
       // expected and silent. Its diagnostic is opt-in, not a retry warning.
-      const incomplete = runAdapter(
-        dir,
-        "deliver-stage-rules",
-        payload(basePrompt),
-      );
+      const incomplete = runDispatchAdmission(dir, payload(basePrompt));
       expect(incomplete.code, incomplete.stderr).toBe(0);
       expect(incomplete.stdout).toBe("");
       expect(incomplete.stderr).toBe("");
       const debugLog = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "hook-debug.log");
-      const traced = runAdapter(
+      const traced = runDispatchAdmission(
         dir,
-        "deliver-stage-rules",
         payload(basePrompt),
         [],
         { AIDLC_HOOK_DEBUG: "1" },
@@ -1148,7 +1193,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(traced.stdout).toBe("");
       expect(traced.stderr).toBe("");
       expect(readFileSync(debugLog, "utf-8")).toContain(
-        'target="deliver-stage-rules" transport="native-preload"',
+        'target="log-subagent" transport="native-preload"',
       );
 
       const proposed = runDispatchCore(dir, payload(basePrompt));
@@ -1164,16 +1209,12 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         rewrite.hookSpecificOutput?.updatedInput?.stages?.[0]?.prompt_template ??
         "";
       expect(exactPrompt).toContain("AIDLC_DISPATCH_RULES_BEGIN");
-      const complete = runAdapter(
-        dir,
-        "deliver-stage-rules",
-        payload(exactPrompt),
-      );
+      const complete = runDispatchAdmission(dir, payload(exactPrompt));
       expect(complete.code, complete.stderr).toBe(0);
       expect(complete.stdout).toBe("");
       expect(complete.stderr).toBe("");
 
-      const direct = runAdapter(dir, "deliver-stage-rules", {
+      const direct = runDispatchAdmission(dir, {
         ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
         cwd: dir,
         tool_input: { name: "aidlc-product-agent", prompt: basePrompt },
@@ -1182,7 +1223,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(direct.stdout).toBe("");
       expect(direct.stderr).toBe("");
 
-      const blankPrompt = runAdapter(dir, "deliver-stage-rules", {
+      const blankPrompt = runDispatchAdmission(dir, {
         ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
         cwd: dir,
         tool_name: "subagent",
@@ -1235,7 +1276,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
           }],
         },
       };
-      const oversized = runAdapter(oversizedDir, "deliver-stage-rules", payload);
+      const oversized = runDispatchAdmission(oversizedDir, payload);
       expect(oversized.code, oversized.stderr).toBe(0);
       expect(oversized.stdout).toBe("");
       expect(oversized.stderr).toContain("exceeds the safe");
@@ -1249,7 +1290,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         "aidlc-quality-agent",
         workerFrontmatter("aidlc-quality-agent", []),
       );
-      const blocked = runAdapter(oversizedDir, "deliver-stage-rules", payload);
+      const blocked = runDispatchAdmission(oversizedDir, payload);
       expect(blocked.code, blocked.stderr).toBe(2);
       expect(blocked.stdout).toBe("");
       expect(blocked.stderr).toContain(workerFile);
@@ -1275,7 +1316,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
           "org.md",
         ),
       );
-      const missing = runAdapter(missingDir, "deliver-stage-rules", {
+      const missing = runDispatchAdmission(missingDir, {
         cwd: missingDir,
         tool_name: "subagent",
         tool_input: {
@@ -1353,7 +1394,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       writeFileSync(join(oldMemory, "org.md"), "# Previous organization\n");
       const workerFile = writeWorkerConfig(dir, "aidlc-product-agent", frontmatter);
 
-      const result = runAdapter(dir, "deliver-stage-rules", {
+      const result = runDispatchAdmission(dir, {
         cwd: dir,
         tool_name: "invoke_sub_agent",
         tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
@@ -1388,7 +1429,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       rmSync(workerFile);
       mkdirSync(workerFile);
 
-      const result = runAdapter(dir, "deliver-stage-rules", {
+      const result = runDispatchAdmission(dir, {
         cwd: dir,
         tool_name: "invoke_sub_agent",
         tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
@@ -1416,14 +1457,14 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         tool_name: "invoke_sub_agent",
         tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
       };
-      expect(runAdapter(dir, "deliver-stage-rules", payload).code).toBe(2);
+      expect(runDispatchAdmission(dir, payload).code).toBe(2);
 
       writeWorkerConfig(
         dir,
         "aidlc-product-agent",
         workerFrontmatter("aidlc-product-agent", ["skill://aidlc", MEMORY_GLOB]),
       );
-      const repaired = runAdapter(dir, "deliver-stage-rules", payload);
+      const repaired = runDispatchAdmission(dir, payload);
       expect(repaired.code, repaired.stderr).toBe(0);
       expect(repaired.stdout).toBe("");
       expect(repaired.stderr).toBe("");
@@ -1441,11 +1482,15 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         workerFrontmatter("aidlc-product-agent", [MEMORY_GLOB]),
       );
       const memory = join(dir, "aidlc", "spaces", "default", "memory");
+      // The fixture is admissible by default, so this case has to create the
+      // condition it asserts: a glob that is correct and matches nothing.
+      rmSync(memory, { recursive: true, force: true });
+      mkdirSync(memory, { recursive: true });
       writeFileSync(join(memory, "notes.txt"), "Not a rule file.\n");
       // A directory named like a rule file: the glob matches the name, so only
       // an onlyFiles scan tells the difference.
       mkdirSync(join(memory, "not-a-file.md"));
-      const result = runAdapter(dir, "deliver-stage-rules", {
+      const result = runDispatchAdmission(dir, {
         cwd: dir,
         tool_name: "subagent",
         tool_input: {
@@ -1469,7 +1514,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       const helper = "aidlc-custom-helper-agent";
       writeWorkerConfig(dir, helper, workerFrontmatter(helper, []));
       rmSync(join(dir, ".kiro", "agents", `${helper}.md`));
-      const result = runAdapter(dir, "deliver-stage-rules", {
+      const result = runDispatchAdmission(dir, {
         cwd: dir,
         tool_name: "invoke_sub_agent",
         tool_input: { name: helper, prompt: "Inspect the project." },
@@ -1492,7 +1537,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
           ],
         },
       };
-      const allowed = runAdapter(dir, "deliver-stage-rules", crew);
+      const allowed = runDispatchAdmission(dir, crew);
       expect(allowed.code, allowed.stderr).toBe(0);
       expect(allowed.stdout).toBe("");
       expect(allowed.stderr).toBe("");
@@ -1503,7 +1548,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         "aidlc-product-agent",
         workerFrontmatter("aidlc-product-agent", []),
       );
-      const blocked = runAdapter(dir, "deliver-stage-rules", crew);
+      const blocked = runDispatchAdmission(dir, crew);
       expect(blocked.code, blocked.stderr).toBe(2);
       expect(blocked.stderr).toContain(workerFile);
       expect(blocked.stderr).not.toContain(`${helper}.md`);
@@ -1520,7 +1565,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         "aidlc-composer-agent",
         workerFrontmatter("aidlc-composer-agent", []),
       );
-      const result = runAdapter(dir, "deliver-stage-rules", {
+      const result = runDispatchAdmission(dir, {
         cwd: dir,
         tool_name: "subagent_aidlc-composer-agent",
         tool_input: { prompt: "Compose the requested workflow." },
@@ -1579,7 +1624,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         tool_name: "invoke_sub_agent",
         tool_input: { name: agent, prompt },
       };
-      const blocked = runAdapter(dir, "deliver-stage-rules", payload);
+      const blocked = runDispatchAdmission(dir, payload);
       expect(blocked.code, blocked.stderr).toBe(2);
       expect(blocked.stdout).toBe("");
       expect(blocked.stderr).toContain(workerFile);
@@ -1594,7 +1639,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         agent,
         `---\nname: ${agent}\ndisplay_name: Test Pro Metrics Agent\nplugin: test-pro\nresources:\n  - '${"file://aidlc/spaces/default/memory/**/*.md"}'\n---\n\nInspect testing metrics.\n`,
       );
-      const repaired = runAdapter(dir, "deliver-stage-rules", payload);
+      const repaired = runDispatchAdmission(dir, payload);
       expect(repaired.code, repaired.stderr).toBe(0);
       expect(repaired.stdout).toBe("");
       expect(repaired.stderr).toBe("");
@@ -2789,7 +2834,6 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         "audit-and-sensors",
         "rebuild-stage-graph",
         "log-subagent",
-        "deliver-stage-rules",
       ]) {
         const r = runAdapter(dir, target, "{not json");
         expect(`${target}:${r.code}`).toBe(`${target}:0`);

@@ -336,14 +336,16 @@ function runCoreHook(
 // rather than the normalized view, and they were missing here - so `input` was
 // never read for them, `kiro` stayed `{}`, and each one returned 0 on its first
 // field access. Three guards that looked wired and enforced nothing:
-// reviewer-scope, guard-tool-call, deliver-stage-rules.
+// reviewer-scope, guard-tool-call, and `deliver-stage-rules`. The third is no
+// longer a target at all: nothing in this row's manifests ever registered it, so
+// its preload admission and its observer forward now ride the `log-subagent`
+// PreToolUse edge, which is registered on exactly the dispatch tools.
 const INPUT_TARGETS = new Set([
   ...PAYLOAD_TARGETS,
   ...SESSION_ID_TARGETS,
   "verb-intercept",
   "reviewer-scope",
   "guard-tool-call",
-  "deliver-stage-rules",
   // Not in PAYLOAD_TARGETS on purpose: a malformed payload here must fall back to
   // the audit-tail reconciliation, not drop the event.
   "sync-workflow-state",
@@ -1643,10 +1645,39 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
       // Admitted. Anything the guard printed on the way through belongs to the human -
       // the relaxed Change Control notice is written exactly once, here.
       if (admission.stdout.trim().length > 0) process.stdout.write(admission.stdout);
+      const dispatch = kiroDispatch(payload);
+      // PRELOAD ADMISSION, third gate on this edge and for the same reason as the
+      // two above: it decides whether a delegate may start, so it must run before
+      // the window opens and it must not be a ledger fact when it refuses.
+      //
+      // Why it lives HERE rather than on a registration of its own. Kiro cannot
+      // rewrite tool arguments, so on this row the delegate's own `resources`
+      // preload - not a brief rewrite - is how the active-space rules reach it.
+      // There is deliberately no `aidlc-deliver-stage-rules.json`: always-included
+      // steering plus that native preload IS the delivery channel, which is the
+      // decision `t245` pins by asserting the manifest's ABSENCE. What still needs
+      // a production channel is the admission half - refusing a dispatch whose
+      // delegate would start with no rules preloaded at all - and this edge is the
+      // only one that already has one, being the only target whose matcher is
+      // exactly the dispatch tools. A second manifest on the same tools would buy
+      // nothing but a second adapter process per dispatch.
+      if (dispatch !== null) {
+        const preloadError = nativePreloadError(projectDir, dispatch.agents);
+        if (preloadError !== null) {
+          process.stderr.write(preloadError);
+          hookDebug(
+            projectDir,
+            "kiro-adapter",
+            "Native active-space memory preload failed",
+            { target, transport: "native-preload", error: preloadError.trim() },
+          );
+          return 2;
+        }
+      }
       const ledgerRefusal = openDelegation(
         latchSession,
         payload,
-        kiroDispatch(payload)?.agents ?? [],
+        dispatch?.agents ?? [],
       );
       if (ledgerRefusal !== null) {
         // Fail CLOSED. Without a durable window the delegate's calls carry no
@@ -1662,6 +1693,62 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
         );
         return 2;
       }
+      // DELIVERY, after admission. The shared augmenter runs as an OBSERVER on this
+      // row: the preload validated above is the real channel, so a brief it judges
+      // incomplete is expected rather than a fault and is recorded only through
+      // opt-in hookDebug - never on stderr, where a dispatch would surface it as a
+      // warning the operator can do nothing about.
+      //
+      // It runs AFTER the window opened, unlike the three gates, because it is the
+      // only step here with side effects of its own: the core hook appends the
+      // `aidlc/.aidlc-subagent-inflight` entry the Stop hook waits on. Ordering it
+      // before the open would let a ledger refusal leave an inflight entry for a
+      // dispatch that never started. Refusing after the open instead leaves a window
+      // with no close, which is the outcome the block above already accounts for -
+      // the human-turn sweep reclaims it.
+      if (dispatch !== null) {
+        const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+        const command = executable
+          ? [executable, "engine", "hook", "deliver-stage-rules"]
+          : [process.execPath, join(HOOKS_DIR, "aidlc-deliver-stage-rules.ts")];
+        const r = Bun.spawnSync(command, {
+          stdin: Buffer.from(
+            JSON.stringify({
+              ...kiro,
+              tool_name: dispatch.coreTool,
+              tool_input: dispatch.coreInput,
+            }),
+            "utf-8",
+          ),
+          cwd: projectDir,
+          stdout: "pipe",
+          stderr: "pipe",
+          env: {
+            ...projectEnv,
+            AIDLC_DISPATCH_RULES_PRELOAD_FALLBACK: "1",
+          },
+        });
+        if (r.exitCode === 2) {
+          // A required rule file could not be loaded at all (missing/unreadable):
+          // that is real missing steering with no preload to fall back on - the one
+          // case that still blocks, with the core hook's repair guidance.
+          process.stderr.write(r.stderr?.toString() ?? "");
+          return 2;
+        }
+        if (r.exitCode === 3) {
+          // The bundle is valid but too large for the hook rewrite channel. The
+          // native preload carries the same active memory files, so this is
+          // advisory: the dispatch proceeds.
+          process.stderr.write(r.stderr?.toString() ?? "");
+        } else if ((r.stdout?.toString().trim() ?? "") !== "") {
+          hookDebug(
+            projectDir,
+            "kiro-adapter",
+            "Incomplete brief served by native active-space memory preload",
+            { target, transport: "native-preload" },
+          );
+        }
+      }
     } else if (ide.event === "PostToolUse") {
       closeDelegation(latchSession, payload);
     }
@@ -1675,6 +1762,10 @@ if (target === "log-subagent" && (ide.malformedFields?.length ?? 0) === 0) {
 // Both halves were wrong by the time it was read: the list it introduced is not
 // here (it sits with INPUT_TARGETS), `guard-tool-call` had no registration at all
 // until one was added, and `t331` named neither it nor `deliver-stage-rules`.
+// That sentence then sat here for a round while only `guard-tool-call` was acted
+// on: `deliver-stage-rules` had no registration either, which a review caught and
+// this file did not, because every test for it invoked the target directly. Its
+// admission now rides the `log-subagent` PreToolUse edge and the target is gone.
 // What follows is just the canonicalizer those targets share.
 
 function canonicalTool(
@@ -2048,79 +2139,6 @@ if (target === "reviewer-scope") {
   return 0;
 }
 
-
-// --- deliver-stage-rules: exact conductor-to-worker steering ---------------------
-//
-// Kiro exposes subagent arguments to preToolUse hooks but does not support
-// updated tool input, and a block-with-retry contract deadlocks live: the
-// conductor cannot reliably reproduce a multi-KB bundle byte-exactly, so
-// every retry re-blocks (observed on the ACP gate - zero dispatches
-// converged). Kiro's delegated agents instead preload the full active memory
-// tree via their `resources` glob. Check selected rule-delivery roster workers'
-// persisted preload before running the shared augmenter as an OBSERVER: complete and
-// preload-served incomplete briefs pass silently; the latter logs only through
-// opt-in hookDebug. Failed preloads and core exit 2 block with repair guidance;
-// exit 3 is advisory only after preload validation succeeds.
-if (target === "deliver-stage-rules") {
-  const dispatch = kiroDispatch(kiro);
-  if (dispatch === null) return 0;
-  const preloadError = nativePreloadError(projectDir, dispatch.agents);
-  if (preloadError !== null) {
-    process.stderr.write(preloadError);
-    hookDebug(projectDir, "kiro-adapter", "Native active-space memory preload failed", {
-      target, transport: "native-preload", error: preloadError.trim(),
-    });
-    return 2;
-  }
-  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  const command = executable
-    ? [executable, "engine", "hook", "deliver-stage-rules"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-deliver-stage-rules.ts")];
-  const r = Bun.spawnSync(command, {
-    stdin: Buffer.from(
-      JSON.stringify({
-        ...kiro,
-        tool_name: dispatch.coreTool,
-        tool_input: dispatch.coreInput,
-      }),
-      "utf-8",
-    ),
-    cwd: projectDir,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: {
-      ...projectEnv,
-      AIDLC_DISPATCH_RULES_PRELOAD_FALLBACK: "1",
-    },
-  });
-  if (r.exitCode === 2) {
-    // A required rule file could not be loaded at all (missing/unreadable):
-    // that is real missing steering with no preload to fall back on - the
-    // one case that still blocks, with the core hook's repair guidance.
-    process.stderr.write(r.stderr?.toString() ?? "");
-    return 2;
-  }
-  if (r.exitCode === 3) {
-    // The bundle is valid but too large for the hook rewrite channel. Kiro's
-    // agent-v1 resources preload the same active memory files, so this is the
-    // advisory fallback case rather than an unloadable-rule block.
-    process.stderr.write(r.stderr?.toString() ?? "");
-    return 0;
-  }
-  if ((r.stdout?.toString().trim() ?? "") !== "") {
-    // Native preload IS the delivery channel here, so an incomplete brief is
-    // expected rather than a fault: it is recorded for opt-in inspection and
-    // never written to stderr, which a dispatch would surface as a warning the
-    // operator can do nothing about.
-    hookDebug(
-      projectDir,
-      "kiro-adapter",
-      "Incomplete brief served by native active-space memory preload",
-      { target, transport: "native-preload" },
-    );
-  }
-  return 0;
-}
 
 // --- legacy-ide-notice: the one thing an unsupported host must still hear ---
 //

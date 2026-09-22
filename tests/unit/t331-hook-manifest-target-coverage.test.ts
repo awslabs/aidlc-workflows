@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, hook:aidlc-session-start, hook:aidlc-record-human-turn, hook:aidlc-plan-approval-guard, hook:aidlc-write-audit-log, hook:aidlc-review-freeze, hook:aidlc-deliver-stage-rules
+// covers: hook:aidlc-continue-workflow, hook:aidlc-session-start, hook:aidlc-record-human-turn, hook:aidlc-plan-approval-guard, hook:aidlc-write-audit-log, hook:aidlc-review-freeze
 //
 // The Kiro row serves two surfaces from one shell, and nothing else checks that
 // its hook wiring actually reaches both. Three ways it can fail silently:
@@ -122,7 +122,11 @@ const REQUIRED: Array<{
       "PostToolUse records the delegation; PreToolUse opens the delegation window, " +
       "which is the ONLY thing that gives a delegate's own tool calls an identity - " +
       "v3 payloads carry no acting-agent field, so without the opening edge the " +
-      "persona-scoped guards see every delegated call as the main session's",
+      "persona-scoped guards see every delegated call as the main session's. That " +
+      "edge also carries the dispatch ADMISSION, including the active-space memory " +
+      "preload check that is this row's only rule-delivery guarantee: there is no " +
+      "`deliver-stage-rules` registration and t245 pins that absence on purpose, so " +
+      "losing this PreToolUse entry would let a delegate start with no rules at all",
   },
 ];
 

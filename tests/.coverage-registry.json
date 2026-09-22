@@ -9219,10 +9219,6 @@
         {
           "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
-        },
-        {
-          "file": "tests/unit/t331-hook-manifest-target-coverage.test.ts",
-          "mechanism": "none"
         }
       ],
       "status": "covered"
