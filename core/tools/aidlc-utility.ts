@@ -41,9 +41,8 @@ import {
 } from "./aidlc-doctor-bundle.ts";
 import {
   AIDLC_HOOK_ENTRY_PREFIX,
+  aidlcDispatcherTarget,
   aidlcHookRegistrationHashes,
-  aidlcHookRegistrations,
-  isAidlcHookCommand,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
 import {
@@ -3192,20 +3191,10 @@ export async function collectDoctorReport(
       };
       collectCommands(parsed);
       const refs = new Set<string>();
-      const dispatcher =
-        '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
       for (const command of commands) {
-        if (!isAidlcHookCommand(command)) continue;
-        for (const match of command.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
-          refs.add(match[0]);
-        }
-        const dispatcherHook = new RegExp(
-          `${dispatcher}\\s+engine\\s+hook\\s+([A-Za-z0-9_-]+)\\b`,
-        ).exec(command);
-        if (dispatcherHook) refs.add(`aidlc-${dispatcherHook[1]}.ts`);
-        if (new RegExp(`${dispatcher}\\s+engine\\s+statusline\\b`).test(command)) {
-          refs.add("aidlc-statusline.ts");
-        }
+        const target = aidlcDispatcherTarget(command, true);
+        if (target === "statusline") refs.add("aidlc-statusline.ts");
+        else if (target !== null) refs.add(`aidlc-${target}.ts`);
       }
       expectedHooks = [...refs].sort();
     } catch {
@@ -3298,17 +3287,19 @@ export async function collectDoctorReport(
             });
           }
         } else {
-          // Baselines from before per-target hook ownership can detect drift,
-          // but cannot safely distinguish a flow-altering registration.
-          const shippedHooksHash = hookEntries.hooksAidlc;
+          // Baselines from before per-target ownership recorded the complete
+          // hooks object. Any drift is blocking until refresh migrates that
+          // baseline: the old record cannot prove that a flow-altering
+          // registration still has its shipped event, matcher, and command.
+          const shippedHooksHash = hookEntries.hooks;
           if (
             typeof shippedHooksHash === "string" &&
-            sha256Bytes(canonical(aidlcHookRegistrations(settingsHooks))) !== shippedHooksHash
+            sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash
           ) {
             results.push({
-              pass: true,
-              severity: "warn",
-              label: "AI-DLC hook registrations in .claude/settings.json differ from the shipped wiring (you changed them)",
+              pass: false,
+              label:
+                "Claude hook wiring differs from its legacy shipped baseline; refresh is required before flow-altering hooks can be verified",
               fix: projectSettingsRepair("claude"),
             });
           }

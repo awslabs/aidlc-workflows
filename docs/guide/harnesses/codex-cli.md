@@ -186,10 +186,12 @@ aidlc config --dry-run
 aidlc config
 ```
 
-Config preserves user-owned content and reports local framework edits as
+Config preserves user-owned content and restores AI-DLC-owned assignments and
+tables during an ordinary refresh, with a note when a project changed one.
+Other locally modified framework-owned files or managed blocks still report
 conflicts. It refuses refresh while any workflow is active; complete the
-workflow first. Upgrade and rollback remain safe during a workflow because
-they do not touch project files. A refresh can change Codex hook identities, so
+workflow first. Upgrade and rollback remain safe during a workflow because they
+do not touch project files. A refresh can change Codex hook identities, so
 approve the new trust dialog or replace the matching trust-seed entries after
 config when Codex requests it.
 

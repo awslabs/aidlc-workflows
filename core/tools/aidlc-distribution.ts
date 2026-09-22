@@ -36,20 +36,65 @@ export type ProjectionDescriptor = {
   rootIntegrations: RootIntegration[];
 };
 
-const AIDLC_DISPATCHER =
-  '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
+const QUOTED_OR_BARE_PATH = String.raw`(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s"';&|]+)`;
+const AIDLC_TS_PATH =
+  String.raw`(?:"[^"\r\n]*[\\/]aidlc\.ts"|'[^'\r\n]*[\\/]aidlc\.ts'|[^\s"';&|]*[\\/]aidlc\.ts)`;
+const AIDLC_DISPATCHER = String.raw`(?:aidlc(?:\.exe|\.cmd)?|bun\s+${AIDLC_TS_PATH})`;
 const AIDLC_HOOK_COMMAND = new RegExp(
-  `${AIDLC_DISPATCHER}\\s+engine\\s+(?:hook\\s+([A-Za-z0-9_-]+)\\b|(statusline)\\b)`,
+  String.raw`^\s*${AIDLC_DISPATCHER}\s+engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))\s*$`,
 );
+const AIDLC_HOOK_COMMAND_PREFIX = new RegExp(
+  String.raw`^\s*${AIDLC_DISPATCHER}\s+engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))(?=\s|$)`,
+);
+const LEGACY_AIDLC_HOOK_COMMAND = new RegExp(
+  String.raw`^\s*bun\s+(${QUOTED_OR_BARE_PATH})\s*$`,
+);
+const LEGACY_AIDLC_HOOK_TARGETS = new Set([
+  "audit-logger",
+  "continue-workflow",
+  "deliver-stage-rules",
+  "dispatch-rules",
+  "fold-usage",
+  "log-subagent",
+  "mint-presence",
+  "plan-approval-guard",
+  "rebuild-stage-graph",
+  "record-human-turn",
+  "review-freeze",
+  "reviewer-scope",
+  "run-sensors",
+  "runtime-compile",
+  "sensor-fire",
+  "session-end",
+  "session-start",
+  "state-transition-guard",
+  "statusline",
+  "stop",
+  "sync-statusline",
+  "sync-workflow-state",
+  "validate-state",
+  "write-audit-log",
+]);
 export const AIDLC_HOOK_ENTRY_PREFIX = "hooksAidlc:";
 
-export function isAidlcHookCommand(command: string): boolean {
-  return AIDLC_HOOK_COMMAND.test(command);
+export function aidlcDispatcherTarget(
+  command: string,
+  allowTrailingContent = false,
+): string | null {
+  const match = (allowTrailingContent ? AIDLC_HOOK_COMMAND_PREFIX : AIDLC_HOOK_COMMAND)
+    .exec(command);
+  return match?.[1] ?? match?.[2] ?? null;
 }
 
 export function aidlcHookTarget(command: string): string | null {
-  const match = AIDLC_HOOK_COMMAND.exec(command);
-  return match?.[1] ?? match?.[2] ?? null;
+  const dispatcher = aidlcDispatcherTarget(command);
+  if (dispatcher !== null) return dispatcher;
+  const legacy = LEGACY_AIDLC_HOOK_COMMAND.exec(command);
+  if (!legacy) return null;
+  const path = legacy[1].replace(/^(['"])([\s\S]*)\1$/, "$2").replaceAll("\\", "/");
+  const hook = /(?:^|\/)hooks\/aidlc-([A-Za-z0-9_-]+)\.ts$/.exec(path);
+  const target = hook?.[1];
+  return target !== undefined && LEGACY_AIDLC_HOOK_TARGETS.has(target) ? target : null;
 }
 
 /** Keep event, matcher, and item metadata while excluding project hook entries. */

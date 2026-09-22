@@ -43,7 +43,6 @@ import {
   aidlcHookRegistrations,
   aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
-  isAidlcHookCommand,
   type ProjectionDescriptor,
   projectionFiles,
   sha256Bytes,
@@ -3814,7 +3813,7 @@ function preserveClaudeProviderFields(
   if (
     Object.hasOwn(current, "statusLine") &&
     !(isRecord(current.statusLine) && typeof current.statusLine.command === "string" &&
-      isAidlcHookCommand(current.statusLine.command))
+      aidlcHookTarget(current.statusLine.command) === "statusline")
   ) {
     if (shippedChanged("statusLine")) {
       notes.push(
@@ -3911,36 +3910,28 @@ const CODEX_FRAMEWORK_TABLES = new Set([
   "tui",
 ]);
 
-const TOML_STRING_VALUE =
-  `(?:'''[\\s\\S]*?'''|"""(?:\\\\[\\s\\S]|"(?!"")|[^"\\\\])*"""|` +
-  `"(?:\\\\.|[^"\\\\\\r\\n])*"|'[^'\\r\\n]*')`;
+const CODEX_FRAMEWORK_ASSIGNMENTS = new Set([
+  "developer_instructions",
+  "sandbox_mode",
+]);
 
-function codexStringAssignmentPattern(name: string): RegExp {
-  return new RegExp(
-    `[\\t ]*(?:${name}|"${name}"|'${name}')[\\t ]*=[\\t ]*${TOML_STRING_VALUE}` +
-      `[\\t ]*(?:#[^\\r\\n]*)?(?:\\r?\\n|$)`,
-    "y",
-  );
-}
-
-const CODEX_FRAMEWORK_ASSIGNMENTS = [
-  {
-    name: "developer_instructions",
-    pattern: codexStringAssignmentPattern("developer_instructions"),
-  },
-  {
-    name: "sandbox_mode",
-    pattern: codexStringAssignmentPattern("sandbox_mode"),
-  },
-] as const;
-
-type TomlStructuralLine = {
+type TomlTopLevelEntry = {
+  kind: "assignment" | "table";
+  name: string | null;
   start: number;
-  token: number;
+  end: number;
   text: string;
-  table: boolean;
-  tableName: string | null;
 };
+
+function tomlRootName(text: string): string | null {
+  try {
+    const parsed = Bun.TOML.parse(text) as Record<string, unknown>;
+    const keys = Object.keys(parsed);
+    return keys.length === 1 ? keys[0] : null;
+  } catch {
+    return null;
+  }
+}
 
 function tomlTableHeader(line: string): { table: boolean; name: string | null } {
   const trimmed = line.trim();
@@ -3952,37 +3943,37 @@ function tomlTableHeader(line: string): { table: boolean; name: string | null } 
   } catch {
     return { table: false, name: null };
   }
-  const single = /^\s*\[\s*(?:[A-Za-z0-9_-]+|"(?:\\.|[^"])*"|'[^']*')\s*\]\s*(?:#.*)?$/
-    .test(line);
-  if (!single) return { table: true, name: null };
-  const parsed = Bun.TOML.parse(`${line}\n`) as Record<string, unknown>;
-  const keys = Object.keys(parsed);
-  return { table: true, name: keys.length === 1 ? keys[0] : null };
+  return { table: true, name: tomlRootName(`${line}\n`) };
 }
 
-// Return only lines whose first token is outside TOML strings and collection
-// values. This keeps lookalike assignments and table headers in multiline
-// developer instructions inert.
-function tomlStructuralLines(content: string): TomlStructuralLine[] {
-  const lines: TomlStructuralLine[] = [];
+// Identify semantic top-level assignments and table sections while retaining
+// their exact source ranges. Parsing each complete assignment makes quoted,
+// escaped, dotted, and inline-table spellings equivalent without reserializing
+// unrelated project configuration or comments.
+function tomlTopLevelEntries(content: string): TomlTopLevelEntry[] {
+  const assignments: TomlTopLevelEntry[] = [];
+  const headers: Array<{ start: number; name: string | null }> = [];
   let depth = 0;
   let multiline: `'''` | `"""` | null = null;
+  let assignment: { start: number; token: number } | null = null;
+  let tablesStarted = false;
   const pattern = /[^\r\n]*(?:\r\n|\n|$)/g;
   for (const match of content.matchAll(pattern)) {
     if (match[0].length === 0) continue;
     const start = match.index;
+    const end = start + match[0].length;
     const text = match[0].replace(/\r?\n$/, "");
     const leading = /^[\t ]*/.exec(text)?.[0].length ?? 0;
     if (multiline === null && depth === 0 && leading < text.length && text[leading] !== "#") {
       const header = tomlTableHeader(text);
-      lines.push({
-        start,
-        token: start + leading,
-        text,
-        table: header.table,
-        tableName: header.name,
-      });
-      if (header.table) continue;
+      if (header.table) {
+        headers.push({ start, name: header.name });
+        tablesStarted = true;
+        continue;
+      }
+      if (!tablesStarted && assignment === null) {
+        assignment = { start, token: start + leading };
+      }
     }
     for (let index = 0; index < text.length; index++) {
       if (multiline !== null) {
@@ -4015,50 +4006,51 @@ function tomlStructuralLines(content: string): TomlStructuralLine[] {
       if (char === "[" || char === "{") depth++;
       else if (char === "]" || char === "}") depth = Math.max(0, depth - 1);
     }
+    if (assignment !== null && multiline === null && depth === 0) {
+      const source = content.slice(assignment.token, end);
+      assignments.push({
+        kind: "assignment",
+        name: tomlRootName(source),
+        start: assignment.start,
+        end,
+        text: source.replaceAll("\r\n", "\n").trimEnd(),
+      });
+      assignment = null;
+    }
   }
-  return lines;
-}
-
-// Match only real root assignments, not lookalikes in onboarding prose, arrays,
-// or user-owned tables. TOML tables keep their scope through blank lines.
-function codexFrameworkAssignmentMatches(
-  content: string,
-  pattern: RegExp,
-): RegExpExecArray[] {
-  const matches: RegExpExecArray[] = [];
-  for (const line of tomlStructuralLines(content)) {
-    if (line.table) break;
-    pattern.lastIndex = line.token;
-    const match = pattern.exec(content);
-    if (match) matches.push(match);
-  }
-  return matches;
+  const sections = headers.map((header, index): TomlTopLevelEntry => {
+    const end = headers[index + 1]?.start ?? content.length;
+    return {
+      kind: "table",
+      name: header.name,
+      start: header.start,
+      end,
+      text: content.slice(header.start, end).replaceAll("\r\n", "\n").trimEnd(),
+    };
+  });
+  return [...assignments, ...sections].sort((left, right) => left.start - right.start);
 }
 
 function codexFrameworkAssignments(
   content: string,
 ): Array<{ name: string; text: string }> {
-  return CODEX_FRAMEWORK_ASSIGNMENTS.flatMap(({ name, pattern }) => {
-    const text = codexFrameworkAssignmentMatches(content, pattern)[0]?.[0]
-      .replaceAll("\r\n", "\n")
-      .trimEnd();
-    return text === undefined ? [] : [{ name, text }];
-  });
+  return tomlTopLevelEntries(content).flatMap((entry) =>
+    entry.kind === "assignment" &&
+      entry.name !== null &&
+      CODEX_FRAMEWORK_ASSIGNMENTS.has(entry.name)
+      ? [{ name: entry.name, text: entry.text }]
+      : []
+  );
 }
 
 function codexSections(
   content: string,
 ): Array<{ name: string | null; text: string; start: number; end: number }> {
-  const headers = tomlStructuralLines(content).filter((line) => line.table);
-  return headers.map((header, index) => {
-    const end = headers[index + 1]?.start ?? content.length;
-    return {
-      name: header.tableName,
-      text: content.slice(header.start, end).replaceAll("\r\n", "\n").trimEnd(),
-      start: header.start,
-      end,
-    };
-  });
+  return tomlTopLevelEntries(content).flatMap((entry) =>
+    entry.kind === "table"
+      ? [{ name: entry.name, text: entry.text, start: entry.start, end: entry.end }]
+      : []
+  );
 }
 
 function mergeCodexUserConfiguration(
@@ -4068,75 +4060,66 @@ function mergeCodexUserConfiguration(
   notes: string[],
 ): string {
   // Refresh AI-DLC's tables and assignments; retain every other project entry.
+  if (current === staged) return current;
   let merged = current;
   const generatedFrameworkAssignments = codexFrameworkAssignments(staged);
-  const missingAssignments: string[] = [];
-  for (const assignment of generatedFrameworkAssignments) {
-    const definition = CODEX_FRAMEWORK_ASSIGNMENTS.find(
-      ({ name }) => name === assignment.name,
-    );
-    if (!definition) continue;
-    const existing = codexFrameworkAssignmentMatches(merged, definition.pattern);
-    const currentText = existing[0]?.[0].replaceAll("\r\n", "\n").trimEnd();
-    const currentMatchesPrior = existing.length === 1 &&
-      priorEntries?.[assignment.name] === sha256Bytes(currentText ?? "");
-    const locallyChanged = priorEntries?.[assignment.name] === undefined
-      ? existing.length > 0
-      : !currentMatchesPrior;
-    if (
-      (existing.length !== 1 || currentText !== assignment.text) &&
-      locallyChanged
-    ) {
-      notes.push(
-        `restored the shipped ${assignment.name} assignment in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`,
-      );
-    }
-    if (existing.length === 1 && currentText === assignment.text) continue;
-    if (existing.length > 0) {
-      for (let index = existing.length - 1; index >= 0; index--) {
-        const match = existing[index];
-        const replacement = index === 0 ? `${assignment.text}\n` : "";
-        merged = merged.slice(0, match.index) + replacement +
-          merged.slice(match.index + match[0].length);
-      }
-    } else {
-      missingAssignments.push(assignment.text);
-    }
-  }
-  if (missingAssignments.length > 0) {
-    merged = `${missingAssignments.join("\n\n")}\n\n${merged.trimStart()}`;
-  }
   const generatedFrameworkSections = codexSections(staged).filter((section) =>
     section.name !== null && CODEX_FRAMEWORK_TABLES.has(section.name)
   );
+  const generated = new Map<string, { kind: "assignment" | "table"; text: string }>();
+  for (const assignment of generatedFrameworkAssignments) {
+    generated.set(assignment.name, { kind: "assignment", text: assignment.text });
+  }
   for (const section of generatedFrameworkSections) {
-    const existing = codexSections(merged).filter((candidate) =>
-      candidate.name === section.name
-    );
-    const currentText = existing[0]?.text;
+    generated.set(section.name!, { kind: "table", text: section.text });
+  }
+  const ownedNames = new Set([
+    ...generated.keys(),
+    ...Object.keys(priorEntries ?? {}),
+  ]);
+  for (const name of ownedNames) {
+    const incoming = generated.get(name);
+    const existing = tomlTopLevelEntries(merged).filter((entry) => entry.name === name);
+    const currentText = existing.map((entry) => entry.text).join("\n\n");
     const currentMatchesPrior = existing.length === 1 &&
-      priorEntries?.[section.name!] === sha256Bytes(currentText ?? "");
-    const locallyChanged = priorEntries?.[section.name!] === undefined
+      priorEntries?.[name] === sha256Bytes(currentText);
+    const locallyChanged = priorEntries?.[name] === undefined
       ? existing.length > 0
       : !currentMatchesPrior;
     if (
-      (existing.length !== 1 || currentText !== section.text) &&
-      locallyChanged
+      locallyChanged &&
+      (incoming === undefined || existing.length !== 1 || currentText !== incoming.text)
     ) {
+      const label = incoming?.kind === "table" ||
+          existing.some((entry) => entry.kind === "table")
+        ? `[${name}] table`
+        : `${name} assignment`;
       notes.push(
-        `restored the shipped [${section.name}] table in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`,
+        `restored the shipped ${label} in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`,
       );
     }
-    if (existing.length === 1 && currentText === section.text) continue;
-    if (existing.length > 0) {
-      for (let index = existing.length - 1; index >= 0; index--) {
-        const candidate = existing[index];
-        const replacement = index === 0 ? `${section.text}\n\n` : "";
-        merged = merged.slice(0, candidate.start) + replacement +
-          merged.slice(candidate.end);
-      }
-    } else {
-      merged = `${merged.trimEnd()}\n\n${section.text}\n`;
+    if (
+      incoming !== undefined &&
+      existing.length === 1 &&
+      existing[0].kind === incoming.kind &&
+      currentText === incoming.text
+    ) {
+      continue;
+    }
+    const replaceInPlace = incoming !== undefined &&
+      existing.length > 0 &&
+      existing.every((entry) => entry.kind === incoming.kind);
+    for (let index = existing.length - 1; index >= 0; index--) {
+      const entry = existing[index];
+      const replacement = replaceInPlace && index === 0
+        ? `${incoming!.text}${incoming!.kind === "table" ? "\n\n" : "\n"}`
+        : "";
+      merged = merged.slice(0, entry.start) + replacement + merged.slice(entry.end);
+    }
+    if (incoming !== undefined && !replaceInPlace) {
+      merged = incoming.kind === "assignment"
+        ? `${incoming.text}\n\n${merged.trimStart()}`
+        : `${merged.trimEnd()}\n\n${incoming.text}\n`;
     }
   }
   const normalized = merged.endsWith("\n") ? merged : `${merged}\n`;

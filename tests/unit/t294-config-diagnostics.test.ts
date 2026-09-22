@@ -1187,6 +1187,57 @@ describe("t294 trust diagnostics", () => {
       expect(human.stdout).not.toContain("aidlc-x");
     }
   }, 180_000);
+
+  test("doctor fails hook drift recorded by a legacy whole-hooks baseline", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const manifestPath = join(
+      project,
+      ".claude",
+      "tools",
+      "data",
+      "aidlc-manifest.json",
+    );
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    const hookEntries = manifest.entries[".claude/settings.json"];
+    for (const key of Object.keys(hookEntries)) {
+      if (key.startsWith("hooksAidlc")) delete hookEntries[key];
+    }
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const guardGroup = settings.hooks.PreToolUse.find(
+      (group: { hooks: Array<{ command: string }> }) =>
+        group.hooks.some((hook) => hook.command.includes("plan-approval-guard")),
+    );
+    settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter(
+      (group: unknown) => group !== guardGroup,
+    );
+    settings.hooks.PostToolUse.push(guardGroup);
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const result = spawnSync(BUN, [
+      join(project, ".claude", "tools", "aidlc.ts"),
+      "--doctor",
+      "--json",
+      "--offline",
+    ], {
+      cwd: project,
+      env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    if (result.error) throw result.error;
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).data.checks).toContainEqual(
+      expect.objectContaining({
+        pass: false,
+        label:
+          "Claude hook wiring differs from its legacy shipped baseline; refresh is required before flow-altering hooks can be verified",
+      }),
+    );
+  }, 60_000);
 });
 
 describe("t294 post-apply outstanding actions", () => {
@@ -2099,6 +2150,7 @@ describe("t294 config diagnostics CLI", () => {
     for (const replacement of [
       'developer_instructions = "team instructions"\n',
       'developer_instructions = """team\\\n  instructions"""\n',
+      '"developer\\u005finstructions" = "team instructions"\n',
     ]) {
       const project = install("codex");
       const configPath = join(project, ".codex", "config.toml");
@@ -2120,6 +2172,29 @@ describe("t294 config diagnostics CLI", () => {
       expect(after).toContain("developer_instructions = '''");
       expect(after).toContain("[tui]");
       expect(after).not.toContain('["tui"]');
+    }
+
+    for (const replacement of [
+      'tui = { status_line = ["git-branch"] }\n',
+      'tui.status_line = ["git-branch"]\n',
+    ]) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const shipped = readFileSync(configPath, "utf-8");
+      const edited = shipped.replace(/\[tui\][\s\S]*$/, replacement);
+      expect(() => parseToml(edited)).not.toThrow();
+      writeFileSync(configPath, edited);
+
+      const refreshed = run([
+        "config", "--project-dir", project, "--yes",
+      ], project, env);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const after = readFileSync(configPath, "utf-8");
+      expect(() => parseToml(after)).not.toThrow();
+      expect(parseToml(after).tui).toEqual(parseToml(shipped).tui);
+      expect(after).toContain("[tui]");
+      expect(after).not.toContain("tui.status_line");
+      expect(after).not.toContain("tui = {");
     }
   }, 120_000);
 
@@ -2143,6 +2218,77 @@ describe("t294 config diagnostics CLI", () => {
     expect(after.match(/^\s*(?:"developer_instructions"|'developer_instructions'|developer_instructions)\s*=/gm))
       .toHaveLength(1);
   }, 60_000);
+
+  test("Codex refresh removes retired framework-owned assignments and tables", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const source = temp("aidlc-t294-codex-retired-source-");
+    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    const sourcePath = join(source, ".codex", "config.toml");
+    writeFileSync(
+      sourcePath,
+      readFileSync(sourcePath, "utf-8")
+        .replace(/^sandbox_mode\s*=.*(?:\r?\n|$)/m, "")
+        .replace(/\[tui\][\s\S]*$/, ""),
+    );
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", source, "--harness", "codex", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const configPath = join(project, ".codex", "config.toml");
+    const parsed = parseToml(readFileSync(configPath, "utf-8"));
+    expect(parsed.sandbox_mode).toBeUndefined();
+    expect(parsed.tui).toBeUndefined();
+    expect(refreshed.stdout).not.toContain("it had local changes");
+
+    const manifest = JSON.parse(readFileSync(
+      join(project, ".codex", "tools", "data", "aidlc-manifest.json"),
+      "utf-8",
+    ));
+    expect(manifest.entries[".codex/config.toml"].sandbox_mode).toBeUndefined();
+    expect(manifest.entries[".codex/config.toml"].tui).toBeUndefined();
+  }, 60_000);
+
+  test("release changes to owned entries are not reported as local edits", () => {
+    const env = runtimeEnv();
+    const codex = install("codex");
+    const codexSource = temp("aidlc-t294-codex-release-change-");
+    cpSync(join(DIST_RELEASE, "codex"), codexSource, { recursive: true });
+    const codexSourcePath = join(codexSource, ".codex", "config.toml");
+    writeFileSync(
+      codexSourcePath,
+      readFileSync(codexSourcePath, "utf-8").replace(
+        'sandbox_mode = "workspace-write"',
+        'sandbox_mode = "read-only"',
+      ),
+    );
+    const codexRefresh = run([
+      "config", "--project-dir", codex,
+      "--from", codexSource, "--harness", "codex", "--yes",
+    ], codex, env);
+    expect(codexRefresh.status, codexRefresh.stdout + codexRefresh.stderr).toBe(0);
+    expect(parseToml(readFileSync(join(codex, ".codex", "config.toml"), "utf-8")).sandbox_mode)
+      .toBe("read-only");
+    expect(codexRefresh.stdout).not.toContain("it had local changes");
+
+    const claude = install("claude");
+    const claudeSource = temp("aidlc-t294-claude-release-change-");
+    cpSync(join(DIST_RELEASE, "claude"), claudeSource, { recursive: true });
+    const claudeSourcePath = join(claudeSource, ".claude", "settings.json");
+    const release = JSON.parse(readFileSync(claudeSourcePath, "utf-8"));
+    release.hooks.PreToolUse[0].matcher = "Bash";
+    writeFileSync(claudeSourcePath, `${JSON.stringify(release, null, 2)}\n`);
+    const claudeRefresh = run([
+      "config", "--project-dir", claude,
+      "--from", claudeSource, "--harness", "claude", "--yes",
+    ], claude, env);
+    expect(claudeRefresh.status, claudeRefresh.stdout + claudeRefresh.stderr).toBe(0);
+    expect(claudeRefresh.stdout).not.toContain(
+      "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed)",
+    );
+  }, 90_000);
 
   test("release refresh adds framework developer instructions to a legacy Codex config", () => {
     const project = install("codex");
@@ -2456,6 +2602,53 @@ describe("t294 config diagnostics CLI", () => {
     expect(readFileSync(settingsPath, "utf-8")).toBe(firstText);
   }, 90_000);
 
+  test("Claude refresh migrates exact legacy hooks without claiming project commands", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const guardGroup = settings.hooks.PreToolUse.find(
+      (group: { hooks: Array<{ command: string }> }) =>
+        group.hooks.some((hook) => hook.command === "aidlc engine hook plan-approval-guard"),
+    );
+    const guard = guardGroup.hooks.find(
+      (hook: { command: string }) =>
+        hook.command === "aidlc engine hook plan-approval-guard",
+    );
+    guard.command =
+      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-plan-approval-guard.ts"';
+    const projectCommands = [
+      "team-aidlc engine hook plan-approval-guard",
+      "aidlc engine hook plan-approval-guard && team-audit",
+    ];
+    settings.hooks.PreToolUse.push({
+      matcher: "Bash",
+      hooks: projectCommands.map((command) => ({ type: "command", command })),
+    });
+    settings.statusLine.command =
+      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"';
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const refreshed = run([
+      "config", "--project-dir", project,
+      "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const commands = Object.values(after.hooks).flatMap(
+      (groups) => (groups as Array<{ hooks: Array<{ command: string }> }>)
+        .flatMap((group) => group.hooks.map((hook) => hook.command)),
+    );
+    expect(commands.filter(
+      (command) => command === "aidlc engine hook plan-approval-guard",
+    )).toHaveLength(1);
+    expect(commands).toEqual(expect.arrayContaining(projectCommands));
+    expect(commands.some((command) =>
+      command.includes("/hooks/aidlc-plan-approval-guard.ts")
+    )).toBe(false);
+    expect(after.statusLine.command).toBe("aidlc engine statusline");
+  }, 60_000);
+
   test("Claude refresh re-adds shipped allow entries before user entries and retains retired entries", () => {
     const project = install("claude");
     const env = runtimeEnv();
@@ -2600,7 +2793,12 @@ describe("t294 config diagnostics CLI", () => {
         command: 'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-custom-policy.ts"',
       }],
     };
+    const projectStatusLine = {
+      type: "command",
+      command: 'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-custom-status.ts"',
+    };
     settings.hooks.PreToolUse.push(projectHook);
+    settings.statusLine = projectStatusLine;
     writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
     writeFileSync(
       join(project, ".claude", "hooks", "aidlc-custom-policy.ts"),
@@ -2613,8 +2811,9 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(refreshed.stdout).not.toContain("restored the AI-DLC hook registrations");
-    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).hooks.PreToolUse)
-      .toContainEqual(projectHook);
+    const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(after.hooks.PreToolUse).toContainEqual(projectHook);
+    expect(after.statusLine).toEqual(projectStatusLine);
   }, 60_000);
 
   test("refresh merges changed shipped Claude entries while preserving user settings", () => {
