@@ -456,7 +456,6 @@ describe("t247 claim-sources sensor", () => {
   for (const [boundary, line] of [
     ["thematic break", "***"],
     ["heading", "### Options"],
-    ["table row", "| Option | Meaning |"],
     ["html block", "<div>Choose one.</div>"],
   ]) {
     test(`a ${boundary} directly under a confirmation entry ends it, as it does in the deliverable`, () => {
@@ -478,6 +477,28 @@ describe("t247 claim-sources sensor", () => {
       expect(result.findings).toEqual([]);
     });
   }
+
+  test("a pipe row without a delimiter is confirmation continuation, not a table boundary", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n| Option | Meaning |\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings).toContain(
+      "stakeholder-map.md ## Assumptions & Open Questions: retained assumption is not listed in ## Assumption Confirmation",
+    );
+  });
 
   test("option lines and the answer tag directly under the last entry are not assumption text", () => {
     const dir = makeStageDir();
@@ -811,6 +832,128 @@ describe("t247 claim-sources sensor", () => {
     });
   }
 
+  for (const [label, rawHtml] of [
+    ["processing-instruction fence", "<?php\n```\n?>\n[Q1]: /url\n```"],
+    ["processing-instruction code span", "<?php\n`literal\n?>\n[Q1]: /url\n`"],
+    ["div fence", "<div>\n```\n</div>\n\n[Q1]: /url\n```"],
+  ] as const) {
+    test(`parser-backed visibility: ${label} cannot hide a real reference definition`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n\n${rawHtml}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings).toContain(
+        "intent-statement.md ## Problem Statement: claim block has no source tag",
+      );
+    });
+  }
+
+  test("raw HTML displays literal source tags without Markdown reference resolution", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "<div>Unsupported claim. [Q1]</div>",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n\n[Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("a definition-shaped line inside raw HTML does not resolve a prose reference", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n\n<div>[Q1]: /url</div>",
+    );
+
+    const result = run(dir);
+    expect(result.pass, result.findings.join("\n")).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("HTML comments inside raw HTML cannot ground visible claim text", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "<div>Unsupported claim. <!-- [Q1] --></div>",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings).toContain(
+      "intent-statement.md ## Problem Statement: claim block has no source tag",
+    );
+  });
+
+  test("removing code-span contents cannot manufacture a literal source tag", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "Unsupported claim. [Q`hidden`1]",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings).toContain(
+      "intent-statement.md ## Problem Statement: claim block has no source tag",
+    );
+  });
+
+  test("parser-backed visibility: a non-one ordered continuation cannot reuse a shortened confirmation", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- X [assumption]\n  2. [note]: /url",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- X [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings).toContain(
+      "stakeholder-map.md ## Assumptions & Open Questions: retained assumption is not listed in ## Assumption Confirmation",
+    );
+  });
+
   test("a definition-shaped line directly under a list item's text is visible prose, not a definition", () => {
     const dir = makeStageDir();
     replaceInFile(
@@ -859,8 +1002,8 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings).toEqual([]);
   });
 
-  for (const marker of ["1.", "01.", "0001)"]) {
-    test(`an ordered list starting at one with '${marker}' can interrupt a paragraph with a definition`, () => {
+  for (const [marker, interrupts] of [["1.", true], ["01.", false], ["0001)", false]] as const) {
+    test(`ordered marker '${marker}' ${interrupts ? "interrupts prose" : "stays prose"} under the vendored parser`, () => {
       const dir = makeStageDir();
       replaceInFile(
         dir,
@@ -876,14 +1019,18 @@ describe("t247 claim-sources sensor", () => {
       );
 
       const result = run(dir);
-      expect(result.pass).toBe(false);
-      expect(result.findings.join("\n")).toContain(
-        "## Problem Statement: claim block has no source tag",
-      );
+      expect(result.pass).toBe(!interrupts);
+      if (interrupts) {
+        expect(result.findings).toContain(
+          "intent-statement.md ## Problem Statement: claim block has no source tag",
+        );
+      } else {
+        expect(result.findings).toEqual([]);
+      }
     });
   }
 
-  test("a new block quote permits a non-one ordered list to interrupt prose", () => {
+  test("the vendored parser keeps a non-one ordered marker as prose in a new interrupting quote", () => {
     const dir = makeStageDir();
     replaceInFile(
       dir,
@@ -899,10 +1046,8 @@ describe("t247 claim-sources sensor", () => {
     );
 
     const result = run(dir);
-    expect(result.pass).toBe(false);
-    expect(result.findings.join("\n")).toContain(
-      "## Problem Statement: claim block has no source tag",
-    );
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
   });
 
   test("consecutive non-one ordered markers remain paragraph continuation", () => {
@@ -1160,7 +1305,6 @@ describe("t247 claim-sources sensor", () => {
     ["an unescaped angle bracket in the destination", "[evidence]: <a<b>"],
     ["an inline title without separating whitespace", '[evidence]: <url>"title"'],
     ["a DEL control character in the destination", "[evidence]: foo\u007fbar"],
-    ["an unescaped parenthesis in the title", "[evidence]: /url (ti(tle)"],
     [
       "an indented code block after a list marker",
       "-     [evidence]: https://example.invalid",
@@ -1182,6 +1326,20 @@ describe("t247 claim-sources sensor", () => {
       );
     });
   }
+
+  test("the vendored parser accepts an opening parenthesis inside a parenthesized title", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Assumptions & Open Questions",
+      "[evidence]: /url (ti(tle)\n\n## Assumptions & Open Questions",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
 
   test("a four-space-indented top-level definition is inspected as code", () => {
     const dir = makeStageDir();
@@ -1297,7 +1455,7 @@ describe("t247 claim-sources sensor", () => {
     );
   });
 
-  test("reference-label length counts Unicode code points", () => {
+  test("the vendored parser counts UTF-16 units toward its reference-label length limit", () => {
     const dir = makeStageDir();
     const astralLabel = String.fromCodePoint(0x1f600).repeat(500);
     replaceInFile(
@@ -1314,13 +1472,11 @@ describe("t247 claim-sources sensor", () => {
     );
 
     const result = run(dir);
-    expect(result.pass).toBe(false);
-    expect(result.findings.join("\n")).toContain(
-      "claim block has no source tag",
-    );
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
   });
 
-  test("a bare destination nested 33 levels is inspected as prose", () => {
+  test("a balanced destination nested 33 levels remains a definition", () => {
     const dir = makeStageDir();
     const destination = `a${"(".repeat(33)}b${")".repeat(33)}`;
     replaceInFile(
@@ -1331,10 +1487,8 @@ describe("t247 claim-sources sensor", () => {
     );
 
     const result = run(dir);
-    expect(result.pass).toBe(false);
-    expect(result.findings.join("\n")).toContain(
-      "claim block has no source tag",
-    );
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
   });
 
   test("ordered-list items ending in a parenthesis are separate claims", () => {
