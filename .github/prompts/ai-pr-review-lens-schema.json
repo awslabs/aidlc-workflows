@@ -76,41 +76,83 @@
   },
   "$defs": {
     "evidence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "source"
-      ],
-      "properties": {
-        "source": {
-          "type": "string",
-          "enum": [
-            "DIFF",
-            "DIFF_FILE",
-            "PR_TITLE",
-            "PR_BODY"
-          ]
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "path",
+            "line",
+            "side"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "DIFF"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "side": {
+              "type": "string",
+              "enum": [
+                "LEFT",
+                "RIGHT"
+              ]
+            }
+          }
         },
-        "path": {
-          "type": "string"
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "path"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "DIFF_FILE"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         },
-        "line": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "side": {
-          "type": "string",
-          "enum": [
-            "LEFT",
-            "RIGHT"
-          ]
-        },
-        "quote": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 500
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "quote"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "PR_TITLE",
+                "PR_BODY"
+              ]
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
         }
-      }
+      ]
     }
   }
 }

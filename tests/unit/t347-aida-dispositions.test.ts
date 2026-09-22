@@ -96,6 +96,11 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
     expect(() => bad([{ id: "F1", disposition: "resolved", findingIndex: 0 }])).toThrow("resolves F1 but also restates it");
     expect(() => bad([{ id: "F1", disposition: "still-open", findingIndex: 0 }, { id: "F1", disposition: "resolved", findingIndex: null }])).toThrow("disposes of F1 twice");
     expect(() => bad([{ id: "F1", disposition: "still-open", findingIndex: 0 }], [{ priority: "P1", line: 43, ledgerId: "F2" }])).toThrow("binds F1 to findings[0], which already carries F2");
+    // Direct ids are validated together with the dispositions: one finding per id, never resolved-and-restated, never bound elsewhere.
+    expect(() => bad([], [{ priority: "P1", line: 43, ledgerId: "F1" }, { priority: "P1", line: 44, ledgerId: "F1" }])).toThrow("findings 0 and 1 both carry ledgerId F1");
+    expect(() => bad([{ id: "F1", disposition: "resolved", findingIndex: null }], [{ priority: "P1", line: 43, ledgerId: "F1" }])).toThrow("ledger resolves F1 but findings[0] restates it");
+    expect(() => bad([{ id: "F1", disposition: "still-open", findingIndex: 1 }], [{ priority: "P1", line: 43, ledgerId: "F1" }, { priority: "P1", line: 44 }])).toThrow("findings 0 and 1 both carry ledgerId F1");
+    expect(() => bad([{ id: "F2", disposition: "still-open", findingIndex: 1 }], [{ priority: "P1", line: 43, ledgerId: "F1" }, { priority: "P1", line: 44, ledgerId: "F1" }])).toThrow("binds F2 to findings[1], which already carries F1");
     expect(() => bad("nope")).toThrow("ledger must be an array of dispositions");
   });
 
@@ -115,19 +120,22 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
     expect(result.undisposedIds).toEqual(["F4"]);
     expect(result.ledger.findings.find(item => item.id === "F1")?.status).toBe("open");
     expect(result.ledger.events.filter(event => event.kind === "resolved").map(event => `${event.id}:${event.reason}`)).toEqual([
-      "F3:declared corrected by the judge; cited files changed since the last review",
+      "F3:declared corrected by the judge (advisory: no change evidence required)",
       "F4:cited code is gone",
       "F6:declared corrected by the judge; cited files changed since the last review",
     ]);
     expect(result.ledger.events.find(event => event.id === "F1")?.reason).toBe("retained: declared corrected by the judge, but cited code and files are unchanged; a maintainer may accept");
     expect(result.ledger.events.find(event => event.id === "F2")?.reason).toBe("retained: still open per the judge, not restated");
 
-    // A cited line gone is deterministic evidence too; a full review (no scope) treats every cited file as under review.
+    // A cited line gone is deterministic evidence too. A full review (first review, force-push,
+    // /aida full) has no change set: unknown is never evidence, so the blocker stays retained.
     const gone = reconcileLedger(ledgerWith(entry("F1", "P1", [A42, lineAnchor(PATH, "RIGHT", "gone")])), [], HEAD, AT, presence, new Map([["F1", "resolved"]]), new Set());
     expect(gone.resolvedByJudgeIds).toEqual(["F1"]);
     expect(gone.ledger.events.at(-1)?.reason).toBe("declared corrected by the judge; a cited line is gone");
     const full = reconcileLedger(ledgerWith(entry("F1", "P1", [A42])), [], HEAD, AT, () => true, new Map([["F1", "resolved"]]), null);
-    expect(full.resolvedByJudgeIds).toEqual(["F1"]);
+    expect(full.resolvedByJudgeIds).toEqual([]);
+    expect(full.unverifiedResolutionIds).toEqual(["F1"]);
+    expect(full.retained.map(item => item.id)).toEqual(["F1"]);
 
     // Explicit bindings are processed before implicit fingerprint matches: the untagged finding on
     // A42 cannot consume F1, which the tagged finding names.
@@ -139,7 +147,8 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       ],
       HEAD, AT, () => true,
     );
-    expect(ordered.kept.map(item => `${item.ledgerId}:${item.title}`)).toEqual(["F1:the restatement", "F2:untagged on the same line"]);
+    // ...and the published order is the judge's, not the matching order.
+    expect(ordered.kept.map(item => `${item.ledgerId}:${item.title}`)).toEqual(["F2:untagged on the same line", "F1:the restatement"]);
   });
 
   test("end to end: a restatement under new wording keeps its id, a declared fix resolves, and the review says what happened", () => {
@@ -147,20 +156,31 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
     try {
       const loaded = ledgerWith(entry("F1", "P1", [A42]), entry("F2", "P1", [A43]), entry("F3", "P1", [lineAnchor(PATH, "RIGHT", "line 7")]));
       // The judge restates F2 with new wording on a different line, declares F1 fixed, forgets F3.
+      // This is a full review (no scope): F1's lines are intact and no change set exists, so the
+      // judge's word alone does not retire the blocker.
       const raw = review([{ priority: "P1", line: 44 }], [{ id: "F2", disposition: "still-open", findingIndex: 0 }, { id: "F1", disposition: "resolved", findingIndex: null }]);
       const applied = applyLedgerToReview(parseStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA), loaded, root, root, AT);
       expect(applied.review.findings.map(item => `${item.ledgerId}:${item.title}`)).toEqual(["F2:Restated as number 1"]);
-      expect(applied.ledger.findings.map(item => `${item.id}:${item.status}`)).toEqual(["F1:resolved", "F2:open", "F3:open"]);
+      expect(applied.ledger.findings.map(item => `${item.id}:${item.status}`)).toEqual(["F1:open", "F2:open", "F3:open"]);
       expect(applied.ledger.findings[1].anchors).toHaveLength(2);
       expect(applied.ledger.nextId).toBe(4);
-      expect(applied.review.ledger?.resolvedByJudge).toEqual(["F1"]);
+      expect(applied.review.ledger?.resolvedByJudge).toEqual([]);
+      expect(applied.review.ledger?.unverifiedResolutions).toEqual(["F1"]);
       expect(applied.review.ledger?.undisposed).toEqual(["F3"]);
-      expect(applied.review.ledger?.retained.map(item => item.id)).toEqual(["F3"]);
+      expect(applied.review.ledger?.retained.map(item => item.id)).toEqual(["F1", "F3"]);
       const body = renderReview(applied.review, CONTEXT_ID).body;
       expect(body).toContain("**P1 [F2]: Restated as number 1**");
-      expect(body).toContain("resolved F1 (F1 declared corrected by the judge); 1 open entry left undisposed by the judge (F3).");
+      expect(body).toContain("1 open entry left undisposed by the judge (F3); the judge declared F1 corrected but the cited code and files are unchanged, so it stays retained until a maintainer accepts.");
+      expect(body).toContain("**P1 [F1]: Finding F1** — first reported at");
       expect(body).toContain("**P1 [F3]: Finding F3** — first reported at");
       expect(body).not.toContain("[F4]");
+
+      // In an incremental review whose change set includes F1's file, the same disposition resolves it.
+      const incremental = parseStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA, { mode: "incremental", since: OLD_HEAD, reason: "r", files: [{ path: PATH, added: [{ start: 44, end: 44 }], deleted: [], deletedFile: false }] });
+      const resolvedNow = applyLedgerToReview(incremental, loaded, root, root, AT);
+      expect(resolvedNow.ledger.findings.map(item => `${item.id}:${item.status}`)).toEqual(["F1:resolved", "F2:open", "F3:open"]);
+      expect(resolvedNow.review.ledger?.resolvedByJudge).toEqual(["F1"]);
+      expect(renderReview(resolvedNow.review, CONTEXT_ID).body).toContain("resolved F1 (F1 declared corrected by the judge)");
 
       // A disposition naming a decided, resolved or unknown id is a validation error; a direct
       // ledgerId on a finding naming one is dropped and the finding recorded as new.

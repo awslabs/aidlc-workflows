@@ -251,12 +251,16 @@ describe("t346 AIDA incremental review scope", () => {
       const validated = securityCitations(lensDir, MANIFEST);
       expect([...validated.lines]).toEqual([`${PATH}:42:RIGHT`]);
       expect(validated.files).toEqual(new Set(["assets/logo.png"]));
-      writeFileSync(join(lensDir, "security.json"), JSON.stringify({ marker: "m", status: "complete", candidates: [{ priority: "P1", title: "t", evidence: [{ source: "DIFF", path: PATH, line: 7, side: "RIGHT" }, { source: "DIFF_FILE", path: PATH }], problem: "p", impact: "i", requiredCorrection: "r" }] }));
+      // A citation on a changed file whose line is not a changed line (or a DIFF_FILE on a file with
+      // hunks) still keeps provenance at file granularity; a citation on an unchanged file is dropped.
+      writeFileSync(join(lensDir, "security.json"), JSON.stringify({ marker: "m", status: "complete", candidates: [{ priority: "P1", title: "t", evidence: [{ source: "DIFF", path: PATH, line: 7, side: "RIGHT" }, { source: "DIFF_FILE", path: PATH }, { source: "DIFF", path: "core/unchanged.ts", line: 1, side: "RIGHT" }], problem: "p", impact: "i", requiredCorrection: "r" }] }));
       expect([...securityCitations(lensDir, MANIFEST).lines]).toEqual([`${PATH}:42:RIGHT`]);
-      expect(securityCitations(lensDir, MANIFEST).files).toEqual(new Set(["assets/logo.png"]));
+      expect(securityCitations(lensDir, MANIFEST).files).toEqual(new Set(["assets/logo.png", PATH]));
+      expect(findingInScope(finding("correctness", { source: "DIFF_FILE", path: PATH }), INCREMENTAL, securityCitations(lensDir, MANIFEST))).toBe(true);
       writeFileSync(join(lensDir, "security.json"), "{not json");
-      // Bare paths count as file-level evidence exactly as the lens cited them.
-      expect(cited.files).toEqual(new Set(["assets/logo.png", "my docs/plan.md"]));
+      // File-level citations count exactly as cited; a DIFF citation with an unusable line keeps
+      // provenance at file granularity (x.ts) rather than being lost.
+      expect(cited.files).toEqual(new Set(["assets/logo.png", "x.ts", "my docs/plan.md"]));
       expect(findingInScope(finding("correctness", diffLine(42)), INCREMENTAL, cited)).toBe(true);
       expect(findingInScope(finding("correctness", diffLine(44)), INCREMENTAL, cited)).toBe(false);
       expect(findingInScope(finding("correctness", { source: "DIFF_FILE", path: "assets/logo.png" }), INCREMENTAL, cited)).toBe(true);
@@ -372,7 +376,12 @@ describe("t346 AIDA incremental review scope", () => {
     }
     const lensSchema = JSON.parse(readFileSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-lens-schema.json"), "utf8"));
     expect(lensSchema.required).toEqual(["marker", "status", "candidates"]);
-    expect(lensSchema.$defs.evidence.properties.source.enum).toEqual(["DIFF", "DIFF_FILE", "PR_TITLE", "PR_BODY"]);
+    // Source-specific variants: a schema-valid citation always carries the fields its source needs.
+    expect(lensSchema.$defs.evidence.anyOf.map((variant: { required: string[] }) => variant.required)).toEqual([
+      ["source", "path", "line", "side"],
+      ["source", "path"],
+      ["source", "quote"],
+    ]);
     expect(prompt("lens-json")).toContain('"marker": "[LENS-REVIEWED] <lens> <head sha>"');
     expect(prompt("judge")).toContain("`.ai-review-lenses/security.json` (structured candidates)");
 

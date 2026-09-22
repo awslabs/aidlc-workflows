@@ -168,7 +168,8 @@ export interface ReconcileResult<T extends ReviewFindingInput> {
 export type LedgerDispositions = ReadonlyMap<string, "resolved" | "still-open">;
 
 // Files the current head changed since the last review (incremental scope), or
-// null when the whole PR diff is under review.
+// null when that set is unknown (a full review: first review, rewritten history,
+// /aida full). Unknown is never evidence of a change.
 export type ChangedFiles = ReadonlySet<string> | null;
 
 export type AnchorPresence = (anchor: LedgerAnchor) => boolean | null;
@@ -865,8 +866,12 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   // after the omitted pass, so a head that fixes old findings frees their slots
   // before capacity is enforced.
   const pendingByFingerprint = new Map<string, T>();
-  // Explicit bindings are processed first so an implicit fingerprint match can
-  // never consume an entry another finding names by id.
+  // Explicit bindings are matched first so an implicit fingerprint match can
+  // never consume an entry another finding names by id; the published order is
+  // restored to the judge's (P0 through P3) at the end.
+  const order = new Map<T, number>(findings.map((finding, index) => [finding, index]));
+  const keptOrder: number[] = [];
+  const pendingOrder = new Map<string, number>();
   const ordered = [...findings.filter(finding => finding.ledgerId), ...findings.filter(finding => !finding.ledgerId)];
   for (const finding of ordered) {
     const hashes = anchorSet(finding.anchors);
@@ -892,6 +897,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     if (!match) {
       const fingerprint = findingFingerprint(finding);
       const duplicate = pendingByFingerprint.get(fingerprint);
+      pendingOrder.set(fingerprint, Math.min(pendingOrder.get(fingerprint) ?? Number.MAX_SAFE_INTEGER, order.get(finding) ?? Number.MAX_SAFE_INTEGER));
       if (!duplicate) {
         pendingByFingerprint.set(fingerprint, structuredClone(finding));
       } else {
@@ -915,6 +921,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
       match.title = finding.title;
     }
     result.kept.push({ ...finding, priority: match.priority, ledgerId: match.id });
+    keptOrder.push(order.get(finding) ?? Number.MAX_SAFE_INTEGER);
   }
 
   // Pass 2: open findings the judge did not restate. An explicit disposition
@@ -932,7 +939,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
       // last review. Advisory entries follow the judge.
       const verdicts = entry.anchors.map(anchor => presentAtHead(anchor));
       const gone = verdicts.some(verdict => verdict === false);
-      const touched = changedFiles === null || entry.anchors.some(anchor => anchor.path !== undefined && changedFiles.has(anchor.path));
+      const touched = changedFiles !== null && entry.anchors.some(anchor => anchor.path !== undefined && changedFiles.has(anchor.path));
       if (isBlocking(entry.priority) && !gone && !touched) {
         entry.lastSeen = { head, at };
         push("seen", entry.id, { reason: "retained: declared corrected by the judge, but cited code and files are unchanged; a maintainer may accept" });
@@ -943,7 +950,11 @@ export function reconcileLedger<T extends ReviewFindingInput>(
       entry.status = "resolved";
       entry.lastSeen = { head, at };
       push("resolved", entry.id, {
-        reason: gone ? "declared corrected by the judge; a cited line is gone" : "declared corrected by the judge; cited files changed since the last review",
+        reason: gone
+          ? "declared corrected by the judge; a cited line is gone"
+          : touched
+            ? "declared corrected by the judge; cited files changed since the last review"
+            : "declared corrected by the judge (advisory: no change evidence required)",
       });
       result.resolvedIds.push(entry.id);
       result.resolvedByJudgeIds.push(entry.id);
@@ -994,7 +1005,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   }
 
   // Pass 3: new findings, once the reconciled ledger knows what it can free.
-  for (const finding of pendingByFingerprint.values()) {
+  for (const [fingerprint, finding] of pendingByFingerprint) {
     makeRoom(ledger);
     const id = `F${ledger.nextId}`;
     ledger.nextId += 1;
@@ -1005,7 +1016,13 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     push("opened", id);
     matchedIds.add(id);
     result.kept.push({ ...finding, ledgerId: id });
+    keptOrder.push(pendingOrder.get(fingerprint) ?? Number.MAX_SAFE_INTEGER);
   }
+  // Publish in the judge's order (P0 through P3), not in matching order.
+  result.kept = result.kept
+    .map((entry, index) => ({ entry, position: keptOrder[index] }))
+    .sort((left, right) => left.position - right.position)
+    .map(item => item.entry);
   return result;
 }
 

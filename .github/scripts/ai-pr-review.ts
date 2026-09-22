@@ -1103,16 +1103,18 @@ export function securityCitations(lensDir: string, manifest?: ChangedFileManifes
         if (!item || typeof item !== "object") continue;
         const { source, path, line, side } = item as Record<string, unknown>;
         if (typeof path !== "string" || path.length === 0) continue;
+        // Provenance is never lost to a sloppy citation: an item that names a
+        // changed file but not a valid changed line exempts the whole file
+        // (over-inclusion is safe; deferring a security finding is not).
+        const changed = manifest?.files.find(file => file.path === path || file.previousPath === path);
+        if (manifest && !changed) continue;
         if (source === "DIFF" && Number.isSafeInteger(line) && Number(line) >= 1 && (side === "LEFT" || side === "RIGHT")) {
-          // Only a line the PR diff actually changed can be trusted as evidence.
-          const changed = manifest?.files.find(file => file.path === path || file.previousPath === path);
-          if (manifest && (!changed || !isChangedLine(changed, { source: "DIFF", path, line: Number(line), side }))) continue;
-          cited.lines.add(`${path}:${line}:${side}`);
+          if (!changed || isChangedLine(changed, { source: "DIFF", path, line: Number(line), side })) {
+            cited.lines.add(`${path}:${line}:${side}`);
+            continue;
+          }
         }
-        if (source === "DIFF_FILE") {
-          if (manifest && !manifest.files.some(file => file.path === path && file.fileLevelEvidence)) continue;
-          cited.files.add(path);
-        }
+        if (source === "DIFF" || source === "DIFF_FILE") cited.files.add(changed?.path ?? path);
       }
     }
   }
@@ -1496,6 +1498,21 @@ export function parseStructuredReview(
       }
       dispositions.push({ id, disposition: entry.disposition, findingIndex });
     });
+  }
+  // Direct ids and disposition bindings must form one mapping: one finding per
+  // id, no id both resolved and restated, no binding that disagrees with a
+  // direct id.
+  const carriers = new Map<string, number[]>();
+  findings.forEach((finding, index) => {
+    if (finding.ledgerId) carriers.set(finding.ledgerId, [...(carriers.get(finding.ledgerId) ?? []), index]);
+  });
+  for (const [id, indexes] of carriers) {
+    if (indexes.length > 1) throw new Error(`findings ${indexes.join(" and ")} both carry ledgerId ${id}`);
+    const disposition = dispositions.find(entry => entry.id === id);
+    if (disposition?.disposition === "resolved") throw new Error(`ledger resolves ${id} but findings[${indexes[0]}] restates it`);
+    if (disposition && disposition.findingIndex !== null && disposition.findingIndex !== indexes[0]) {
+      throw new Error(`ledger binds ${id} to findings[${disposition.findingIndex}] but findings[${indexes[0]}] carries it`);
+    }
   }
 
   const residualRisk = requiredText(candidate.residualRisk, "residualRisk", 1000);
