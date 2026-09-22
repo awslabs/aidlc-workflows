@@ -8,6 +8,9 @@ Please read through this document before submitting any issues or pull requests.
 
 This file covers the project-wide conventions (reporting, PR flow, security, licensing). The authoritative, hands-on contributor guide — prerequisites, the edit → regenerate → test loop, and step-by-step recipes for adding a stage, scope, agent, or utility handler — is [`docs/reference/11-contributing.md`](docs/reference/11-contributing.md). Read it before making code changes.
 
+For the path from PR review through nightly previews and stable publication,
+see [Development and Releases](DEVELOPERS.md).
+
 ## How this repository is built
 
 AI-DLC ships to many CLI harnesses (today Claude Code, Kiro CLI, Kiro IDE, Codex CLI, opencode, and GitHub Copilot) from a single hand-authored source. The layout has three zones:
