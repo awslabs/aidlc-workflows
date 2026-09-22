@@ -23,7 +23,7 @@ import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearOwnedClaudeFixtureStartup } from "../harness/claude-fixture-startup.ts";
-import { resolveWinNode } from "../harness/tui-drive.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import {
   assertTuiDriveKill,
   cleanupTuiProject,
@@ -34,7 +34,10 @@ import {
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
+// This regression retains the legacy Node launch and AIDLC_NODE_BIN fixture.
+// Native Bun settings isolation needs its own validation by the driver owner.
+const LEGACY_ENV = { ...process.env, AIDLC_TUI_BACKEND: "node-pty" };
+const WIN_NODE = IS_WIN ? resolveTuiRuntime(DRIVER, { env: LEGACY_ENV }).bin : null;
 const USER_SENTINEL = "USER_POISON_SENTINEL";
 const PROJECT_SENTINEL = "PROJECT_GUIDANCE_SENTINEL";
 const PROMPT =
@@ -63,10 +66,11 @@ interface ProbeCleanupState {
 }
 
 function drive(args: string[], env: NodeJS.ProcessEnv): Run {
+  const { bin, prefix } = resolveTuiRuntime(DRIVER, { env: LEGACY_ENV });
   const res = spawnSync(
-    WIN_NODE as string,
-    ["--experimental-strip-types", DRIVER, ...args],
-    { encoding: "utf-8", env },
+    bin,
+    [...prefix, ...args],
+    { encoding: "utf-8", env: { ...env, AIDLC_TUI_BACKEND: "node-pty" } },
   );
   return {
     rc: res.status ?? -1,
@@ -119,14 +123,8 @@ function absentReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live Windows settings-isolation journey";
   }
-  if (!WIN_NODE) return "node not found (required to run tui-drive on Windows)";
-  if (
-    spawnSync(WIN_NODE, ["-e", "require('node-pty')"], {
-      encoding: "utf-8",
-    }).status !== 0
-  ) {
-    return "node-pty not node-resolvable";
-  }
+  const runtimeReason = tuiUnavailableReason({ env: LEGACY_ENV });
+  if (runtimeReason) return runtimeReason;
   if (!CLAUDE_EXE) return "claude.exe not found on PATH";
   return null;
 }

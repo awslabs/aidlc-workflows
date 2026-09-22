@@ -1,4 +1,5 @@
 // covers: hook:aidlc-continue-workflow, hook:aidlc-rebuild-stage-graph
+// covers: function:parseLiteralShellInvocation
 //
 // Pins the both-shape detector contract for the stop hook and runtime-compile
 // hook. The legacy tool-file shape is a permanent input: plugin manifests and
@@ -10,9 +11,13 @@
 // with the legacy detectors and intentionally fails closed.
 
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, sep } from "node:path";
 import {
   classifyRuntimeCompileCommand,
   isEngineToolCall,
+  parseLiteralShellInvocation,
 } from "../../core/tools/aidlc-lib.ts";
 
 type RuntimeCompileDecision = "reject" | "fire" | "pass";
@@ -1037,7 +1042,7 @@ describe("detector corpus", () => {
       'META=`aidlc engine orchestrate next` aidlc engine orchestrate next space teamb',
       String.raw`aidlc engine orchestrate next intent cr\eate --scope poc`,
       String.raw`aidlc --project-dir . engine orchestrate next intent cr\eate --scope poc`,
-      String.raw`aidlc engine orchestrate next intent 'create' --scope poc`,
+      "aidlc engine orchestrate next intent 'create' --scope poc",
       'aidlc next intent "$ACTION" --scope poc',
     ]) {
       expect(d1(command), command).toBe(true);
@@ -1157,6 +1162,181 @@ describe("detector corpus", () => {
     ]) {
       expect(isEngineToolCall("Bash", { command }, invalid), invalid).toBe(true);
     }
+  });
+
+  test("one absolute literal cd preserves only the exact terminal config proof", () => {
+    const output = JSON.stringify({
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    });
+    for (const [prefix, projectDir] of [
+      ["cd /workspace/app && ", "/workspace/app"],
+      ["cd -- '/workspace/app with spaces' && ", "/workspace/app with spaces"],
+      [String.raw`cd "C:\Windows\Temp\project" && `, String.raw`C:\Windows\Temp\project`],
+      [String.raw`cd 'C:\Windows\Temp\project'&&`, String.raw`C:\Windows\Temp\project`],
+      ["cd '/workspace/a && b' && ", "/workspace/a && b"],
+    ]) {
+      for (const command of [
+        "aidlc engine orchestrate next --depth extreme",
+        "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme",
+        "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme 2>&1",
+      ]) {
+        expect(isEngineToolCall("Bash", { command: prefix + command }), prefix + command).toBe(true);
+        expect(isEngineToolCall("Bash", { command: prefix + command }, output, projectDir), prefix + command).toBe(false);
+      }
+    }
+    const terminal = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
+    for (const command of [
+      `cd relative && ${terminal}`,
+      `cd -P /workspace/app && ${terminal}`,
+      `cd /workspace/app ; ${terminal}`,
+      `cd /workspace/app || ${terminal}`,
+      `cd /workspace/app & ${terminal}`,
+      `cd /workspace/app && ${terminal} && aidlc next`,
+      `cd /workspace/app && aidlc next; ${terminal}`,
+      `cd /workspace/app && ${terminal} | cat`,
+      `cd /workspace/app && ${terminal} > output`,
+      `cd /workspace/* && ${terminal}`,
+      `cd "$ROOT" && ${terminal}`,
+      `cd "$(pwd)" && ${terminal}`,
+      `cd /workspace/app && sh -c '${terminal}'`,
+      `cd\u00a0/workspace/app && ${terminal}`,
+      `cd /workspace/app && ${terminal.replace("--depth extreme", "--depth\u00a0extreme")}`,
+      `cd /workspace/app && ${terminal.replace("extreme", "ex\\\ntreme")}`,
+      `cd /workspace/app && ai\\\ndlc next --depth extreme`,
+      `cd /workspace/app && ${terminal}\n`,
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, output, "/workspace/app"), command).toBe(true);
+    }
+    for (const invalid of [
+      "",
+      output.slice(0, -1),
+      `${output}\n${output}`,
+      output.replace("depth extreme`", "depth minimal`"),
+      JSON.stringify({
+        kind: "print",
+        message: 'Run `bun "$ROOT/.claude/tools/aidlc.ts" engine config set depth extreme` to update the configuration, then print its output verbatim and stop.',
+      }),
+      JSON.stringify({ kind: "print", message: "done", continue: true }),
+      [{ type: "text", text: output }, { type: "image", data: "other" }],
+    ]) {
+      expect(isEngineToolCall("Bash", { command: `cd /workspace/app && ${terminal}` }, invalid, "/workspace/app")).toBe(true);
+    }
+  });
+
+  test("terminal configuration proof is bound to the active project directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-detector-"));
+    try {
+      const projectDir = join(root, "active project");
+      const otherProjectDir = join(root, "other project");
+      const projectAlias = join(root, "active alias");
+      mkdirSync(projectDir);
+      mkdirSync(otherProjectDir);
+      symlinkSync(projectDir, projectAlias, "junction");
+      const output = JSON.stringify({
+        kind: "print",
+        message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      });
+      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme";
+      const command = `cd '${projectDir}' && ${terminal}`;
+      expect(isEngineToolCall("Bash", { command }, output, projectDir)).toBe(false);
+      expect(isEngineToolCall("Bash", { command: `cd '${otherProjectDir}' && ${terminal}` }, output, projectDir)).toBe(true);
+      expect(isEngineToolCall("Bash", { command }, output)).toBe(true);
+      expect(isEngineToolCall("Bash", { command: `cd '${projectAlias}${sep}' && ${terminal}` }, output, `${projectDir}${sep}.${sep}`)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit --project-dir binds terminal configuration proof to the active project", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-detector-selector-"));
+    try {
+      const projectDir = join(root, "active project");
+      const otherProjectDir = join(root, "other project");
+      mkdirSync(projectDir);
+      mkdirSync(otherProjectDir);
+      const output = JSON.stringify({
+        kind: "print",
+        message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      });
+      for (const entry of [
+        "bun .claude/tools/aidlc-orchestrate.ts",
+        "bun .claude/tools/aidlc.ts engine orchestrate",
+        "aidlc engine orchestrate",
+      ]) {
+        const terminal = `${entry} next --depth extreme`;
+        for (const [command, engaged] of [
+          [`${entry} --project-dir '${otherProjectDir}' next --depth extreme`, true],
+          [`${terminal} --project-dir '${projectDir}'`, false],
+          [`${terminal} --project-dir='${otherProjectDir}'`, true],
+          [`${terminal} --project-dir='${projectDir}'`, false],
+          [`cd '${projectDir}' && ${terminal} --project-dir '${otherProjectDir}'`, true],
+          [`cd '${otherProjectDir}' && ${terminal} --project-dir '${projectDir}'`, true],
+          [`${terminal} --project-dir .`, false],
+          [`${terminal} --project-dir '../other project'`, true],
+          [`cd '${projectDir}' && ${terminal} --project-dir .`, false],
+          [`cd '${projectDir}' && ${terminal} --project-dir '../other project'`, true],
+        ] as const) {
+          expect(isEngineToolCall("Bash", { command }, output, projectDir), command).toBe(engaged);
+        }
+        const command = `${terminal} --project-dir '${projectDir}'`;
+        expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+      }
+      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme";
+      for (const [selectors, engaged] of [
+        [`--project-dir '${projectDir}' --project-dir='${otherProjectDir}'`, true],
+        [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, false],
+      ] as const) {
+        const command = `${terminal} ${selectors}`;
+        expect(isEngineToolCall("Bash", { command }, output, projectDir), command).toBe(engaged);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("literal shell parsing preserves native paths and shell word boundaries", () => {
+    const command = String.raw`cd "C:\Windows\Temp\project" && bun .claude/tools/aidlc.ts engine config set depth extreme 2>&1`;
+    const parsed = parseLiteralShellInvocation(command);
+    expect(parsed?.directory).toBe(String.raw`C:\Windows\Temp\project`);
+    expect(parsed?.argv).toEqual(["bun", ".claude/tools/aidlc.ts", "engine", "config", "set", "depth", "extreme"]);
+    expect(parseLiteralShellInvocation("aidlc next --depth\u00a0extreme")?.argv)
+      .toEqual(["aidlc", "next", "--depth\u00a0extreme"]);
+    expect(parseLiteralShellInvocation("aidlc next --depth 'extreme\u00a0'")?.argv.at(-1)).toBe("extreme\u00a0");
+    expect(parseLiteralShellInvocation("aidlc next --depth ex\\\ntreme")).toBeNull();
+    expect(parseLiteralShellInvocation(String.raw`cd "C:\unfinished\" && aidlc next`)).toBeNull();
+    expect(parseLiteralShellInvocation("cd /app && cd /other && aidlc next")).toBeNull();
+    const output = JSON.stringify({
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    });
+    for (const command of [
+      "aidlc\u00a0engine orchestrate next --depth extreme",
+      "aidlc next --depth\u00a0extreme",
+      "aidlc next --depth ex\\\ntreme",
+      "ai\\\ndlc next --depth extreme",
+    ]) expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+  });
+
+  test("ordinary escaped engine names can only add conservative engagement", () => {
+    const output = JSON.stringify({
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    });
+    for (const command of [
+      String.raw`cd /workspace/app && ai\dlc next`,
+      String.raw`a\idlc next`,
+      String.raw`aidlc ne\xt`,
+      String.raw`bun .claude/tools/aidlc-orchest\rate.ts next`,
+      String.raw`cd /workspace/app && ai\dlc next --depth extreme`,
+    ]) {
+      expect(parseLiteralShellInvocation(command), command).toBeNull();
+      expect(isEngineToolCall("Bash", { command }), command).toBe(true);
+      expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+    }
+    // These are literal quoted data, not Bash's unquoted escape removal.
+    expect(isEngineToolCall("Bash", { command: String.raw`echo 'ai\dlc next'` })).toBe(false);
+    expect(isEngineToolCall("Bash", { command: String.raw`echo "ai\dlc next"` })).toBe(false);
   });
 
   test("observed unified Bun report has native and legacy transition classifications", () => {

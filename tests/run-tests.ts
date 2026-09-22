@@ -6,7 +6,7 @@
 // contract: flags, tier banners, START/DONE markers, summary fields, verbose
 // log dirs, debug trace locations, and the "exit == failed files" convention.
 
-import { spawn, spawnSync } from "node:child_process";
+import { type spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
@@ -20,10 +20,11 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   guardProfileDescription,
   parseRunnerArgs,
+  preflightVerdict,
   RunnerArgsError,
   testGuardEnvironment,
   type ParsedArgs,
@@ -33,6 +34,11 @@ import {
   selectShard,
   type ShardConfig,
 } from "./lib/test-sharding.ts";
+import type { E2eWorker } from "./lib/e2e-workers.ts";
+import { createE2eNativeRoot, createE2eTemporaryRoot } from "./lib/e2e-workers.ts";
+import type { E2eCaseCounts } from "./lib/e2e-plan.ts";
+import type { IsolatedProcess } from "./lib/e2e-process.ts";
+import type { E2eLimits, E2eTask } from "./lib/e2e-scheduler.ts";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
@@ -60,6 +66,7 @@ const LIVE_MODEL_GATES = [
 type Level = "smoke" | "unit" | "integration" | "e2e";
 type Status = "PASS" | "FAIL" | "SKIP";
 
+
 interface ResultRow {
   name: string;
   status: Status;
@@ -68,6 +75,25 @@ interface ResultRow {
   failed: number;
   duration: string;
   reason?: string;
+}
+
+interface IsolatedFileContext {
+  worker: E2eWorker;
+  env: NodeJS.ProcessEnv;
+  artifacts: string;
+  force?: boolean;
+}
+
+interface FileExecution {
+  status: Status;
+  cases: E2eCaseCounts;
+  wallTimeMs: number;
+  timedOut: boolean;
+  throttlingSignals: number;
+  cleanupError?: string;
+  evidenceComplete?: boolean;
+  evidenceError?: string;
+  junitPath?: string;
 }
 
 function usage(): string {
@@ -93,6 +119,10 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --verbose       Write per-test logs to tests/logs/
   --no-llm        Force all live-model gates closed while deterministic
                   integration/e2e tests still run. Also via AIDLC_NO_LLM=1.
+  --require-coverage  Fail if selected coverage is skipped, empty, or incomplete.
+                  Writes coverage.json; use for required nightly test gates.
+  --matrix-plan FILE  Bind this run to a source/cohort coverage plan.
+  --matrix-job ID     Required job in that plan. Implies --require-coverage.
   --debug         Implies --verbose; streams per-test output and writes SDK/TUI
                   driver traces to tests/logs/
   --filter PAT    Only run tests whose filename matches extended regex PAT
@@ -102,6 +132,17 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
                   Recommended range: 1-8. See docs/reference/09-testing.md.
   --shard N/M     Run one deterministic, duration-balanced unit-test shard.
                   Requires --unit with no other level or profile flags.
+  --isolated-e2e  Dispatch e2e files across -P isolated checkout workers.
+                  Known serial driver families may overlap; assertions are unchanged.
+  --e2e-plan      Print the isolated e2e inventory/resource plan; run no tests or builds.
+                  Requires --e2e; implies --isolated-e2e, not --e2e.
+  --bedrock-parallel N  Maximum simultaneous Bedrock test files (default: 2).
+  --kiro-parallel N     Maximum simultaneous Kiro test files (default: 2).
+  --ide-parallel N      Maximum simultaneous Kiro IDE files (default: 1).
+  --e2e-file-timeout N  Isolated worker file deadline, seconds (default: 10800).
+  --e2e-timings FILE    Prior summary.txt used for longest-first scheduling.
+  --e2e-cancel-file FILE  Create this file to request portable worker cancellation.
+                  These options require --e2e --isolated-e2e or --e2e --e2e-plan.
 
   -h, --help      Show this help and exit
 
@@ -133,9 +174,106 @@ function parseArgs(argv: string[]): ParsedArgs {
     process.stderr.write(`${error.message}\n${error.showUsage ? `\n${usage()}` : ""}`);
     process.exit(error.exitCode);
   }
+
 }
 
 const args = parseArgs(process.argv.slice(2));
+
+function matchesE2eFilter(file: string, filter: RegExp | null): boolean {
+  const base = basename(file);
+  return !filter || filter.test(base) || filter.test(legacyResultName(file)) || filter.test(qualifiedResultName(file));
+}
+
+function legacyResultName(file: string): string {
+  const plugin = file.replaceAll("\\", "/").match(/\/plugins\/([^/]+)\/tests\//);
+  const name = basename(file, ".test.ts");
+  return plugin ? `plugin-${plugin[1]}-${name}` : name;
+}
+
+function qualifiedResultName(file: string): string {
+  const tier = relative(SCRIPT_DIR, file).replaceAll("\\", "/").split("/")[0];
+  return `${tier === ".." ? "plugins" : tier}-${legacyResultName(file)}`;
+}
+
+function requestedTestFiles(): string[] {
+  const filter = args.filter ? new RegExp(args.filter) : null;
+  const levels: Level[] = [
+      ...(args.runSmoke ? ["smoke" as const] : []),
+      ...(args.runUnit ? ["unit" as const] : []),
+      ...(args.runIntegration ? ["integration" as const] : []),
+      ...(args.runE2e ? ["e2e" as const] : []),
+  ];
+  return levels.flatMap((level) => levelFiles(level))
+    .filter((path) => matchesE2eFilter(path, filter));
+}
+
+let requestedFilesAtStart: string[] | undefined;
+let effectiveTestFiles: string[] | undefined;
+const requiredPrerequisites = new Set<string>();
+const requiredTuiFiles = new Set<string>();
+let resultNames: Map<string, string> | undefined;
+function resultName(file: string): string {
+  if (!resultNames) {
+    const files = new Set(effectiveTestFiles ?? requestedTestFiles());
+    const counts = new Map<string, number>();
+    for (const path of files) counts.set(legacyResultName(path), (counts.get(legacyResultName(path)) ?? 0) + 1);
+    resultNames = new Map([...files].map((path) => [
+      path, counts.get(legacyResultName(path))! > 1 ? qualifiedResultName(path) : legacyResultName(path),
+    ]));
+  }
+  return resultNames.get(file) ?? legacyResultName(file);
+}
+
+/** Full-profile summaries qualify collisions; historical basename summaries remain valid. */
+function e2eTimingAliases(weights: Record<string, number>): Record<string, number> {
+  const result = { ...weights };
+  for (const [name, seconds] of Object.entries(weights)) {
+    if (name.startsWith("e2e-")) result[name.slice(4)] = seconds;
+  }
+  return result;
+}
+
+function e2eLimits(tasks: readonly E2eTask[]): E2eLimits {
+  // Preflight uses worker 1 before the queue and cannot increase queue width.
+  const queued = tasks.filter((task) => basename(task.file) !== "t-tui-preflight.serial.test.ts");
+  const limits: E2eLimits = {
+    workers: Math.max(1, Math.min(args.parallel, queued.length)),
+    bedrock: args.bedrockParallel, kiro: args.kiroParallel, ide: args.ideParallel,
+  };
+  for (const resource of queued[0]?.resources ?? []) {
+    if (queued.every((task) => task.resources.includes(resource))) {
+      limits.workers = Math.min(limits.workers, limits[resource]);
+    }
+  }
+  if (queued[0]?.serialGroup &&
+    queued.every((task) => task.serialGroup === queued[0].serialGroup)) {
+    limits.workers = 1;
+  }
+  return limits;
+}
+
+if (args.e2ePlan) {
+  try {
+    const { planE2eFile, readE2eTimings } = await import("./lib/e2e-plan.ts");
+    const filter = args.filter ? new RegExp(args.filter) : null;
+    const weights = args.e2eTimings ? e2eTimingAliases(readE2eTimings(readFileSync(args.e2eTimings, "utf8"))) : {};
+    const files = levelFiles("e2e").filter((file) => matchesE2eFilter(file, filter));
+    if (files.length === 0) throw new Error("e2e selection contains no test files");
+    const tasks = files.map((file) => planE2eFile(file, weights));
+    const limits = e2eLimits(tasks);
+    process.stdout.write(`${JSON.stringify({
+      workers: limits.workers,
+      limits: { bedrock: limits.bedrock, kiro: limits.kiro, ide: limits.ide },
+      files: tasks.map((task) => ({
+        ...task, file: relative(REPO_ROOT, task.file).replaceAll("\\", "/"),
+      })),
+    }, null, 2)}\n`);
+    process.exit(0);
+  } catch (error) {
+    process.stderr.write(`ERROR: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(2);
+  }
+}
 
 function prepareGeneratedTrees(): void {
   if (process.env[PACKAGE_READY_ENV] === "1") return;
@@ -163,6 +301,7 @@ function prepareGeneratedTrees(): void {
       Bun.sleepSync(100);
     }
   }
+  let generationFailed = false;
   try {
     const generated = spawnSync(BUN, [join(REPO_ROOT, "scripts", "package.ts")], {
       cwd: REPO_ROOT,
@@ -174,12 +313,15 @@ function prepareGeneratedTrees(): void {
       process.stderr.write("ERROR: failed to regenerate generated projections\n");
       process.stderr.write(generated.stdout ?? "");
       process.stderr.write(generated.stderr ?? "");
-      process.exit(2);
+      generationFailed = true;
+    } else {
+      process.env[PACKAGE_READY_ENV] = "1";
     }
-    process.env[PACKAGE_READY_ENV] = "1";
   } finally {
     rmSync(PACKAGE_LOCK, { recursive: true, force: true });
   }
+  // process.exit inside try would skip finally and strand the package lock.
+  if (generationFailed) process.exit(2);
 }
 
 prepareGeneratedTrees();
@@ -322,6 +464,50 @@ let failedFiles = 0;
 let totalTests = 0;
 let totalFailed = 0;
 const resultRows: ResultRow[] = [];
+const fileExecutions = new Map<string, FileExecution>();
+let isolatedRunError = false;
+let isolatedInterrupted = false;
+const isolatedAbort = new AbortController();
+let captureFailure: Error | undefined;
+let runnerFailure: string | undefined;
+type MatrixModule = typeof import("./lib/test-matrix.ts");
+type MatrixContext = ReturnType<MatrixModule["loadTestMatrixJob"]>;
+type MatrixRuntime = Parameters<MatrixModule["validateMatrixSelection"]>[2];
+let matrixModule: MatrixModule | undefined;
+let matrixContext: MatrixContext | undefined;
+let matrixRuntime: MatrixRuntime | undefined;
+let matrixReceiptWritten = false;
+
+function coverageReport() {
+  const requested = new Set(requestedFilesAtStart ?? requestedTestFiles());
+  const selected = effectiveTestFiles ?? [...requested];
+  const files = selected.map((file) => {
+    const execution = fileExecutions.get(resultName(file));
+    return {
+      file: relative(REPO_ROOT, file).replaceAll("\\", "/"),
+      requested: requested.has(file),
+      prerequisite: requiredPrerequisites.has(file),
+      state: execution?.status ?? "INCOMPLETE",
+      cases: execution?.cases ?? null,
+      evidenceError: execution?.evidenceError,
+      complete: !!execution && execution.evidenceComplete === true &&
+        execution.cases.total > 0 && execution.cases.skipped === 0 &&
+        !execution.cleanupError && !execution.timedOut,
+    };
+  });
+  return {
+    required: args.requireCoverage,
+    complete: files.length > 0 && !isolatedRunError && files.every((file) => file.complete),
+    requestedFiles: requested.size,
+    selectedFiles: files.length,
+    recordedFiles: files.filter((file) => file.cases !== null).length,
+    files,
+  };
+}
+
+function runFailed(): boolean {
+  return failedFiles > 0 || selectionErrors.length > 0 || isolatedRunError || (args.requireCoverage && !coverageReport().complete);
+}
 const selectionErrors: string[] = [];
 
 function testsRel(file: string): string {
@@ -524,49 +710,142 @@ async function runSpawnCapture(
   cmdArgs: string[],
   env: NodeJS.ProcessEnv,
   debugPrefix: string | null,
-): Promise<{ rc: number; output: string }> {
-  const child = spawn(cmd, cmdArgs, {
-    cwd: REPO_ROOT,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  context?: IsolatedFileContext,
+  streamPath?: string,
+): Promise<{ rc: number; output: string; timedOut: boolean; cleanupError?: string }> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  isolatedAbort.signal.addEventListener("abort", cancel, { once: true });
+  if (isolatedAbort.signal.aborted) cancel();
+  let timedOut = false;
+  const timeout = context ? setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, args.e2eFileTimeout * 1000) : undefined;
   const chunks: Buffer[] = [];
+  const failures: string[] = [];
   let lineBuf = "";
-
+  let supervised: IsolatedProcess | undefined;
+  let transport: { worker: E2eWorker; env: NodeJS.ProcessEnv } | undefined = context;
+  let child: ReturnType<typeof spawn>;
+  try {
+    {
+      const cwd = context?.worker.root ?? REPO_ROOT;
+      const artifacts = context?.artifacts ?? join(logDir, "processes", resultName(cmdArgs[1]));
+      mkdirSync(artifacts, { recursive: true });
+      if (!context) {
+        const temp = await createE2eTemporaryRoot();
+        const socket = `aidlc-file-${process.pid}-${resultName(cmdArgs[1])}`;
+        env = {
+          ...env,
+          AIDLC_TEST_WORKER_ROOT: artifacts,
+          AIDLC_TUI_BUN_ROOT: createE2eNativeRoot(artifacts),
+          AIDLC_TUI_TMUX_SOCKET: socket,
+          TEMP: temp, TMP: temp, TMPDIR: temp,
+        };
+        transport = { worker: { id: 0, root: cwd, socket }, env };
+      }
+      const supervisorPath = join(cwd, "tests", "lib", "e2e-process.ts");
+      // Both the coordinator-side helper and its child entry point must use
+      // the snapshot, even if authored source changes while a file is queued.
+      const { startIsolatedProcess }: typeof import("./lib/e2e-process.ts") =
+        await import(pathToFileURL(supervisorPath).href);
+      supervised = await startIsolatedProcess({
+        command: [cmd, ...cmdArgs], cwd, env,
+        artifacts, signal: controller.signal,
+      });
+      child = supervised.child;
+    }
+  } catch (error) {
+    if (timeout) clearTimeout(timeout);
+    isolatedAbort.signal.removeEventListener("abort", cancel);
+    const output = String(error);
+    if (streamPath) appendFileSync(streamPath, output);
+    return { rc: timedOut ? 124 : 127, output, timedOut };
+  }
   const onData = (chunk: Buffer): void => {
     chunks.push(chunk);
+    if (streamPath && !captureFailure) {
+      try {
+        appendFileSync(streamPath, chunk);
+      } catch (error) {
+        // Throwing from a data callback can strand the runner's pending close
+        // promise (observed with ENOSPC on Windows). Retire every owned process
+        // and stop dispatch instead of spinning or reporting uncaptured output.
+        captureFailure = new Error(`test output capture failed at ${streamPath}: ${String(error)}`);
+        failures.push(captureFailure.message);
+        isolatedRunError = true;
+        isolatedAbort.abort();
+      }
+    }
     if (debugPrefix === null) return;
-    const text = chunk.toString();
-    lineBuf += text;
+    lineBuf += chunk.toString();
     const lines = lineBuf.split(/\n/);
     lineBuf = lines.pop() ?? "";
-    for (const line of lines) {
-      process.stdout.write(`${debugPrefix}${line}\n`);
-    }
+    for (const line of lines) process.stdout.write(`${debugPrefix}${line}\n`);
   };
-
-  child.stdout.on("data", onData);
-  child.stderr.on("data", onData);
-
-  const rc = await new Promise<number>((resolvePromise) => {
-    child.on("error", (err) => {
-      chunks.push(Buffer.from(String(err)));
-      resolvePromise(127);
-    });
-    child.on("close", (code, signal) => {
-      if (debugPrefix !== null && lineBuf.length > 0) {
-        process.stdout.write(`${debugPrefix}${lineBuf}`);
-        lineBuf = "";
-      }
-      resolvePromise(code ?? (signal ? 128 : 1));
-    });
+  child.stdout!.on("data", onData);
+  child.stderr!.on("data", onData);
+  let closed = false;
+  const closing = new Promise<number>((done) => {
+    child.on("error", (error) => { chunks.push(Buffer.from(String(error))); done(127); });
+    child.on("close", (code, signal) => { closed = true; done(code ?? (signal ? 128 : 1)); });
   });
-
-  return { rc, output: Buffer.concat(chunks).toString("utf8") };
+  let rc = 1;
+  try {
+    rc = await (supervised?.exited ?? closing);
+  } catch (error) {
+    failures.push(String(error));
+  }
+  if (timeout) clearTimeout(timeout);
+  if (supervised) {
+    // Retire file-owned native namespaces even on ordinary Linux runs, where
+    // terminal daemons intentionally live outside the test's process group.
+    // On Windows, publish retirement before terminating the owning job.
+    if (transport) {
+      try {
+        const { cleanupE2eTransports } = await import("./lib/e2e-workers.ts");
+        await cleanupE2eTransports(transport.worker, transport.env);
+      } catch (error) { failures.push(String(error)); }
+    }
+    try { await supervised.retire(); } catch (error) { failures.push(String(error)); }
+    if (!closed) {
+      let drainTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          closing,
+          new Promise<never>((_done, reject) => {
+            drainTimer = setTimeout(() => reject(new Error("isolated worker output did not close after tree retirement")), 2000);
+          }),
+        ]);
+      } catch (error) {
+        failures.push(String(error));
+        child.stdout!.destroy();
+        child.stderr!.destroy();
+      } finally { if (drainTimer) clearTimeout(drainTimer); }
+    }
+  }
+  isolatedAbort.signal.removeEventListener("abort", cancel);
+  if (!context && transport && failures.length === 0) {
+    try {
+      const { finishE2eTemporaryFiles } = await import("./lib/e2e-workers.ts");
+      await finishE2eTemporaryFiles(
+        transport.env, transport.env.AIDLC_TEST_WORKER_ROOT!,
+        rc !== 0 || !!captureFailure || process.env.AIDLC_KEEP_TEMP === "1",
+      );
+    } catch (error) { failures.push(String(error)); }
+  }
+  if (debugPrefix !== null && lineBuf) process.stdout.write(`${debugPrefix}${lineBuf}`);
+  const cleanupError = failures.length ? failures.join("\n") : undefined;
+  if (cleanupError) {
+    rc = 1;
+    chunks.push(Buffer.from(`\nerror: ${cleanupError}\n`));
+  }
+  return { rc: timedOut ? 124 : rc, output: Buffer.concat(chunks).toString("utf8"), timedOut, cleanupError };
 }
 
 function writeTestLog(file: string, row: ResultRow, rc: number, body: string): void {
-  if (!args.verbose) return;
+  if (!args.verbose || captureFailure) return;
   writeFileSync(
     join(logDir, `${row.name}.log`),
     [
@@ -586,23 +865,19 @@ function writeTestLog(file: string, row: ResultRow, rc: number, body: string): v
   );
 }
 
-async function runBunTestFile(file: string, parallelMode = false): Promise<void> {
+async function runBunTestFile(
+  file: string, parallelMode = false, context?: IsolatedFileContext, force = false,
+): Promise<FileExecution | undefined> {
+  if (captureFailure) throw captureFailure;
   const base = basename(file);
-  // Result meta is keyed by `name`. For tests under tests/<level>/ the basename
-  // is unique, but plugin content tests live at plugins/<plugin>/tests/ and every
-  // plugin ships `plugin.test.ts` (the fixture header says "copy this shape"), so
-  // a bare-basename key would collide — last writer wins and a FAILING suite gets
-  // erased from the summary (the same result-masking class as the round-2 t188
-  // gap). Key a plugin test by its plugin dir so two `plugin.test.ts` never clash.
-  const pluginMatch = file.replace(/\\/g, "/").match(/\/plugins\/([^/]+)\/tests\//);
-  const name = pluginMatch
-    ? `plugin-${pluginMatch[1]}-${base.replace(/\.test\.ts$/, "")}`
-    : base.replace(/\.test\.ts$/, "");
+  // Preserve single-tier collector names; qualify only collisions among the
+  // selected files (including an implicit integration preflight).
+  const name = resultName(file);
 
   // Match the filter against BOTH the basename and the qualified name shown in
   // output/summary — a user who copies the displayed `plugin-<plugin>-<stem>`
   // name into --filter would otherwise select nothing and see a green run (round-5).
-  if (filterRegex && !filterRegex.test(base) && !filterRegex.test(name)) return;
+  if (!force && !context?.force && !matchesE2eFilter(file, filterRegex)) return;
 
   if (shouldSkipForClaude(file)) {
     // --no-llm deliberately excludes these files, even from a mixed filter.
@@ -621,7 +896,12 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
     process.stdout.write(`=== DONE ${base} (${row.status}) ===\n`);
     writeMeta(name, row);
     writeTestLog(file, row, required ? 1 : 0, body);
-    return;
+    const execution: FileExecution = {
+      status: row.status, cases: { total: 0, passed: 0, failed: 0, skipped: 0 },
+      wallTimeMs: 0, timedOut: false, throttlingSignals: 0,
+    };
+    fileExecutions.set(name, execution);
+    return execution;
   }
 
   // Fixture defaults allow synthetic transitions and authority-bearing audit
@@ -638,8 +918,10 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   // host cannot change unrelated test results. Focused managed-policy tests
   // override the path with their own fixture.
   const env: NodeJS.ProcessEnv = {
-    ...testGuardEnvironment(process.env, args.guardProfile),
+    ...testGuardEnvironment({ ...process.env, ...context?.env }, args.guardProfile),
     AIDLC_TEST_NAME: base,
+    // Survives each file's private TMPDIR, but never crosses runner invocations.
+    AIDLC_TEST_COMPILED_DIR: join(logDir, "compiled"),
     AIDLC_MANAGED_SETTINGS_PATH: join(logDir, ".aidlc-managed-settings-absent.json"),
   };
   // Command-scope config outranks the isolated global file. Preserve its safety
@@ -659,9 +941,9 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   env.GIT_CONFIG_SYSTEM = NULL_DEVICE;
   process.stdout.write(`\n=== START ${base} ===\n`);
 
-  const junitXml = args.verbose
-    ? join(logDir, `${name}.junit.xml`)
-    : tmpFile("aidlc-run-tests-junit");
+  const junitXml = context
+    ? join(context.artifacts, "junit.xml")
+    : args.verbose ? join(logDir, `${name}.junit.xml`) : tmpFile("aidlc-run-tests-junit");
   const start = Date.now();
   const debugPrefix = args.debug && parallelMode ? `[${base}] ` : args.debug ? "" : null;
 
@@ -671,15 +953,41 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
     // both shipping plugin.test.ts would otherwise write the same log file, and
     // the failing one's detail would be overwritten by a passing sibling (round-5).
     process.stdout.write(`  log: ${displayLogDirPath(join(logDir, `${name}.log`))}\n`);
-    process.stdout.write(`  driver traces: ${displayLogDirPath(logDir)}/{sdk,tui,kiro-acp}-drive-*.ndjson\n`);
+    process.stdout.write(context
+      ? `  driver traces: ${displayLogDirPath(context.artifacts)}/*.ndjson\n`
+      : `  driver traces: ${displayLogDirPath(logDir)}/{sdk,tui,kiro-acp}-drive-*.ndjson\n`);
   }
 
+  const actualFile = context ? join(context.worker.root, relative(REPO_ROOT, file)) : file;
+  if (args.verbose) {
+    // Persist only coverage controls, never the full environment or credentials.
+    const coverageKeys = [
+      ...LIVE_MODEL_GATES, "AIDLC_RELEASE_CONTRACT_LIVE", "AIDLC_NO_LLM",
+      "AIDLC_KIRO_IDE_CASE", "AIDLC_REQUIRE_COMPILED_COVERAGE",
+      "AIDLC_TEST_PACKAGE_READY", "AIDLC_TUI_BACKEND",
+    ];
+    writeFileSync(join(logDir, `${name}.execution.json`), `${JSON.stringify({
+      file: actualFile,
+      platform: process.platform,
+      noLlm: args.noLlm,
+      requireCoverage: args.requireCoverage,
+      worker: env.AIDLC_TEST_WORKER_ID ?? null,
+      gates: Object.fromEntries(coverageKeys.map((key) => [key, env[key] ?? null])),
+    }, null, 2)}\n`);
+  }
+  const streamPath = args.verbose ? join(logDir, `${name}.log`) : undefined;
+  if (streamPath) writeFileSync(streamPath, `Test: ${base}\nFile: ${actualFile}\nStatus: RUNNING\n\n--- Output ---\n`);
   const run = await runSpawnCapture(
     BUN,
-    ["test", file, "--reporter=junit", `--reporter-outfile=${junitXml}`],
+    ["test", actualFile, "--reporter=junit", `--reporter-outfile=${junitXml}`],
     env,
     debugPrefix,
+    context,
+    streamPath,
   );
+  if (run.timedOut) {
+    run.output += `\nerror: isolated e2e file exceeded ${args.e2eFileTimeout}s deadline\n`;
+  }
 
   let xml = "";
   try {
@@ -689,16 +997,16 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   } catch {
     xml = "";
   }
+  const { e2eCaseCounts, validateJUnitEvidence } = await import("./lib/e2e-plan.ts");
+  const evidence = validateJUnitEvidence(xml);
+  const cases = evidence.complete ? evidence.cases : e2eCaseCounts(xml);
   const counts = buildMeta(xml, name, run.rc);
-  // Bun's root totals include skipped cases (also nested under describe).
-  // buildMeta intentionally preserves the older XML-only PASS/FAIL contract;
-  // requested coverage is a runner policy, evaluated separately from exit 0.
-  const root = xml.match(/<testsuites\b[^>]*>/)?.[0] ?? "";
-  const skippedAttr = root.match(/\bskipped\s*=\s*"([0-9]+)"/);
-  const skipped = skippedAttr
-    ? Number(skippedAttr[1])
-    : (xml.match(/<skipped\b/g) ?? []).length;
-  const meta: ResultRow = { ...counts, skipped: Math.min(counts.tests, skipped) };
+  const meta: ResultRow = { ...counts, skipped: Math.min(counts.tests, cases.skipped) };
+  if ((!evidence.complete && cases.total > 0) || (evidence.complete && cases.failed > 0)) {
+    meta.status = "FAIL";
+    meta.failed = Math.max(1, meta.failed, cases.failed);
+    if (!evidence.complete) run.output += `\nerror: ${evidence.error}\n`;
+  }
   if (meta.status === "PASS" && meta.tests === meta.skipped) {
     meta.status = filterRegex ? "FAIL" : "SKIP";
     meta.reason = filterRegex
@@ -726,8 +1034,24 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
     doneBlock();
   }
 
-  if (!args.verbose) rmSync(junitXml, { force: true });
+  if (!context && !args.verbose) rmSync(junitXml, { force: true });
   writeTestLog(file, meta, run.rc, body);
+  const execution: FileExecution = {
+    status: cases.skipped === cases.total && status !== "FAIL" ? "SKIP" : status,
+    cases,
+    wallTimeMs: Date.now() - start,
+    timedOut: run.timedOut,
+    cleanupError: run.cleanupError,
+    evidenceComplete: evidence.complete,
+    evidenceError: evidence.complete ? undefined : evidence.error,
+    junitPath: junitXml,
+    // Diagnostic evidence, never grounds for changing an assertion or retrying.
+    throttlingSignals: (run.output.match(
+      /ThrottlingException|TooManyRequestsException|(?:HTTP|status(?:Code)?)\s*[:=]?\s*429\b|rate[_ ]limit[_ ]exceeded/gi,
+    ) ?? []).length,
+  };
+  fileExecutions.set(name, execution);
+  return execution;
 }
 
 // Plugin content tests live beside each plugin (plugins/<name>/tests/*.test.ts),
@@ -798,17 +1122,27 @@ async function runFileBand(
     return;
   }
 
-  const executing = new Set<Promise<void>>();
-  for (const file of parallelFiles) {
-    const p = runBunTestFile(file, true).finally(() => {
-      executing.delete(p);
-    });
-    executing.add(p);
-    if (executing.size >= effectiveParallel) {
-      await Promise.race(executing);
+  const executing = new Set<Promise<FileExecution | undefined>>();
+  try {
+    for (const file of parallelFiles) {
+      const p = runBunTestFile(file, true).finally(() => {
+        executing.delete(p);
+      });
+      executing.add(p);
+      if (executing.size >= effectiveParallel) {
+        await Promise.race(executing);
+      }
     }
+    await Promise.all(executing);
+  } catch (error) {
+    isolatedRunError = true;
+    runnerFailure = String(error);
+    isolatedAbort.abort();
+    throw error;
+  } finally {
+    // An infrastructure error must drain admitted files before main can exit.
+    await Promise.allSettled(executing);
   }
-  await Promise.all(executing);
 }
 
 async function runFilesPartitioned(
@@ -852,6 +1186,264 @@ async function runTier(level: Level, label: string): Promise<void> {
   aggregateTierResults();
 }
 
+async function runIsolatedE2e(): Promise<void> {
+  const { planE2eFile, readE2eTimings } = await import("./lib/e2e-plan.ts");
+  const { runE2eQueue } = await import("./lib/e2e-scheduler.ts");
+  const {
+    prepareE2eWorkers, e2eWorkerEnvironment, cleanupE2eTransports, finishE2eTemporaryFiles,
+    assertE2eDiskSpace,
+  } = await import("./lib/e2e-workers.ts");
+  const selected = levelFiles("e2e").filter((file) => matchesE2eFilter(file, filterRegex));
+  if (selected.length === 0) throw new Error("isolated e2e selection contains no test files");
+  const weights = args.e2eTimings ? e2eTimingAliases(readE2eTimings(readFileSync(args.e2eTimings, "utf8"))) : {};
+  const tasks = selected.map((file) => planE2eFile(file, weights));
+  const preflight = join(SCRIPT_DIR, "e2e", "t-tui-preflight.serial.test.ts");
+  const needsTui = tasks.some((task) => task.tui);
+  if (needsTui && !existsSync(preflight)) {
+    throw new Error("isolated TUI selection requires t-tui-preflight.serial.test.ts");
+  }
+  const limits = e2eLimits(tasks);
+  const records = new Map<string, Record<string, unknown>>(tasks.map((task) => [
+    task.file, {
+      file: relative(REPO_ROOT, task.file).replaceAll("\\", "/"),
+      selected: true, state: "PENDING", resources: task.resources,
+      estimatedSeconds: task.estimatedSeconds, exclusive: task.exclusive,
+    },
+  ]));
+  if (needsTui && !records.has(preflight)) {
+    records.set(preflight, {
+      file: relative(REPO_ROOT, preflight).replaceAll("\\", "/"),
+      selected: false, prerequisite: true, state: "PENDING", resources: [],
+    });
+  }
+  const reportPath = join(logDir, "e2e-results.json");
+  const eventsPath = join(logDir, "e2e-events.ndjson");
+  let state = "PREPARING";
+  let finalizationError: string | undefined;
+  let setup: { sourceRevision?: string; sourceDirty?: boolean } = {};
+  const report = (): void => writeFileSync(reportPath, `${JSON.stringify({
+    state, limits, ...setup, finalizationError,
+    selectedFiles: records.size,
+    requestedFiles: tasks.length,
+    coverageComplete: [...records.values()].every((record) => {
+      const cases = record.cases as E2eCaseCounts | undefined;
+      return record.state === "PASS" && record.evidenceComplete === true &&
+        !!cases && cases.total > 0 && cases.skipped === 0;
+    }),
+    files: [...records.values()],
+  }, null, 2)}\n`);
+  writeFileSync(join(logDir, "e2e-plan.json"), `${JSON.stringify({
+    limits,
+    files: tasks.map((task) => ({
+      ...task, file: relative(REPO_ROOT, task.file).replaceAll("\\", "/"),
+    })),
+  }, null, 2)}\n`);
+  report();
+  let pool: Awaited<ReturnType<typeof prepareE2eWorkers>>;
+  let poolCleanupSafe = true;
+  try {
+    pool = await prepareE2eWorkers(REPO_ROOT, logDir, limits.workers);
+  } catch (error) {
+    isolatedRunError = true;
+    state = "ERROR";
+    for (const record of records.values()) record.state = "INCOMPLETE";
+    report();
+    throw error;
+  }
+  setup = { sourceRevision: pool.sourceRevision, sourceDirty: pool.sourceDirty };
+  const interrupt = (): void => {
+    isolatedInterrupted = true;
+    state = "INTERRUPTED";
+    isolatedAbort.abort();
+    try { report(); } catch (error) {
+      isolatedRunError = true;
+      runnerFailure = `interruption report failed: ${String(error)}`;
+    }
+  };
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
+  const cancellationTimer = args.e2eCancelFile ? setInterval(() => {
+    if (!isolatedInterrupted && existsSync(args.e2eCancelFile)) interrupt();
+  }, 100) : undefined;
+  if (args.e2eCancelFile && existsSync(args.e2eCancelFile)) interrupt();
+  process.stdout.write(
+    `\n## Isolated E2E (${limits.workers} workers; Bedrock=${limits.bedrock}; Kiro=${limits.kiro}; IDE=${limits.ide})\n` +
+    `E2E plan: ${join(logDir, "e2e-plan.json")}\nE2E results: ${reportPath}\n` +
+    `Driver traces: ${join(logDir, "e2e-artifacts", "*", "*.ndjson")}\n`,
+  );
+  const execute = async (file: string, workerId: number): Promise<FileExecution> => {
+    if (isolatedInterrupted) throw new Error("isolated e2e interrupted");
+    const worker = pool.workers[workerId - 1];
+    assertE2eDiskSpace(worker.root);
+    assertE2eDiskSpace(logDir);
+    const artifacts = join(logDir, "e2e-artifacts", resultName(file));
+    const env = await e2eWorkerEnvironment(worker, file, artifacts, process.env);
+    const record = records.get(file)!;
+    Object.assign(record, {
+      state: "RUNNING", worker: workerId, checkout: worker.root, socket: worker.socket,
+      artifacts, temporaryDirectory: env.TEMP,
+    });
+    let outcome: FileExecution | undefined;
+    let cleanupFailure: Error | undefined;
+    const checkWorkerSource = async (checkpoint: "before" | "after"): Promise<void> => {
+      if (!matrixContext) return;
+      const { captureTestSource } = await import("./lib/test-source.ts");
+      const captured = captureTestSource(worker.root);
+      record.matrixSource ??= {
+        expected: matrixContext.source.sourceDigest,
+      };
+      const proof = record.matrixSource as Record<string, unknown>;
+      proof[checkpoint] = captured.sourceDigest;
+      writeFileSync(join(artifacts, "matrix-worker-source.json"), `${JSON.stringify(proof, null, 2)}\n`);
+      if (captured.sourceDigest !== matrixContext.source.sourceDigest) {
+        throw new Error(`matrix worker ${workerId} authored source mismatch at ${checkpoint} execution`);
+      }
+    };
+    try {
+      report();
+      // Cancellation may have arrived during any awaited environment allocation.
+      // Stay inside finally so even a never-launched file releases its fixtures.
+      isolatedAbort.signal.throwIfAborted();
+      await checkWorkerSource("before");
+      outcome = await runBunTestFile(file, true, { worker, env, artifacts, force: true });
+      if (outcome?.cleanupError) {
+        poolCleanupSafe = false;
+        cleanupFailure = new Error(outcome.cleanupError);
+      }
+    } finally {
+      try {
+        await cleanupE2eTransports(worker, env);
+        await checkWorkerSource("after");
+        // Leave fixtures in place on process-cleanup uncertainty. The failure
+        // is reported and thrown after finally, without replacing a pending error.
+        if (!cleanupFailure) {
+          record.retainedFixtures = await finishE2eTemporaryFiles(
+            env, artifacts,
+            isolatedInterrupted || outcome?.status === "FAIL" || process.env.AIDLC_KEEP_TEMP === "1",
+          );
+        }
+      } catch (error) {
+        poolCleanupSafe = false;
+        const message = error instanceof Error ? error.message : String(error);
+        cleanupFailure = new Error(`isolated worker ${workerId} cleanup failed: ${message}`);
+        record.cleanupError = message;
+        const name = resultName(file);
+        appendFileSync(join(logDir, `${name}.log`), `\nerror: ${message}\n`);
+        outcome = {
+          status: "FAIL",
+          cases: outcome?.cases ?? { total: 0, passed: 0, skipped: 0, failed: 0 },
+          wallTimeMs: outcome?.wallTimeMs ?? 0,
+          timedOut: outcome?.timedOut ?? false,
+          throttlingSignals: outcome?.throttlingSignals ?? 0,
+        };
+        writeMeta(name, {
+          name, status: "FAIL", tests: outcome.cases.total,
+          skipped: outcome.cases.skipped,
+          failed: Math.max(1, outcome.cases.failed), duration: String(outcome.wallTimeMs / 1000),
+        });
+      }
+    }
+    if (!outcome) throw new Error(`isolated e2e produced no result for ${file}`);
+    Object.assign(record, outcome, {
+      state: isolatedInterrupted ? "INCOMPLETE" : outcome.timedOut ? "TIMED_OUT" : outcome.status,
+    });
+    fileExecutions.set(resultName(file), {
+      ...outcome,
+      cleanupError: cleanupFailure?.message ?? outcome.cleanupError,
+    });
+    report();
+    if (cleanupFailure) throw cleanupFailure;
+    if (isolatedInterrupted) throw new Error("isolated e2e interrupted");
+    return outcome;
+  };
+  let runFailure: unknown;
+  let hasRunFailure = false;
+  const rememberFailure = (error: unknown): void => {
+    if (!hasRunFailure) { runFailure = error; hasRunFailure = true; }
+  };
+  try {
+    state = "RUNNING";
+    report();
+    let tuiReady = true;
+    if (needsTui) {
+      const gate = await execute(preflight, 1);
+      tuiReady = prerequisitePassed(gate);
+      if (!tuiReady) {
+        isolatedRunError = true;
+        runnerFailure = "TUI capability prerequisite did not pass with complete, non-skipped evidence";
+      }
+    }
+    const runnable = tasks.filter((task) => {
+      if (needsTui && task.file === preflight) return false;
+      if (task.tui && !tuiReady) {
+        const name = resultName(task.file);
+        writeMeta(name, { name, status: "SKIP", tests: 0, skipped: 0, failed: 0, duration: "0" });
+        Object.assign(records.get(task.file)!, { state: "SKIP", reason: "TUI capability gate failed" });
+        process.stdout.write(`=== DONE ${basename(task.file)} (SKIP: TUI capability gate failed) ===\n`);
+        return false;
+      }
+      return true;
+    });
+    await runE2eQueue(runnable, limits, async (task, worker) => {
+      try {
+        await execute(task.file, worker);
+      } catch (error) {
+        isolatedAbort.abort();
+        throw error;
+      }
+    }, (event) => {
+      try {
+        appendFileSync(eventsPath, `${JSON.stringify({
+          timestamp: new Date().toISOString(), ...event,
+          file: relative(REPO_ROOT, event.file).replaceAll("\\", "/"),
+        })}\n`);
+      } catch (error) {
+        isolatedAbort.abort();
+        throw error;
+      }
+      const record = records.get(event.file)!;
+      record.queuedMs = event.queuedMs;
+      if (event.kind === "finish") record.workerElapsedMs = event.elapsedMs;
+    });
+    state = [...records.values()].some((record) =>
+      record.state === "FAIL" || record.state === "TIMED_OUT") ? "FAIL" : "COMPLETE";
+  } catch (error) {
+    isolatedRunError = true;
+    state = isolatedInterrupted ? "INTERRUPTED" : "ERROR";
+    for (const record of records.values()) {
+      if (record.state === "RUNNING" || record.state === "PENDING") record.state = "INCOMPLETE";
+    }
+    rememberFailure(error);
+  } finally {
+    process.removeListener("SIGINT", interrupt);
+    process.removeListener("SIGTERM", interrupt);
+    if (cancellationTimer) clearInterval(cancellationTimer);
+    // Assertion failures already retain their fixtures beside the durable logs.
+    // Keeping every generated checkout on each red slice exhausted Windows disks.
+    // Unconfirmed process retirement still retains the pool for investigation.
+    try {
+      await pool.dispose(!poolCleanupSafe || process.env.AIDLC_KEEP_TEMP === "1");
+    } catch (error) {
+      rememberFailure(error);
+      finalizationError = `worker pool disposal failed: ${String(error)}`;
+      isolatedRunError = true;
+      state = "ERROR";
+    }
+    try {
+      report();
+      aggregateTierResults();
+      writeVerboseSummary();
+    } catch (error) {
+      finalizationError ??= `result publication failed: ${String(error)}`;
+      isolatedRunError = true;
+      state = "ERROR";
+      try { report(); } catch {}
+      rememberFailure(error);
+    }
+  }
+  if (hasRunFailure) throw runFailure;
+}
+
 function printSummary(): void {
   process.stdout.write("\n==============================\n");
   process.stdout.write("SUMMARY\n");
@@ -861,6 +1453,7 @@ function printSummary(): void {
   process.stdout.write(`Failed files: ${failedFiles}\n`);
   process.stdout.write(`Total assertions: ${totalTests}\n`);
   process.stdout.write(`Failed assertions: ${totalFailed}\n`);
+  process.stdout.write(`Coverage: ${coverageReport().complete ? "COMPLETE" : "INCOMPLETE"}\n`);
   process.stdout.write(`Executed test cases: ${resultRows.reduce((n, row) => n + row.tests - row.skipped, 0)}\n`);
   process.stdout.write(`Skipped test cases: ${resultRows.reduce((n, row) => n + row.skipped, 0)}\n`);
   process.stdout.write(`Skipped files: ${resultRows.filter((row) => row.status === "SKIP").length}\n`);
@@ -869,11 +1462,13 @@ function printSummary(): void {
     process.stdout.write(`Log directory: ${displayLogDirPath(logDir)}\n`);
   }
   process.stdout.write("==============================\n");
-  process.stdout.write(failedFiles > 0 || selectionErrors.length > 0 ? "RESULT: FAIL\n" : "RESULT: PASS\n");
+  process.stdout.write(runFailed() ? "RESULT: FAIL\n" : "RESULT: PASS\n");
 }
 
 function writeVerboseSummary(): void {
   if (!args.verbose || !logDir) return;
+  const coverage = coverageReport();
+  writeFileSync(join(logDir, "coverage.json"), `${JSON.stringify(coverage, null, 2)}\n`);
   const tiersRun = [
     args.runSmoke ? "smoke" : "",
     args.runUnit ? "unit" : "",
@@ -907,21 +1502,35 @@ function writeVerboseSummary(): void {
     `  Failed files: ${failedFiles}`,
     `  Total assertions: ${totalTests}`,
     `  Failed assertions: ${totalFailed}`,
+    `  Coverage: ${coverage.complete ? "COMPLETE" : "INCOMPLETE"}`,
     `  Executed test cases: ${resultRows.reduce((n, row) => n + row.tests - row.skipped, 0)}`,
     `  Skipped test cases: ${resultRows.reduce((n, row) => n + row.skipped, 0)}`,
     `  Skipped files: ${resultRows.filter((row) => row.status === "SKIP").length}`,
     ...selectionErrors.map((error) => `  error: ${error}`),
-    `  Result: ${failedFiles > 0 || selectionErrors.length > 0 ? "FAIL" : "PASS"}`,
+    `  Result: ${runFailed() ? "FAIL" : "PASS"}`,
   );
   writeFileSync(join(logDir, "summary.txt"), `${lines.join("\n")}\n`, "utf8");
 
   const failures: string[] = selectionErrors.map((error) => `error: ${error}`);
+  if (args.requireCoverage && !coverage.complete) {
+    failures.push("INCOMPLETE: required selected coverage was not fully exercised");
+    if (coverage.selectedFiles === 0) failures.push("  No test files selected");
+    for (const file of coverage.files.filter((file) => !file.complete)) {
+      failures.push(`  ${file.file}: ${file.state}; cases=${file.cases?.total ?? "unknown"}; skipped=${file.cases?.skipped ?? "unknown"}${file.evidenceError ? `; ${file.evidenceError}` : ""}`);
+    }
+    failures.push("");
+  }
+  if (isolatedRunError) failures.push(
+    captureFailure || runnerFailure
+      ? `ERROR: ${captureFailure?.message ?? runnerFailure}`
+      : "ERROR: isolated e2e did not complete; see e2e-results.json", "",
+  );
   if (failedFiles > 0) {
     for (const row of resultRows) {
       if (row.status !== "FAIL") continue;
       failures.push(`FAIL: ${row.name} (${row.reason ?? `${row.failed} failed assertions`})`);
       const logFile = join(logDir, `${row.name}.log`);
-      if (existsSync(logFile)) {
+      if (existsSync(logFile) && statSync(logFile).isFile()) {
         // bun:test marks a failing case with a line that STARTS WITH `(fail)`
         // (e.g. `(fail) my test name [0.4ms]`) and prints the assertion detail
         // on a preceding `error:` line — NOT the TAP `not ok` the legacy .sh
@@ -941,7 +1550,82 @@ function writeVerboseSummary(): void {
   writeFileSync(join(logDir, "failures.txt"), `${failures.join("\n")}\n`, "utf8");
 }
 
+function prerequisitePassed(result: FileExecution | undefined): boolean {
+  return preflightVerdict(result, { liveRequested: false, requireCoverage: true }) === "pass";
+}
+
+function sealMatrixReceipt(): void {
+  if (!matrixContext || !matrixModule || !matrixRuntime || matrixReceiptWritten) return;
+  const e2e = new Set(levelFiles("e2e"));
+  const files = (effectiveTestFiles ?? requestedTestFiles()).map((file) => {
+    const execution = fileExecutions.get(resultName(file));
+    const junit = execution?.junitPath ?? (args.isolatedE2e && e2e.has(file)
+      ? join(logDir, "e2e-artifacts", resultName(file), "junit.xml")
+      : join(logDir, `${resultName(file)}.junit.xml`));
+    return {
+      file: relative(REPO_ROOT, file).replaceAll("\\", "/"),
+      junitPath: relative(logDir, junit).replaceAll("\\", "/"),
+      state: execution?.timedOut ? "TIMED_OUT" as const : execution?.status ?? "INCOMPLETE" as const,
+      evidenceComplete: execution?.evidenceComplete === true && !execution.cleanupError,
+    };
+  });
+  const result = matrixModule.writeTestMatrixReceipt(matrixContext, {
+    stampDir: logDir,
+    files,
+    runStatus: isolatedInterrupted ? "INTERRUPTED" : isolatedRunError ? "ERROR" : runFailed() ? "FAIL" : "PASS",
+    errors: [runnerFailure, captureFailure?.message].filter((error): error is string => !!error),
+    runtimeIdentity: matrixRuntime,
+    gates: Object.fromEntries([...LIVE_MODEL_GATES, "AIDLC_RELEASE_CONTRACT_LIVE"]
+      .map((key) => [key, process.env[key] ?? null])),
+  });
+  matrixReceiptWritten = true;
+  if (result.receipt.status !== "PASS") {
+    isolatedRunError = true;
+    runnerFailure ??= "test matrix job did not fulfill its planned coverage; see test-matrix-receipt.json";
+    writeVerboseSummary();
+    printSummary();
+  }
+}
+
 async function main(): Promise<number> {
+  // Freeze requested files and mandatory prerequisites before naming or running
+  // anything. A filter must not hide an automatically executed capability gate.
+  const requested = requestedTestFiles();
+  requestedFilesAtStart = requested;
+  if (needsLlm && !args.filter && !args.noLlm) {
+    const preflight = join(SCRIPT_DIR, "integration", "t19.test.ts");
+    if (existsSync(preflight)) requiredPrerequisites.add(preflight);
+  }
+  if (args.runE2e) {
+    const { planE2eFile } = await import("./lib/e2e-plan.ts");
+    const e2e = new Set(levelFiles("e2e"));
+    for (const file of requested) {
+      if (e2e.has(file) && planE2eFile(file).tui) requiredTuiFiles.add(file);
+    }
+    if (requiredTuiFiles.size > 0) {
+      requiredPrerequisites.add(join(SCRIPT_DIR, "e2e", "t-tui-preflight.serial.test.ts"));
+    }
+  }
+  effectiveTestFiles = [...new Set([...requested, ...requiredPrerequisites])];
+  resultNames = undefined;
+  if (args.matrixPlan) {
+    matrixModule = await import("./lib/test-matrix.ts");
+    const { planE2eFile } = await import("./lib/e2e-plan.ts");
+    const { selectedTuiBackend } = await import("./harness/tui-runtime.ts");
+    matrixRuntime = {
+      platform: process.platform,
+      architecture: process.arch,
+      backend: effectiveTestFiles.some((file) => existsSync(file) && planE2eFile(file).tui)
+        ? selectedTuiBackend() : "none",
+      bunVersion: process.versions.bun ?? "unknown",
+    };
+    matrixContext = matrixModule.loadTestMatrixJob(args.matrixPlan, args.matrixJob, REPO_ROOT);
+    matrixModule.validateMatrixSelection(
+      matrixContext,
+      effectiveTestFiles.map((file) => relative(REPO_ROOT, file).replaceAll("\\", "/")),
+      matrixRuntime,
+    );
+  }
   process.stdout.write("AI-DLC Testing Harness\n");
   process.stdout.write("======================\n");
   process.stdout.write(`${guardProfileDescription(args.guardProfile)}\n`);
@@ -949,26 +1633,34 @@ async function main(): Promise<number> {
   if (args.runSmoke) await runTier("smoke", "Smoke Tests (structural)");
   if (args.runSmoke && failedFiles > 0) {
     process.stdout.write("\nSMOKE FAILURES DETECTED -- aborting before unit/integration levels\n");
-    writeVerboseSummary();
-    printSummary();
     return failedFiles;
   }
 
   if (args.runUnit) await runTier("unit", "Unit Tests (single-component isolation)");
 
   let preflightRan = false;
-  if (needsLlm && !args.filter) {
+  if (needsLlm && !args.filter && args.noLlm) {
+    process.stdout.write("\n--no-llm: omitting Claude health preflight because its live gate is closed\n");
+  } else if (needsLlm && !args.filter) {
     const preflight = join(SCRIPT_DIR, "integration", "t19.test.ts");
     if (existsSync(preflight)) {
       process.stdout.write("\n## Preflight Health Check (Claude CLI validation)\n");
-      await runBunTestFile(preflight, false);
+      const preflightResult = await runBunTestFile(preflight, false);
       preflightRan = true;
       aggregateTierResults();
 
-      const preflightFailed = resultRows.some((r) => r.name === "t19" && r.status === "FAIL");
-      if (preflightFailed) {
+      const verdict = preflightVerdict(preflightResult, {
+        liveRequested: process.env.AIDLC_CLAUDE_SDK_LIVE === "1" || process.env.AIDLC_TUI_LIVE === "1",
+        requireCoverage: args.requireCoverage,
+      });
+      if (verdict === "fail") {
+        isolatedRunError = true;
+        runnerFailure = "Claude capability prerequisite did not pass with complete, non-skipped evidence";
         process.stdout.write("\nPREFLIGHT FAILURE -- skipping remaining Claude-dependent tests\n");
         process.stdout.write("  Fix: ensure claude CLI is authenticated and API is responsive\n");
+        claudeGateOpen = false;
+      } else if (verdict === "skip") {
+        process.stdout.write("\nPREFLIGHT SKIP -- skipping remaining Claude-dependent tests\n");
         claudeGateOpen = false;
       }
     }
@@ -990,7 +1682,14 @@ async function main(): Promise<number> {
     aggregateTierResults();
   }
 
-  if (args.runE2e) {
+  if (args.runE2e && args.isolatedE2e) {
+    try {
+      await runIsolatedE2e();
+    } catch (error) {
+      isolatedRunError = true;
+      throw error;
+    }
+  } else if (args.runE2e) {
     process.stdout.write("\n");
     process.stdout.write(
       args.parallel > 1
@@ -999,29 +1698,32 @@ async function main(): Promise<number> {
     );
     const e2eFiles = levelFiles("e2e");
     const tuiExcludes = e2eFiles
-      .map((f) => basename(f))
-      .filter((b) => b.startsWith("t-tui"));
+      .filter((file) => requiredTuiFiles.has(file))
+      .map((file) => basename(file));
     const nonTuiExcludes = e2eFiles
-      .map((f) => basename(f))
-      .filter((b) => !b.startsWith("t-tui"));
+      .filter((file) => !requiredTuiFiles.has(file))
+      .map((file) => basename(file));
 
     await runFilesPartitioned("e2e", args.parallel, tuiExcludes);
     await withStdoutLock(() => undefined);
     aggregateTierResults();
 
     const tuiPreflight = join(SCRIPT_DIR, "e2e", "t-tui-preflight.serial.test.ts");
-    if (existsSync(tuiPreflight)) {
+    if (requiredPrerequisites.has(tuiPreflight)) {
+      if (!existsSync(tuiPreflight)) {
+        throw new Error("TUI selection requires t-tui-preflight.serial.test.ts");
+      }
       process.stdout.write("\n## E2E TUI Capability Gate\n");
-      await runBunTestFile(tuiPreflight, false);
+      const tuiPreflightResult = await runBunTestFile(tuiPreflight, false, undefined, true);
       aggregateTierResults();
 
-      const tuiPreflightFailed = resultRows.some(
-        (r) => r.name.includes("preflight") && r.status === "FAIL",
-      );
+      const tuiPreflightFailed = !prerequisitePassed(tuiPreflightResult);
       if (tuiPreflightFailed) {
+        isolatedRunError = true;
+        runnerFailure = "TUI capability prerequisite did not pass with complete, non-skipped evidence";
         process.stdout.write("\nTUI PREFLIGHT FAILURE -- skipping remaining folded TUI tests\n");
-        process.stdout.write("  The terminal substrate is present but broken (e.g. node-pty under\n");
-        process.stdout.write("  bun on Windows, microsoft/node-pty #748; or tmux capture empty).\n");
+        process.stdout.write("  The selected terminal backend failed the token-free capability check.\n");
+        process.stdout.write("  Inspect the preflight log and AIDLC_TUI_BACKEND selection.\n");
       } else {
         await runFilesPartitioned("e2e", args.parallel, [
           ...nonTuiExcludes,
@@ -1038,19 +1740,34 @@ async function main(): Promise<number> {
       ? `--filter ${JSON.stringify(args.filter)} matched no test files in the selected tiers/shard. Check the filename, tier and shard.`
       : `--filter ${JSON.stringify(args.filter)} executed no test cases. --no-llm excludes Claude-dependent files; select deterministic tests or enable the requested live coverage.`);
   }
-  writeVerboseSummary();
-  printSummary();
-  return failedFiles || (selectionErrors.length > 0 ? 1 : 0);
+  return runFailed() ? Math.max(1, failedFiles) : 0;
 }
 
 try {
   const rc = await main();
   if (isolatedGitConfig !== NULL_DEVICE) rmSync(isolatedGitConfig, { force: true });
+  writeVerboseSummary();
   if (cleanupLogDir) rmSync(logDir, { recursive: true, force: true });
-  process.exit(rc);
+  printSummary();
+  // Seal last, after cleanup and report publication. A PASS receipt has no
+  // remaining filesystem work that could subsequently invalidate the run.
+  sealMatrixReceipt();
+  process.exit(runFailed() ? Math.max(1, failedFiles) : rc);
 } catch (err) {
+  isolatedRunError = true;
+  runnerFailure ??= String(err);
+  isolatedAbort.abort();
+  try {
+    aggregateTierResults();
+    if (isolatedGitConfig !== NULL_DEVICE) rmSync(isolatedGitConfig, { force: true });
+    writeVerboseSummary();
+    if (cleanupLogDir) rmSync(logDir, { recursive: true, force: true });
+    printSummary();
+    sealMatrixReceipt();
+  } catch {
+    // A full/unwritable result volume cannot publish a complete rollup. The
+    // nonzero exit and original stderr remain authoritative; never emit PASS.
+  }
   appendFileSync(2, `${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
-  if (isolatedGitConfig !== NULL_DEVICE) rmSync(isolatedGitConfig, { force: true });
-  if (cleanupLogDir) rmSync(logDir, { recursive: true, force: true });
   process.exit(1);
 }

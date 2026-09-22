@@ -6,6 +6,8 @@
     "plugins/*/tests/**/*.ts"
   ],
   "exclude": [
+    // Debug evidence can contain complete isolated worker checkouts and retained fixtures.
+    "tests/logs/**",
     // Standalone React/Vite fixture dependencies are not installed at the repository root.
     "tests/fixtures/brownfield-todo/**",
     // This fixture must produce a real compiler diagnostic for the sensor test.

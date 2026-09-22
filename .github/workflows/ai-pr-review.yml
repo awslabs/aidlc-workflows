@@ -136,6 +136,7 @@ jobs:
             case "$path" in
               .github/workflows/ai-pr-review.yml|\
               .github/scripts/ai-pr-review.ts|\
+              .github/scripts/ai-pr-ledger.ts|\
               .github/scripts/prepare-ai-review-runtime.sh|\
               .github/prompts/ai-pr-review-*.md|\
               .github/prompts/ai-pr-review-*.json)
@@ -160,7 +161,8 @@ jobs:
           fi
           mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts
           cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/
-          cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh \
+          cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts \
+            .github/scripts/prepare-ai-review-runtime.sh \
             .ai-review-controls/scripts/
           echo "::notice::AI review controls from $controls_sha"
 
@@ -179,6 +181,13 @@ jobs:
             --base "$base" \
             --head "$head" \
             --output .ai-review-context
+          # The findings ledger is live maintainer state, not review input identity:
+          # it is read after the context digest so a /aida decision never forces a
+          # new full review of an unchanged head.
+          bun .ai-review-controls/scripts/ai-pr-ledger.ts fetch \
+            --repo "$REPO" \
+            --pr "$REQUESTED_PR" \
+            --output .ai-review-context/ledger.json
 
           context_id="$(cat .ai-review-context/context-id.txt)"
           existing_record="$(gh api "repos/$REPO/pulls/$REQUESTED_PR/reviews" --paginate \
@@ -515,7 +524,7 @@ jobs:
             printf '[LENS-REVIEWED] user-experience %s\n' "$HEAD_SHA"
           )"
           run_model \
-            "fable" \
+            "sol" \
             "User-experience review" \
             "high" \
             50000 \
@@ -534,7 +543,7 @@ jobs:
             printf '[LENS-REVIEWED] direction %s\n' "$HEAD_SHA"
           )"
           run_model \
-            "fable" \
+            "sol" \
             "Direction review" \
             "high" \
             50000 \
@@ -570,7 +579,11 @@ jobs:
             --manifest .ai-review-context/changed-files.json \
             --metadata .ai-review-context/pr.json \
             --output .ai-pr-review-final/review.json \
-            --decision-output .ai-pr-review-final/decision.json)"
+            --decision-output .ai-pr-review-final/decision.json \
+            --ledger .ai-review-context/ledger.json \
+            --ledger-output .ai-pr-review-final/ledger.json \
+            --context-dir .ai-review-context \
+            --repo-dir .)"
           echo "event=$event" >> "$GITHUB_OUTPUT"
           decision="$(jq -r '"\(.actor)/\(.action)"' \
             .ai-pr-review-final/decision.json)"
@@ -580,6 +593,7 @@ jobs:
         id: publish
         if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
         env:
+          BASE_SHA: ${{ steps.context.outputs.base }}
           CONTEXT_ID: ${{ steps.context.outputs.context_id }}
           EVENT: ${{ steps.model.outputs.event }}
           GH_TOKEN: ${{ github.token }}
@@ -609,6 +623,52 @@ jobs:
             .ai-review-context/discussion-identity.json \
             /tmp/current-discussion-identity.json; then
             echo "::error::Authoritative PR conversation changed during review"
+            exit 1
+          fi
+
+          # Compare-and-swap on the findings ledger. A maintainer may have applied
+          # /aida decisions while the models ran, or between our read and our write.
+          # Each attempt merges the live ledger into the pre-review snapshot,
+          # re-derives the verdict deterministically (no model rerun) and publishes
+          # the ledger only if the comment still carries the digest that was read.
+          # The ledger is written BEFORE the review so a command landing afterwards
+          # always builds on this head's state.
+          ledger_published=""
+          for attempt in 1 2 3; do
+            bun .ai-review-controls/scripts/ai-pr-ledger.ts merge \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --input .ai-review-context/ledger.json \
+              --output .ai-pr-review-final/ledger.live.json >/dev/null
+            EVENT="$(bun .ai-review-controls/scripts/ai-pr-review.ts validate \
+              --base "$BASE_SHA" \
+              --head "$HEAD_SHA" \
+              --context-id "$CONTEXT_ID" \
+              --input .ai-pr-review-final/review.md \
+              --manifest .ai-review-context/changed-files.json \
+              --metadata .ai-review-context/pr.json \
+              --output .ai-pr-review-final/review.json \
+              --decision-output .ai-pr-review-final/decision.json \
+              --ledger .ai-pr-review-final/ledger.live.json \
+              --ledger-output .ai-pr-review-final/ledger.json \
+              --context-dir .ai-review-context \
+              --repo-dir .)"
+            publish_status=0
+            bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --input .ai-pr-review-final/ledger.json || publish_status=$?
+            if [ "$publish_status" -eq 0 ]; then
+              ledger_published=true
+              break
+            elif [ "$publish_status" -eq 3 ]; then
+              echo "::notice::The findings ledger changed during publication (attempt $attempt); re-deriving the verdict"
+            else
+              exit "$publish_status"
+            fi
+          done
+          if [ -z "$ledger_published" ]; then
+            echo "::error::The findings ledger kept changing during publication"
             exit 1
           fi
 

@@ -1982,6 +1982,7 @@ describe("t244 Windows and completion release surfaces", () => {
   test("release workflow keeps actions pinned, lints installers, and regenerates before consumers", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
     const previewWorkflow = readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8");
+    const fullSuiteWorkflow = readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
       permissions?: Record<string, string>;
       jobs: Record<string, {
@@ -2013,7 +2014,7 @@ describe("t244 Windows and completion release surfaces", () => {
     // Third-party actions are pinned to a full commit SHA. A same-repository
     // reusable workflow (`./.github/workflows/...`) is referenced by path and
     // resolves to the commit already being run, so it carries no ref to pin.
-    const actionRefs = [workflow, previewWorkflow].flatMap(
+    const actionRefs = [workflow, previewWorkflow, fullSuiteWorkflow].flatMap(
       (workflowText) =>
         [...workflowText.matchAll(/^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm)]
           .map((match) => match[1]),
@@ -2431,21 +2432,26 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).not.toContain("\n  push:");
   });
 
-  test("CI test job builds the projections before running the tiers", () => {
-    // The same generator-driven rule for the per-push gate: the tiers exercise
-    // CI-built bytes from a fresh checkout.
-    const ci = readFileSync(
-      join(REPO_ROOT, ".github", "workflows", "ci.yml"),
-      "utf-8",
-    );
-    expect(ci).toContain("branches:\n      - main");
-    expect(ci).not.toContain("branches:\n      - v2");
-    const testJob = ci.slice(ci.indexOf("\n  test:"), ci.indexOf("\n  changelog-guard:"));
-    const regen = "run: bun scripts/package.ts";
-    expect(testJob).toContain(regen);
-    expect(testJob.indexOf(regen)).toBeLessThan(testJob.indexOf("tests/run-tests.ts"));
-    const deepJob = ci.slice(ci.indexOf("\n  test-deep:"), ci.indexOf("\n  changelog-guard:"));
-    expect(deepJob).toContain(regen);
-    expect(deepJob.indexOf(regen)).toBeLessThan(deepJob.indexOf("tests/run-tests.ts"));
+  test("CI test jobs build the projections before running their tiers", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      on: { pull_request: { branches: string[] } };
+      jobs: Record<string, { steps: Array<{ run?: string }> }>;
+    };
+    expect(ci.on.pull_request.branches).toContain("main");
+    expect(ci.on.pull_request.branches).not.toContain("v2");
+    for (const name of ["test_smoke", "test_unit", "test_native_terminal"]) {
+      const steps = ci.jobs[name].steps;
+      const build = steps.findIndex((step) => step.run?.trim().startsWith("bun scripts/package.ts"));
+      const run = steps.findIndex((step) => step.run?.includes("tests/run-tests.ts"));
+      expect(build, `${name} must regenerate its projections`).toBeGreaterThanOrEqual(0);
+      expect(run, `${name} must invoke the test runner`).toBeGreaterThanOrEqual(0);
+      expect(build, `${name} must build before running its tier`).toBeLessThan(run);
+    }
+    const isolation = ci.jobs.test_live_isolation.steps;
+    const build = isolation.findIndex((step) => step.run === "bun scripts/package.ts");
+    expect(build).toBeGreaterThanOrEqual(0);
+    for (const [index, step] of isolation.entries()) {
+      if (step.run?.includes("prepare-live-runtime")) expect(build).toBeLessThan(index);
+    }
   });
 });

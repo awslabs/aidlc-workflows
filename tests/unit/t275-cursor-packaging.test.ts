@@ -978,5 +978,5 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 30_000); // Three CLI steps plus a distribution copy need a bounded Windows startup allowance.
 });

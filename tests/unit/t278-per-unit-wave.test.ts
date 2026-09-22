@@ -488,6 +488,37 @@ function stateCommand(proj: string, args: string[]) {
   };
 }
 
+function approveIteration(proj: string, stage: string, value: "stage-major" | "unit-major"): void {
+  const session = "t278-iteration";
+  const env = {
+    ...process.env,
+    AIDLC_PROJECT_DIR: proj,
+    CLAUDE_PROJECT_DIR: proj,
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: undefined,
+    AIDLC_UNATTENDED: undefined,
+  };
+  for (const action of ["decision", "answer"]) {
+    const result = spawnSync(BUN, [
+      LOG, action, "--stage", stage, "--checkpoint", "construction-policy",
+      "--field", "Construction Iteration", "--value", value, "--session", session,
+      ...(action === "decision"
+        ? ["--decision", `Change Construction Iteration to ${value}?`, "--options", "Approve,Request Changes"]
+        : ["--details", "Approve"]),
+      "--project-dir", proj,
+    ], { encoding: "utf-8", env });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    if (action === "decision") {
+      const human = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+        encoding: "utf-8", cwd: proj, env,
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve",
+        }),
+      });
+      expect(human.status, `${human.stdout}${human.stderr}`).toBe(0);
+    }
+  }
+}
+
 function unitVerbResult(
   proj: string,
   action: string,
@@ -1277,8 +1308,8 @@ describe("t278 engine-emitted wave contract", () => {
         readFileSync(file, "utf-8").replaceAll("- [ ]", "- [S]"),
       );
       seedBoltDag(proj, ["alpha", "beta"]);
+      appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
       if (rejectedWave) {
-        appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
         appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, proj);
         appendAuditEntry("HUMAN_TURN", {}, proj);
         const rejected = reportRejected(proj, "Revise the design");
@@ -1293,6 +1324,7 @@ describe("t278 engine-emitted wave contract", () => {
       expect(next(proj).directive.wave?.entries.map((entry) => entry.unit))
         .toEqual(units);
 
+      approveIteration(proj, "functional-design", "unit-major");
       const selected = stateCommand(proj, [
         "set-construction-iteration",
         "unit-major",
@@ -1343,6 +1375,7 @@ describe("t278 engine-emitted wave contract", () => {
     const proj = project("nfr-requirements", "unit-major", "none");
     addRuntimeState(proj);
     seedBoltDag(proj, ["alpha"]);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
     const file = seededStateFile(proj);
     writeFileSync(
       file,
@@ -1353,6 +1386,7 @@ describe("t278 engine-emitted wave contract", () => {
     );
     const started = unitVerbResult(proj, "start", "alpha", [], "nfr-requirements");
     expect(started.status, started.out).toBe(0);
+    approveIteration(proj, "nfr-requirements", "stage-major");
     const selected = stateCommand(proj, [
       "set-construction-iteration",
       "stage-major",
@@ -1412,7 +1446,6 @@ function expectWaveProse(body: string): void {
     "then `directive.wave` when present, otherwise `directive.gate`",
   );
   expect(body).toContain("parent Unit fields are only a projection");
-  expect(body).toContain("complete steering bundle verbatim");
   expect(body).toContain("every `inline_context_paths` file");
   expect(body).toContain("`context_warnings`");
   expect(body).toContain("entry.required_produces");
@@ -1443,6 +1476,17 @@ describe("t278 wave protocol parity", () => {
       );
       expectWaveProse(authored);
       expectWaveProse(generated);
+      if (harness.name === "kiro" || harness.name === "kiro-ide") {
+        for (const body of [authored, generated]) {
+          expect(body).toContain(
+            'Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2',
+          );
+          expect(body).toContain("native preload where one exists, verbatim paste otherwise");
+        }
+      } else {
+        expect(authored).toContain("complete steering bundle verbatim");
+        expect(generated).toContain("complete steering bundle verbatim");
+      }
       expect(authored).toContain(
         "Serialize reviews wherever the single reviewer-scope record is enforced",
       );
@@ -1479,6 +1523,10 @@ describe("t278 wave protocol parity", () => {
     expect(core).toContain("unit complete --wave");
     expect(core).toContain("UNIT_COMPLETED");
     expect(core).toContain("accumulated steering bundle");
+    expect(core).toContain(
+      'Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2',
+    );
+    expect(core).toContain("native preload where one exists, verbatim paste otherwise");
     expect(core).not.toContain(
       "read `bolt_dag.batches` from the intent's `runtime-graph.json`",
     );

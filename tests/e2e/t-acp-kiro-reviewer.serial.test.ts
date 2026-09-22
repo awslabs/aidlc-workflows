@@ -51,7 +51,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   auditBlockField,
@@ -212,9 +212,16 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         // both exist. The completion verifies record bytes and receipt ownership.
         expect(existsSync(requirementsPath(proj))).toBe(true);
         const artifact = readFileSync(requirementsPath(proj), "utf-8");
+        const review = completedReview(proj);
+        if (process.env.AIDLC_TEST_LOG_DIR) {
+          writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "kiro-reviewer-primary.md"), artifact);
+          writeFileSync(
+            join(process.env.AIDLC_TEST_LOG_DIR, "kiro-reviewer-receipt.json"),
+            `${JSON.stringify(review, null, 2)}\n`,
+          );
+        }
         expect(artifact.trim().length).toBeGreaterThan(0);
         expect(artifact).not.toMatch(/^## Review\b/m);
-        const review = completedReview(proj);
         expect(review).not.toBeNull();
         if (!review) throw new Error("Missing digest-bound REVIEW_COMPLETED and matching request");
         expect(review.ref.path).toMatch(

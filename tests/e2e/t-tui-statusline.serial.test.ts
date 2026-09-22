@@ -19,29 +19,22 @@
 //
 // COST: this launches the claude TUI but submits NO prompt, so it reaches the
 // `ready` statusline state WITHOUT a Bedrock turn — it spends NO tokens (unlike
-// t-tui-workshop, which is AIDLC_TUI_LIVE-gated). It needs tmux + claude + the
+// t-tui-workshop, which is AIDLC_TUI_LIVE-gated). It needs the selected TUI substrate + claude + the
 // distributable; absent any of those it SKIPs with a reason.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts as a
-// subprocess — node on Windows so node-pty never loads under bun (#748), bun
-// elsewhere (tmux is a subprocess anyway). The driver auto-selects its backend
-// by os.platform(); this test is platform-agnostic.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import * as os from "node:os";
 import { join } from "node:path";
-import { resolveWinNode } from "../harness/tui-drive.ts";
 import { cleanupTuiProjectAfterKill, setupTuiProject } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
-const IS_WIN = os.platform() === "win32";
-// node on Windows (#748), resolved because the box's node is off PATH; the .ts
-// entrypoint needs --experimental-strip-types under node < 22.18. bun elsewhere
-// (runs .ts natively, no flag — byte-identical to the spike).
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
 
 interface Run {
   rc: number;
@@ -49,9 +42,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const [bin, prefix] = IS_WIN
-    ? [WIN_NODE as string, ["--experimental-strip-types", DRIVER]]
-    : [process.execPath, [DRIVER]];
+  const { bin, prefix } = resolveTuiRuntime(DRIVER);
   const res = spawnSync(bin, [...prefix, ...args], { encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
@@ -74,21 +65,11 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
   );
 }
 
-// ABSENT detection (skip-with-reason). On POSIX the substrate is tmux; claude
+// ABSENT detection checks the selected substrate; claude
 // is needed on every platform; the distributable must be present to copy.
 function absentReason(): string | null {
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    // node may be off PATH (proven on the EC2 box) — resolve a concrete binary
-    // and test node-pty resolvability with IT, not a bare `node`. Both absent ->
-    // clean SKIP (capability absent).
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
   if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
     return "claude CLI not found";
   }
@@ -132,16 +113,13 @@ describe("t-tui-statusline (statusline renders in a real terminal)", () => {
         ]);
         expect(started.rc).toBe(0);
 
-        // --- step 3: clear the two startup modals (idempotent) ----------------
-        // 3a. workspace-trust dialog: "1. Yes, I trust this folder".
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        // 3b. bypass-permissions warning: "2. Yes, I accept" (only with
-        // --dangerously-skip-permissions).
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
+        // Startup exits as soon as the target UI is ready; absent modals do not
+        // consume separate timeout windows. Navigation stays fixture-scoped.
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\] ready", "--timeout-ms", "60000",
+        ]);
+        if (startup.rc !== 0) throw new Error(`TUI startup failed: ${startup.stderr}`);
 
         // --- step 4: wait for the statusline marker ---------------------------
         const sawMarker = waitFor(session, "\\[AIDLC\\]", 45000, 1000);

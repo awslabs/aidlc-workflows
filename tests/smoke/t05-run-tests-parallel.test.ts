@@ -153,6 +153,9 @@ function shellFilesUnder(dir: string): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
+    // Generated debug evidence can retain whole worker checkouts and fixtures.
+    // It is not part of the authored test-file substrate guarded here.
+    if (full === join(TESTS_ROOT, "logs")) continue;
     if (entry.isDirectory()) {
       files.push(...shellFilesUnder(full));
     } else if (entry.isFile() && entry.name.endsWith(".sh")) {
@@ -199,6 +202,18 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     // (run-tests.sh:90 `${PARALLEL:-<missing>}`). STRONGER than the .sh, which
     // only checked rc==2 here.
     expect(r.out).toContain("ERROR: --parallel requires a positive integer");
+  }, PER_TEST_TIMEOUT);
+
+  test("--e2e-plan requires --e2e and implies isolated planning without running tests", () => {
+    const rejected = run(["--e2e-plan"]);
+    expect(rejected.status).toBe(2);
+    expect(rejected.out).toContain("--e2e --isolated-e2e or --e2e --e2e-plan");
+    expect(rejected.out).toContain("--e2e-plan implies --isolated-e2e, not --e2e");
+
+    const planned = run(["--e2e", "--e2e-plan", "--filter", "^t01-helpers$"]);
+    expect(planned.status, planned.out).toBe(0);
+    const plan = JSON.parse(planned.out) as { files: Array<{ file: string }> };
+    expect(plan.files.map(({ file }) => file)).toEqual(["tests/e2e/t01-helpers.test.ts"]);
   }, PER_TEST_TIMEOUT);
 
   test("rejects malformed and out-of-range --shard values", () => {
@@ -306,6 +321,45 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(r.out).toContain(`=== START ${file} ===`);
     expect(r.out).toContain("Test files: 1");
     expect(r.out).toContain("RESULT: PASS");
+  }, PER_TEST_TIMEOUT);
+
+  test("unit shards isolate compiled handoffs and fail when the producer did not run", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t05-compiled-"));
+    const trace = join(root, "handoff-path.txt");
+    const plant = join(TESTS_ROOT, "unit", "t248-t05-compiled-handoff.test.ts");
+    writeFileSync(plant, [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      plantedBunTestSource("records runner compiled handoff", `
+      const dir = process.env.AIDLC_TEST_COMPILED_DIR;
+      expect(dir).toBeDefined();
+      mkdirSync(dir!, { recursive: true });
+      writeFileSync(join(dir!, "handoff-probe"), "current run");
+      writeFileSync(${JSON.stringify(trace)}, dir!);
+      `),
+    ].join("\n"));
+    try {
+      const r = run([
+        "--unit", "--shard", "1/1", "--filter", "t248-t05-compiled-handoff|t249-copilot-adapter",
+      ], {
+        AIDLC_TEST_PACKAGE_READY: "1",
+        AIDLC_TEST_COMPILED_DIR: root,
+        // Even an existing executable cannot replace this shard's producer.
+        AIDLC_TEST_COMPILED_EXECUTABLE: process.execPath,
+        BUN_OPTIONS: "--test-name-pattern=records|0a:",
+      });
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain("=== DONE t248-t05-compiled-handoff.test.ts (PASS) ===");
+      expect(r.out).toContain("=== DONE t249-copilot-adapter.test.ts (FAIL) ===");
+      expect(r.out).toContain("(fail) t249 Copilot hook adapter (live-captured payload fixtures) > 0a:");
+      const compiledDir = readFileSync(trace, "utf8");
+      expect(compiledDir).not.toBe(root);
+      expect(existsSync(compiledDir)).toBe(false);
+      expect(existsSync(root)).toBe(true);
+    } finally {
+      rmSync(plant, { force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
   }, PER_TEST_TIMEOUT);
 
   // --- 3. --parallel 1 ≡ serial on the smoke tier --------------------------
@@ -564,19 +618,25 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       f.endsWith(".meta"),
     );
     expect(leftoverMeta.length).toBe(0);
+    const junit = readFileSync(join(logDir, "t06-claude-md-paths.junit.xml"), "utf8");
+    expect(junit).toContain("<testcase");
+    const execution = JSON.parse(readFileSync(join(logDir, "t06-claude-md-paths.execution.json"), "utf8"));
+    expect(execution.file).toContain("t06-claude-md-paths.test.ts");
+    expect(Object.hasOwn(execution.gates, "AIDLC_TUI_LIVE")).toBe(true);
   }, PER_TEST_TIMEOUT);
 
   test("--all --debug defaults live TUI coverage unless AIDLC_TUI_LIVE is explicit", () => {
+    // Test each input explicitly, even when this meta-test runs under --no-llm.
     const defaulted = run(
       ["--all", "--debug", "--filter", "t01-helpers"],
-      { AIDLC_TUI_LIVE: undefined },
+      { AIDLC_TUI_LIVE: undefined, AIDLC_NO_LLM: undefined },
     );
     expect(defaulted.status).toBe(0);
     expect(defaulted.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=1 (defaulted");
 
     const explicitOff = run(
       ["--all", "--debug", "--filter", "NO_SUCH_T05_TEST"],
-      { AIDLC_TUI_LIVE: "0" },
+      { AIDLC_TUI_LIVE: "0", AIDLC_NO_LLM: undefined },
     );
     expect(explicitOff.status).toBe(1);
     expect(explicitOff.out).toContain("matched no test files");
@@ -584,7 +644,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
 
     const noLlm = run(
       ["--all", "--debug", "--no-llm", "--filter", "NO_SUCH_T05_TEST"],
-      { AIDLC_TUI_LIVE: undefined },
+      { AIDLC_TUI_LIVE: undefined, AIDLC_NO_LLM: undefined },
     );
     expect(noLlm.status).toBe(1);
     expect(noLlm.out).toContain("matched no test files");

@@ -633,9 +633,15 @@ dynamic per workflow position.
 1. Dispatch the named harness agent; its config loads the persona and
    knowledge (reviewer checklists are absorbed into the reviewer agents'
    bodies at build time).
-2. Paste the accumulated `load-steering` rule bundle verbatim into the brief;
-   pass relevant prior-artifact paths and task instructions rather than copied
-   persona or knowledge prose.
+2. Paste the accumulated `load-steering` rule bundle into every agent brief
+   verbatim. On harnesses whose agent definitions declare native preload of
+   the full active-space memory tree (Kiro CLI `resources`), deliver the rule
+   bundle through that preload instead of pasting it; every other harness
+   retains the verbatim-paste contract. Every brief still carries
+   `directive.ceremony`, `directive.protocol_modules`, and the diary discipline
+   verbatim. An unloadable required rule blocks dispatch with repair guidance.
+   Artifact references stay exact paths; never copy persona or knowledge prose
+   into a brief.
 3. Select the agent named by the stage metadata.
 
 ### Multi-Agent Stages (Ensemble Topologies)

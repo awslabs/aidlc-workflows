@@ -3679,7 +3679,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5927,7 +5927,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6683,7 +6683,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6713,7 +6713,7 @@
         },
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7346,7 +7346,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -8577,7 +8577,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9049,7 +9049,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9084,7 +9084,7 @@
         },
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9096,7 +9096,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9528,6 +9528,10 @@
       "unitId": "aidlc-statusline",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/e2e/t-tui-journey-orientation-windows.serial.test.ts",
+          "mechanism": "tui"
+        },
         {
           "file": "tests/e2e/t-tui-journey-orientation.serial.test.ts",
           "mechanism": "tui"

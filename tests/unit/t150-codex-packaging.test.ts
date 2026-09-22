@@ -147,6 +147,8 @@ function runDoctorWithCodexVersion(version: string): {
       encoding: "utf-8",
       env: {
         ...process.env,
+        // The version-floor fixture exercises copied source, not the host install.
+        AIDLC_INSTALL_ROOT: join(root, "install"),
         PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
       },
       },
@@ -583,5 +585,24 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     const supported = runDoctorWithCodexVersion("0.145.0");
     expect(supported.status).toBe(0);
     expect(supported.output).toContain("Harness CLI: codex codex-cli 0.145.0");
+  });
+
+  test("14: both generated Codex configs select workspace-write at the TOML root", () => {
+    for (const output of ["dist", "dist-release"]) {
+      const configPath = join(REPO_ROOT, output, "codex", ".codex", "config.toml");
+      const config = parse(readFileSync(configPath, "utf-8"));
+      // A text match also accepts sandbox_mode inside shell_environment_policy,
+      // where it does not select the sandbox. Check the generated TOML structure.
+      expect(config.sandbox_mode, configPath).toBe("workspace-write");
+      expect(config.shell_environment_policy, configPath).toEqual({
+        set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },
+      });
+      // Keep the existing network policy and absence of extra grants/approval
+      // overrides while correcting only the sandbox setting's table placement.
+      expect(config.sandbox_workspace_write, configPath).toEqual({
+        network_access: true,
+      });
+      expect(config.approval_policy, configPath).toBeUndefined();
+    }
   });
 });

@@ -81,6 +81,9 @@ function runDoctor(
     ...process.env,
     CLAUDE_PROJECT_DIR: project,
     AIDLC_HARNESS_DIR: ".claude",
+    // This copied-install fixture owns plugin checks, not the host's installed runtime.
+    // Keep doctor/export from inspecting that unrelated store; project cleanup owns this path.
+    AIDLC_INSTALL_ROOT: join(project, ".doctor-install"),
     ...envOverrides,
   };
   if (!("AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS" in envOverrides)) {

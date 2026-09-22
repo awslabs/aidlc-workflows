@@ -17,7 +17,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { binRoot } from "../../core/tools/aidlc-install-paths.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -189,7 +188,12 @@ function wizardStderrMessage(stderr: string): string {
 
 describe("t299 first-run setup wizard", () => {
   test("recommended defaults render detection, trichotomy, receipts, blocker, and next commands", () => {
-    const result = runWizard("\n", { aidlc: false, runtimeIssue: true });
+    const machineEnv = isolatedMachineEnv();
+    const result = runWizard("\n", {
+      aidlc: false,
+      runtimeIssue: true,
+      env: machineEnv,
+    });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("AI-DLC setup - first run in this project.");
     expect(result.stdout).toContain("Claude Code detected  (2.1.220 on your PATH)");
@@ -208,7 +212,7 @@ describe("t299 first-run setup wizard", () => {
     );
     if (process.platform === "win32") {
       expect(result.stdout).toContain(
-        `Add ${binRoot()} to your User PATH in Windows Settings, then open a new terminal.`,
+        `Add ${machineEnv.AIDLC_BIN_DIR} to your User PATH in Windows Settings, then open a new terminal.`,
       );
       expect(result.stdout).not.toContain('export PATH="$HOME/.local/bin:$PATH"');
     } else {

@@ -352,13 +352,20 @@ function fire(args: string[], env: Record<string, string>): SpawnResult {
 }
 
 /** Async spawn variant for backgrounded / parallel fires (Group G). */
-function fireAsync(args: string[], env: Record<string, string>): Promise<number> {
-  return new Promise((resolve) => {
+function fireAsync(args: string[], env: Record<string, string>): Promise<SpawnResult> {
+  return new Promise((resolve, reject) => {
     const child = spawn(BUN, [SENSOR_TS, "fire", ...args], {
       env: { ...process.env, ...withStubScriptDir(env) },
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    child.on("close", (code) => resolve(code ?? -1));
+    const output: string[] = [];
+    child.stdout!.setEncoding("utf-8").on("data", (chunk: string) => output.push(chunk));
+    child.stderr!.setEncoding("utf-8").on("data", (chunk: string) => output.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code, signal) => resolve({
+      rc: code ?? -1,
+      out: `${signal ? `signal=${signal}\n` : ""}${output.join("")}`,
+    }));
   });
 }
 
@@ -872,7 +879,7 @@ describe("t92 Group G: concurrency invariants", () => {
     const proj = makeProj();
     writeFileSync(join(proj, "aidlc-docs", "test.md"), "stub\n", "utf-8");
     const sensors = makeForkSensors("required-sections", "bun .claude/tools/aidlc-sensor-stub-pass.ts");
-    await Promise.all(
+    const results = await Promise.all(
       [1, 2, 3, 4, 5].map(() =>
         fireAsync(
           ["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")],
@@ -881,8 +888,10 @@ describe("t92 Group G: concurrency invariants", () => {
       ),
     );
     const f = proj;
-    expect(auditEventCount(f, "SENSOR_FIRED")).toBe(5);
-    expect(auditEventCount(f, "SENSOR_PASSED")).toBe(5);
+    const detail = `${JSON.stringify(results, null, 2)}\n${readAudit(f)}`;
+    for (const result of results) expect(result.rc, detail).toBe(0);
+    expect(auditEventCount(f, "SENSOR_FIRED"), detail).toBe(5);
+    expect(auditEventCount(f, "SENSOR_PASSED"), detail).toBe(5);
     // Each Fire id appears exactly twice (FIRED + PASSED); count unique ids
     // that are paired. Mirrors the awk uniq -c | $1==2 | wc -l.
     const ids = readAudit(f)
@@ -892,7 +901,7 @@ describe("t92 Group G: concurrency invariants", () => {
     const counts = new Map<string, number>();
     for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
     const paired = [...counts.values()].filter((c) => c === 2).length;
-    expect(paired).toBe(5);
+    expect(paired, detail).toBe(5);
   }, 30000);
 
   test("25: lock-released-across-spawn — fast PASSED lands during slow's spawn window", async () => {

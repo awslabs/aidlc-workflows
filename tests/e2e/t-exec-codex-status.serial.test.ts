@@ -70,7 +70,7 @@ describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via 
       const { proj, home, root } = setupCodexProject();
       try {
         const r = execCodex(proj, home, "Use the $aidlc skill to run: /aidlc --status");
-        expect(r.rc).toBe(0);
+        expect(r.rc, r.out).toBe(0);
         // The engine's no-workflow status text, surfaced verbatim by the
         // print-directive terminal arm.
         expect(r.out.toLowerCase()).toContain("no active");

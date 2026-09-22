@@ -1571,9 +1571,22 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(initialCreation.status).toBe(0);
 
     expect(acquireAuditLock(proj, 0, 1)).toBe(true);
-    const queued = [
-      Bun.spawn({
-        cmd: [
+    const stderrPaths = ["intent-create", "recompose"].map((name) =>
+      join(process.env.AIDLC_TEST_LOG_DIR ?? tmp, `t188-workspace-holder-${name}.stderr.log`)
+    );
+    // Capture directly so a failing child cannot fill an unread stderr pipe.
+    const spawnQueued = (cmd: string[], stderrPath: string) => Bun.spawn({
+      cmd,
+      cwd: proj,
+      stdout: "ignore",
+      stderr: Bun.file(stderrPath),
+      env,
+    });
+    const queued: ReturnType<typeof spawnQueued>[] = [];
+    let lockHeld = true;
+    try {
+      queued.push(spawnQueued(
+        [
           BUN,
           utility,
           "intent-create",
@@ -1584,13 +1597,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           "--project-dir",
           proj,
         ],
-        cwd: proj,
-        stdout: "ignore",
-        stderr: "pipe",
-        env,
-      }),
-      Bun.spawn({
-        cmd: [
+        stderrPaths[0],
+      ));
+      queued.push(spawnQueued(
+        [
           BUN,
           utility,
           "recompose",
@@ -1599,24 +1609,33 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           "--project-dir",
           proj,
         ],
-        cwd: proj,
-        stdout: "ignore",
-        stderr: "pipe",
-        env,
-      }),
-    ];
+        stderrPaths[1],
+      ));
 
-    let queuedPastDefault: boolean[] = [];
-    try {
-      await Bun.sleep(5_500);
-      queuedPastDefault = queued.map((child) => child.exitCode === null);
+      let queuedPastDefault: boolean[] = [];
+      try {
+        await Bun.sleep(5_500);
+        queuedPastDefault = queued.map((child) => child.exitCode === null);
+      } finally {
+        releaseAuditLock(proj);
+        lockHeld = false;
+      }
+
+      expect(queuedPastDefault).toEqual([true, true]);
+      const exits = await Promise.all(queued.map((child) => child.exited));
+      const stderr = stderrPaths.map((path) => readFileSync(path, "utf-8")).join("\n");
+      expect(exits, stderr).toEqual([0, 0]);
+      expect(existsSync(auditLockDir(proj))).toBe(false);
     } finally {
-      releaseAuditLock(proj);
+      try {
+        if (lockHeld) releaseAuditLock(proj);
+      } finally {
+        for (const child of queued) {
+          if (child.exitCode === null) child.kill("SIGKILL");
+        }
+        await Promise.allSettled(queued.map((child) => child.exited));
+      }
     }
-
-    expect(queuedPastDefault).toEqual([true, true]);
-    expect(await Promise.all(queued.map((child) => child.exited))).toEqual([0, 0]);
-    expect(existsSync(auditLockDir(proj))).toBe(false);
   }, TIMEOUT_MS);
 
   test("relative project env keeps compose and graph on the same workspace lock", () => {

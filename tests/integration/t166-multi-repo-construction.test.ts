@@ -31,7 +31,8 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject, fixtureIntentId8 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -66,9 +67,124 @@ const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const tempDirs: string[] = [];
 const aliasDirs: string[] = [];
 afterAll(() => {
-  for (const d of aliasDirs) rmSync(d, { force: true });
+  // Windows directory junctions require the directory-removal path in Bun.
+  for (const d of aliasDirs) rmSync(d, { recursive: process.platform === "win32", force: true });
   for (const d of tempDirs) cleanupTestProject(d);
 });
+
+/** Check the operation itself: chmod/ACL success does not prove access was denied. */
+function assertFixtureUnavailable(path: string, mode: "create" | "read"): void {
+  const probe = mode === "create" ? join(path, `.t166-create-probe-${randomUUID()}`) : path;
+  let failure: unknown;
+  try {
+    if (mode === "create") mkdirSync(probe);
+    else readFileSync(probe);
+  } catch (error) {
+    failure = error;
+  } finally {
+    if (mode === "create" && existsSync(probe)) rmSync(probe, { recursive: true, force: true });
+  }
+  if (failure === undefined) {
+    const kind = lstatSync(path).isDirectory() ? "directory" : "file";
+    throw new Error(
+      `t166 fixture premise failed: ${mode} still succeeds at ${path} ` +
+        `(kind=${kind}, platform=${process.platform}, bun=${process.versions.bun}).`,
+    );
+  }
+}
+
+/** Force real filesystem unavailability without changing Windows token privileges. */
+function withUnavailableFixtureAccess<T>(
+  paths: string[],
+  mode: "create" | "read",
+  action: () => T,
+): T {
+  if (paths.length === 0) throw new Error(`t166 ${mode} fixture has no target paths`);
+  const windows = process.platform === "win32";
+  // With an elevated Windows token, deny ACEs and sharing restrictions did not
+  // block Bun reads. Use explicit path-kind faults instead: a file
+  // cannot contain a worktree, and a directory cannot be read as an audit shard.
+  // Move the original object within its parent so its contents and ACL survive.
+  const originals: Array<{
+    path: string;
+    backup: string;
+    moved: boolean;
+    ino: number;
+    dev: number;
+    bytes: Buffer | null;
+  }> = [];
+  const chmodded: string[] = [];
+  const restoreErrors: unknown[] = [];
+  let actionResult: T | undefined;
+  let actionFailed = false;
+  let actionError: unknown;
+  try {
+    if (!windows) {
+      for (const path of paths) {
+        chmodSync(path, mode === "create" ? 0o500 : 0o000);
+        chmodded.push(path);
+      }
+    } else {
+      for (const path of paths) {
+        const stat = lstatSync(path);
+        if (mode === "create" ? !stat.isDirectory() : !stat.isFile()) {
+          throw new Error(`t166 ${mode} fixture has the wrong original path kind: ${path}`);
+        }
+        // Backups do not end in .md, so audit enumeration cannot read them instead.
+        const original = {
+          path,
+          backup: join(dirname(path), `.t166-saved-${randomUUID()}`),
+          moved: false,
+          ino: stat.ino,
+          dev: stat.dev,
+          bytes: mode === "read" ? readFileSync(path) : null,
+        };
+        originals.push(original);
+        renameSync(path, original.backup);
+        original.moved = true;
+        if (mode === "create") writeFileSync(path, "t166 blocked worktree parent\n", { flag: "wx" });
+        else mkdirSync(path);
+      }
+    }
+    for (const path of paths) assertFixtureUnavailable(path, mode);
+    actionResult = action();
+  } catch (error) {
+    actionFailed = true;
+    actionError = error;
+  } finally {
+    for (const path of chmodded) {
+      try {
+        chmodSync(path, mode === "create" ? 0o700 : 0o600);
+      } catch (error) {
+        restoreErrors.push(error);
+      }
+    }
+    for (const original of originals.reverse()) {
+      if (!original.moved) continue;
+      try {
+        rmSync(original.path, { recursive: true, force: true });
+        renameSync(original.backup, original.path);
+        const restored = lstatSync(original.path);
+        if (restored.ino !== original.ino || restored.dev !== original.dev ||
+            (mode === "create" ? !restored.isDirectory() : !restored.isFile()) ||
+            (original.bytes !== null && !readFileSync(original.path).equals(original.bytes))) {
+          restoreErrors.push(new Error(`t166 fixture did not restore its original object: ${original.path}`));
+        }
+      } catch (error) {
+        restoreErrors.push(error);
+      }
+    }
+  }
+  if (restoreErrors.length > 0) {
+    throw new AggregateError(
+      actionFailed ? [actionError, ...restoreErrors] : restoreErrors,
+      actionFailed ? "t166 fixture action and restoration failed" : "t166 fixture restoration failed",
+      actionFailed ? { cause: actionError } : undefined,
+    );
+  }
+  if (actionFailed) throw actionError;
+  return actionResult as T;
+}
 
 interface RunResult {
   status: number;
@@ -1223,18 +1339,18 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       );
       rmSync(worktreeDir(proj, slug), { recursive: true, force: true });
       const parent = join(proj, ".aidlc", "worktrees");
-      chmodSync(parent, 0o500);
-      const phantom = runWorktree(
-        proj,
-        "create",
-        "--slug",
-        slug,
-        "--base",
-        "main",
-        "--repo",
-        "repo-b",
+      const phantom = withUnavailableFixtureAccess([parent], "create", () =>
+        runWorktree(
+          proj,
+          "create",
+          "--slug",
+          slug,
+          "--base",
+          "main",
+          "--repo",
+          "repo-b",
+        ),
       );
-      chmodSync(parent, 0o700);
       if (plantRepoB) git(repoB, "branch", boltName(fixtureIntentId8(proj), slug));
       return { created, phantom, proj };
     }
@@ -1536,16 +1652,16 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const unreadableShards = readdirSync(unreadableAuditDir).map((file) =>
       join(unreadableAuditDir, file),
     );
-    for (const shard of unreadableShards) chmodSync(shard, 0o000);
-    const unreadableAuthority = runWorktree(
-      unreadableProj,
-      "discard",
-      "--slug",
-      "unreadable-authority",
-      "--repo",
-      "repo-b",
+    const unreadableAuthority = withUnavailableFixtureAccess(unreadableShards, "read", () =>
+      runWorktree(
+        unreadableProj,
+        "discard",
+        "--slug",
+        "unreadable-authority",
+        "--repo",
+        "repo-b",
+      ),
     );
-    for (const shard of unreadableShards) chmodSync(shard, 0o600);
 
     test("an uncorroborated phantom row cannot override the real creating repo", () => {
       expect(trueRepo.created.status).toBe(0);
@@ -1761,7 +1877,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
     test("env-supplied project paths are redacted from Error fields", () => {
       expect(envError.status).not.toBe(0);
-      expect(errorBlock(envProj)).toContain("<project-dir>/.aidlc/worktrees");
+      expect(errorBlock(envProj).replaceAll("\\", "/")).toContain("<project-dir>/.aidlc/worktrees");
       expect(errorBlock(envProj)).not.toContain(envProj);
     });
 

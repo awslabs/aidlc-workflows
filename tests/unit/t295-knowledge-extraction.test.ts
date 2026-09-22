@@ -51,6 +51,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   detectMimeType,
   documentkbDir,
@@ -92,6 +93,35 @@ function doc(p: string, name: string, body: string | Buffer): string {
   const full = join(documentsDir(p, SPACE), name);
   writeFileSync(full, body);
   return full;
+}
+
+/** Exercise absence even on hosts with Poppler, without changing the test's PATH. */
+function extractWithoutPdfTool(project: string, abs: string): ReturnType<typeof extractDocument> {
+  const emptyPath = join(project, "empty-bin");
+  mkdirSync(emptyPath);
+  const tool = pathToFileURL(
+    join(import.meta.dir, "../../dist/claude/.claude/tools/aidlc-knowledge.ts"),
+  ).href;
+  const childEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PATH"),
+  );
+  const result = spawnSync(process.execPath, ["-e", `
+    import { extractDocument, probeExtractor } from ${JSON.stringify(tool)};
+    console.log(JSON.stringify({
+      probe: probeExtractor("pdftotext"),
+      outcome: extractDocument(${JSON.stringify(abs)}, "application/pdf", 9, ${JSON.stringify(DIGEST)}),
+    }));
+  `], {
+    cwd: emptyPath,
+    env: { ...childEnv, PATH: emptyPath },
+    encoding: "utf-8",
+    timeout: 4_000,
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(0);
+  const packet = JSON.parse(result.stdout);
+  expect(packet.probe.available).toBe(false);
+  return packet.outcome;
 }
 
 afterEach(() => {
@@ -146,8 +176,7 @@ describe("t295 probeExtractor degrades instead of throwing", () => {
     expect(r.available).toBe(true);
   });
 
-  test("pdftotext, when present, reports a version string", () => {
-    if (!PDFTOTEXT) return; // CI has no Poppler; the branch is deliberate
+  test.skipIf(!PDFTOTEXT)("pdftotext, when present, reports a version string", () => {
     const r = probeExtractor("pdftotext");
     expect(r.available).toBe(true);
     // pdftotext prints its banner to STDERR, so a stdout-only probe would report
@@ -373,8 +402,7 @@ describe("t295 each outcome is a DISTINCT state with its own remedy", () => {
     expect(out.record.reason).toContain(String(EXTRACT_INPUT_BYTE_CAP));
   });
 
-  test("a malformed PDF is extraction_failed with a distinct reason", () => {
-    if (!PDFTOTEXT) return; // needs a working extractor to FAIL meaningfully
+  test.skipIf(!PDFTOTEXT)("a malformed PDF is extraction_failed with a distinct reason", () => {
     const p = scratchProject();
     const abs = doc(p, "fake.pdf", "%PDF-1.4\nnot really a pdf\n");
     const out = extractDocument(abs, "application/pdf", 26, DIGEST);
@@ -391,11 +419,7 @@ describe("t295 each outcome is a DISTINCT state with its own remedy", () => {
     // fact about a program that never executed.
     const p = scratchProject();
     const abs = doc(p, "a.pdf", "%PDF-1.4\n");
-    // Force the unavailable path by asking for a type whose configured argv0
-    // does not exist. With no harness configuration, PDF maps to pdftotext, so
-    // this case only holds where pdftotext is ABSENT.
-    if (PDFTOTEXT) return;
-    const out = extractDocument(abs, "application/pdf", 9, DIGEST);
+    const out = extractWithoutPdfTool(p, abs);
     expect(out.record.state).toBe("extractor_unavailable");
     expect(out.record.extractor?.name).toBe("pdftotext");
     expect(out.record.extractor?.version).toBeUndefined();
@@ -411,14 +435,12 @@ describe("t295 each outcome is a DISTINCT state with its own remedy", () => {
   test("extractor_unavailable ALSO records detectedType -- the mime a retry needs to re-probe", () => {
     const p = scratchProject();
     const abs = doc(p, "a.pdf", "%PDF-1.4\n");
-    if (PDFTOTEXT) return;
-    const out = extractDocument(abs, "application/pdf", 9, DIGEST);
+    const out = extractWithoutPdfTool(p, abs);
     expect(out.record.state).toBe("extractor_unavailable");
     expect(out.record.detectedType).toBe("application/pdf");
   });
 
-  test("a valid PDF with NO TEXT LAYER is no_extractable_text, not a failure", () => {
-    if (!PDFTOTEXT) return; // needs a working extractor to distinguish the states
+  test.skipIf(!PDFTOTEXT)("a valid PDF with NO TEXT LAYER is no_extractable_text, not a failure", () => {
     // The distinction that matters: the extractor RAN and succeeded, and the
     // document simply has no text -- a scanned or image-only page. The remedy is a
     // text version of the document, NOT "install the extractor" and NOT "fix the
@@ -794,7 +816,7 @@ describe("t295 Finding 5(c): a DOCX with no configured extractor becomes retryab
   // uses a SCRATCH COPY of dist/ with its OWN harness.json (same technique as
   // t294), never the real dist. First run configures a NONEXISTENT extractor
   // for the docx mime (forcing extractor_unavailable); second run reconfigures
-  // it to `cat` (always present) and syncs, proving the row is retryable.
+  // it to a Bun file reader and syncs, proving the row is retryable.
   const REPO = join(import.meta.dir, "..", "..");
   let scratch = "";
 
@@ -806,21 +828,38 @@ describe("t295 Finding 5(c): a DOCX with no configured extractor becomes retryab
   }
 
   function makeDocx(path: string): void {
-    // A minimal ZIP with the two entries hasWordOoxmlSignature looks for.
-    const r = spawnSync("python3", ["-c", `
-import zipfile
-z = zipfile.ZipFile(${JSON.stringify(path)}, "w")
-z.writestr("[Content_Types].xml", "<Types/>")
-z.writestr("word/document.xml", "<document/>")
-z.close()
-`]);
-    if (r.status !== 0) throw new Error(`fixture docx creation failed: ${r.stderr}`);
+    // A real ZIP_STORED archive, including CRCs and the central directory.
+    // Entries: [Content_Types].xml=<Types/>, word/document.xml=<document/>.
+    // Fixed 1980-01-01 timestamps; embedding bytes removes a runtime Python
+    // dependency without replacing the valid ZIP with a detector-only stub.
+    writeFileSync(path, Buffer.from(
+      "UEsDBBQAAAAAAAAAIQDHHBc8CAAAAAgAAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbDxUeXBlcy8+UEsDBBQAAAAAAAAAIQBf" +
+      "W9FMCwAAAAsAAAARAAAAd29yZC9kb2N1bWVudC54bWw8ZG9jdW1lbnQvPlBLAQIUAxQAAAAAAAAAIQDHHBc8CAAAAAgAAAAT" +
+      "AAAAAAAAAAAAAACAAQAAAABbQ29udGVudF9UeXBlc10ueG1sUEsBAhQDFAAAAAAAAAAhAF9b0UwLAAAACwAAABEAAAAAAAAA" +
+      "AAAAAIABOQAAAHdvcmQvZG9jdW1lbnQueG1sUEsFBgAAAAACAAIAgAAAAHMAAAAAAA==",
+      "base64",
+    ));
+  }
+
+  function setFileReaderExtractor(): void {
+    const reader = join(scratch, "read-docx.ts");
+    writeFileSync(reader, [
+      'import { readFileSync } from "node:fs";',
+      "process.stdout.write(readFileSync(process.argv[2]));",
+      "",
+    ].join("\n"));
+    setDocxExtractor([process.execPath, reader, "$IN"]);
   }
 
   function runKnowledge(args: string[], projectDir: string): { status: number; out: string } {
     const tool = join(scratch, "dist", "claude", ".claude", "tools", "aidlc-knowledge.ts");
-    const r = spawnSync("bun", [tool, ...args, "--project-dir", projectDir, "--json"], {
+    const r = spawnSync(process.execPath, [tool, ...args, "--project-dir", projectDir, "--json"], {
       encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_RUNTIME_HARNESS_ROOT: join(scratch, "dist", "claude", ".claude"),
+      },
     });
     return { status: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
   }
@@ -848,9 +887,8 @@ z.close()
     // THE FIX: detectedType is present, naming the mime a retry needs.
     expect(afterOnboard.documents[0].extraction.detectedType).toBe(WORD_DOCX_MIME);
 
-    // Now a real (if useless) extractor exists for this mime -- `cat` is on
-    // every POSIX machine this suite runs on.
-    setDocxExtractor(["cat", "$IN"]);
+    // Now a real (if useless) extractor exists for this MIME on every host.
+    setFileReaderExtractor();
     const synced = runKnowledge(["sync"], projectDir);
     expect(synced.status, synced.out).toBe(0);
     const parsed = JSON.parse(synced.out.slice(synced.out.indexOf("{")));
@@ -877,7 +915,7 @@ z.close()
     expect(afterOnboard.documents[0].extraction.state).toBe("unsupported_type");
     expect(afterOnboard.documents[0].extraction.detectedType).toBe(WORD_DOCX_MIME);
 
-    setDocxExtractor(["cat", "$IN"]);
+    setFileReaderExtractor();
     const synced = runKnowledge(["sync"], projectDir);
     expect(synced.status, synced.out).toBe(0);
     const parsed = JSON.parse(synced.out.slice(synced.out.indexOf("{")));

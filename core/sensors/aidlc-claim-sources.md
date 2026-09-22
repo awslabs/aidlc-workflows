@@ -40,7 +40,7 @@ For each deliverable, the sensor verifies:
   `intent-capture-questions.md`
 - when the initial description contains `<document>`, deliverables cannot use
   `[desc]`; request and document claims require confirmed `[Q<n>]`
-- `[scope]` is used only for a workflow-selected Initial Scope Signal
+- `[scope]` grounds claims only in a workflow-selected Initial Scope Signal
 - `[assumption]` appears only in the assumptions section
 - retained assumptions exactly match entries under an
   `## Assumption Confirmation` answered exactly `A. Accept assumptions`
@@ -66,6 +66,15 @@ attributes still cannot ground a claim. A visible literal `[Q1]` in a `div`
 can ground its claim; `[Q1]: /url` in that block never defines a Markdown link.
 Raw HTML content cannot open a control section or supply an answer tag in the
 questions file.
+
+Under a deliverable's `## Sources`, the exact single-line declaration
+``- [scope] Workflow-selected scope: `<scope>`.`` is metadata only when its
+scope matches the validated questions register and authoritative workflow state.
+The `[scope]` label must remain visible literal text, not a Markdown link.
+This exception applies only to that complete declaration: wrong values,
+malformed or unregistered declarations, appended text, neighboring claims, and
+other source tags still receive the normal checks. A `Sources` heading never
+exempts an entire section or makes unsupported content valid.
 
 A tag counts when the rendered document shows it as literal text. Bracket pairs
 resolve as Markdown links only against a definition parsed from the original

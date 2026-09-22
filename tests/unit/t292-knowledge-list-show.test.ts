@@ -425,7 +425,7 @@ describe("t292 show's other guarantees", () => {
     // The original is the authoritative human-readable reference; a citation to
     // content.md would send a reader to a machine-shaped derivative.
     const p = scratchProject();
-    doc(p, join("security", "policy.md").split("/").join("-"), "text\n");
+    doc(p, "security-policy.md", "text\n");
     const { indexed } = onboard(p, SPACE, undefined, NOW);
     const shown = showDocument(p, SPACE, indexed[0].id);
     expect(shown.citation).toContain("documents/");

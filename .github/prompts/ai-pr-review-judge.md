@@ -25,6 +25,15 @@ not the PR description:
   accepted finding, including an accepted P0 or P1. Report only when the current
   head expands beyond the accepted trigger or impact, or contradicts a later
   authoritative decision.
+- Honor `.ai-review-context/ledger.json`, the only authoritative record of
+  maintainer decisions. Do not restate a `rejected` or `accepted` finding whose
+  anchored lines and priority are unchanged; the publisher removes them
+  deterministically and renders accepted risks from the ledger itself. Restate
+  a still-`open` finding when it still holds so it keeps its identity; an open
+  P0/P1 you omit while its cited lines are provably unchanged is retained by
+  the publisher and still requires author changes. Identity is category plus
+  cited lines: report a finding as new only when no ledger entry of the same
+  category covers any of its cited lines.
 - Verify concrete correctness, compatibility, security, state, recovery,
   user-experience, workflow-cost, and AIDLC direction consequences.
 - Consolidate candidates with one root cause and choose the category that best
