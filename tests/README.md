@@ -174,9 +174,12 @@ because its CLI exposes vendor API keys to agent environments; Copilot is
 excluded by account policy. Only source already on `main` passes the plan's
 ancestry gate.
 
-The OIDC-bearing live lanes stay off unless repository variable `AIDLC_NIGHTLY_LIVE=1`
-is deliberately set: dependency and CLI installers still share the OIDC job
-boundary ([#1306](https://github.com/awslabs/aidlc-workflows/issues/1306)). The credential-free
+`live_prepare` installs dependencies and packages projections without OIDC,
+handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
+the archive and Windows installs CLIs only as its isolated user. This closes
+[#1306](https://github.com/awslabs/aidlc-workflows/issues/1306), while repository
+variable `AIDLC_NIGHTLY_LIVE=1` remains the deliberate enablement switch.
+The credential-free
 Windows release-contract job remains enabled. Preview publication proceeds with
 `complete: false` when the disabled lanes are skipped and other jobs pass;
 stable promotion still requires `passed: true`.

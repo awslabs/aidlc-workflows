@@ -48,8 +48,11 @@ if [[ "$mode" == prepare ]]; then
   sudo install -m 755 "$bun_bin" "$live_tools/bin/bun"
   sudo install -m 755 "$node_bin" "$live_tools/bin/node"
   run_live "$live_tools/bin/bun" -e 'const fs=require("fs"),p=require("path");function walk(path){const s=fs.lstatSync(path);if(s.isSymbolicLink())return;fs.chmodSync(path,s.isDirectory()?0o700:(s.mode&0o777)|0o600);if(s.isDirectory())for(const name of fs.readdirSync(path))walk(p.join(path,name));}walk(process.argv[1])' "$live_root"
-  npm_root="$(npm root -g)"
-  if [[ -d "$npm_root" ]]; then sudo cp -a "$npm_root/." "$live_tools/node_modules/"; fi
+  npm_root="$RUNNER_TEMP/aidlc-cli/lib/node_modules"
+  if [[ "$family" != isolation && "$family" != release-contract ]]; then
+    [[ -d "$npm_root" ]] || { echo 'Prepared CLI artifact is missing' >&2; exit 1; }
+    sudo cp -a "$npm_root/." "$live_tools/node_modules/"
+  fi
   sudo chmod -R a+rX,go-w "$live_tools"
   case "$family" in
     claude-*) cli=claude ;;

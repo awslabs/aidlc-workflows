@@ -104,12 +104,25 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("exactly the OIDC-bearing jobs require explicit nightly live opt-in", () => {
+  test("dependency preparation and OIDC-bearing jobs require explicit nightly live opt-in", () => {
     const jobs = Object.entries(workflow.jobs);
     const oidcJobs = jobs.filter(([, job]) => job.permissions?.["id-token"] === "write").map(([name]) => name).sort();
     expect(oidcJobs).toEqual(["live_hosted", "live_windows"]);
     const gatedJobs = jobs.filter(([, job]) => job.if === "vars.AIDLC_NIGHTLY_LIVE == '1'").map(([name]) => name).sort();
-    expect(gatedJobs).toEqual(oidcJobs);
+    expect(gatedJobs).toEqual(["live_hosted", "live_prepare", "live_windows"]);
+    expect(workflow.jobs.live_prepare.permissions).toEqual({ contents: "read" });
+    for (const name of oidcJobs) {
+      const job = workflow.jobs[name];
+      expect(job.needs).toContain("live_prepare");
+      const download = job.steps.findIndex((step) => step.uses?.startsWith("actions/download-artifact@"));
+      const prepare = job.steps.findIndex((step) => step.name === "Prepare separate-user live runtime");
+      expect(download).toBeGreaterThanOrEqual(0);
+      expect(download).toBeLessThan(prepare);
+      for (const step of job.steps) {
+        expect(step.run ?? "").not.toMatch(/\b(bun|npm|npx|pnpm|yarn|pip|pip3|cargo)\s+(install|i|ci|add)\b/);
+        expect(step.run ?? "").not.toContain("scripts/package.ts");
+      }
+    }
   });
 
   test("credentialed startup is isolated from broker and agent environments", () => {
@@ -444,13 +457,13 @@ describe("t345 complete nightly coverage", () => {
   });
 
   test("disabled live lanes must be skipped and are not tested coverage", () => {
-    const needs = { ...allSuccess(), live_hosted: { result: "skipped" as const }, live_windows: { result: "skipped" as const } };
+    const needs = { ...allSuccess(), live_prepare: { result: "skipped" as const }, live_hosted: { result: "skipped" as const }, live_windows: { result: "skipped" as const } };
     for (const live of [undefined, "", "0"]) {
       expect(fullSuiteResult(needs, identity, { live })).toMatchObject({
-        passed: true, complete: false, disabledLegs: ["live_hosted", "live_windows"], excluded: excludedFamilies,
+        passed: true, complete: false, disabledLegs: ["live_prepare", "live_hosted", "live_windows"], excluded: excludedFamilies,
       });
     }
-    for (const job of ["live_hosted", "live_windows"]) {
+    for (const job of ["live_prepare", "live_hosted", "live_windows"]) {
       for (const status of ["success", "failure", "cancelled"] as const) {
         expect(fullSuiteResult({ ...needs, [job]: { result: status } }, identity, {})).toMatchObject({ passed: false, complete: false });
       }
@@ -464,7 +477,7 @@ describe("t345 complete nightly coverage", () => {
     expect(fullSuiteResult(allSuccess(), identity, { live: "1" })).toMatchObject({
       passed: true, complete: false, disabledLegs: [], excluded: excludedFamilies,
     });
-    for (const job of ["live_hosted", "live_windows", "release_contract_windows"]) {
+    for (const job of ["live_prepare", "live_hosted", "live_windows", "release_contract_windows"]) {
       for (const status of ["failure", "cancelled", "skipped"] as const) {
         expect(fullSuiteResult({ ...allSuccess(), [job]: { result: status } }, identity, { live: "1" }))
           .toMatchObject({ passed: false, complete: false });
@@ -479,7 +492,7 @@ describe("t345 complete nightly coverage", () => {
   test("result CLI warns about disabled lanes and excluded families but rejects missing jobs and configuration errors", () => {
     const root = mkdtempSync(join(tmpdir(), "full-suite-result-"));
     try {
-      const needs: SuiteNeeds = { ...allSuccess(), live_hosted: { result: "skipped" }, live_windows: { result: "skipped" } };
+      const needs: SuiteNeeds = { ...allSuccess(), live_prepare: { result: "skipped" }, live_hosted: { result: "skipped" }, live_windows: { result: "skipped" } };
       const env = {
         ...process.env, AIDLC_NIGHTLY_LIVE: "", FULL_SUITE_NEEDS: JSON.stringify(needs), FULL_SUITE_SHA: identity.sha,
       };
@@ -487,13 +500,13 @@ describe("t345 complete nightly coverage", () => {
       const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
       const result = spawnSync(process.execPath, [script, output], { encoding: "utf8", env });
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain("::warning::Full suite ran with the live lanes disabled (AIDLC_NIGHTLY_LIVE unset): live_hosted, live_windows");
+      expect(result.stderr).toContain("::warning::Full suite ran with the live lanes disabled (AIDLC_NIGHTLY_LIVE unset): live_prepare, live_hosted, live_windows");
       expect(result.stderr).toContain(`::warning::Full suite excluded families: ${excludedFamilies.join(", ")}`);
       const report = JSON.parse(readFileSync(output, "utf8"));
-      expect(report).toMatchObject({ passed: true, complete: false, disabledLegs: ["live_hosted", "live_windows"], excluded: excludedFamilies });
+      expect(report).toMatchObject({ passed: true, complete: false, disabledLegs: ["live_prepare", "live_hosted", "live_windows"], excluded: excludedFamilies });
       const unexpectedRun = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(allSuccess()) } });
       expect(unexpectedRun.status).toBe(1);
-      expect(unexpectedRun.stderr).toContain("::error::Live-lane configuration error: AIDLC_NIGHTLY_LIVE is not '1' but these jobs ran: live_hosted=success, live_windows=success");
+      expect(unexpectedRun.stderr).toContain("::error::Live-lane configuration error: AIDLC_NIGHTLY_LIVE is not '1' but these jobs ran: live_prepare=success, live_hosted=success, live_windows=success");
       delete needs.native_reconcile;
       const missing = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(needs) } });
       expect(missing.status).toBe(1);

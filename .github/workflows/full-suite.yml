@@ -206,12 +206,48 @@ jobs:
           name: "full-suite-deterministic-${{ matrix.tier }}-${{ runner.os }}"
           path: tests/logs/
           include-hidden-files: true
-  # Keep the live lanes off until installers leave the OIDC boundary; see #1306.
-  # Package and CLI installers currently run inside id-token-bearing jobs.
-  # Setting AIDLC_NIGHTLY_LIVE=1 is the deliberate act enabling these OIDC jobs.
-  live_hosted:
+  # Closes #1306: lifecycle installers have no OIDC capability; live lanes consume
+  # only validated prepared artifacts. AIDLC_NIGHTLY_LIVE remains explicit opt-in.
+  live_prepare:
     if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
     needs: plan
+    permissions:
+      contents: read
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - name: Install relocatable pinned CLIs
+        if: "runner.os != 'Windows'"
+        run: npm install -g --prefix "$RUNNER_TEMP/aidlc-cli" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION" "opencode-ai@$OPENCODE_VERSION"
+      - name: Pack POSIX live dependencies
+        if: "runner.os != 'Windows'"
+        run: python3 scripts/ci-live-deps.py pack "$RUNNER_TEMP/live-deps.tar.gz" --workspace "$GITHUB_WORKSPACE" --cli "$RUNNER_TEMP/aidlc-cli"
+      - name: Pack Windows live dependencies
+        if: "runner.os == 'Windows'"
+        shell: powershell
+        run: python scripts/ci-live-deps.py pack "$env:RUNNER_TEMP/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps.tar.gz"
+          retention-days: 1
+          if-no-files-found: error
+  live_hosted:
+    if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
+    needs: [plan, live_prepare]
     environment: nightly-live
     permissions:
       contents: read
@@ -257,22 +293,18 @@ jobs:
         with:
           persist-credentials: false
           ref: "${{ needs.plan.outputs.sha }}"
+      # Pinned setup-bun supplies the broker runtime, not dependency lifecycle scripts.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
-      - run: "bun install --frozen-lockfile"
-      - run: "bun scripts/package.ts"
-      - name: "Install pinned family CLIs"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps"
+      - name: Validate and unpack live dependencies
         run: |
-          case "${{ matrix.family }}" in
-            claude-*) npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" ;;
-          esac
-          case "${{ matrix.family }}" in
-            codex) npm install -g "@openai/codex@$CODEX_VERSION" ;;
-          esac
-          case "${{ matrix.family }}" in
-            opencode) npm install -g "opencode-ai@$OPENCODE_VERSION" ;;
-          esac
+          python3 scripts/ci-live-deps.py unpack "$RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$GITHUB_WORKSPACE" --temporary "$RUNNER_TEMP" --posix-clis
+          echo "$RUNNER_TEMP/aidlc-cli/bin" >> "$GITHUB_PATH"
       - name: "Prepare separate-user live runtime"
         run: bash .github/scripts/prepare-live-runtime.sh prepare ${{ matrix.family }}
       - name: "Assume nightly Bedrock role"
@@ -358,7 +390,7 @@ jobs:
           include-hidden-files: true
   live_windows:
     if: "vars.AIDLC_NIGHTLY_LIVE == '1'"
-    needs: plan
+    needs: [plan, live_prepare]
     runs-on: windows-latest
     environment: nightly-live
     permissions:
@@ -377,11 +409,16 @@ jobs:
         with:
           ref: "${{ needs.plan.outputs.sha }}"
           persist-credentials: false
+      # Pinned setup-bun supplies the broker runtime; dependencies arrive as inert artifacts.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
-      - run: bun install --frozen-lockfile
-      - run: bun scripts/package.ts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps"
+      - name: Validate and unpack live dependencies
+        run: python scripts/ci-live-deps.py unpack "$env:RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE" --temporary "$env:RUNNER_TEMP"
       - name: "Prepare separate-user live runtime"
         run: .github/scripts/prepare-live-runtime.ps1 -Mode prepare -Family ${{ matrix.family }}
       - name: "Assume nightly Bedrock role"
@@ -478,7 +515,7 @@ jobs:
           include-hidden-files: true
   result:
     if: "${{ always() }}"
-    needs: [plan, native_terminal, native_reconcile, deterministic, live_hosted, live_windows, release_contract_windows]
+    needs: [plan, native_terminal, native_reconcile, deterministic, live_prepare, live_hosted, live_windows, release_contract_windows]
     runs-on: ubuntu-latest
     steps:
       - name: "Reject unauthorized source without executing repository code"

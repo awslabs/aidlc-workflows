@@ -1037,9 +1037,13 @@ for an unchanged SHA, dispatch `full-suite.yml` on `main` with `ref=<sha>`; unli
 the preview publisher, this always runs the suite even when a preview already
 exists. Release validation searches the newest 100 successful runs of each source.
 
-The OIDC-bearing live lanes stay off unless repository variable `AIDLC_NIGHTLY_LIVE=1`
-is deliberately set: dependency and CLI installers still share the OIDC job
-boundary ([#1306](https://github.com/awslabs/aidlc-workflows/issues/1306)). The credential-free
+`live_prepare` installs dependencies and packages projections on all three hosted
+OSes with contents-read permission only; POSIX pinned CLIs travel in the same
+validated archive, while Windows CLI installation stays inside its isolated user.
+This closes [#1306](https://github.com/awslabs/aidlc-workflows/issues/1306): installers
+never run with OIDC in scope, and credentialed lanes only validate and unpack
+prepared bytes. `AIDLC_NIGHTLY_LIVE=1` remains the deliberate enablement switch
+for preparation and live lanes. The credential-free
 Windows release-contract job remains enabled. Preview publication proceeds with
 `complete: false` when the disabled lanes are skipped and other jobs pass;
 stable promotion still requires `passed: true`.

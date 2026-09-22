@@ -1,7 +1,7 @@
 import { FAMILIES } from "./ci-live-filter.ts";
 
 export const FULL_SUITE_JOBS = [
-  "plan", "native_terminal", "native_reconcile", "deterministic", "live_hosted",
+  "plan", "native_terminal", "native_reconcile", "deterministic", "live_prepare", "live_hosted",
   "live_windows", "release_contract_windows",
 ] as const;
 
@@ -30,7 +30,7 @@ export function fullSuiteResult(
     .map((job) => [job, needs[job]?.result ?? "missing"]));
   const excluded = Object.entries(FAMILIES).filter(([, family]) => family.hosting === "excluded")
     .map(([name]) => name).sort();
-  const disabledLegs = live === "1" ? [] : ["live_hosted", "live_windows"];
+  const disabledLegs = live === "1" ? [] : ["live_prepare", "live_hosted", "live_windows"];
   const passed = /^[a-f0-9]{40}$/.test(identity.sha) && Object.entries(legs)
     .every(([job, status]) => status === (disabledLegs.includes(job) ? "skipped" : "success"));
   return {
