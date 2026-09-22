@@ -5,7 +5,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import {
   BLOCKED_STATE_TRANSITIONS,
@@ -574,6 +574,95 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
+  test("runtime integrity refuses inline imports, command substitutions, aliases, functions, and heredocs", () => {
+    // These payloads exercise dynamic module loading rather than static imports.
+    for (const command of [
+      `bun -e 'import("./.claude/hooks/aidlc-record-human-turn.ts")'`,
+      `bun -e 'const p = ["./.claude/hooks", "aidlc-record-human-turn.ts"].join("/"); await import(p)'`,
+      `bun --eval 'const p = "aidlc-guard-switch"; await import(p)'`,
+      `node -e 'applyIntentSettings({ requested: {} })'`,
+      `python -c 'print("aidlc-guard-switch")'`,
+      `sh -c 'printf applyIntentSettings'`,
+      `bash -c "$(printf '%s' 'aidlc-record-human-turn')"`,
+      `zsh -c 'printf applyIntentSettings'`,
+      `alias h='bun .claude/hooks/aidlc-record-human-turn.ts'`,
+      `alias h='bun -e applyIntentSettings'`,
+      `function h { bun -e 'applyIntentSettings()'; }`,
+      `h() { bun -e 'import("aidlc-guard-switch")'; }`,
+      `bun <<'EOF'\napplyIntentSettings()\nEOF`,
+    ]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stdout, command).toBe("");
+    }
+  });
+
+  test("runtime integrity reads wrapper scripts at interpreter and executable positions", () => {
+    const project = createTestProject();
+    projects.push(project);
+    writeFileSync(join(project, "wrapper.ts"), 'import "./.claude/tools/aidlc-guard-switch.ts";\n');
+    writeFileSync(join(project, "wrapper"), 'bun -e "applyIntentSettings()"\n');
+    for (const command of [
+      `bun "${join(project, "wrapper.ts")}"`,
+      "node wrapper.ts",
+      "bun run wrapper.ts",
+      "tsx wrapper.ts",
+      "./wrapper",
+      "wrapper.ts",
+    ]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: project,
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stdout, command).toBe("");
+    }
+  });
+
+  test("runtime integrity bounds wrapper reads and ignores unavailable script files", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const content = "// applyIntentSettings\n";
+    writeFileSync(join(project, "at-limit.ts"), content.padEnd(1024 * 1024, " "));
+    writeFileSync(join(project, "over-limit.ts"), content.padEnd(1024 * 1024 + 1, " "));
+    mkdirSync(join(project, "directory.ts"));
+    for (const [command, status] of [
+      ["bun at-limit.ts", 2],
+      ["bun over-limit.ts", 0],
+      ["bun missing.ts", 0],
+      ["bun directory.ts", 0],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: project,
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, command).toBe(status);
+      if (status === 0) expect(r.stderr, command).toBe("");
+    }
+  });
+
   test("runtime integrity refuses shell mutations of session and Plan Approval records", () => {
     for (const command of [
       "echo x > aidlc/.aidlc-sessions/foo.json",
@@ -633,6 +722,66 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(relativeWrite.status).toBe(2);
     expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+  });
+
+  test("runtime integrity refuses written hook imports outside the runtime and authored repository", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const content = 'import { applyIntentSettings } from ".claude/tools/aidlc-guard-switch.ts"';
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: "scripts/x.ts", content }],
+      ["Edit", { file_path: "scripts/x.ts", new_string: content }],
+      ["MultiEdit", { file_path: "scripts/x.ts", edits: [{ new_string: content }] }],
+      ["MultiEdit", { edits: [{ file_path: ".claude/tools/x.ts", new_string: content }, { file_path: "scripts/x.ts", new_string: content }] }],
+      ["NotebookEdit", { notebook_path: "analysis.ipynb", new_source: content }],
+      ["Write", { file_path: "docs/notes.md", content: "The applyIntentSettings helper is for hooks." }],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(2);
+    }
+  });
+
+  test("runtime integrity exempts installed tools and repository development, not sibling paths", () => {
+    const project = createTestProject();
+    projects.push(project);
+    mkdirSync(join(project, "scripts"), { recursive: true });
+    mkdirSync(join(project, ".claude", "tools"), { recursive: true });
+    writeFileSync(join(project, "scripts", "package.ts"), "export {};\n");
+    writeFileSync(join(project, "scripts", "build.ts"), 'console.log("build");\n');
+    for (const tool of ["aidlc.ts", "aidlc-utility.ts"]) {
+      writeFileSync(join(project, ".claude", "tools", tool), 'import "./aidlc-guard-switch.ts";\n');
+    }
+    const content = "The applyIntentSettings helper is for hooks.";
+    for (const [tool_name, tool_input, status] of [
+      ["Bash", { command: "bun .claude/tools/aidlc.ts engine orchestrate next" }, 0],
+      ["Bash", { command: "bun .claude/tools/aidlc-utility.ts config-change --guard-policy strict" }, 0],
+      ["Bash", { command: "bun scripts/build.ts" }, 0],
+      ["Write", { file_path: "docs/notes.md", content }, 0],
+      ["Write", { file_path: "core/hooks/helper.ts", content }, 0],
+      ["Write", { file_path: "harness/adapter.ts", content }, 0],
+      ["Write", { file_path: "tests/example.test.ts", content }, 0],
+      ["Write", { file_path: ".claude/tools/helper.ts", content }, 0],
+      ["MultiEdit", { edits: [{ file_path: ".claude/tools/helper.ts", new_string: content }, { file_path: "scripts/build.ts", new_string: 'console.log("build");' }] }, 0],
+      ["Write", { file_path: "scripts/x.ts", content }, 2],
+      ["Write", { file_path: "docs-extra/notes.md", content }, 2],
+      ["Write", { file_path: "docs/../scripts/x.ts", content }, 2],
+      ["Write", { file_path: ".claude-extra/tools/helper.ts", content }, 2],
+      ["Write", { file_path: "docs/.aidlc-sessions/foo.json", content }, 2],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+        encoding: "utf-8",
+        env: { ...unownedEnv(), AIDLC_HARNESS_DIR: ".claude" },
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(status);
+      if (status === 0) expect(r.stderr, JSON.stringify(tool_input)).toBe("");
+    }
   });
 
   test("runtime integrity allows engine commands, conductor records, and ordinary documents", () => {

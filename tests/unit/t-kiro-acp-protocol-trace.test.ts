@@ -278,7 +278,7 @@ test("raw vendor chunks and input updates remain visible without changing aggreg
   expect(rows.find(row => row.event === "aggregate_at_return")?.calls?.[0]?.input.commandPresent).toBe(false);
 });
 
-test("a failed orphan remains an issue even when a preceding chunk contains input", async () => {
+test("a failed orphan is reported as a rejected call even when a preceding chunk contains input", async () => {
   const project = directory(), trace = join(project, "trace.ndjson");
   const diagnostic = "The tool input does not match the tool schema: missing field `command`";
   const { session } = adapter(trace, (_request, emit, current) => {
@@ -291,7 +291,10 @@ test("a failed orphan remains an issue even when a preceding chunk contains inpu
   });
   const result = await driveKiroAcp({ projectDir: project, session, prompt: "fixture-only", keepAlive: true });
   expect(result.toolCalls).toEqual([]);
-  expect(result.toolCallIssues).toEqual([{ toolCallId: "bad", status: "failed", output: [diagnostic], orphan: true }]);
+  // The host never announced a start for this call, so it is the agent reaching
+  // for something that is not there: reported separately, not a watched failure.
+  expect(result.toolCallIssues).toEqual([]);
+  expect(result.rejectedToolCalls).toEqual([{ toolCallId: "bad", status: "failed", output: [diagnostic], orphan: true }]);
   const wireFailure = records(trace).find(row => row.update?.status === "failed");
   expect(wireFailure?.update?.content).toEqual([{ content: { type: "text", text: diagnostic } }]);
   expect(wireFailure?.update?.rawOutput).toEqual({ code: "fixture-validation-error" });

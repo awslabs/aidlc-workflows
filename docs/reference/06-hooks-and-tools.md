@@ -95,6 +95,14 @@ Because it grants no new authority, direct invocation cannot lower a fence.
 Guard recovery no longer offers `lower-fence` as an executable remedy. Direct
 fence refusals explain that in-chat lowering is unavailable and point to scope
 configuration before intent creation or scope change.
+The [state-transition guard](#pretooluse-aidlc-state-transition-guardts) uses a
+runtime-integrity check to refuse recognized direct and indirect tool-call
+routes to hooks and their records, including paths, environment assignments,
+inline and wrapper scripts, aliases, shell functions, and written content.
+This is defense in depth: hooks and tool calls run as the same user, so the
+harness's permission model and the person's review of what the agent runs
+remain the outer boundary.
+No in-repo check can provide stronger provenance on today's harnesses.
 
 #### Kiro IDE adapter
 
@@ -789,11 +797,25 @@ Claude and Codex consume `hookSpecificOutput.updatedInput`; the opencode adapter
 **Trigger:** Before `Bash`, `Write`, `Edit`, `MultiEdit`, or `NotebookEdit` tool calls
 **Purpose:** Protect harness runtime integrity and keep workflow lifecycle mutations behind the orchestration engine
 
-Before fence decisions, an unconditional integrity check refuses tool calls that
-invoke AIDLC hooks, assign session or bypass controls, or mutate paths containing
-`.aidlc-sessions` or `.aidlc-plan-approval` directories. It is not a fence:
-neither Guard Policy, a lowered `state-transition` fence, nor the presence bypass
-disables it. Conductor writes to `<record>/.aidlc-engine/reviewer-dispatch.json`,
+Before fence decisions, an unconditional runtime-integrity check refuses
+recognized direct and indirect tool-call routes to AIDLC hooks and runtime
+records, including paths containing `.aidlc-sessions` or
+`.aidlc-plan-approval`, session or bypass environment assignments, inline and
+wrapper scripts, aliases, shell functions, and written content.
+It is defense in depth: hooks and tool calls run as the same user, so the
+harness's permission model and the person's review of what the agent runs
+remain the outer boundary; no in-repo check can provide stronger provenance
+on today's harnesses.
+It is not a fence: neither Guard Policy, a lowered `state-transition` fence,
+nor the presence bypass disables it.
+Wrapper inspection reads existing script files up to 1 MiB and skips unreadable
+files and the harness installation, whose shipped tools legitimately import
+hook helpers.
+The written-content check also exempts the harness installation and this
+repository's `core/`, `harness/`, `tests/`, and `docs/` trees when
+`scripts/package.ts` exists at the project root; protected runtime record paths
+remain refused even there.
+Conductor writes to `<record>/.aidlc-engine/reviewer-dispatch.json`,
 `aidlc/.aidlc-compose-pending`, and ordinary workflow documents remain available.
 
 The guard refuses direct `aidlc-state.ts` lifecycle verbs with exit 2 and a

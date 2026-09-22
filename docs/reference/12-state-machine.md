@@ -1101,6 +1101,14 @@ remains readable for persisted directives from this release, but new refusals
 do not emit it: supported hook payloads cannot authenticate who supplied prompt
 text. A held fence instead explains the scope-configuration route.
 
+The runtime-integrity check refuses recognized direct and indirect tool-call
+routes to hooks and their records, including paths, environment assignments,
+inline and wrapper scripts, aliases, shell functions, and written content.
+This is defense in depth: hooks and tool calls run as the same user, so the
+harness's permission model and the person's review of what the agent runs
+remain the outer boundary.
+No in-repo check can provide stronger provenance on today's harnesses.
+
 **Operations and interaction.** Emitted remedies carry `interaction`, an
 `action` for presentation, `requiresHuman`, and `executableNow`. The conductor
 offers only executable remedies, waits for the human's selection, and follows
