@@ -524,7 +524,7 @@ jobs:
             printf '[LENS-REVIEWED] user-experience %s\n' "$HEAD_SHA"
           )"
           run_model \
-            "fable" \
+            "sol" \
             "User-experience review" \
             "high" \
             50000 \
@@ -543,7 +543,7 @@ jobs:
             printf '[LENS-REVIEWED] direction %s\n' "$HEAD_SHA"
           )"
           run_model \
-            "fable" \
+            "sol" \
             "Direction review" \
             "high" \
             50000 \
