@@ -112,6 +112,12 @@ export async function sanitizeLogs(
 ): Promise<void> {
   const root = resolve(directory);
   if (!safeRoot(root)) return;
+  // Codex stores sandbox-account credentials here. A caller selecting a nested
+  // log root must not turn this secret subtree into ordinary text to inspect.
+  if (root.split(sep).some((part) => part.toLowerCase() === ".sandbox-secrets")) {
+    fs.rmSync(root, { recursive: true, force: true });
+    return;
+  }
   const withinArtifacts = root.split(sep).some((part) => part.toLowerCase() === "e2e-artifacts");
   const removed: Array<{ path: string; reason: string }> = [];
   const report = join(root, "sanitizer-report.json");
@@ -132,6 +138,13 @@ export async function sanitizeLogs(
       return;
     }
     const name = basename(path).toLowerCase();
+    if (name === ".sandbox-secrets") {
+      // Unconditional, including keepTraces: remove without reading contents or
+      // publishing private descendant names in the sanitizer report.
+      fs.rmSync(path, { recursive: true, force: true });
+      removed.push({ path: redactSecrets(relative(root, path).split(sep).join("/")), reason: "sandbox-secrets" });
+      return;
+    }
     if (prune && !keepTraces && (
       name.endsWith(".ndjson") || name.startsWith("sdk-drive") || name.startsWith("tui-drive") ||
       (stat.isDirectory() && inArtifacts && name === "traces")

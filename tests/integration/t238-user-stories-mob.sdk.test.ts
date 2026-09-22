@@ -34,6 +34,7 @@ import {
   driveAidlc,
   readStateField,
   type CapturedToolResult,
+  type DriveResult,
 } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
@@ -346,6 +347,72 @@ function seedLiveKnowledge(projectDir: string): void {
   );
 }
 
+function logKnowledgeReadDiagnostics(result: DriveResult): void {
+  // Driver NDJSON is removed from hosted artifacts. Retain only fixed labels,
+  // counts, marker booleans and tool-result order in the ordinary test log.
+  // Never print tool inputs/results, commands, paths, IDs or assistant prose.
+  const knownTools = ["Read", "Bash", "Shell", "Task", "Agent", "Write", "Edit",
+    "MultiEdit", "Skill", "AskUserQuestion", "Glob", "Grep", "TodoWrite"];
+  const targets = [
+    ["persona", ".claude/agents/aidlc-product-agent.md"],
+    ["knowledge", LIVE_KNOWLEDGE_REL],
+    ["stage", ".claude/aidlc-common/stages/inception/user-stories.md"],
+    ["requirements", "requirements.md"],
+    ["stories", "inception/user-stories/stories.md"],
+    ["personas", "inception/user-stories/personas.md"],
+    ["assessment", "inception/user-stories/user-stories-assessment.md"],
+  ] as const;
+  const events = result.toolResults.map((entry, index) => ({
+    index,
+    tool: knownTools.includes(entry.toolName) ? entry.toolName : entry.toolName ? "other" : "missing",
+    isError: entry.isError,
+    targets: targets.filter(([, path]) => inputMentions(entry, path) ||
+      shellCommand(entry)?.replaceAll("\\", "/").includes(path)).map(([label]) => label),
+    markerInResult: entry.resultText.includes(LIVE_KNOWLEDGE_MARKER),
+    markerInInput: JSON.stringify(entry.input).includes(LIVE_KNOWLEDGE_MARKER),
+    supportDispatch: SUPPORT_AGENTS.some(agent => dispatchedAgent(entry) === agent),
+  }));
+  const first = (predicate: (event: typeof events[number]) => boolean) => events.find(predicate)?.index ?? -1;
+  const relevant = events.filter(event => event.tool === "Read" || event.targets.length ||
+    event.markerInResult || event.markerInInput || event.supportDispatch);
+  const observedTools = [...new Set(events.map(event => event.tool))].sort();
+  const terminal = result.resultEvent;
+  const terminalKinds = ["success", "error_during_execution", "error_max_turns",
+    "error_max_budget_usd", "error_max_structured_output_retries"];
+  console.error(`t238 knowledge-read diagnostics: ${JSON.stringify({
+    order: "tool-result-stream",
+    timedOut: result.timedOut,
+    stoppedAfterToolResult: result.stoppedAfterToolResult,
+    stoppedAfterAskUserQuestion: result.stoppedAfterAskUserQuestion,
+    terminal: terminal ? {
+      subtype: terminalKinds.includes(terminal.subtype) ? terminal.subtype : "other",
+      isError: terminal.is_error,
+      turns: terminal.num_turns,
+      errorCount: terminal.errors?.length ?? 0,
+      permissionDenials: terminal.permissionDenialsCount,
+    } : null,
+    toolResultCount: events.length,
+    toolCounts: Object.fromEntries(observedTools.map(tool => [tool, events.filter(event => event.tool === tool).length])),
+    markerResultCount: events.filter(event => event.markerInResult).length,
+    markerInputCount: events.filter(event => event.markerInInput).length,
+    firstMarkerResult: events.find(event => event.markerInResult) ?? null,
+    first: {
+      personaRead: first(event => event.tool === "Read" && event.targets.includes("persona")),
+      knowledgeRead: first(event => event.tool === "Read" && event.targets.includes("knowledge")),
+      markerRead: first(event => event.tool === "Read" && event.markerInResult),
+      stageRead: first(event => event.tool === "Read" && event.targets.includes("stage")),
+      requirementsRead: first(event => event.tool === "Read" && event.targets.includes("requirements")),
+      supportDispatch: first(event => event.supportDispatch),
+      artifactWrite: first(event => ["Write", "Edit", "MultiEdit"].includes(event.tool) &&
+        event.targets.some(target => ["stories", "personas", "assessment"].includes(target))),
+    },
+    // Aggregate indices cover the entire run even when the event sample omits
+    // the middle. The emitted sample contains at most 24 fixed-shape records.
+    observations: relevant.length <= 24 ? relevant : [...relevant.slice(0, 12), ...relevant.slice(-12)],
+    omittedObservations: Math.max(0, relevant.length - 24),
+  })}`);
+}
+
 describe("t238 user-stories mob topology (Claude SDK live)", () => {
   test(
     "readable project knowledge is opened before mob stage work",
@@ -364,6 +431,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           },
         });
 
+        logKnowledgeReadDiagnostics(result);
         expect(result.timedOut).toBe(false);
         expect(result.stoppedAfterToolResult).toBe(true);
         const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";

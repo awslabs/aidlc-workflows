@@ -26,12 +26,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   documentDir,
   documentkbDir,
@@ -52,6 +53,7 @@ const SPACE = "default";
 const CHILD_ENV = { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" };
 
 let proj: string | undefined;
+const pendingPermissionRestores = new Set<() => void>();
 
 function scratchProject(): string {
   proj = mkdtempSync(join(tmpdir(), "t287-"));
@@ -74,14 +76,78 @@ function runSync(p: string): { status: number; out: string } {
   return { status: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
 }
 
+/** Deny directory writes only inside this test's freshly created project. */
+function withDirectoryWritesDenied<T>(project: string, directory: string, operation: () => T): T {
+  const root = realpathSync(project);
+  const target = realpathSync(directory);
+  const child = relative(root, target);
+  if (!child || child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    throw new Error(`Permission fixture must be a child of its own project: ${target}`);
+  }
+  if (process.platform !== "win32") {
+    chmodSync(target, 0o500);
+    try { return operation(); } finally { chmodSync(target, 0o700); }
+  }
+
+  // A Windows directory's ReadOnly attribute does not deny writes. Save only
+  // this directory's DACL, then deny file/subdirectory creation without
+  // inheritance flags. Reads and WRITE_DAC remain available for restoration.
+  const backupDir = mkdtempSync(join(root, ".t287-acl-"));
+  const backup = join(backupDir, "directory.acl");
+  const parent = dirname(target);
+  const leaf = basename(target);
+  const icacls = (args: string[]): void => {
+    const result = spawnSync("icacls.exe", args, {
+      cwd: parent, encoding: "utf8", timeout: 10_000, windowsHide: true,
+    });
+    if (result.status !== 0) {
+      throw new Error(`Fixture icacls failed: ${JSON.stringify({
+        args, cwd: parent, status: result.status, signal: result.signal,
+        error: result.error?.message, stdout: result.stdout, stderr: result.stderr,
+      })}`);
+    }
+  };
+  let saved = false;
+  const restore = (): void => {
+    if (!saved) return;
+    // /save records the leaf relative to parent; restore from that same parent.
+    icacls([".", "/restore", backup, "/q"]);
+    saved = false;
+    pendingPermissionRestores.delete(restore);
+    rmSync(backupDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  };
+  try {
+    icacls([leaf, "/save", backup, "/q"]);
+    saved = true;
+    // Register before /deny: even a partially failed ACL update must restore.
+    pendingPermissionRestores.add(restore);
+    icacls([leaf, "/deny", "*S-1-1-0:(WD,AD)", "/q"]);
+    const probe = join(target, `${basename(backupDir)}.probe`);
+    let denied: unknown;
+    try { writeFileSync(probe, "probe\n", { flag: "wx" }); } catch (error) { denied = error; }
+    if (!denied) {
+      rmSync(probe, { force: true });
+      throw new Error(`Fixture ACL did not deny file creation: ${target}`);
+    }
+    if (!["EACCES", "EPERM"].includes((denied as NodeJS.ErrnoException).code ?? "")) throw denied;
+    return operation();
+  } finally {
+    if (saved) restore();
+    else rmSync(backupDir, { recursive: true, force: true });
+  }
+}
+
 afterEach(() => {
+  // Retry failed restoration before deleting the fixture; keep its saved DACL
+  // available if restoration itself fails, rather than silently ignoring it.
+  for (const restore of [...pendingPermissionRestores].reverse()) restore();
   if (proj !== undefined) {
     // A chmod injection can leave a dir 0o500; restore before rmSync recurses.
     try { chmodSync(documentkbDir(proj, SPACE), 0o700); } catch { /* absent */ }
     rmSync(proj, { recursive: true, force: true });
     proj = undefined;
   }
-});
+}, process.platform === "win32" ? 30_000 : undefined);
 
 describe("t287 sync commits through the SAME publish gate as onboard", () => {
   test("structural: assertPublishable is called from sync's commit BEFORE writeIndex", () => {
@@ -422,9 +488,7 @@ describe("t287 the self-heal property: a plain sync always recovers from an inje
     const { indexed } = onboard(p, SPACE, undefined, NOW);
     const dir = documentDir(p, SPACE, indexed[0].id);
     writeFileSync(abs, "v2\n");
-    chmodSync(dir, 0o500);
-    const failed = runSync(p);
-    chmodSync(dir, 0o700);
+    const failed = withDirectoryWritesDenied(p, dir, () => runSync(p));
     expect(failed.status).not.toBe(0);
 
     // The self-heal: a plain, unmodified sync must now succeed and land the
@@ -433,22 +497,20 @@ describe("t287 the self-heal property: a plain sync always recovers from an inje
     expect(healed.status, `follow-up sync did not self-heal: ${healed.out}`).toBe(0);
     const row = readIndex(p, SPACE).documents[0];
     expect(row.sha256).not.toBe(indexed[0].sha256);
-  });
+  }, process.platform === "win32" ? 60_000 : undefined);
 
   test(`self-heal after: ${injectionPoints[1]}`, () => {
     const p = scratchProject();
     doc(p, "a.md", "v1\n");
     onboard(p, SPACE, undefined, NOW);
     doc(p, "b.md", "v2\n"); // a pending "new" row for the next sync to find
-    chmodSync(documentkbDir(p, SPACE), 0o500);
-    const failed = runSync(p);
-    chmodSync(documentkbDir(p, SPACE), 0o700);
+    const failed = withDirectoryWritesDenied(p, documentkbDir(p, SPACE), () => runSync(p));
     expect(failed.status).not.toBe(0);
 
     const healed = runSync(p);
     expect(healed.status, `follow-up sync did not self-heal: ${healed.out}`).toBe(0);
     expect(readIndex(p, SPACE).documents.length).toBe(2);
-  });
+  }, process.platform === "win32" ? 60_000 : undefined);
 
   test("OUTSIDE the enumeration: a failure during PLANNING (before the lock) is not this property's claim", () => {
     // Documented, not tested as a positive case: planning reads files and

@@ -1028,11 +1028,48 @@ describe("t326 pinned team Unit merge", () => {
       cwd: beta.checkout,
       encoding: "utf-8",
     });
+    const rebaseResult = (result: typeof rebased) => ({
+      status: result.status, signal: result.signal, error: result.error?.message,
+      stdout: result.stdout, stderr: result.stderr,
+    });
+    const reportRebaseFailure = (continued?: typeof rebased) => {
+      try {
+        const probes = [
+          ["status", "--porcelain=v1", "--branch"],
+          ["ls-files", "--unmerged"],
+          ["diff", "--cached", "--name-status"],
+          ["rev-parse", "--verify", "REBASE_HEAD"],
+          ["rev-parse", "--verify", "HEAD"],
+        ].map((args) => ({
+          args,
+          ...rebaseResult(spawnSync("git", args, {
+            cwd: beta.checkout, encoding: "utf-8", timeout: 5000,
+          })),
+        }));
+        console.error(`t326 rebase diagnostics:\n${JSON.stringify({
+          checkout: beta.checkout, initial: rebaseResult(rebased),
+          continued: continued ? rebaseResult(continued) : null, probes,
+        }, null, 2)}`);
+      } catch (error) {
+        console.error(`t326 rebase diagnostics unavailable: ${String(error)}`);
+      }
+    };
     if ((rebased.status ?? 1) !== 0) {
       const statePath = seededStateFile(beta.checkout);
       const stateRelative = statePath
         .slice(beta.checkout.length + 1)
         .replaceAll("\\", "/");
+      // Resolve only the expected state conflict. An unrelated Git failure must
+      // not cause us to manufacture staged changes and mask the original error.
+      const unmerged = spawnSync("git", ["diff", "--name-only", "--diff-filter=U"], {
+        cwd: beta.checkout, encoding: "utf-8",
+      });
+      const conflicts = (unmerged.stdout ?? "").split(/\r?\n/).filter(Boolean);
+      if (unmerged.status !== 0 || conflicts.length !== 1 || conflicts[0] !== stateRelative) {
+        reportRebaseFailure();
+      }
+      expect(unmerged.status, JSON.stringify({ initial: rebaseResult(rebased), unmerged: rebaseResult(unmerged) })).toBe(0);
+      expect(conflicts, JSON.stringify(rebaseResult(rebased))).toEqual([stateRelative]);
       git(beta.checkout, ["checkout", "origin/main", "--", stateRelative]);
       writeFileSync(
         statePath,
@@ -1047,6 +1084,7 @@ describe("t326 pinned team Unit merge", () => {
         encoding: "utf-8",
         env: { ...process.env, GIT_EDITOR: "true" },
       });
+      if (continued.status !== 0) reportRebaseFailure(continued);
       expect(continued.status, `${continued.stdout}${continued.stderr}`).toBe(0);
     }
     const rebasedStatePath = seededStateFile(beta.checkout);

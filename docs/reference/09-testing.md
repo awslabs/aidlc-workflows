@@ -933,6 +933,14 @@ namespaces, which lets the runner retire native sessions after a test aborts.
 If the result volume itself is unwritable, missing captures remain incomplete.
 They cannot establish successful coverage.
 
+Codex live tests use `tests/harness/codex-test-lifecycle.ts` to retain the original
+failure and full exec output while reserving cleanup time. On Windows, verified
+runner-owned fixtures are removed only after the coordinator retires their
+process tree; failures preserve those fixtures with the diagnostic artifacts.
+The exec driver disables the interactive `request_user_input` feature, which
+Codex exec cannot service, and exercises the skill's prose approval fallback.
+Approval assertions and sandbox permissions remain required.
+
 Worker preparation checks free space for the snapshot and checkout copies,
 plus a reserve of 512 MiB. Each isolated file checks the reserve before starting.
 `AIDLC_E2E_MIN_FREE_BYTES` overrides the reserve in bytes (a nonnegative integer).

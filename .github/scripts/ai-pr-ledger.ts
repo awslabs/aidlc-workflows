@@ -30,6 +30,9 @@ const MAX_ARCHIVED_DECISIONS = 200;
 const MAX_EVENTS = 1000;
 const MAX_COMMANDS_PER_COMMENT = 20;
 
+// An argv prefix lets fixtures use a native interpreter without a shell.
+export type GhExecutable = string | readonly [executable: string, ...args: string[]];
+
 export type Priority = "P0" | "P1" | "P2" | "P3";
 export type DiffSide = "LEFT" | "RIGHT";
 export type LedgerStatus = "open" | "resolved" | "accepted" | "rejected";
@@ -1089,8 +1092,9 @@ export function headContainsAnchor(contextDir: string, anchor: LedgerAnchor, rep
 
 // --- GitHub I/O ---------------------------------------------------------------
 
-function ghJson(args: string[], ghExecutable: string, input?: string): unknown {
-  const raw = execFileSync(ghExecutable, args, {
+function ghJson(args: string[], ghExecutable: GhExecutable, input?: string): unknown {
+  const [command, ...prefix] = typeof ghExecutable === "string" ? [ghExecutable] : ghExecutable;
+  const raw = execFileSync(command, [...prefix, ...args], {
     encoding: "utf8", input, maxBuffer: Number.POSITIVE_INFINITY,
     stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
@@ -1104,7 +1108,7 @@ function assertRepository(repository: string): void {
 export function loadLedgerComment(
   repository: string,
   pullRequest: number,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
   at = new Date().toISOString(),
 ): LoadedLedger {
   assertRepository(repository);
@@ -1146,7 +1150,7 @@ export function publishLedgerComment(
   ledger: Ledger,
   commentId: number | null,
   migrated = false,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
   expectedDigest: string | null = null,
 ): number {
   assertRepository(repository);
@@ -1166,7 +1170,7 @@ export function publishLedgerComment(
   return commentId;
 }
 
-export function actorHasWrite(repository: string, login: string, ghExecutable = "gh"): boolean {
+export function actorHasWrite(repository: string, login: string, ghExecutable: GhExecutable = "gh"): boolean {
   assertRepository(repository);
   if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) return false;
   try {
@@ -1178,7 +1182,7 @@ export function actorHasWrite(repository: string, login: string, ghExecutable = 
   }
 }
 
-function react(repository: string, commentId: number, content: "+1" | "-1" | "confused", ghExecutable: string): void {
+function react(repository: string, commentId: number, content: "+1" | "-1" | "confused", ghExecutable: GhExecutable): void {
   try {
     ghJson(["api", "--method", "POST", `repos/${repository}/issues/comments/${commentId}/reactions`, "--input", "-"], ghExecutable, `${JSON.stringify({ content })}\n`);
   } catch {
@@ -1201,7 +1205,7 @@ const PUBLISH_ATTEMPTS = 3;
 
 export function runCommand(
   repository: string, pullRequest: number, commentId: number, actorLogin: string,
-  now = new Date().toISOString(), ghExecutable = "gh",
+  now = new Date().toISOString(), ghExecutable: GhExecutable = "gh",
 ): CommandOutcome {
   assertRepository(repository);
   const comment = ghJson(["api", `repos/${repository}/issues/comments/${commentId}`], ghExecutable);
@@ -1287,10 +1291,10 @@ export function writeLedgerFile(path: string, ledger: Ledger, migrated: boolean,
 
 export const LEDGER_CONFLICT_EXIT = 3;
 
-function main(): void {
-  const [command, ...args] = process.argv.slice(2);
+export function main(argv = process.argv.slice(2), ghExecutable: GhExecutable = "gh"): void {
+  const [command, ...args] = argv;
   if (command === "fetch") {
-    const loaded = loadLedgerComment(argValue(args, "--repo"), Number(argValue(args, "--pr")));
+    const loaded = loadLedgerComment(argValue(args, "--repo"), Number(argValue(args, "--pr")), ghExecutable);
     writeLedgerFile(argValue(args, "--output"), loaded.ledger, loaded.migrated, loaded.digest);
     process.stdout.write(`${loaded.commentId === null ? "new" : `comment ${loaded.commentId}`} migrated=${loaded.migrated}\n`);
     return;
@@ -1300,7 +1304,7 @@ function main(): void {
     // merged with the live comment, so maintainer decisions made while the
     // models ran are applied before the verdict is published.
     const snapshot = readLedgerFile(argValue(args, "--input"));
-    const live = loadLedgerComment(argValue(args, "--repo"), Number(argValue(args, "--pr")));
+    const live = loadLedgerComment(argValue(args, "--repo"), Number(argValue(args, "--pr")), ghExecutable);
     const merged = mergeLedgers(snapshot.ledger, live.ledger);
     writeLedgerFile(argValue(args, "--output"), merged, snapshot.migrated || live.migrated, live.digest);
     process.stdout.write(`${ledgerDigest(merged) === ledgerDigest(snapshot.ledger) ? "unchanged" : "changed"}\n`);
@@ -1310,9 +1314,9 @@ function main(): void {
     const repository = argValue(args, "--repo");
     const pullRequest = Number(argValue(args, "--pr"));
     const input = readLedgerFile(argValue(args, "--input"));
-    const existing = loadLedgerComment(repository, pullRequest);
+    const existing = loadLedgerComment(repository, pullRequest, ghExecutable);
     try {
-      const id = publishLedgerComment(repository, pullRequest, input.ledger, existing.commentId, input.migrated, "gh", input.expectedDigest);
+      const id = publishLedgerComment(repository, pullRequest, input.ledger, existing.commentId, input.migrated, ghExecutable, input.expectedDigest);
       process.stdout.write(`comment ${id} digest=${ledgerDigest(compactLedger(input.ledger))}\n`);
     } catch (error) {
       if (!(error instanceof LedgerConflictError)) throw error;
@@ -1325,13 +1329,13 @@ function main(): void {
     // The live ledger's effective verdict for the head it last reviewed, plus the
     // comment's digest, so a publisher can tell whether a command landed after
     // its own write.
-    const live = loadLedgerComment(argValue(args, "--repo"), Number(argValue(args, "--pr")));
+    const live = loadLedgerComment(argValue(args, "--repo"), Number(argValue(args, "--pr")), ghExecutable);
     const verdict = ledgerVerdict(live.ledger);
     process.stdout.write(`${JSON.stringify({ ...(verdict ?? { head: null, decision: null, openBlocking: null }), digest: live.digest })}\n`);
     return;
   }
   if (command === "command") {
-    const outcome = runCommand(argValue(args, "--repo"), Number(argValue(args, "--pr")), Number(argValue(args, "--comment-id")), argValue(args, "--actor"));
+    const outcome = runCommand(argValue(args, "--repo"), Number(argValue(args, "--pr")), Number(argValue(args, "--comment-id")), argValue(args, "--actor"), undefined, ghExecutable);
     if (args.includes("--state-output")) writeFileSync(argValue(args, "--state-output"), `${JSON.stringify(outcome)}\n`);
     process.stdout.write(`${outcome.status}: ${outcome.message}\n`);
     return;

@@ -36,6 +36,9 @@ const DISCUSSION_FILE = "discussion.json";
 const AI_REVIEW_MARKER = "<!-- ai-pr-review context=";
 const AI_REVIEW_DECISION_MARKER = "<!-- ai-pr-review decision=";
 
+// An argv prefix lets fixtures use a native interpreter without a shell.
+export type GhExecutable = string | readonly [executable: string, ...args: string[]];
+
 export type Priority = "P0" | "P1" | "P2" | "P3";
 export type FindingCategory =
   | "direction"
@@ -260,8 +263,9 @@ function git(args: string[], encoding?: BufferEncoding, cwd = process.cwd()): Bu
   });
 }
 
-function gh(args: string[], executable = "gh"): unknown {
-  return JSON.parse(execFileSync(executable, args, {
+function gh(args: string[], executable: GhExecutable = "gh"): unknown {
+  const [command, ...prefix] = typeof executable === "string" ? [executable] : executable;
+  return JSON.parse(execFileSync(command, [...prefix, ...args], {
     encoding: "utf8",
     maxBuffer: Number.POSITIVE_INFINITY,
     stdio: ["ignore", "pipe", "pipe"],
@@ -270,10 +274,11 @@ function gh(args: string[], executable = "gh"): unknown {
 
 function ghRaw(
   args: string[],
-  executable = "gh",
+  executable: GhExecutable = "gh",
   input?: string,
 ): string {
-  return execFileSync(executable, args, {
+  const [command, ...prefix] = typeof executable === "string" ? [executable] : executable;
+  return execFileSync(command, [...prefix, ...args], {
     encoding: "utf8",
     input,
     maxBuffer: Number.POSITIVE_INFINITY,
@@ -327,7 +332,7 @@ function removeManagedLabels(
   repository: string,
   pullRequest: number,
   labels: string[],
-  ghExecutable: string,
+  ghExecutable: GhExecutable,
 ): void {
   const managed = new Set(REVIEW_LABELS.map(definition => definition.name));
   for (const label of labels) {
@@ -350,7 +355,7 @@ export function reconcileReviewLabels(
   pullRequest: number,
   outcome: ReviewLabelOutcome,
   expectedHead?: string,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): boolean {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("repository must use owner/name format");
@@ -446,7 +451,7 @@ export function refreshVerdict(
   head: string,
   decision: "merge" | "change",
   reason: string,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): RefreshOutcome {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("repository must use owner/name format");
@@ -526,7 +531,7 @@ export function convergeLedgerVerdict(
   pullRequest: number,
   head: string,
   reason: string,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): RefreshOutcome {
   assertSha(head, "head");
   // The review and command workflows share one non-cancelling per-PR
@@ -549,7 +554,7 @@ export function currentReviewLabelOutcome(
   repository: string,
   pullRequest: number,
   expectedHead?: string,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): ReviewLabelOutcome {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("repository must use owner/name format");
@@ -578,7 +583,7 @@ function records(value: unknown, label: string): Record<string, unknown>[] {
   return value.map((entry, index) => record(entry, `${label}[${index}]`));
 }
 
-function paginatedRecords(endpoint: string, ghExecutable = "gh"): Record<string, unknown>[] {
+function paginatedRecords(endpoint: string, ghExecutable: GhExecutable = "gh"): Record<string, unknown>[] {
   const pages = gh(["api", "--paginate", "--slurp", endpoint], ghExecutable);
   if (!Array.isArray(pages)) throw new Error(`${endpoint} pagination did not return pages`);
   return pages.flatMap((page, index) => records(page, `${endpoint} page ${index}`));
@@ -702,7 +707,7 @@ export function buildDiscussion(
   output: string,
   currentAiOutput: string,
   identityOutput?: string,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): void {
   const reviews = paginatedRecords(
     `repos/${repository}/pulls/${pullRequest}/reviews`,

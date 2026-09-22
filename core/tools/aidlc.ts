@@ -2983,7 +2983,7 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2)).catch((error) => {
+  await main(process.argv.slice(2)).catch((error) => {
     process.exitCode = renderDispatcherFailure(
       process.argv.slice(2),
       1,

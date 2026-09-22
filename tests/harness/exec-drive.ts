@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
+import { codexExecTimeout, recordCodexExec } from "./codex-test-lifecycle.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
@@ -145,22 +146,33 @@ export interface ExecResult {
   out: string;
 }
 
+/** Exec cannot service interactive request_user_input RPCs. The shipped skill
+ * has a prose approval fallback; keep that gate available in headless tests. */
+export function codexHeadlessArgs(...args: string[]): string[] {
+  return ["-c", "features.default_mode_request_user_input=false", ...args];
+}
+
 export function execCodex(
   proj: string,
   home: string,
   prompt: string,
 ): ExecResult {
-  const result = spawnSync(CODEX_BIN, ["exec", prompt], {
+  const argv = codexHeadlessArgs("exec", prompt);
+  const result = spawnSync(CODEX_BIN, argv, {
     cwd: proj,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, CODEX_HOME: home },
-    timeout: TEST_TIMEOUT_MS,
+    timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
-  return {
+  const captured = {
     rc: result.status ?? -1,
-    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}\n${result.error?.message ?? ""}`,
+    signal: result.signal,
+    error: result.error?.message,
   };
+  recordCodexExec("status", proj, [CODEX_BIN, ...argv], captured);
+  return captured;
 }
 
 // A scratch install: dist/copilot copied verbatim (dotfiles included: the

@@ -464,5 +464,5 @@ export function emitMetricForAuditEvent(
 }
 
 if (import.meta.main && process.argv[2] === METRIC_WORKER_ARG) {
-  void sendMetricFromStdin();
+  await sendMetricFromStdin();
 }

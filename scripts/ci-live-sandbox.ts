@@ -19,6 +19,7 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
       APPDATA: join(home, "AppData/Roaming"), LOCALAPPDATA: join(home, "AppData/Local"),
       GIT_CONFIG_GLOBAL: join(home, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
       SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
     });
   } else {
     Object.assign(env, { TMPDIR: join(home, "tmp"), BUN_INSTALL: join(home, ".bun"), XDG_CACHE_HOME: join(home, ".cache") });

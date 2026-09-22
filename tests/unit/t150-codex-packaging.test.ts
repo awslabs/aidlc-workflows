@@ -131,7 +131,35 @@ function runDoctorWithCodexVersion(version: string): {
     const binDir = join(root, "bin");
     mkdirSync(binDir, { recursive: true });
     if (process.platform === "win32") {
-      writeFileSync(join(binDir, "codex.cmd"), `@echo off\r\necho codex-cli ${version}\r\n`);
+      // The doctor executes the resolved path without a shell. Node-compatible
+      // spawnSync rejects .cmd files; use a small native CLI (as in t255).
+      const source = join(binDir, "codex.cs");
+      const executable = join(binDir, "codex.exe");
+      writeFileSync(source, `using System;
+public static class CodexVersionFixture {
+  public static int Main(string[] args) {
+    if (args.Length != 1 || args[0] != "--version") return 2;
+    Console.WriteLine(${JSON.stringify(`codex-cli ${version}`)});
+    return 0;
+  }
+}
+`);
+      const compiler = join(
+        process.env.WINDIR ?? "C:\\Windows",
+        "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe",
+      );
+      const compiled = spawnSync(
+        compiler,
+        ["/nologo", "/optimize+", "/target:exe", `/out:${executable}`, source],
+        { encoding: "utf-8", timeout: 5_000 },
+      );
+      if (compiled.error || compiled.status !== 0) {
+        throw new Error(`Codex fixture compile failed: ${compiled.error?.message || compiled.stderr || compiled.stdout}`);
+      }
+      const probe = spawnSync(executable, ["--version"], { encoding: "utf-8", timeout: 5_000 });
+      expect(probe.error).toBeUndefined();
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(probe.stdout.trim()).toBe(`codex-cli ${version}`);
     } else {
       const fakeCodex = join(binDir, "codex");
       writeFileSync(fakeCodex, `#!/bin/sh\necho "codex-cli ${version}"\n`);

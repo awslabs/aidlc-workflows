@@ -701,6 +701,14 @@ describe("t345 complete nightly coverage", () => {
         .toEqual(family === "opencode" ? ["AWS_PROFILE"] : []);
       if (family === "opencode") expect(env.AWS_PROFILE).toBe("broker");
       expect(env).toMatchObject(FAMILIES[family].env);
+      const windows = sandboxEnvironment(family, "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
+        ...inherited, PATHEXT: ".UNTRUSTED",
+      });
+      // Native `where claude` needs the executable suffix list after scrubbing.
+      expect(windows.PATHEXT).toBe(".COM;.EXE;.BAT;.CMD");
+      expect(windows.PATH).toBe("C:\\aidlc-live\\tools");
+      expect(Object.keys(windows).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key)))
+        .toEqual(family === "opencode" ? ["AWS_PROFILE"] : []);
     }
   });
 

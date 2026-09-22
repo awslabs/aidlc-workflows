@@ -194,7 +194,10 @@ function createWorktree(p: string, slug: string): void {
   );
   if ((res.status ?? -1) !== 0) {
     throw new Error(
-      `aidlc-worktree create --slug ${slug} failed: ${res.stderr ?? res.stdout ?? `exit ${res.status}`}`,
+      `aidlc-worktree create --slug ${slug} failed: ${JSON.stringify({
+        status: res.status, signal: res.signal, error: res.error?.message,
+        stdout: res.stdout ?? "", stderr: res.stderr ?? "",
+      })}`,
     );
   }
   seedCloneId(wtDir(p, slug));
@@ -313,6 +316,25 @@ function auditLockDir(projectDir: string): string {
 // Phase A — primitive smoke
 // ===========================================================================
 describe("t07 Phase A — primitive smoke (migrated from t07-audit-fork-merge.sh, plan 31)", () => {
+  test("base source budget failure names its cause before creating a worktree or audit row", () => {
+    const p = makeFixture();
+    const auditBefore = readFileSync(auditPath(p), "utf8");
+    const base = spawnSync("git", ["-C", p, "rev-parse", "main"], { encoding: "utf8" });
+    expect(base.status, base.stderr).toBe(0);
+    const refused = spawnSync(
+      BUN,
+      [WORKTREE_TOOL, "create", "--slug", "source-budget", "--base", "main", "--project-dir", p],
+      { cwd: p, encoding: "utf8", env: { ...process.env, AIDLC_TEST_SOURCE_MAX_ENTRIES: "1" } },
+    );
+    expect(refused.status, refused.stderr).toBe(1);
+    const message = JSON.parse(refused.stderr).error;
+    expect(message).toContain("Base source listing could not be computed");
+    expect(message).toContain(base.stdout.trim());
+    expect(message).toContain("budget-entries");
+    expect(existsSync(wtDir(p, "source-budget"))).toBe(false);
+    expect(readFileSync(auditPath(p), "utf8")).toBe(auditBefore);
+  }, 30_000);
+
   test("A1-A7: fork happy path — exit 0, AUDIT_FORKED in both audits, byte-identical, matching Fork Boundary", () => {
     const p = makeFixture();
     createWorktree(p, "demo");

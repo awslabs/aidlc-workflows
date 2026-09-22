@@ -1201,54 +1201,79 @@ function runNewGitlinkRecoveryGit(
   budget: NewGitlinkRecoveryBudget,
   input?: string,
 ): SpawnSyncReturns<string> | null {
-  const allowance = remainingNewGitlinkRecoveryMs(budget);
-  if (allowance === null) return null;
-  const startedNs = process.hrtime.bigint();
-  const remainingNs = budget.deadlineNs! - startedNs;
-  if (remainingNs <= 0n) {
-    budget.exhausted = true;
-    return null;
+  if (remainingNewGitlinkRecoveryMs(budget) === null) return null;
+  const commandDeadline = process.hrtime.bigint() +
+    BigInt(budget.commandTimeoutMs) * 1_000_000n;
+  const commandExpired = (): Error =>
+    new Error(`new submodule recovery ${operation} command deadline exceeded (${budget.commandTimeoutMs}ms)`);
+  const trace: Array<Record<string, unknown>> = [];
+  try {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const startedNs = process.hrtime.bigint();
+      const remainingNs = budget.deadlineNs! - startedNs;
+      if (remainingNs <= 0n) {
+        budget.exhausted = true;
+        return null;
+      }
+      const commandRemainingNs = commandDeadline - startedNs;
+      if (commandRemainingNs <= 0n) throw commandExpired();
+      const allowanceNs = remainingNs < commandRemainingNs ? remainingNs : commandRemainingNs;
+      const timeout = Math.max(1, Math.ceil(Number(allowanceNs) / 1_000_000));
+      const wallStartedMs = Date.now();
+      const result = spawnSync("git", args, {
+        encoding: "utf-8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        maxBuffer: 512 * 1024 * 1024,
+        ...(input === undefined ? {} : { input }),
+        timeout,
+      });
+      const endedNs = process.hrtime.bigint();
+      const spawnError = result.error as NodeJS.ErrnoException | undefined;
+      // A Windows ETIMEDOUT can arrive early. Only the monotonic deadlines
+      // establish expiry, including when a subprocess reports success late.
+      budget.exhausted = endedNs >= budget.deadlineNs!;
+      const commandDeadlineExceeded = endedNs >= commandDeadline;
+      trace.push({
+        operation,
+        attempt,
+        timeoutMs: timeout,
+        remainingBeforeMs: Number(remainingNs) / 1_000_000,
+        remainingAfterMs: Number(budget.deadlineNs! - endedNs) / 1_000_000,
+        commandRemainingBeforeMs: Number(commandRemainingNs) / 1_000_000,
+        commandRemainingAfterMs: Number(commandDeadline - endedNs) / 1_000_000,
+        elapsedMs: Number(endedNs - startedNs) / 1_000_000,
+        wallElapsedMs: Date.now() - wallStartedMs,
+        deadlineExceeded: budget.exhausted,
+        commandDeadlineExceeded,
+        status: result.status,
+        signal: result.signal,
+        error: spawnError ? {
+          code: spawnError.code,
+          errno: spawnError.errno,
+          syscall: spawnError.syscall,
+          message: spawnError.message,
+        } : null,
+        stderr: (result.stderr ?? "").slice(0, 4096),
+      });
+      if (budget.exhausted) return null;
+      if (commandDeadlineExceeded) throw commandExpired();
+      // Match the bounded Windows transport recovery used by test-source.ts:
+      // retry once, without restarting either the command or aggregate budget.
+      if (process.platform === "win32" && spawnError?.code === "ETIMEDOUT" && attempt === 1) {
+        continue;
+      }
+      return result;
+    }
+    throw new Error(`new submodule recovery ${operation} attempts exhausted`);
+  } finally {
+    if (process.env.AIDLC_TEST_NEW_GITLINK_RECOVERY_TRACE === "1") {
+      // Flush after the command finishes so diagnostics cannot consume the
+      // tiny remainder between a premature timeout and its single retry.
+      for (const row of trace) {
+        console.error(`AIDLC_RECOVERY_COMMAND ${JSON.stringify({ ...row, attempts: trace.length })}`);
+      }
+    }
   }
-  const timeout = Math.min(allowance, Math.ceil(Number(remainingNs) / 1_000_000));
-  const aggregateLimited = remainingNs <= BigInt(budget.commandTimeoutMs) * 1_000_000n;
-  const wallStartedMs = Date.now();
-  const result = spawnSync("git", args, {
-    encoding: "utf-8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-    maxBuffer: 512 * 1024 * 1024,
-    ...(input === undefined ? {} : { input }),
-    timeout,
-  });
-  const endedNs = process.hrtime.bigint();
-  const spawnError = result.error as NodeJS.ErrnoException | undefined;
-  // Check successful commands too: a subprocess can finish after its allowance
-  // while the synchronous API is still collecting/reaping its process tree.
-  // ETIMEDOUT on an aggregate-limited command also proves that its assigned
-  // remainder was spent, independently of a platform's wall-clock sampling.
-  budget.exhausted = endedNs >= budget.deadlineNs! ||
-    (spawnError?.code === "ETIMEDOUT" && aggregateLimited);
-  if (process.env.AIDLC_TEST_NEW_GITLINK_RECOVERY_TRACE === "1") {
-    console.error(`AIDLC_RECOVERY_COMMAND ${JSON.stringify({
-      operation,
-      timeoutMs: timeout,
-      remainingBeforeMs: Number(remainingNs) / 1_000_000,
-      remainingAfterMs: Number(budget.deadlineNs! - endedNs) / 1_000_000,
-      elapsedMs: Number(endedNs - startedNs) / 1_000_000,
-      wallElapsedMs: Date.now() - wallStartedMs,
-      aggregateLimited,
-      deadlineExceeded: budget.exhausted,
-      status: result.status,
-      signal: result.signal,
-      error: spawnError ? {
-        code: spawnError.code,
-        errno: spawnError.errno,
-        syscall: spawnError.syscall,
-        message: spawnError.message,
-      } : null,
-      stderr: result.stderr,
-    })}`);
-  }
-  return budget.exhausted ? null : result;
 }
 
 function newGitlinkRecoveryError(

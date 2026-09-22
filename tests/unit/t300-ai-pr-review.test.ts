@@ -115,16 +115,11 @@ function validate(raw: string): StructuredReview {
   return validateStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA);
 }
 
-function writeGhFixture(path: string, source: string): string {
-  if (process.platform === "win32") {
-    const script = `${path}.js`;
-    const executable = `${path}.cmd`;
-    writeFileSync(script, source);
-    writeFileSync(executable, `@"${process.execPath}" "${script}" %*\r\n`);
-    return executable;
-  }
-  writeFileSync(path, source, { mode: 0o755 });
-  return path;
+function writeGhFixture(path: string, source: string): readonly [string, string] {
+  // Spaces and cmd metacharacters must stay literal in the argv prefix.
+  const script = `${path} fixture & (argv).js`;
+  writeFileSync(script, source);
+  return [process.execPath, script];
 }
 
 describe("t300 adversarial AI PR review", () => {

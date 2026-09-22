@@ -13,6 +13,9 @@ const MAX_BUG_TEST_FILES = 5;
 const AI_ISSUE_REVIEW_MARKER = "<!-- ai-issue-review issue=";
 const AI_ISSUE_LABEL_STATE_MARKER = "<!-- ai-issue-review label-state=";
 
+// An argv prefix lets fixtures use a native interpreter without a shell.
+export type GhExecutable = string | readonly [executable: string, ...args: string[]];
+
 export type FindingLevel = "blocking-question" | "recommendation";
 export type FindingPriority = "P0" | "P1" | "P2" | "P3";
 export type IssueAlignment = "aligned" | "not-aligned";
@@ -256,8 +259,9 @@ function assertContextId(value: string): void {
   }
 }
 
-function ghRaw(args: string[], executable = "gh", input?: string): string {
-  return execFileSync(executable, args, {
+function ghRaw(args: string[], executable: GhExecutable = "gh", input?: string): string {
+  const [command, ...prefix] = typeof executable === "string" ? [executable] : executable;
+  return execFileSync(command, [...prefix, ...args], {
     encoding: "utf8",
     input,
     maxBuffer: Number.POSITIVE_INFINITY,
@@ -355,7 +359,7 @@ function validateIssueReviewLabelSnapshot(value: unknown): IssueReviewLabelSnaps
 function readIssue(
   repository: string,
   issueNumber: number,
-  ghExecutable: string,
+  ghExecutable: GhExecutable,
 ): Record<string, unknown> {
   return record(
     JSON.parse(ghRaw(["api", `repos/${repository}/issues/${issueNumber}`], ghExecutable)),
@@ -371,7 +375,7 @@ function applyManagedIssueLabels(
   repository: string,
   issueNumber: number,
   desiredLabels: string[],
-  ghExecutable: string,
+  ghExecutable: GhExecutable,
 ): void {
   const issueBeforeMutation = readIssue(repository, issueNumber, ghExecutable);
   if (!issueIsEligible(issueBeforeMutation)) {
@@ -425,7 +429,7 @@ function applyManagedIssueLabels(
 export function currentIssueReviewLabelSnapshot(
   repository: string,
   issueNumber: number,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): IssueReviewLabelSnapshot {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("repository must use owner/name format");
@@ -442,7 +446,7 @@ export function restoreIssueReviewLabels(
   repository: string,
   issueNumber: number,
   snapshot: IssueReviewLabelSnapshot,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): boolean {
   const validated = validateIssueReviewLabelSnapshot(snapshot);
   if (!issueIsEligible(readIssue(repository, issueNumber, ghExecutable))) return false;
@@ -454,7 +458,7 @@ export function reconcileIssueReviewLabels(
   repository: string,
   issueNumber: number,
   state: IssueReviewLabelState,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): boolean {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("repository must use owner/name format");

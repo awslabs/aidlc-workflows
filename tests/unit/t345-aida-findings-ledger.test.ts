@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   acceptedRisks,
   applyCommands,
@@ -153,16 +154,11 @@ function apply(raw: StructuredReview, loaded: LoadedLedger, root: string) {
   return applyLedgerToReview(parseStructuredReview(JSON.stringify(raw), BASE, HEAD, MANIFEST, METADATA), loaded, root, root, AT);
 }
 
-function writeGhFixture(path: string, source: string): string {
-  if (process.platform === "win32") {
-    const script = `${path}.js`;
-    const executable = `${path}.cmd`;
-    writeFileSync(script, source);
-    writeFileSync(executable, `@"${process.execPath}" "${script}" %*\r\n`);
-    return executable;
-  }
-  writeFileSync(path, source, { mode: 0o755 });
-  return path;
+function writeGhFixture(path: string, source: string): readonly [string, string] {
+  // Spaces and cmd metacharacters must stay literal in the argv prefix.
+  const script = `${path} fixture & (argv).js`;
+  writeFileSync(script, source);
+  return [process.execPath, script];
 }
 
 function fakeGh(
@@ -172,7 +168,7 @@ function fakeGh(
   commentBody: string,
   commentUserType = "User",
   liveBody: string | null = ledgerBody,
-): { path: string; log: string } {
+): { path: readonly [string, string]; log: string } {
   const log = join(root, "calls.jsonl");
   const path = writeGhFixture(
     join(root, "gh"),
@@ -1025,15 +1021,18 @@ describe("t345 AIDA findings ledger", () => {
   test("the fetch, merge and publish CLIs carry the live digest for the compare-and-swap", () => {
     const root = mkdtempSync(join(tmpdir(), "aida-ledger-cli-"));
     try {
-      // Keep CLI dispatch on the fixture and its Bun interpreter, including
-      // Windows' semicolon-delimited PATH. Never fall through to the host gh.
-      const env = { ...process.env, PATH: [root, dirname(process.execPath)].join(delimiter) };
+      // Run the CLI in a real subprocess with an explicit fixture command.
+      // A fixture-only PATH prevents falling through to the host gh.
+      const env = { ...process.env, PATH: root };
       const gh = fakeGh(root, null, "write", "");
-      const resolvedGh = Bun.which("gh", { PATH: env.PATH });
-      expect(resolvedGh).not.toBeNull();
-      expect(realpathSync(resolvedGh!)).toBe(realpathSync(gh.path));
+      const resolvedInterpreter = Bun.which(gh.path[0], { PATH: env.PATH });
+      expect(resolvedInterpreter).not.toBeNull();
+      expect(realpathSync(resolvedInterpreter!)).toBe(realpathSync(process.execPath));
+      const driver = join(root, "ledger-cli.ts");
+      const ledgerModule = pathToFileURL(join(REPO_ROOT, ".github", "scripts", "ai-pr-ledger.ts")).href;
+      writeFileSync(driver, `import { main } from ${JSON.stringify(ledgerModule)};\nmain(process.argv.slice(2), ${JSON.stringify(gh.path)});\n`);
       const output = join(root, "ledger.json");
-      const run = (args: string[]) => execFileSync(process.execPath, [".github/scripts/ai-pr-ledger.ts", ...args], { cwd: REPO_ROOT, encoding: "utf8", env });
+      const run = (args: string[]) => execFileSync(process.execPath, [driver, ...args], { cwd: REPO_ROOT, encoding: "utf8", env });
       expect(run(["fetch", "--repo", "acme/repo", "--pr", "42", "--output", output]).trim()).toBe("new migrated=false");
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ version: LEDGER_VERSION, pullRequest: 42, nextId: 1, findings: [], migrated: false, expectedDigest: null });
 

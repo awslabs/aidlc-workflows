@@ -360,13 +360,16 @@ function fireAsync(args: string[], env: Record<string, string>): Promise<SpawnRe
       env: { ...process.env, ...withStubScriptDir(env) },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const output: string[] = [];
-    child.stdout!.setEncoding("utf-8").on("data", (chunk: string) => output.push(chunk));
-    child.stderr!.setEncoding("utf-8").on("data", (chunk: string) => output.push(chunk));
+    // Preserve lines within each pipe; stdout can arrive between two chunks
+    // of one stderr diagnostic under Windows pipe scheduling.
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    child.stdout!.setEncoding("utf-8").on("data", (chunk: string) => stdout.push(chunk));
+    child.stderr!.setEncoding("utf-8").on("data", (chunk: string) => stderr.push(chunk));
     child.on("error", reject);
     child.on("close", (code, signal) => resolve({
       rc: code ?? -1,
-      out: `${signal ? `signal=${signal}\n` : ""}${output.join("")}`,
+      out: `${signal ? `signal=${signal}\n` : ""}${stdout.join("")}${stderr.join("")}`,
     }));
   });
 }
@@ -915,11 +918,21 @@ describe("t92 Group G: concurrency invariants", () => {
       [1, 2, 3, 4, 5].map(() =>
         fireAsync(
           ["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")],
-          { CLAUDE_PROJECT_DIR: proj, AIDLC_SENSORS_DIR: sensors },
+          { CLAUDE_PROJECT_DIR: proj, AIDLC_SENSORS_DIR: sensors, AIDLC_TEST_SENSOR_LOCK_TRACE: "1" },
         ),
       ),
     );
     const f = proj;
+    const prefix = "AIDLC_SENSOR_AUDIT_LOCK ";
+    const lockTrace = results.flatMap((result) =>
+      result.out.split(/\r?\n/).filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length)),
+    );
+    if (process.env.AIDLC_TEST_LOG_DIR) {
+      writeFileSync(
+        join(process.env.AIDLC_TEST_LOG_DIR, `t92-audit-lock-${process.pid}.ndjson`),
+        `${lockTrace.join("\n")}\n`,
+      );
+    }
     const detail = `${JSON.stringify(results, null, 2)}\n${readAudit(f)}`;
     for (const result of results) expect(result.rc, detail).toBe(0);
     expect(auditEventCount(f, "SENSOR_FIRED"), detail).toBe(5);
@@ -934,6 +947,12 @@ describe("t92 Group G: concurrency invariants", () => {
     for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
     const paired = [...counts.values()].filter((c) => c === 2).length;
     expect(paired, detail).toBe(5);
+    expect(lockTrace, detail).toHaveLength(10);
+    // Even a passing fire must release its audit window before running the
+    // sensor or returning its verdict. Pending release can strand a peer's pair.
+    expect(lockTrace.map((line) => JSON.parse(line).releasePending), detail).toEqual(
+      Array(10).fill(false),
+    );
   }, 30000);
 
   test("25: lock-released-across-spawn — fast PASSED lands during slow's spawn window", async () => {

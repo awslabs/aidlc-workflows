@@ -3974,11 +3974,19 @@ process.stdin.on("end", () => server.stop(true));
         },
       );
       const elapsed = Number(process.hrtime.bigint() - started) / 1_000_000;
+      const recoveryAttempts: Array<{
+        operation: string; attempt: number; attempts: number;
+        timeoutMs: number; remainingBeforeMs: number; remainingAfterMs: number;
+        commandRemainingBeforeMs: number; commandRemainingAfterMs: number;
+        deadlineExceeded: boolean; commandDeadlineExceeded: boolean;
+      }> = [];
       for (const line of finalized.stderr.split(/\r?\n/)) {
         const prefix = "AIDLC_RECOVERY_COMMAND ";
         if (!line.startsWith(prefix)) continue;
+        const command = JSON.parse(line.slice(prefix.length));
+        recoveryAttempts.push(command);
         appendFileSync(trace, `${JSON.stringify({
-          at: Date.now(), event: "recovery-command", ...JSON.parse(line.slice(prefix.length)),
+          at: Date.now(), event: "recovery-command", ...command,
         })}\n`);
       }
       appendFileSync(trace, `${JSON.stringify({
@@ -4001,6 +4009,18 @@ process.stdin.on("end", () => server.stop(true));
         observed.some((row) => row.event === "advertisement-request" && row.delayed === true),
         "the recovery deadline must be exercised by the delayed remote, not by unrelated startup latency",
       ).toBe(true);
+      expect(recoveryAttempts.length, diagnostic).toBeGreaterThan(0);
+      expect(recoveryAttempts.length, diagnostic).toBeLessThanOrEqual(2);
+      for (const [index, attempt] of recoveryAttempts.entries()) {
+        expect(attempt.operation, diagnostic).toBe("ls-remote");
+        expect(attempt.attempt, diagnostic).toBe(index + 1);
+        expect(attempt.attempts, diagnostic).toBe(recoveryAttempts.length);
+        expect(attempt.timeoutMs, diagnostic).toBeLessThanOrEqual(
+          Math.ceil(Math.min(attempt.remainingBeforeMs, attempt.commandRemainingBeforeMs)),
+        );
+        expect(attempt.deadlineExceeded, diagnostic).toBe(attempt.remainingAfterMs <= 0);
+        expect(attempt.commandDeadlineExceeded, diagnostic).toBe(attempt.commandRemainingAfterMs <= 0);
+      }
     } catch (error) {
       failures.push(error);
     }
