@@ -48,6 +48,7 @@ export {
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
+import type * as VendoredMarkdownParser from "./vendor/markdown-parser.js";
 
 export const ENGINE_DIR = ".aidlc-engine";
 export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
@@ -30126,6 +30127,170 @@ function multilineInlineCodeSpanEnd(
     }
   }
   return null;
+}
+
+export type MarkdownContainer =
+	| { kind: "blockQuote" }
+	| { kind: "listItem"; ordered: boolean; start: number | null; marker: string; id: number; contentIndent: number };
+
+export type MarkdownLineKind =
+	| "blank" | "paragraph" | "heading" | "thematicBreak" | "codeFenced" | "codeIndented"
+	| "htmlFlow" | "definition" | "table" | "listItemPrefix";
+
+export interface MarkdownLine {
+	kind: MarkdownLineKind;
+	containers: MarkdownContainer[];
+	htmlKind: 1 | 2 | 3 | 4 | 5 | 6 | 7 | null;
+	contentStart: number;
+	invisible: Array<{ start: number; end: number; kind: "codeText" | "htmlText" | "htmlComment" }>;
+}
+
+export interface MarkdownDefinition {
+	label: string;
+	startLine: number;
+	endLine: number;
+}
+
+export interface MarkdownBlocks {
+	lines: MarkdownLine[];
+	definitions: MarkdownDefinition[];
+}
+
+type MarkdownParserModule = typeof VendoredMarkdownParser;
+type MarkdownToken = VendoredMarkdownParser.Token;
+let markdownParser: MarkdownParserModule | null = null;
+
+function loadMarkdownParser(): MarkdownParserModule {
+	markdownParser ??= require("./vendor/markdown-parser.js");
+	return markdownParser!;
+}
+
+const MARKDOWN_LEAF_KINDS: Readonly<Record<string, MarkdownLineKind>> = {
+	paragraph: "paragraph",
+	atxHeading: "heading",
+	setextHeading: "heading",
+	thematicBreak: "thematicBreak",
+	codeFenced: "codeFenced",
+	codeIndented: "codeIndented",
+	htmlFlow: "htmlFlow",
+	definition: "definition",
+	table: "table",
+};
+
+// Only classify a block already recognized by micromark: its extent and whether
+// it can interrupt a paragraph come exclusively from the parser, not this tag list.
+function markdownHtmlKind(firstLine: string): NonNullable<MarkdownLine["htmlKind"]> {
+	if (/^<(?:script|pre|style|textarea)(?:[\t >]|$)/i.test(firstLine)) return 1;
+	if (firstLine.startsWith("<!--")) return 2;
+	if (firstLine.startsWith("<?")) return 3;
+	if (/^<![A-Za-z]/.test(firstLine)) return 4;
+	if (firstLine.startsWith("<![CDATA[")) return 5;
+	if (/^<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[\t >]|\/>|$)/i.test(firstLine)) return 6;
+	return 7;
+}
+
+/** CommonMark/GFM source structure; all positions index BOM/CRLF-normalized raw lines. */
+export function markdownBlocks(content: string): MarkdownBlocks {
+	const normalized = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+	const raw = normalized.split("\n");
+	const offsets: number[] = [];
+	let offset = 0;
+	const lines = raw.map((line): MarkdownLine => {
+		offsets.push(offset);
+		offset += line.length + 1;
+		return { kind: "blank", containers: [], htmlKind: null, contentStart: 0, invisible: [] };
+	});
+	const parser = loadMarkdownParser();
+	const events = parser.postprocess(parser.parse({ extensions: [parser.gfm()] }).document()
+		.write(parser.preprocess()(normalized, undefined, true)));
+	const frames: Array<{ type: string; container: MarkdownContainer | null }> = [];
+	const definitions: MarkdownDefinition[] = [];
+	let definition: MarkdownDefinition | null = null;
+	const containerPath = (): MarkdownContainer[] => frames.flatMap((frame) => frame.container ? [frame.container] : []);
+	const column = (point: MarkdownToken["start"]): number => point.offset - offsets[point.line - 1];
+
+	for (const [phase, token, context] of events) {
+		const type = token.type;
+		if (type === "blockQuote" || type === "listOrdered" || type === "listUnordered") {
+			if (phase === "enter") {
+				frames.push({ type, container: type === "blockQuote" ? { kind: "blockQuote" } : null });
+			} else {
+				frames.pop();
+			}
+			continue;
+		}
+		if (phase === "exit") {
+			if (type === "definition") definition = null;
+			continue;
+		}
+		const lineIndex = token.start.line - 1;
+		const line = lines[lineIndex];
+		if (type === "listItemPrefix") {
+			// micromark emits each item prefix, not synthetic listItem wrappers.
+			// Replacing the innermost list frame starts a sibling; nested lists have
+			// their own frame, so lazy continuations retain the same item identity.
+			const frame = frames[frames.length - 1];
+			frame.container = {
+				kind: "listItem", ordered: frame.type === "listOrdered", start: null,
+				marker: "", id: token.start.offset, contentIndent: column(token.end),
+			};
+			line.kind = "listItemPrefix";
+			line.containers = containerPath();
+			line.contentStart = column(token.end);
+		} else if (type === "listItemValue" || type === "listItemMarker") {
+			const item = frames[frames.length - 1].container;
+			if (item?.kind === "listItem") {
+				if (type === "listItemValue") item.start = Number(context.sliceSerialize(token));
+				else {
+					item.marker = context.sliceSerialize(token);
+					// Marker-only items still require one column of content indentation.
+					item.contentIndent = Math.max(item.contentIndent, column(token.end) + 1);
+				}
+			}
+		} else if (type === "blockQuotePrefix" || type === "listItemIndent" || type === "linePrefix") {
+			line.contentStart = Math.max(line.contentStart, column(token.end));
+			if (line.kind === "blank") line.containers = containerPath();
+		} else if (type === "lineEndingBlank") {
+			if (line.kind === "blank") line.containers = containerPath();
+		}
+
+		const kind = MARKDOWN_LEAF_KINDS[type];
+		if (kind) {
+			const containers = containerPath();
+			let blockStart = column(token.start);
+			// htmlFlow includes the opening line's indentation in its token.
+			if (kind === "htmlFlow") blockStart += /^[\t ]*/.exec(raw[lineIndex].slice(blockStart))![0].length;
+			const htmlKind = kind === "htmlFlow" ? markdownHtmlKind(raw[lineIndex].slice(blockStart)) : null;
+			for (let index = lineIndex; index < token.end.line; index++) {
+				lines[index].kind = kind;
+				lines[index].containers = containers;
+				lines[index].htmlKind = htmlKind;
+			}
+			line.contentStart = Math.max(line.contentStart, blockStart);
+			if (kind === "definition") {
+				definition = { label: "", startLine: lineIndex, endLine: token.end.line - 1 };
+				definitions.push(definition);
+			}
+		}
+		if (type === "definitionLabelString" && definition) {
+			definition.label = parser.normalizeIdentifier(context.sliceSerialize(token));
+		}
+		if (type === "codeText" || type === "htmlText") {
+			const kind = type === "codeText" ? "codeText"
+				: normalized.startsWith("<!--", token.start.offset) ? "htmlComment" : "htmlText";
+			for (let index = lineIndex; index < token.end.line; index++) {
+				const start = index === lineIndex ? column(token.start) : 0;
+				const end = index === token.end.line - 1 ? column(token.end) : raw[index].length;
+				lines[index].invisible.push({ start, end, kind });
+			}
+		}
+	}
+	// Multiline inline tokens straddle later container-prefix events. Exclude those
+	// prefixes only after the full event walk has located each line's content start.
+	for (const line of lines) {
+		for (const span of line.invisible) span.start = Math.max(span.start, line.contentStart);
+	}
+	return { lines, definitions };
 }
 
 // Replace invisible Markdown (HTML comments, code spans, and block code) with
