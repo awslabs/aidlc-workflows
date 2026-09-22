@@ -8,6 +8,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { nativeSnapshotReply } from "../harness/windows-identity-fixture.ts";
+import { getWindowsProcessDetailsWithBun } from "../harness/tui-process-identity.ts";
 import {
   type BoundedCommandResult, legacyWinSessionDir, liveOwnedWindowsProcesses, resolveWinNode, runBoundedCommand,
   WIN_KILL_TIMEOUT_MS, type WindowsProcessIdentity, winSessionDir,
@@ -256,18 +259,16 @@ describe("Windows cleanup identity snapshots", () => {
   const identities: WindowsProcessIdentity[] = [101, 202, 303].map((pid) => ({
     pid, parentPid: 100, creationDate: "2026-09-22T05:46:00.000Z", commandLine: "owned target",
   }));
-  const reply = (value: unknown): BoundedCommandResult => ({
-    status: 0, stdout: Buffer.from(JSON.stringify(value)).toString("base64"), stderr: "", timedOut: false,
-  });
+  const reply = (value: unknown): BoundedCommandResult => nativeSnapshotReply(identities.map(row => row.pid), value);
 
-  test("one snapshot shares the remaining cleanup budget despite slow PowerShell startup", () => {
+  test("one native snapshot shares the remaining cleanup budget despite slow bridge startup", () => {
     let queries = 0;
     const result = liveOwnedWindowsProcesses(identities, 2800, "regression-liveness", (file, args, budget) => {
       queries++;
-      expect(file).toBe("powershell.exe");
-      expect(args.at(-1)).toContain("ProcessId = 101 OR ProcessId = 202 OR ProcessId = 303");
+      expect(file).toBe(process.env.AIDLC_BUN_BIN ?? process.execPath);
+      expect(args.slice(1)).toEqual(["--windows-process-details", "101", "202", "303"]);
       expect(budget).toBe(2800);
-      // Model a loaded host requiring 1100ms per PowerShell/CIM invocation:
+      // Model a loaded host requiring 1100ms per bridge invocation:
       // the former 750ms per-PID cap cannot complete even the first lookup.
       return budget < 1100
         ? { status: null, stdout: "", stderr: "", timedOut: true, errorCode: "ETIMEDOUT" }
@@ -288,14 +289,14 @@ describe("Windows cleanup identity snapshots", () => {
       .toEqual({ status: "ok", value: [] });
   });
 
-  test.skipIf(!IS_WIN)("real CIM liveness tolerates startup beyond the former per-PID cap", () => {
-    const current = currentProcessIdentities([process.pid]);
+  test.skipIf(!IS_WIN)("real native liveness tolerates bridge startup beyond the former per-PID cap", () => {
+    const current = getWindowsProcessDetailsWithBun([process.pid], 2_000);
     expect(current).toHaveLength(1);
     const owned = { ...current[0], parentPid: 0, commandLine: "" };
     const reused = { ...owned, creationDate: "2000-01-01T00:00:00.000Z" };
     const result = liveOwnedWindowsProcesses([owned, reused], WIN_KILL_TIMEOUT_MS, "regression-slow-cim",
       (file, args, budget) => runBoundedCommand(file, [
-        ...args.slice(0, -1), `Start-Sleep -Milliseconds 900\n${args.at(-1)}`,
+        "--eval", `await Bun.sleep(900); process.argv = ${JSON.stringify([file, ...args])}; await import(${JSON.stringify(pathToFileURL(args[0]).href)});`,
       ], budget));
     expect(result).toEqual({ status: "ok", value: [owned] });
   }, 25_000);

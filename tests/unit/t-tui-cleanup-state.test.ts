@@ -1,6 +1,7 @@
 // All process queries, clocks and termination effects are injected. These
 // state-machine controls run on every OS without a Claude CLI or a live TUI.
 import { describe, expect, test } from "bun:test";
+import { nativeSnapshotReply, withNativeGeneration } from "../harness/windows-identity-fixture.ts";
 import {
   createWindowsCleanupIdentityReader,
   forceKillWindowsProcessesWithinDeadline,
@@ -16,9 +17,8 @@ describe("Windows cleanup identity state", () => {
   const identity = (pid: number, parentPid = 100, creationDate = "2026-09-22T00:00:01.000Z"): WindowsProcessIdentity => ({
     pid, parentPid, creationDate, commandLine: `owned process ${pid}`,
   });
-  const snapshotReply = (rows: WindowsProcessIdentity[]) => ({
-    status: 0, stdout: Buffer.from(JSON.stringify(rows)).toString("base64"), stderr: "", timedOut: false,
-  });
+  const snapshotReply = (rows: WindowsProcessIdentity[], args: string[]) =>
+    nativeSnapshotReply(args.slice(2).map(Number), rows);
 
   test("cleanup retries discover a target after absence and still verify absent recorded descendants", () => {
     const daemon = identity(101);
@@ -65,8 +65,8 @@ describe("Windows cleanup identity state", () => {
       WIN_KILL_TIMEOUT_MS - now,
       "kill-liveness",
       (_file, args) => {
-        expect(args.at(-1)).toContain("ProcessId = 404");
-        return snapshotReply([descendant]);
+        expect(args.slice(2)).toContain("404");
+        return snapshotReply([descendant], args);
       },
     );
     expect(live).toEqual({ status: "ok", value: [descendant] });
@@ -101,7 +101,7 @@ describe("Windows cleanup identity state", () => {
     expect(read(recorded.pid, "kill-owned-process")).toEqual({ status: "ok", value: reused });
     expect(queries).toBe(3); // The error invalidated the still-unread positive.
     const live = liveWindowsCleanupProcesses([], [recorded], WIN_KILL_TIMEOUT_MS, "kill-liveness",
-      () => snapshotReply([reused]));
+      (_file, args) => snapshotReply([reused], args));
     expect(live).toEqual({ status: "ok", value: [] });
     const killed: number[] = [];
     if (live.status === "ok") {
@@ -129,9 +129,9 @@ describe("Windows cleanup identity state", () => {
     expect(read(wrapper.pid, "kill-owned-process").status).toBe("error");
     expect(queries).toBe(1); // Even a positive cache hit cannot outlive the budget.
     let finalQueries = 0;
-    expect(liveWindowsCleanupProcesses([], [wrapper], 0, "kill-liveness", () => {
+    expect(liveWindowsCleanupProcesses([], [wrapper], 0, "kill-liveness", (_file, args) => {
       finalQueries++;
-      return snapshotReply([wrapper]);
+      return snapshotReply([wrapper], args);
     }).status).toBe("error");
     expect(finalQueries).toBe(0);
 
@@ -158,24 +158,28 @@ describe("Windows cleanup identity state", () => {
     const snapshot = queryWindowsProcessIdentities([101, 202, 303], 2_000, "settings-startup-control",
       (file, args, budget) => {
         queries++;
-        expect(file).toBe("powershell.exe");
-        expect(args.at(-1)).toContain("ProcessId = 101 OR ProcessId = 202 OR ProcessId = 303");
+        expect(file).toBe(process.env.AIDLC_BUN_BIN ?? process.execPath);
+        expect(args.slice(1)).toEqual(["--windows-process-details", "101", "202", "303"]);
         // A 1100ms cold start cannot finish under the former 750ms cap.
         return budget < 1100
           ? { status: null, stdout: "", stderr: "", timedOut: true }
-          : { status: 0, stdout: Buffer.from(JSON.stringify(identities)).toString("base64"), stderr: "", timedOut: false };
+          : snapshotReply(identities, args);
       });
-    expect(snapshot).toEqual({ status: "ok", value: identities });
+    expect(snapshot).toEqual({ status: "ok", value: identities.map(withNativeGeneration) });
     expect(queries).toBe(1);
     expect(WIN_KILL_TIMEOUT_MS).toBe(8_000);
-    expect(liveOwnedWindowsProcesses(identities, 2_000, "settings-reuse-control", () => ({
-      status: 0,
-      stdout: Buffer.from(JSON.stringify(identities.map(row => ({
+    expect(liveOwnedWindowsProcesses(identities, 2_000, "settings-reuse-control", (_file, args) =>
+      snapshotReply(identities.map(row => ({
         ...row, creationDate: "2026-09-22T00:01:00.000Z",
-      })))).toString("base64"),
-      stderr: "",
-      timedOut: false,
-    }))).toEqual({ status: "ok", value: [] });
+      })), args))).toEqual({ status: "ok", value: [] });
+  });
+
+  test("native creation generations remain distinct within the same millisecond", () => {
+    const recorded = withNativeGeneration(identity(303));
+    const nextTicks = BigInt(recorded.nativeIdentity!.split(":")[2]) + 1n;
+    const reused = { ...recorded, nativeIdentity: `win32:303:${nextTicks}` };
+    expect(liveOwnedWindowsProcesses([recorded], 2_000, "settings-submillisecond-reuse", (_file, args) =>
+      snapshotReply([reused], args))).toEqual({ status: "ok", value: [] });
   });
 
   test("timed-out or malformed identity snapshots cannot establish absence", () => {

@@ -133,6 +133,7 @@ import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
 import { stateFilePathFor } from "./sdk-drive.ts";
+import { parseWindowsProcessChildrenReply, parseWindowsProcessDetailsReply, windowsProcessDetailsCommand } from "./tui-process-identity.ts";
 import { createBunBackend } from "./tui-bun-backend.ts";
 import { selectedTuiBackend } from "./tui-runtime.ts";
 import type { TuiSnapshot, TuiTextLayout, TuiTextViews } from "./tui-screen.ts";
@@ -604,6 +605,7 @@ export type WindowsProcessIdentity = {
   parentPid: number;
   creationDate: string;
   commandLine: string;
+  nativeIdentity?: string;
 };
 
 type WindowsDescendantSnapshot = {
@@ -710,54 +712,7 @@ function windowsProcessQuery(
   timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
   context = "process",
 ): WindowsProcessQuery<WindowsProcessIdentity> {
-  if (shouldInjectCimFailure(context)) {
-    return {
-      status: "error",
-      message: `injected CIM failure for ${context}`,
-    };
-  }
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"`,
-    "if ($null -eq $p) { exit 3 }",
-    "$out = [pscustomobject]@{",
-    "  pid = [int]$p.ProcessId",
-    "  parentPid = [int]$p.ParentProcessId",
-    '  creationDate = $p.CreationDate.ToUniversalTime().ToString("o")',
-    "  commandLine = [string]$p.CommandLine",
-    "}",
-    "$json = $out | ConvertTo-Json -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
-  const startedAt = Date.now();
-  const result = runBoundedCommand(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    timeoutMs,
-  );
-  if (result.status === 3) return { status: "absent" };
-  if (result.status !== 0) {
-    const timing = `context=${context}, budget=${timeoutMs}ms, elapsed=${Date.now() - startedAt}ms`;
-    return {
-      status: "error",
-      message:
-        result.timedOut
-          ? `process identity query timed out for pid ${pid} (${timing})`
-          : `process identity query failed for pid ${pid}: ` +
-            `${result.stderr || result.errorCode || `exit ${result.status}`} (${timing})`,
-    };
-  }
-  try {
-    return {
-      status: "ok",
-      value: parsePowerShellBase64Json<WindowsProcessIdentity>(result.stdout),
-    };
-  } catch {
-    return {
-      status: "error",
-      message: `process identity query returned invalid JSON for pid ${pid}`,
-    };
-  }
+  return processFromSnapshot(queryWindowsProcessIdentities([pid], timeoutMs, context), pid);
 }
 
 function windowsProcessFallbackQuery(
@@ -766,51 +721,11 @@ function windowsProcessFallbackQuery(
   timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
   context = "process-fallback",
 ): WindowsProcessQuery<WindowsProcessIdentity> {
-  if (shouldInjectCimFailure(context)) {
-    return {
-      status: "error",
-      message: `injected process fallback failure for ${context}`,
-    };
+  const current = windowsProcessQuery(pid, timeoutMs, context);
+  if (current.status === "ok" && current.value.parentPid !== parentPid) {
+    return { status: "error", message: `native process identity parent mismatch for pid ${pid}` };
   }
-  const script = [
-    `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
-    "if ($null -eq $p) { exit 3 }",
-    "$out = [pscustomobject]@{",
-    "  pid = [int]$p.Id",
-    `  parentPid = ${parentPid}`,
-    '  creationDate = $p.StartTime.ToUniversalTime().ToString("o")',
-    "  commandLine = ''",
-    "}",
-    "$json = $out | ConvertTo-Json -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
-  const startedAt = Date.now();
-  const result = runBoundedCommand(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    timeoutMs,
-  );
-  if (result.status === 3) return { status: "absent" };
-  if (result.status !== 0) {
-    return {
-      status: "error",
-      message: `fallback process identity query ${result.timedOut ? "timed out" : "failed"} ` +
-        `for pid ${pid} (context=${context}, budget=${timeoutMs}ms, ` +
-        `elapsed=${Date.now() - startedAt}ms): ` +
-        `${result.stderr || result.errorCode || `exit ${result.status}`}`,
-    };
-  }
-  try {
-    return {
-      status: "ok",
-      value: parsePowerShellBase64Json<WindowsProcessIdentity>(result.stdout),
-    };
-  } catch {
-    return {
-      status: "error",
-      message: `fallback process identity query returned invalid JSON for pid ${pid}`,
-    };
-  }
+  return current;
 }
 
 function windowsDirectChildrenQuery(
@@ -818,70 +733,19 @@ function windowsDirectChildrenQuery(
   timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
   context = "descendants",
 ): WindowsProcessQuery<WindowsDescendantSnapshot> {
-  if (shouldInjectCimFailure(context)) {
-    return {
-      status: "error",
-      message: `injected CIM failure for ${context}`,
-    };
-  }
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    "$all = @(Get-CimInstance Win32_Process)",
-    "function Convert-Identity($p) {",
-    "  if ($null -eq $p) { return $null }",
-    "  return [pscustomobject]@{",
-    "    pid = [int]$p.ProcessId",
-    "    parentPid = [int]$p.ParentProcessId",
-    '    creationDate = $p.CreationDate.ToUniversalTime().ToString("o")',
-    "    commandLine = [string]$p.CommandLine",
-    "  }",
-    "}",
-    `$root = $all | Where-Object { [int]$_.ProcessId -eq ${parentPid} } | Select-Object -First 1`,
-    `$children = @($all | Where-Object { [int]$_.ParentProcessId -eq ${parentPid} } | ForEach-Object { Convert-Identity $_ })`,
-    "$out = [pscustomobject]@{",
-    "  currentRoot = Convert-Identity $root",
-    "  children = $children",
-    "}",
-    "$json = ConvertTo-Json -InputObject $out -Depth 4 -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
-  const startedAt = Date.now();
-  const result = runBoundedCommand(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    timeoutMs,
-  );
-  if (result.status !== 0) {
-    const timing = `context=${context}, budget=${timeoutMs}ms, elapsed=${Date.now() - startedAt}ms`;
-    return {
-      status: "error",
-      message:
-        result.timedOut
-          ? `descendant identity query timed out for parent pid ${parentPid} (${timing})`
-          : `descendant identity query failed for parent pid ${parentPid}: ` +
-            `${result.stderr || result.errorCode || `exit ${result.status}`} (${timing})`,
-    };
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return { status: "error", message: "descendant identity deadline exhausted" };
+  if (shouldInjectCimFailure(context)) return { status: "error", message: `injected CIM failure for ${context}` };
+  const [bin, args] = windowsProcessDetailsCommand([parentPid]);
+  args[1] = "--windows-process-children";
+  const result = runBoundedCommand(bin, args, timeoutMs);
+  if (result.timedOut || result.errorCode || result.status !== 0) {
+    return { status: "error", message: `native descendant identity query failed for parent pid ${parentPid} ` +
+      `(context=${context}, budget=${timeoutMs}ms): ${result.stderr || result.errorCode || `exit ${result.status}`}` };
   }
   try {
-    const parsed = parsePowerShellBase64Json<WindowsDescendantSnapshot>(
-      result.stdout,
-    );
-    return {
-      status: "ok",
-      value: {
-        currentRoot: parsed.currentRoot ?? null,
-        children: Array.isArray(parsed.children)
-          ? parsed.children
-          : parsed.children
-            ? [parsed.children]
-            : [],
-      },
-    };
-  } catch {
-    return {
-      status: "error",
-      message: `descendant identity query returned invalid JSON for parent pid ${parentPid}`,
-    };
+    return { status: "ok", value: parseWindowsProcessChildrenReply(result.stdout, parentPid) };
+  } catch (error) {
+    return { status: "error", message: `native descendant identity query returned invalid data: ${String(error)}` };
   }
 }
 
@@ -891,7 +755,8 @@ function sameWindowsProcess(
 ): boolean {
   return (
     current.pid === recorded.pid &&
-    Date.parse(current.creationDate) === Date.parse(recorded.creationDate)
+    Date.parse(current.creationDate) === Date.parse(recorded.creationDate) &&
+    (!current.nativeIdentity || !recorded.nativeIdentity || current.nativeIdentity === recorded.nativeIdentity)
   );
 }
 
@@ -1157,54 +1022,27 @@ export function queryWindowsProcessIdentities(
   if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff)) {
     return { status: "error", message: `invalid recorded process identity for ${context}` };
   }
-  // Rechecking N identities must not pay N PowerShell startups, each killed
-  // at 750ms on a busy host. One filtered snapshot shares the caller's remaining
-  // deadline and retains creation identities and command lines for validation.
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `$rows = @(Get-CimInstance Win32_Process -Filter "${pids.map((pid) => `ProcessId = ${pid}`).join(" OR ")}" | ForEach-Object {`,
-    "  [pscustomobject]@{",
-    "    pid = [int]$_.ProcessId",
-    "    parentPid = [int]$_.ParentProcessId",
-    '    creationDate = $_.CreationDate.ToUniversalTime().ToString("o")',
-    "    commandLine = [string]$_.CommandLine",
-    "  }",
-    "})",
-    "$json = ConvertTo-Json -InputObject $rows -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
+  // Node delegates one bounded batch to Bun's native, read-only handle API.
+  // Every PID has an explicit identity/absence reply; failures never omit rows.
+  const [bin, args] = windowsProcessDetailsCommand(pids);
   const startedAt = Date.now();
-  const result = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], timeoutMs);
+  const result = run(bin, args, timeoutMs);
   writeCimTrace(
-    `identity-snapshot context=${context} count=${pids.length} budget=${timeoutMs}ms ` +
+    `native-identity-snapshot context=${context} count=${pids.length} budget=${timeoutMs}ms ` +
       `elapsed=${Date.now() - startedAt}ms status=${result.status} timedOut=${result.timedOut}`,
   );
   if (result.timedOut || result.errorCode || result.status !== 0) {
     return {
       status: "error",
-      message: `process identity liveness query ${result.timedOut ? "timed out" : "failed"} ` +
+      message: `native process identity query ${result.timedOut ? "timed out" : "failed"} ` +
         `for pid(s) ${pids.join(", ")} (context=${context}, budget=${timeoutMs}ms, ` +
         `elapsed=${Date.now() - startedAt}ms): ${result.stderr || result.errorCode || `exit ${result.status}`}`,
     };
   }
   try {
-    const rows = parsePowerShellBase64Json<WindowsProcessIdentity[]>(result.stdout);
-    const seen = new Set<number>();
-    if (!Array.isArray(rows) || rows.some((row) => {
-      if (!row || !pids.includes(row.pid) || seen.has(row.pid) ||
-        !Number.isSafeInteger(row.parentPid) || row.parentPid < 0 ||
-        typeof row.creationDate !== "string" || !Number.isFinite(Date.parse(row.creationDate)) ||
-        typeof row.commandLine !== "string") return true;
-      seen.add(row.pid);
-      return false;
-    })) throw new Error("invalid process snapshot");
-    // Only a completed, valid snapshot can establish absence or PID reuse.
-    return {
-      status: "ok",
-      value: rows,
-    };
-  } catch {
-    return { status: "error", message: `process identity liveness query returned invalid JSON for ${context}` };
+    return { status: "ok", value: parseWindowsProcessDetailsReply(result.stdout, pids) };
+  } catch (error) {
+    return { status: "error", message: `native process identity query returned invalid data for ${context}: ${String(error)}` };
   }
 }
 

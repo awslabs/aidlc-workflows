@@ -1727,6 +1727,11 @@ export function onboard(
     }
 
     // --- Pass 3: COMMIT, inside the space-level lock. ---
+    // Concurrent Windows onboards can queue behind several index publications
+    // and audit appends for longer than the shared ~5s acquire budget. Give
+    // this commit up to 150 x 100ms retries there; extraction/staging stays
+    // outside the lock and other callers retain their existing budgets.
+    const commitRetries = process.platform === "win32" ? 150 : 50;
     const committed = withAuditLock(projectDir, () => {
       // (a) RE-VALIDATE every digest. THE step that makes this safe: a document
       // edited during staging would otherwise be indexed with the new digest and
@@ -1942,15 +1947,20 @@ export function onboard(
       for (const id of pendingIntentAssociations) {
         setIntentAssociation(projectDir, space, id, intentUuid as string, "associate");
       }
-      const auditState = documentAuditState(projectDir, space);
-      for (const outcome of outcomes) {
-        const row = fresh.documents.find((candidate) => candidate.id === outcome.id);
-        if (!row) continue;
-        ensureDocumentRevisionAudit(projectDir, space, row, auditState);
-        ensureDocumentAssociationAudit(projectDir, space, row, auditState);
+      // Fresh/edited rows were audited above. Only pre-existing unchanged
+      // outcomes need reconciliation; avoid replaying the entire audit ledger
+      // under the commit lock when that repair loop would be empty.
+      if (outcomes.length > 0) {
+        const auditState = documentAuditState(projectDir, space);
+        for (const outcome of outcomes) {
+          const row = fresh.documents.find((candidate) => candidate.id === outcome.id);
+          if (!row) continue;
+          ensureDocumentRevisionAudit(projectDir, space, row, auditState);
+          ensureDocumentAssociationAudit(projectDir, space, row, auditState);
+        }
       }
       return { landed, edited };
-    }, undefined, space);
+    }, undefined, space, commitRetries, 100);
 
     for (const row of committed.landed) {
       outcomes.push({
