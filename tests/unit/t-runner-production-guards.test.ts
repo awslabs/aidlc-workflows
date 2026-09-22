@@ -213,6 +213,7 @@ function runnerFixture(files: Record<string, string>) {
     "tests/lib/e2e-plan.ts",
     "tests/lib/e2e-scheduler.ts",
     "tests/lib/e2e-workers.ts",
+    "tests/lib/e2e-deferred-cleanup.ts",
     "tests/lib/e2e-process.ts",
     "tests/lib/bun-junit-to-meta.ts",
     "tests/lib/test-sharding.ts",

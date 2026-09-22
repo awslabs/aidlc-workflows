@@ -148,7 +148,16 @@ export interface IsolatedProcess {
   /** Resolves on the test leader's exit, independently of inherited output pipes. */
   exited: Promise<number>;
   stop(): void;
-  retire(): Promise<void>;
+  retire(): Promise<IsolatedProcessRetirement>;
+}
+
+/** Returned only after native tree retirement and handle closure succeed.
+ * Never reconstruct this authority from files written by a test process. */
+export interface IsolatedProcessRetirement {
+  readonly platform: NodeJS.Platform;
+  readonly job?: string;
+  readonly configPath: string;
+  readonly configText: string;
 }
 
 export async function startIsolatedProcess(options: {
@@ -161,11 +170,12 @@ export async function startIsolatedProcess(options: {
     token: randomUUID(), command: options.command, cwd: options.cwd,
     status: join(options.artifacts, "process-status.json"), job: job?.name,
   };
+  const configPath = join(options.artifacts, "process-config.json");
+  const configText = JSON.stringify(config);
   try {
     options.signal.throwIfAborted();
-    const path = join(options.artifacts, "process-config.json");
-    writeFileSync(path, JSON.stringify(config), { mode: 0o600 });
-    child = spawn(process.execPath, [HERE, "--supervise", path], {
+    writeFileSync(configPath, configText, { mode: 0o600 });
+    child = spawn(process.execPath, [HERE, "--supervise", configPath], {
       cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
@@ -219,7 +229,7 @@ export async function startIsolatedProcess(options: {
       await pause(20);
     }
   })();
-  let retirement: Promise<void> | undefined;
+  let retirement: Promise<IsolatedProcessRetirement> | undefined;
   return {
     child, exited, stop,
     retire() {
@@ -249,6 +259,9 @@ export async function startIsolatedProcess(options: {
         child.stdin.destroy();
         try { job?.close(); } catch (error) { failures.push(error); }
         if (failures.length) throw new AggregateError(failures, "e2e process cleanup failed");
+        return Object.freeze({
+          platform: process.platform, job: config.job, configPath, configText,
+        });
       })();
       return retirement;
     },

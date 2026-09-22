@@ -47,7 +47,7 @@ import {
 import type { E2eWorker } from "./lib/e2e-workers.ts";
 import { createE2eNativeRoot, createE2eTemporaryRoot } from "./lib/e2e-workers.ts";
 import type { E2eCaseCounts } from "./lib/e2e-plan.ts";
-import type { IsolatedProcess } from "./lib/e2e-process.ts";
+import type { IsolatedProcess, IsolatedProcessRetirement } from "./lib/e2e-process.ts";
 import type { E2eLimits, E2eTask } from "./lib/e2e-scheduler.ts";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -94,6 +94,7 @@ interface IsolatedFileContext {
   artifacts: string;
   force?: boolean;
   budget?: FileBudget;
+  retirement?: IsolatedProcessRetirement;
 }
 
 interface FileBudget {
@@ -883,6 +884,7 @@ async function runSpawnCapture(
     child.on("close", (code, signal) => { closed = true; done(code ?? (signal ? 128 : 1)); });
   });
   let rc = 1;
+  let retirement: IsolatedProcessRetirement | undefined;
   try {
     rc = await (supervised?.exited ?? closing);
   } catch (error) {
@@ -899,7 +901,10 @@ async function runSpawnCapture(
         await cleanupE2eTransports(transport.worker, transport.env);
       } catch (error) { failures.push(String(error)); }
     }
-    try { await supervised.retire(); } catch (error) { failures.push(String(error)); }
+    try {
+      retirement = await supervised.retire();
+      if (context) context.retirement = retirement;
+    } catch (error) { failures.push(String(error)); }
     if (!closed) {
       let drainTimer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -923,6 +928,7 @@ async function runSpawnCapture(
       await finishE2eTemporaryFiles(
         transport.env, transport.env.AIDLC_TEST_WORKER_ROOT!,
         rc !== 0 || !!captureFailure || process.env.AIDLC_KEEP_TEMP === "1",
+        retirement,
       );
     } catch (error) { failures.push(String(error)); }
   }
@@ -1402,6 +1408,7 @@ async function runIsolatedE2e(): Promise<void> {
       artifacts, temporaryDirectory: env.TEMP,
     });
     let outcome: FileExecution | undefined;
+    const context: IsolatedFileContext = { worker, env, artifacts, force: true, budget };
     let cleanupFailure: Error | undefined;
     const checkWorkerSource = async (checkpoint: "before" | "after"): Promise<void> => {
       if (!matrixContext) return;
@@ -1423,7 +1430,7 @@ async function runIsolatedE2e(): Promise<void> {
       // Stay inside finally so even a never-launched file releases its fixtures.
       isolatedAbort.signal.throwIfAborted();
       await checkWorkerSource("before");
-      outcome = await runBunTestFile(file, true, { worker, env, artifacts, force: true, budget });
+      outcome = await runBunTestFile(file, true, context);
       if (outcome?.cleanupError) {
         poolCleanupSafe = false;
         cleanupFailure = new Error(outcome.cleanupError);
@@ -1438,6 +1445,7 @@ async function runIsolatedE2e(): Promise<void> {
           record.retainedFixtures = await finishE2eTemporaryFiles(
             env, artifacts,
             isolatedInterrupted || outcome?.status === "FAIL" || process.env.AIDLC_KEEP_TEMP === "1",
+            context.retirement,
           );
         }
       } catch (error) {

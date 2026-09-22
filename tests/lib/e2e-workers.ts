@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { resolveTuiRuntime, selectedTuiBackend } from "../harness/tui-runtime.ts";
 import { ensurePrivateRoot } from "../harness/tui-record-file.ts";
+import type { IsolatedProcessRetirement } from "./e2e-process.ts";
+import { retainDeferredCodexFixtures } from "./e2e-deferred-cleanup.ts";
 
 export interface E2eWorker {
   id: number;
@@ -348,7 +350,9 @@ export async function e2eWorkerEnvironment(
 /** Preserve failed fixtures with the durable log artifacts after transports stop. */
 export async function finishE2eTemporaryFiles(
   env: NodeJS.ProcessEnv, artifactDir: string, preserve: boolean,
+  retirement?: IsolatedProcessRetirement,
 ): Promise<string | undefined> {
+  let deferred: string | undefined;
   if (env.AIDLC_TUI_BUN_ROOT) {
     const root = privateNativeRoot(env)!;
     const receipt = transportReceipts.get(env);
@@ -358,13 +362,17 @@ export async function finishE2eTemporaryFiles(
     if (resolve(artifactDir) !== resolve(env.AIDLC_TEST_WORKER_ROOT!)) {
       throw new Error("e2e native evidence destination differs from the file's artifact scope");
     }
+    deferred = await retainDeferredCodexFixtures(env, artifactDir, retirement);
     // Archives are diagnostics, never a live namespace: copied inode identities
     // cannot authorize commands. Copy before deleting either root or fixtures.
     await cp(root, join(artifactDir, "tui-bun"), { recursive: true });
     await rm(dirname(root), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     nativeRoots.delete(resolve(artifactDir));
     transportReceipts.delete(env);
+  } else {
+    deferred = await retainDeferredCodexFixtures(env, artifactDir, retirement);
   }
+  if (deferred) return deferred;
   const source = env.TEMP!;
   if (!preserve) {
     await rm(source, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

@@ -1771,6 +1771,18 @@ function Initialize-CodexRuntime {
     # server policy need not grant it to the broad BUILTIN\Users group.
     foreach ($sid in $codexSandboxSids) { [AidlcBatchLogon]::GrantSandboxInteractive($sid) }
     $groupSid = (Get-LocalGroup -Name 'CodexSandboxUsers').SID
+    # A workspace may be readable while its private ancestors cannot be stat'ed.
+    # PowerShell location discovery and Bun realpath both inspect those ancestors.
+    # Permit directory metadata/traversal on these exact runtime-owned containers;
+    # do not grant directory listing, file contents, writes, or inherited access.
+    foreach ($path in @($root, $sandboxHome, (Join-Path $sandboxHome 'temp'))) {
+        Assert-PlainPath $path
+        if (-not [IO.Directory]::Exists($path)) { throw 'Codex workspace ancestor is absent.' }
+        $acl = Get-Acl -LiteralPath $path
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $groupSid, 'ReadAttributes, ReadExtendedAttributes, ReadPermissions, Traverse', 'None', 'None', 'Allow'))
+        [IO.Directory]::SetAccessControl($path, $acl)
+    }
     $entries = @(
         foreach ($relative in @('.sandbox', '.sandbox-secrets', '.sandbox-bin', '.sandbox\setup_marker.json', '.sandbox-secrets\sandbox_users.json')) {
             $path = Join-Path $codexSeed $relative
@@ -2033,7 +2045,25 @@ public static class AidlcCodexCapabilityProbe {
 '@
 }
 
-function Get-CodexReadinessBody {
+function Get-CodexShellReadinessSource {
+    return @'
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$config = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'shell-proof.json') | ConvertFrom-Json
+$providerMarker = Join-Path (Get-Location).ProviderPath $config.marker
+if (-not [IO.File]::Exists($providerMarker) -or [IO.File]::ReadAllText($providerMarker) -cne $config.token) {
+    throw 'Native PowerShell location does not identify the expected project.'
+}
+& $config.probe $config.sid $config.secret $config.forbidden 'space "quoted" & symbols \tail\' $config.project $config.marker $config.token
+if ($LASTEXITCODE -ne 0) { throw 'Native command capability proof failed.' }
+# Relative script lookup exercises the same shell -> Bun route as model tools.
+& $config.bun '.\path-proof.cjs' $config.project $config.marker $config.token
+if ($LASTEXITCODE -ne 0) { throw 'Native Bun project canonicalization failed.' }
+[Console]::WriteLine('Codex PowerShell location and Bun realpath verified.')
+'@
+}
+
+function Get-CodexReadinessBody([string]$ProofRoot) {
     # Actual native sandbox commands, not a model or provider probe. Exercise
     # both machine accounts through distinct fresh CODEX_HOMEs, then retain
     # the encrypted metadata only until the administrator drains those SIDs.
@@ -2047,10 +2077,11 @@ $env:AIDLC_CODEX_GUI_DIAGNOSTICS = '1'
 $expectedSids = __SIDS__
 $initializer = __INITIALIZER__
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$commandShell = __COMMAND_SHELL__
 # Create the actual temporary root as the live user, as the test runner does.
 # Assigning another user's ownership from the administrator requires a restore
 # privilege that hosted runner tokens do not necessarily enable.
-$ownedTemp = Join-Path $env:TEMP 'owned-temp'
+$ownedTemp = __PROOF_ROOT__
 [void][IO.Directory]::CreateDirectory($ownedTemp)
 $env:TEMP = $ownedTemp
 $env:TMP = $ownedTemp
@@ -2073,11 +2104,32 @@ foreach ($network in @('false', 'true')) {
     $secretPath = Join-Path $env:CODEX_HOME '.sandbox-secrets\sandbox_users.json'
     if (-not [IO.File]::Exists($secretPath)) { throw 'Fresh Codex sandbox credential file is absent.' }
     $probe = __CAPABILITY_PROBE__
+    $shellProbe = Join-Path $project 'shell-proof.ps1'
+    [IO.File]::WriteAllText($shellProbe, __SHELL_SOURCE__)
+    @{
+        project = $project; probe = $probe; sid = $expectedSids[$index]
+        secret = $secretPath; forbidden = __FORBIDDEN__; bun = $bun
+        marker = $cwdMarker; token = $cwdToken
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $project 'shell-proof.json') -Encoding UTF8
+    [IO.File]::WriteAllText((Join-Path $project 'path-proof.cjs'), @"
+const {realpathSync, readFileSync, lstatSync} = require("node:fs");
+const {join, dirname} = require("node:path");
+const [project, marker, token] = process.argv.slice(2);
+if (realpathSync(process.cwd()).toLowerCase() !== realpathSync(project).toLowerCase()) {
+  throw Error("Bun sandbox cwd does not identify the expected project");
+}
+for (let path = project; ; path = dirname(path)) {
+  if (!lstatSync(path).isDirectory()) throw Error("Project ancestor is not a directory");
+  if (dirname(path) === path) break;
+}
+if (readFileSync(join(project, marker), "utf8") !== token) throw Error("Wrong Bun project marker");
+console.log("Bun sandbox project and ancestor metadata verified.");
+"@)
     $invoke = Join-Path $project 'invoke.cjs'
     [IO.File]::WriteAllText($invoke, @"
 const {spawnSync} = require("node:child_process");
 const {writeSync, realpathSync} = require("node:fs");
-const [launcher, probe, project, sid, secret, forbidden, network, cwdMarker, cwdToken] = process.argv.slice(2);
+const [launcher, shell, shellProbe, project, network] = process.argv.slice(2);
 const callerCwd = process.cwd();
 writeSync(1, JSON.stringify({probe:"codex-caller-cwd",expectedProject:project,callerCwd}) + "\n");
 if (realpathSync.native(callerCwd).toLowerCase() !== realpathSync.native(project).toLowerCase()) {
@@ -2085,7 +2137,7 @@ if (realpathSync.native(callerCwd).toLowerCase() !== realpathSync.native(project
 }
 const args = ["-c", "sandbox_mode=workspace-write", "-c", "windows.sandbox=elevated",
   "-c", "sandbox_workspace_write.network_access=" + network, "sandbox", "--",
-  probe, sid, secret, forbidden, 'space "quoted" & symbols \\tail\\', project, cwdMarker, cwdToken];
+  shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", shellProbe];
 const result = spawnSync(launcher, args, {cwd:project,
   env:{...process.env,AIDLC_CODEX_EXPECTED_CWD:project},encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:90000});
 writeSync(1, result.stdout || "");
@@ -2099,7 +2151,7 @@ process.exitCode = result.status === null ? 1 : result.status;
 "@)
     Set-Location -LiteralPath $project
     [Console]::WriteLine((@{probe='codex-parent-cwd'; expectedProject=$project; providerCwd=(Get-Location).Path; osCwd=[Environment]::CurrentDirectory} | ConvertTo-Json -Compress))
-    & $bun $invoke $native $probe $project $expectedSids[$index] $secretPath __FORBIDDEN__ $network $cwdMarker $cwdToken
+    & $bun $invoke $native $commandShell $shellProbe $project $network
     if ($LASTEXITCODE -ne 0) { throw 'Fresh-home elevated sandbox readiness command failed.' }
     if (-not [IO.File]::Exists((Join-Path $project 'workspace-write.txt'))) { throw 'Native workspace write was not observed.' }
     # Resume-style reentry must validate the same generation without resetting
@@ -2117,6 +2169,9 @@ process.exitCode = result.status === null ? 1 : result.status;
     $body = $body.Replace('__CAPABILITY_PROBE__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-capability-probe.exe')))
     $body = $body.Replace('__PACKAGE_ROOT__', (ConvertTo-PSLiteral $nativeDirectory))
     $body = $body.Replace('__INITIALIZER__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-initialize-home.ps1')))
+    $body = $body.Replace('__PROOF_ROOT__', (ConvertTo-PSLiteral $ProofRoot))
+    $body = $body.Replace('__COMMAND_SHELL__', (ConvertTo-PSLiteral (Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe')))
+    $body = $body.Replace('__SHELL_SOURCE__', (ConvertTo-PSLiteral (Get-CodexShellReadinessSource)))
     $body = $body.Replace('__SIDS__', ('@(' + (($codexSandboxSids | ForEach-Object { ConvertTo-PSLiteral $_ }) -join ',') + ')'))
     return $body.Replace('__FORBIDDEN__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-outside-write-must-not-exist')))
 }
@@ -2360,7 +2415,7 @@ try {
         [IO.File]::Copy($normalizerSource, (Join-Path $tools 'normalize-live-tools.cjs'), $false)
         Assert-PlainPath $git
         if (-not [IO.File]::Exists($git)) { throw 'Hosted Windows Git is required.' }
-        foreach ($path in @('tmp', 'AppData\Roaming', 'AppData\Local', 'npm-cache')) {
+        foreach ($path in @('tmp', 'temp', 'AppData\Roaming', 'AppData\Local', 'npm-cache')) {
             [void][IO.Directory]::CreateDirectory((Join-Path $sandboxHome $path))
         }
         foreach ($name in @('empty.npmrc', 'empty-global.npmrc')) { [IO.File]::WriteAllText((Join-Path $sandboxHome $name), '') }
@@ -2459,14 +2514,14 @@ exit $LASTEXITCODE
         if ($exitCode -ne 0) { throw 'Windows isolation proof failed.' }
         if ($Family -eq 'codex') {
             $stage = 'proving fresh Codex sandbox homes'
-            $proofRoot = Join-Path $root ('codex-readiness-' + [Guid]::NewGuid().ToString('N'))
-            New-PrivateDirectory $proofRoot
-            Set-RuntimeAcl $proofRoot $sandboxSid 'Modify'
+            # Use the same private ancestor chain as the real test fixtures.
+            # The live identity creates/owns the leaf inside Get-CodexReadinessBody.
+            $proofRoot = Join-Path (Join-Path $sandboxHome 'temp') ('codex-readiness-' + [Guid]::NewGuid().ToString('N'))
             $proofEnvironment = Get-SafeEnvironment
-            $proofEnvironment.TEMP = $proofRoot
-            $proofEnvironment.TMP = $proofRoot
-            $proofEnvironment.TMPDIR = $proofRoot
-            $exitCode = Invoke-Isolated 'codex-sandbox-proof' $proofEnvironment (Get-CodexReadinessBody) -TimeoutMinutes 3
+            $proofEnvironment.TEMP = Join-Path $sandboxHome 'temp'
+            $proofEnvironment.TMP = $proofEnvironment.TEMP
+            $proofEnvironment.TMPDIR = $proofEnvironment.TEMP
+            $exitCode = Invoke-Isolated 'codex-sandbox-proof' $proofEnvironment (Get-CodexReadinessBody $proofRoot) -TimeoutMinutes 3
             Stop-SandboxProcesses -AdditionalSids $codexSandboxSids
             if ($exitCode -ne 0) { throw 'Fresh-home Codex sandbox proof failed.' }
             Remove-OwnedTree $proofRoot

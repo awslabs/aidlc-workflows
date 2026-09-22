@@ -949,6 +949,10 @@ The runner writes these additional artifacts under its timestamped log directory
   worker assignment, case pass/fail/skip counts, durations, timeout/cleanup
   outcomes and diagnostic throttle-pattern counts.
 - `e2e-artifacts/<test>/`: retained JUnit and isolated SDK/TUI/IDE traces.
+- `e2e-artifacts/<test>/deferred-cleanup.json`: Windows Codex fixture retention
+  after the coordinator verifies native process retirement. These fixtures move
+  to `retained-fixtures/` even on success; the host owns final deletion of the
+  protected sandbox files. A cross-volume copy keeps the original too.
 - `e2e-worker-storage.json`: checkout pool location, estimated snapshot size,
   and whether checkout copies were retained. Windows pools use short private
   paths under the system temporary directory so deep report paths do not break
@@ -1445,6 +1449,14 @@ use session 0: the proof requires correct user identity and access denied for
 launcher modules/`PROCESS_VM_READ`, runner directories and private credential state.
 The broker stays under the runner identity; only nonsecret routes and model pins
 cross into the live user's environment. Failed isolation proofs block execution.
+
+Windows Codex also provisions its two native sandbox identities and verifies
+both using fresh test homes. The readiness command runs through PowerShell and
+Bun under the actual sandbox: the shell must start in the project, Bun must
+canonicalize its path, and credential reads and writes outside the workspace
+must remain denied. The sandbox identities receive directory metadata and
+traversal access on the three private containers above the fixtures, with no
+inherited permission to list their contents or read their files.
 
 POSIX collection stops the dedicated account's processes before administrator
 copying. On macOS it first retires that account's launchd user/GUI domains to

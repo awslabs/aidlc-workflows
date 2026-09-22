@@ -58,6 +58,7 @@ const REAL_PROCESS = join(import.meta.dir, "..", "lib", "e2e-process.ts");
 const REAL_RECORD = join(import.meta.dir, "..", "harness", "tui-record-file.ts");
 const REAL_WINDOWS_RECORD = join(import.meta.dir, "..", "harness", "tui-windows-private-file.ts");
 const REAL_WORKERS = join(import.meta.dir, "..", "lib", "e2e-workers.ts");
+const REAL_DEFERRED_CLEANUP = join(import.meta.dir, "..", "lib", "e2e-deferred-cleanup.ts");
 const REAL_RUNTIME = join(import.meta.dir, "..", "harness", "tui-runtime.ts");
 
 const scratchRoots: string[] = [];
@@ -121,6 +122,7 @@ function driveRunner(
   copyFileSync(REAL_RECORD, join(harnessDir, "tui-record-file.ts"));
   copyFileSync(REAL_WINDOWS_RECORD, join(harnessDir, "tui-windows-private-file.ts"));
   copyFileSync(REAL_WORKERS, join(libDir, "e2e-workers.ts"));
+  copyFileSync(REAL_DEFERRED_CLEANUP, join(libDir, "e2e-deferred-cleanup.ts"));
   copyFileSync(REAL_RUNTIME, join(harnessDir, "tui-runtime.ts"));
   assertRunnerFixtureImports(root);
 

@@ -153,9 +153,9 @@ async function deferredWindowsCleanup(root: string): Promise<{ defer(): void; cl
       verifyReport();
       verifyStatus();
       verifyJob();
-      // run-tests retires this job before finishE2eTemporaryFiles removes TEMP
-      // on success or moves it to retained-fixtures on failure. This is a
-      // handoff record, never a claim that the process tree has already exited.
+      // After verified job retirement, the coordinator retains this container
+      // with its diagnostics for host cleanup, including when the test passes.
+      // This request is never evidence that the process tree has already exited.
       const receipt = join(artifacts, `codex-deferred-cleanup-${++deferredNumber}.json`);
       writeFileSync(receipt, `${JSON.stringify({ root, temporaryDirectory: temp, coordinatorReport: reportPath, runnerConfig: configPath, job: config.job }, null, 2)}\n`);
       console.error(`[codex fixture] cleanup deferred until runner job retirement: ${root} (${receipt})`);
