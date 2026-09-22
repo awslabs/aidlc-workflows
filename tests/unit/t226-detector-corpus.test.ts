@@ -1042,7 +1042,7 @@ describe("detector corpus", () => {
       'META=`aidlc engine orchestrate next` aidlc engine orchestrate next space teamb',
       String.raw`aidlc engine orchestrate next intent cr\eate --scope poc`,
       String.raw`aidlc --project-dir . engine orchestrate next intent cr\eate --scope poc`,
-      String.raw`aidlc engine orchestrate next intent 'create' --scope poc`,
+      "aidlc engine orchestrate next intent 'create' --scope poc",
       'aidlc next intent "$ACTION" --scope poc',
     ]) {
       expect(d1(command), command).toBe(true);
@@ -1243,6 +1243,53 @@ describe("detector corpus", () => {
       expect(isEngineToolCall("Bash", { command: `cd '${otherProjectDir}' && ${terminal}` }, output, projectDir)).toBe(true);
       expect(isEngineToolCall("Bash", { command }, output)).toBe(true);
       expect(isEngineToolCall("Bash", { command: `cd '${projectAlias}${sep}' && ${terminal}` }, output, `${projectDir}${sep}.${sep}`)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit --project-dir binds terminal configuration proof to the active project", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-detector-selector-"));
+    try {
+      const projectDir = join(root, "active project");
+      const otherProjectDir = join(root, "other project");
+      mkdirSync(projectDir);
+      mkdirSync(otherProjectDir);
+      const output = JSON.stringify({
+        kind: "print",
+        message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      });
+      for (const entry of [
+        "bun .claude/tools/aidlc-orchestrate.ts",
+        "bun .claude/tools/aidlc.ts engine orchestrate",
+        "aidlc engine orchestrate",
+      ]) {
+        const terminal = `${entry} next --depth extreme`;
+        for (const [command, engaged] of [
+          [`${entry} --project-dir '${otherProjectDir}' next --depth extreme`, true],
+          [`${terminal} --project-dir '${projectDir}'`, false],
+          [`${terminal} --project-dir='${otherProjectDir}'`, true],
+          [`${terminal} --project-dir='${projectDir}'`, false],
+          [`cd '${projectDir}' && ${terminal} --project-dir '${otherProjectDir}'`, true],
+          [`cd '${otherProjectDir}' && ${terminal} --project-dir '${projectDir}'`, true],
+          [`${terminal} --project-dir .`, false],
+          [`${terminal} --project-dir '../other project'`, true],
+          [`cd '${projectDir}' && ${terminal} --project-dir .`, false],
+          [`cd '${projectDir}' && ${terminal} --project-dir '../other project'`, true],
+        ] as const) {
+          expect(isEngineToolCall("Bash", { command }, output, projectDir), command).toBe(engaged);
+        }
+        const command = `${terminal} --project-dir '${projectDir}'`;
+        expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+      }
+      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme";
+      for (const [selectors, engaged] of [
+        [`--project-dir '${projectDir}' --project-dir='${otherProjectDir}'`, true],
+        [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, false],
+      ] as const) {
+        const command = `${terminal} ${selectors}`;
+        expect(isEngineToolCall("Bash", { command }, output, projectDir), command).toBe(engaged);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

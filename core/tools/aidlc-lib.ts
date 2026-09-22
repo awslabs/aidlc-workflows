@@ -1726,9 +1726,10 @@ export function isEngineToolCall(
   // surface the tool by name) the tool name itself.
   const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
   // Correlated output can prove only one literal engine invocation terminal.
-  // A directory-only prelude is exempt only when it resolves to the known
-  // active project directory. Unknown/other directories and every other chain
-  // stay on the conservative per-segment path.
+  // A directory-only prelude and explicit --project-dir must each resolve to the
+  // known active project directory. Resolve a relative --project-dir against the
+  // cd prelude when present, otherwise against the active project. Unknown/other
+  // directory bindings and every other chain stay on the conservative per-segment path.
   const literal = parseLiteralShellInvocation(rawText);
   if (literal) {
     const invocation = engineInvocationFromWords(literal.argv, literal.rawWords);
@@ -1736,7 +1737,10 @@ export function isEngineToolCall(
       invocation !== null && typeof invocation !== "string" &&
       isTerminalConfigurationDispatch(invocation, observedOutput) &&
       (literal.directory === null ||
-        (projectDir !== undefined && sameDirectory(literal.directory, projectDir)))
+        (projectDir !== undefined && sameDirectory(literal.directory, projectDir))) &&
+      (invocation.projectDir === null ||
+        (projectDir !== undefined &&
+          sameDirectory(resolvePath(literal.directory ?? projectDir, invocation.projectDir), projectDir)))
     ) return false;
   }
   const unescaped = unescapeUnquotedShellTextForEngagement(rawText);
@@ -1839,7 +1843,7 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
 function engineInvocationFromWords(
   tokens: string[],
   rawTokens: string[],
-): { command: string; args: string[] } | "uncertain" | "opaque" | null {
+): { command: string; args: string[]; projectDir: string | null } | "uncertain" | "opaque" | null {
   const base = (token: string): string => token.replaceAll("\\", "/").split("/").pop() ?? "";
   // Only transparent prefixes establish an executable position. In particular,
   // words following sh -c (or an arbitrary script) are data, not an executable.
@@ -1874,6 +1878,7 @@ function engineInvocationFromWords(
     command = "aidlc";
   }
   const native = command === "aidlc";
+  let projectDir: string | null = null;
   // Match dispatcher global extraction, then the orchestrator's own attempt
   // selector extraction. Neither consumes options after the literal delimiter.
   const stripGlobals = (args: string[], attempt: boolean): string[] | null => {
@@ -1884,10 +1889,11 @@ function engineInvocationFromWords(
       if (arg === "--") literal = true;
       if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
         if (i + 1 >= args.length) return null;
+        if (arg === "--project-dir") projectDir = args[i + 1];
         i++;
-      } else if (!literal && native && ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
-        continue;
-      } else {
+      } else if (!literal && arg.startsWith("--project-dir=")) {
+        projectDir = arg.slice("--project-dir=".length);
+      } else if (literal || !native || !["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
         clean.push(arg);
       }
     }
@@ -1900,7 +1906,7 @@ function engineInvocationFromWords(
     args = stripGlobals(args, true);
     if (!args) return null;
   }
-  return { command, args };
+  return { command, args, projectDir };
 }
 
 function parsedNextArgv(invocation: { command: string; args: string[] }): string[] | null {
