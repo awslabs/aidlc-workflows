@@ -2,6 +2,13 @@
 name: test-pro-metrics-agent
 display_name: Test Pro Metrics Agent
 plugin: test-pro
+# A dispatched plugin persona is a roster worker, so on Kiro it must declare the
+# active-space memory preload or the pre-dispatch check refuses the delegation.
+# Ship the `default` form: `/aidlc space <name>` repoints it, plugin personas
+# included. The reference plugin carries it so the example satisfies the contract
+# the refusal names.
+resources:
+  - 'file://aidlc/spaces/default/memory/**/*.md'
 examples:
   - methodology.md
 description: >

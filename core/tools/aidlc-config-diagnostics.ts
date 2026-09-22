@@ -843,6 +843,10 @@ const HARNESS_CLI: Record<
   kiro: {
     command: "kiro-cli",
     required: false,
+    // The row's documented prerequisite (docs/guide/harnesses/kiro.md): 2.21.1 is
+    // where the engine pin landed, so an older CLI reaches this tree without the
+    // wiring it depends on. Not `required`, because Kiro IDE is the other surface.
+    minimumVersion: "2.21.1",
     install:
       "Open this project in Kiro IDE, or install Kiro CLI and ensure `kiro-cli --version` works.",
   },

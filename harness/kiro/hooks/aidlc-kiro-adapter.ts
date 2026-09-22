@@ -810,9 +810,12 @@ function nativePreloadError(projectDir: string, agents: string[]): string | null
     `Expected the frontmatter resources to include ${expected}, resolving to at least one existing Markdown file. ` +
     // Plugin authoring reserves aidlc- for core; other roster namespaces have
     // hand-authored configs that space switch and doctor cannot repair.
+    // `--doctor` is deliberately NOT named as a verification step: collectDoctorReport
+    // does not read worker `resources` at all (zero mentions), so running it would
+    // report a clean tree while the dispatch is still blocked. The retry is the check.
     (agent.startsWith("aidlc-")
       ? `Add or restore ${expected} in the worker's frontmatter resources and repair the memory files, ` +
-        `then rerun /aidlc space switch ${space} to repoint the resources and /aidlc --doctor before retrying.\n`
+        `then rerun /aidlc space switch ${space} to repoint the resources before retrying.\n`
       : `Add ${expected} to the resources in the plugin persona's Markdown frontmatter and repair the active-space memory files before retrying.\n`);
   for (const agent of new Set(workers)) {
     const file = join(rosterDir, `${agent}.md`);
@@ -990,14 +993,19 @@ if (INPUT_TARGETS.has(target)) {
     }
   }
 }
+// The debug log is a per-user file under the project's gitignored runtime dir, but
+// it is still the operator's prompt text and the output of their tools. Record the
+// SHAPE of each, never the content: a length tells you whether the payload arrived
+// and which channel carried it, which is all this log is for, and it cannot leak a
+// secret pasted into a prompt or returned by a command.
 hookDebug(projectDir, "kiro-adapter", "invoked", {
   target,
   hasStdinPayload: input.trim().length > 0,
   hasUserPrompt: (process.env.USER_PROMPT ?? "").length > 0,
-  prompt: (ide.prompt ?? ide.userPrompt ?? "").slice(0, 160),
+  promptBytes: Buffer.byteLength(ide.prompt ?? ide.userPrompt ?? ""),
   toolName: ide.toolName ?? "",
   sessionId: ide.sessionId ?? "",
-  toolResult: (ide.toolResult ?? "").slice(0, 160),
+  toolResultBytes: Buffer.byteLength(ide.toolResult ?? ""),
 });
 
 // Persist the effective SessionStart identity under the existing gitignored
@@ -3468,7 +3476,9 @@ function buildForward(): Forward {
       ) {
         hookDebug(projectDir, "kiro-adapter", "audit-and-sensors: write failed, nothing to audit", {
           toolName: ide.toolName ?? "?",
-          toolResult: (ide.toolResult ?? "").slice(0, 160),
+          // Shape, not content: isFailedWriteResult already classified this, and the
+          // text can carry file content the operator never meant to persist.
+          toolResultBytes: Buffer.byteLength(ide.toolResult ?? ""),
         });
         return null;
       }
@@ -3498,7 +3508,7 @@ function buildForward(): Forward {
           }
           hookDebug(projectDir, "kiro-adapter", "audit-and-sensors: write failed, nothing to audit", {
             toolName: ide.toolName ?? "?",
-            toolResult: (ide.toolResult ?? "").slice(0, 160),
+            toolResultBytes: Buffer.byteLength(ide.toolResult ?? ""),
           });
           return null;
         }

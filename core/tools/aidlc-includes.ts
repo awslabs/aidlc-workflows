@@ -20,9 +20,11 @@
 // segment, leaving every other byte untouched. Identical treatment for all
 // harnesses. No file is created, regenerated whole, or special-cased.
 //
-// It runs at two moments: bootstrap (first `/aidlc` / --doctor / SessionStart —
-// idempotent no-op when the pointer already matches the active space) and on a
-// `/aidlc space <name>` switch (rewrites the pointer to the new space). At the
+// It runs at two moments: workspace creation (`ensureWorkspaceDirs`, idempotent —
+// a no-op when the pointer already matches the active space) and on a
+// `/aidlc space <name>` switch (rewrites the pointer to the new space), plus the
+// SessionStart hook, which repoints the active selection for a fresh session.
+// `--doctor` is NOT one of them: it reports on the tree without rewriting it. At the
 // `default` space the rewrite is a byte-identical no-op, so a single-team user's
 // committed tree never dirties — only a multi-space switch produces a local
 // (uncommitted, per-user) modification, driven by the gitignored `active-space`
@@ -97,11 +99,16 @@ function repointKiroAgentResources(raw: string, space: string): string | null {
   return `${JSON.stringify(json, null, 2)}\n`;
 }
 
-/** Rewrite the memory glob in a Kiro agent's Markdown frontmatter. Anchored on
- *  BOTH the `file://` scheme and the `/memory/**\/*.md` tail, because the persona
- *  body also mentions `aidlc/spaces/<active-space>/memory/{org,team,project}.md`
- *  — a placeholder the agent resolves at read time, which a looser pattern would
- *  overwrite with a concrete space name. Returns null when nothing changed. */
+/** Rewrite the active-space memory glob in a Kiro agent's Markdown. The frontmatter
+ *  `resources` block is what this maintains, but the substitution is deliberately
+ *  file-wide rather than frontmatter-scoped: it is anchored on BOTH the `file://`
+ *  scheme and the `/memory/**\/*.md` tail, and that pair is what keeps it off the
+ *  body. The persona body also mentions
+ *  `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — a placeholder the
+ *  agent resolves at read time, which a looser pattern would overwrite with a
+ *  concrete space name — and it matches neither anchor. A body occurrence of the
+ *  full anchored glob would be rewritten, which is correct: that string names the
+ *  active space wherever it appears. Returns null when nothing changed. */
 function repointKiroAgentFrontmatter(raw: string, space: string): string | null {
   const next = raw.replace(
     /file:\/\/aidlc\/spaces\/[^/]+\/memory\/\*\*\/\*\.md/g,

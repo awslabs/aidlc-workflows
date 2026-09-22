@@ -39,6 +39,61 @@ function skipReason(): string | null {
 }
 const SKIP_REASON = skipReason();
 
+// This row ships Markdown agent configs and no per-agent JSON sibling, so the
+// calibration registers Markdown: the persona body is the prompt and the
+// capability + preload fields live in frontmatter. `aidlc space <name>` repoints
+// the glob through repointKiroAgentFrontmatter, which is what the resources
+// assertion after the switch proves.
+function agentMarkdown(
+  name: string,
+  prompt: string,
+  fields: { tools: string[]; allowedTools: string[]; resources: string[]; extra?: string[] },
+): string {
+  const lines = [
+    `name: ${name}`,
+    `tools: ${JSON.stringify(fields.tools)}`,
+    `allowedTools: ${JSON.stringify(fields.allowedTools)}`,
+    ...(fields.extra ?? []),
+  ];
+  if (fields.resources.length === 0) lines.push("resources: []");
+  else {
+    lines.push("resources:");
+    for (const resource of fields.resources) lines.push(`  - '${resource}'`);
+  }
+  return `---\n${lines.join("\n")}\n---\n\n${prompt}\n`;
+}
+
+/** Read back the capability + preload fields a registered Markdown agent declares.
+ *  Flow sequences (`tools: [...]`, `resources: []`) and a `resources:` block
+ *  sequence are the two shapes this row emits. */
+function declaredFields(
+  file: string,
+): { tools: string[]; allowedTools: string[]; resources: string[] } {
+  const frontmatter =
+    /^---\r?\n([\s\S]*?)\r?\n---/.exec(readFileSync(file, "utf8"))?.[1] ?? "";
+  const lines = frontmatter.split(/\r?\n/);
+  const flow = (key: string): string[] => {
+    const raw = new RegExp(`^${key}:[ \\t]*(\\[.*\\])[ \\t]*$`, "m").exec(frontmatter)?.[1];
+    return raw === undefined ? [] : (JSON.parse(raw) as string[]);
+  };
+  const block = (key: string): string[] => {
+    const start = lines.findIndex((line) => new RegExp(`^${key}:[ \\t]*$`).test(line));
+    if (start === -1) return flow(key);
+    const out: string[] = [];
+    for (const line of lines.slice(start + 1)) {
+      const item = /^[ \t]+-[ \t]+(.*\S)[ \t]*$/.exec(line);
+      if (item === null) break;
+      out.push(item[1].replace(/^(['"])([\s\S]*)\1$/, "$2"));
+    }
+    return out;
+  };
+  return {
+    tools: flow("tools"),
+    allowedTools: flow("allowedTools"),
+    resources: block("resources"),
+  };
+}
+
 function memoryFile(values: string[]): string {
   const padding = "- Background: ordinary calibration context containing no calibration field values.\n".repeat(110);
   return `${FIELDS[0]}=${values[0]}\n${padding}${FIELDS[1]}=${values[1]}\n${padding}${FIELDS[2]}=${values[2]}\n`;
@@ -53,29 +108,26 @@ async function probe(preload: boolean): Promise<string[]> {
   const decoys = FIELDS.map(() => randomBytes(16).toString("hex"));
   const mode = preload ? "positive" : "negative";
   try {
-    const controller = {
-      name: CONTROLLER,
-      prompt: CONTROLLER_PROMPT,
-      tools: ["subagent"], allowedTools: ["subagent"],
-      toolsSettings: { subagent: { trustedAgents: [WORKER] } },
-      resources: [],
-    };
+    const controller = agentMarkdown(CONTROLLER, CONTROLLER_PROMPT, {
+      tools: ["subagent"], allowedTools: ["subagent"], resources: [],
+      // Delegation trust lives in the conductor's frontmatter on this row.
+      extra: ["toolsSettings:", "  subagent:", "    trustedAgents:", `      - "${WORKER}"`],
+    });
     // Use the same memory glob as the shipped registered worker; the public
-    // space command must repoint it before Kiro starts the fresh session.
-    const shipped = JSON.parse(readFileSync(join(KIRO_SRC, "agents", "aidlc-developer-agent.json"), "utf8")) as {
-      resources: string[];
-    };
-    const memoryResources = shipped.resources.filter((entry) =>
+    // space command must repoint it before Kiro starts the fresh session. The
+    // shipped worker is Markdown here, so the glob is read from its frontmatter
+    // rather than from a JSON sibling this row no longer ships.
+    const memoryResources = declaredFields(
+      join(KIRO_SRC, "agents", "aidlc-developer-agent.md"),
+    ).resources.filter((entry) =>
       /^file:\/\/aidlc\/spaces\/default\/memory\/\*\*\/\*\.md$/.test(entry));
     expect(memoryResources).toHaveLength(1);
-    const worker = {
-      name: WORKER, prompt: WORKER_PROMPT,
-      tools: [], allowedTools: [],
-      resources: preload ? memoryResources : [],
-    };
+    const worker = agentMarkdown(WORKER, WORKER_PROMPT, {
+      tools: [], allowedTools: [], resources: preload ? memoryResources : [],
+    });
     const agentDir = join(project, ".kiro", "agents");
-    writeFileSync(join(agentDir, `${CONTROLLER}.json`), JSON.stringify(controller));
-    writeFileSync(join(agentDir, `${WORKER}.json`), JSON.stringify(worker));
+    writeFileSync(join(agentDir, `${CONTROLLER}.md`), controller);
+    writeFileSync(join(agentDir, `${WORKER}.md`), worker);
     const rules = memoryFile(values);
     const rulePath = join(project, "aidlc", "spaces", SPACE, "memory", "org.md");
     mkdirSync(join(project, "aidlc", "spaces", SPACE, "memory"), { recursive: true });
@@ -90,8 +142,8 @@ async function probe(preload: boolean): Promise<string[]> {
       env: { ...process.env, AIDLC_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".kiro" },
     });
     expect(switchSpace.status, switchSpace.stderr).toBe(0);
-    const effectiveWorker = JSON.parse(readFileSync(join(agentDir, `${WORKER}.json`), "utf8"));
-    const effectiveController = JSON.parse(readFileSync(join(agentDir, `${CONTROLLER}.json`), "utf8"));
+    const effectiveWorker = declaredFields(join(agentDir, `${WORKER}.md`));
+    const effectiveController = declaredFields(join(agentDir, `${CONTROLLER}.md`));
     expect(effectiveWorker.resources).toEqual(preload ? [`file://aidlc/spaces/${SPACE}/memory/**/*.md`] : []);
     expect(effectiveController.resources).toEqual([]);
     expect(effectiveController.tools).toEqual(["subagent"]);
