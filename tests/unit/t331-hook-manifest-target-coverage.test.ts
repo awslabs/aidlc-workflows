@@ -180,6 +180,15 @@ const REQUIRED_MATCHER_TOOLS: Array<{ target: string; tools: string[]; why: stri
       "fs_write",
       "str_replace",
       "delete_file",
+      // The three the guard was BLIND to: the matcher sent them, `canonicalTool`
+      // did not translate them, and its one caller turns an unknown name into
+      // `return 0` - so the read-scope bound was not enforced for a reviewer
+      // using any of these spellings. They belong here now because the
+      // canonicalizer knows them; listing a name this list's premise does not
+      // hold for would be the same silent gap in the other direction.
+      "create_file",
+      "apply_patch",
+      "edit_file",
       "read",
       "fs_read",
       "read_file",

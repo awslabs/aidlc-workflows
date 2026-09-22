@@ -8,8 +8,8 @@
     "responses": ["subagent_response"]
   },
   "_adapter_tool_names": {
-    "_provenance": "Defensive adapter vocabulary from issue #778's Kiro CLI v3/IDE census and issue #543's direct-dispatch report; these names are exercised by direct adapter tests, not treated as agent-v1 registration selectors.",
-    "writes": ["write", "fs_write", "str_replace", "fs_append"],
+    "_provenance": "Defensive adapter vocabulary from issue #778's Kiro CLI v3/IDE census and issue #543's direct-dispatch report; these names are exercised by direct adapter tests, not treated as agent-v1 registration selectors. `create_file`, `apply_patch` and `edit_file` are in this list because the SHIPPED matchers send them (aidlc-reviewer-scope.json, aidlc-review-freeze.json, aidlc-write-audit-log.json) and canonicalWriteTool translates them: a test vocabulary narrower than the matcher cannot see a guard that drops what the matcher delivers, which is exactly how reviewer-scope stayed blind to these three while this file was green.",
+    "writes": ["write", "fs_write", "create_file", "str_replace", "fs_append", "apply_patch", "edit_file"],
     "deletes": ["delete_file"],
     "reads": ["read", "fs_read", "read_file", "read_files"]
   },

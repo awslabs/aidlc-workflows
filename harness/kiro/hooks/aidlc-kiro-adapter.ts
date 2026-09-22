@@ -1808,12 +1808,28 @@ function canonicalTool(
   name: string,
   input: Record<string, unknown> = {},
 ): string {
-  if (name === "write" || name === "fs_write") {
+  // The write spellings here must match `canonicalWriteTool`'s, because the
+  // SHIPPED `aidlc-reviewer-scope.json` matcher sends all of them and this
+  // function's one caller — the reviewer-scope branch below — turns an unknown
+  // name into `return 0`. So a name the matcher delivers and this function does
+  // not translate is not a missed translation, it is the read-scope bound not
+  // being enforced at all: `create_file`, `apply_patch` and `edit_file` reached
+  // the guard and left it with exit 0 and no path check. Two canonicalizers over
+  // one vocabulary is the standing hazard; if they drift again the honest repair
+  // is to make this one delegate to `canonicalWriteTool` for the write half.
+  if (name === "write" || name === "fs_write" || name === "create_file") {
     return ["str_replace", "append"].includes(String(input.command ?? ""))
       ? "Edit"
       : "Write";
   }
-  if (name === "str_replace" || name === "fs_append") return "Edit";
+  if (
+    name === "str_replace" ||
+    name === "fs_append" ||
+    name === "apply_patch" ||
+    name === "edit_file"
+  ) {
+    return "Edit";
+  }
   if (["read", "fs_read", "read_file", "read_files"].includes(name)) return "Read";
   // The search and list names, which fell through to the default and were then
   // discarded by the reviewer-scope branch. Core carries purpose-built logic for
