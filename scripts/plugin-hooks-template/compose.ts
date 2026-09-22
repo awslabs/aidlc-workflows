@@ -828,31 +828,109 @@ function disallowedToolsValues(content: string): string[] {
 // needing more declares its own `tools:`, which is then taken as authored.
 const KIRO_WORKER_TOOLS = ["fs_read", "fs_write", "execute_bash", "thinking"] as const;
 
-/** The tool names a persona's frontmatter grants, in either YAML form: flow
- *  (`tools: ["a", "b"]`, which the conductor uses) or block (`tools:` then `  - a`,
- *  which the built core personas use). An absent key returns the empty list, which is
- *  NOT the same as granting nothing - it means the persona inherits, which is exactly
- *  why the projection below has to supply a list. */
-function kiroToolGrants(content: string): string[] {
+/** A plugin persona's `tools:` declaration: resolved, absent, or refused.
+ *
+ *  There is no YAML parser here to be authoritative with. This file is a TEMPLATE that
+ *  runs inside a user's installed project and imports nothing but `node:*`, so the
+ *  reader is CONSERVATIVE rather than clever: it resolves the two shapes a persona
+ *  actually uses and REFUSES everything else. That inverts the failure mode, which is
+ *  the whole point. A loose text reader let three grants through - `- subagent #
+ *  comment` kept the comment and stopped matching `subagent`, a multiline flow sequence
+ *  showed only `[` on the key's line and read as empty, and two `tools:` keys resolved
+ *  to the FIRST where YAML takes the last. An unresolvable declaration now stops the
+ *  persona instead of being guessed at. */
+type ToolGrants =
+  | { kind: "absent" }
+  | { kind: "resolved"; tools: string[] }
+  | { kind: "unresolved"; reason: string };
+
+/** One plain or quoted YAML scalar, with a trailing comment removed the way YAML removes
+ *  it - ` #` outside quotes. Returns null for anything this cannot reduce to a single
+ *  bare word: anchors, aliases, tags, nested flow, block scalars, escapes, or an
+ *  unquoted value with a space in it. An entry that cannot be reduced is an entry the
+ *  delegation check cannot judge, so it must not be treated as judged. */
+function plainYamlScalar(raw: string): string | null {
+  let value = raw.trim();
+  if (value === "") return null;
+  const quote = value[0];
+  if (quote === '"' || quote === "'") {
+    const end = value.indexOf(quote, 1);
+    if (end < 0) return null;
+    const inner = value.slice(1, end);
+    const rest = value.slice(end + 1).trim();
+    if (rest !== "" && !rest.startsWith("#")) return null;
+    if (inner.includes("\\") || inner.includes(quote)) return null;
+    return inner;
+  }
+  const comment = value.search(/\s#/);
+  if (comment >= 0) value = value.slice(0, comment).trim();
+  if (value === "") return null;
+  if (/[[\]{}&*!|>,'"]/.test(value)) return null;
+  if (/\s/.test(value)) return null;
+  return value;
+}
+
+function kiroToolGrants(content: string): ToolGrants {
   const lines = frontmatter(content).split(/\r?\n/);
-  const at = lines.findIndex((line) => /^tools:/.test(line));
-  if (at === -1) return [];
-  const inline = lines[at].slice("tools:".length).trim();
-  if (inline.length > 0) {
-    return inline
-      .replace(/^\[/, "")
-      .replace(/\]$/, "")
-      .split(",")
-      .map((tool) => tool.trim().replace(/^["']|["']$/g, ""))
-      .filter((tool) => tool.length > 0);
+  const keys = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => /^tools:/.test(line));
+  if (keys.length === 0) return { kind: "absent" };
+  if (keys.length > 1) {
+    // YAML takes the last of two identical keys and most parsers call the document
+    // malformed. Either way a reader that takes the first can be aimed at the wrong list.
+    return { kind: "unresolved", reason: "declares `tools` more than once" };
   }
-  const out: string[] = [];
-  for (const line of lines.slice(at + 1)) {
-    const item = /^\s+-\s+(.*\S)\s*$/.exec(line);
-    if (item === null) break;
-    out.push(item[1].trim().replace(/^["']|["']$/g, ""));
+  const { line, index } = keys[0];
+  const inline = line.slice("tools:".length).trim();
+  if (inline !== "") {
+    if (!inline.startsWith("[")) {
+      return {
+        kind: "unresolved",
+        reason: `declares a \`tools\` value that is neither a flow sequence nor a block sequence: ${inline}`,
+      };
+    }
+    if (!inline.endsWith("]")) {
+      return { kind: "unresolved", reason: "declares a multiline `tools` flow sequence" };
+    }
+    const body = inline.slice(1, -1).trim();
+    if (body === "") return { kind: "resolved", tools: [] };
+    const tools: string[] = [];
+    for (const raw of body.split(",")) {
+      const scalar = plainYamlScalar(raw);
+      if (scalar === null) {
+        return {
+          kind: "unresolved",
+          reason: `declares a \`tools\` entry that cannot be resolved to a tool name: ${raw.trim()}`,
+        };
+      }
+      tools.push(scalar);
+    }
+    return { kind: "resolved", tools };
   }
-  return out;
+  const tools: string[] = [];
+  for (const next of lines.slice(index + 1)) {
+    if (/^\s*#/.test(next)) continue;
+    const item = /^[ \t]+-([ \t]+.*)?$/.exec(next);
+    if (item === null) {
+      // A new top-level key, or a blank line, ends the sequence. Anything else at this
+      // depth is a shape this reader does not model.
+      if (/^\S/.test(next) || next.trim() === "") break;
+      return {
+        kind: "unresolved",
+        reason: `declares a \`tools\` block containing a line that is not a sequence entry: ${next.trim()}`,
+      };
+    }
+    const scalar = plainYamlScalar(item[1] ?? "");
+    if (scalar === null) {
+      return {
+        kind: "unresolved",
+        reason: `declares a \`tools\` entry that cannot be resolved to a tool name: ${next.trim()}`,
+      };
+    }
+    tools.push(scalar);
+  }
+  return { kind: "resolved", tools };
 }
 
 function projectKiroNativeAgent({ file, content }: CopyContext): string {
@@ -865,22 +943,47 @@ function projectKiroNativeAgent({ file, content }: CopyContext): string {
   ) {
     throw new Error(`${file}: Kiro cannot project this disallowedTools declaration`);
   }
-  // An authored `tools:` governs: the precheck has already refused one that grants
-  // `subagent`, so what survives is the author's own narrower statement and this
-  // projection must not overwrite it. Otherwise the allowlist is supplied - taking
-  // the denial's own slot when there was one, so the restriction reads where the
-  // author wrote it, and appended when the persona declared neither.
-  const authored = /^tools:/m.test(m[1]);
-  const allowlist = `tools: [${KIRO_WORKER_TOOLS.map((tool) => `"${tool}"`).join(", ")}]`;
+  // An AUTHORED `tools:` governs its own contents - the precheck has already refused one
+  // that grants `subagent` or that cannot be resolved - but NOT its shape. Whatever the
+  // author wrote is replaced by one canonical flow sequence built from the resolved
+  // names, so the installed file cannot be read two ways and cannot carry a second
+  // `tools:` key for a later reader to disagree about. A persona that declared nothing
+  // gets the default allowlist; an explicit empty list is respected as written.
+  const grants = kiroToolGrants(content);
+  if (grants.kind === "unresolved") {
+    throw new Error(`${file}: Kiro cannot resolve this tools declaration (${grants.reason})`);
+  }
+  const tools = grants.kind === "resolved" ? grants.tools : [...KIRO_WORKER_TOOLS];
+  const allowlist = `tools: [${tools.map((tool) => `"${tool}"`).join(", ")}]`;
+  const out: string[] = [];
   let placed = false;
-  const lines = m[1].split(/\r?\n/).flatMap((line) => {
-    if (!/^disallowedTools:/.test(line)) return [line];
-    if (authored) return [];
-    placed = true;
-    return [allowlist];
-  });
-  if (!authored && !placed) lines.push(allowlist);
-  return content.replace(m[0], () => `---\n${lines.join("\n")}\n---\n`);
+  let inToolsBlock = false;
+  for (const line of m[1].split(/\r?\n/)) {
+    if (/^tools:/.test(line)) {
+      inToolsBlock = line.slice("tools:".length).trim() === "";
+      if (!placed) {
+        out.push(allowlist);
+        placed = true;
+      }
+      continue;
+    }
+    if (inToolsBlock) {
+      // Only the sequence entries and comments indented under the key belong to it.
+      if (/^[ \t]+-/.test(line) || /^[ \t]+#/.test(line)) continue;
+      inToolsBlock = false;
+    }
+    if (/^disallowedTools:/.test(line)) {
+      // The denial's own slot, so the restriction reads where the author wrote it.
+      if (!placed) {
+        out.push(allowlist);
+        placed = true;
+      }
+      continue;
+    }
+    out.push(line);
+  }
+  if (!placed) out.push(allowlist);
+  return content.replace(m[0], () => `---\n${out.join("\n")}\n---\n`);
 }
 
 function kiroNativeAgentPrecheck(): CopyPrecheck {
@@ -907,9 +1010,17 @@ function kiroNativeAgentPrecheck(): CopyPrecheck {
     // An authored allowlist is taken as written, so one that NAMES the delegation
     // tool is an explicit request to nest - which this row does not have. The
     // conductor is the only delegator (`agents/aidlc.md` is the one persona granted
-    // `subagent`), so refuse rather than project a persona that contradicts it.
+    // `subagent`), so refuse rather than project a persona that contradicts it. And
+    // refuse a declaration this projection cannot RESOLVE at all: a shape it has to
+    // guess at is a shape it cannot check for `subagent`.
     const granted = kiroToolGrants(ctx.content);
-    if (granted.some((tool) => /^subagent$/i.test(tool))) {
+    if (granted.kind === "unresolved") {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" ${granted.reason}, so its delegation boundary cannot be validated; declare tools on one line as ["fs_read", "fs_write"] or as a simple block sequence; not copied`,
+      );
+      return false;
+    }
+    if (granted.kind === "resolved" && granted.tools.some((tool) => /^subagent$/i.test(tool))) {
       recordDrop(
         `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" grants the subagent tool; only the conductor may delegate on this row, so nested delegation cannot be projected; not copied`,
       );

@@ -2100,6 +2100,78 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(composedNarrow).not.toMatch(/execute_bash/);
   }, 240_000);
 
+  test("Kiro refuses every tools shape whose delegation grant it cannot resolve", () => {
+    // The first cut of this check read the frontmatter as comma- and line-delimited
+    // text, and each of these four got a `subagent` grant past it: the comment stayed
+    // attached so the name stopped matching, the multiline flow sequence showed only
+    // `[` on the key's line and read as empty, the single-quoted entry kept its quotes,
+    // and two `tools:` keys resolved to the FIRST where YAML takes the last. There is
+    // no YAML parser available to this template - it runs in a user's install and
+    // imports only `node:*` - so the reader refuses what it cannot resolve instead of
+    // guessing, and these cases pin that.
+    const persona = (plugin: string, toolsBlock: string[]): string => [
+      "---",
+      `name: ${plugin}-agent`,
+      `display_name: ${plugin} agent`,
+      `plugin: ${plugin}`,
+      ...toolsBlock,
+      "---",
+      "",
+      `# ${plugin} agent`,
+      "",
+    ].join("\n");
+
+    for (const [label, toolsBlock, expectedDrop] of [
+      ["a commented block entry", ["tools:", "  - fs_read", "  - subagent # keep me"],
+        "grants the subagent tool"],
+      ["a single-quoted flow entry", [`tools: ["fs_read", 'subagent']`],
+        "grants the subagent tool"],
+      ["a multiline flow sequence", ["tools: [", '  "fs_read",', '  "subagent"', "]"],
+        "declares a multiline `tools` flow sequence"],
+      ["a duplicate tools key", [`tools: ["fs_read"]`, `tools: ["subagent"]`],
+        "declares `tools` more than once"],
+    ] as const) {
+      const plugin = `syn-bypass-${label.replace(/[^a-z]+/g, "-")}`;
+      const run = composeSynthetic(
+        plugin,
+        { [`agents/${plugin}-agent.md`]: persona(plugin, [...toolsBlock]) },
+        ".kiro",
+      );
+      expect(
+        existsSync(join(run.proj, ".kiro", "agents", `${plugin}-agent.md`)),
+        label,
+      ).toBe(false);
+      // The drop must be the INTENDED one. Without this the case would pass for a
+      // plugin-name mismatch or any other refusal, which is how a bypass test becomes
+      // decoration.
+      expect(run.drops, label).toContain(expectedDrop);
+      expect(run.drops, label).toContain(`${plugin}-agent.md`);
+    }
+
+    // CANONICAL EMISSION, which is what makes the shape unambiguous for the NEXT reader
+    // rather than only for this one: a block sequence the author wrote comes out as a
+    // single flow line, so nothing downstream can read it two ways or find a second key.
+    const canonicalPlugin = "syn-canonical";
+    const canonical = composeSynthetic(
+      canonicalPlugin,
+      {
+        [`agents/${canonicalPlugin}-agent.md`]: persona(canonicalPlugin, [
+          "tools:",
+          "  - fs_read",
+          "  - 'thinking'   # quoted with a comment",
+        ]),
+      },
+      ".kiro",
+    );
+    const composed = readFileSync(
+      join(canonical.proj, ".kiro", "agents", `${canonicalPlugin}-agent.md`),
+      "utf-8",
+    );
+    expect(composed).toMatch(/^tools: \["fs_read", "thinking"\]$/m);
+    expect(composed).not.toMatch(/^ {2}- /m);
+    expect(composed).not.toMatch(/keep me|quoted with a comment/);
+  }, 240_000);
+
   test("Kiro rejects plugin-owned ensemble collaborators with a compose drop", () => {
     const stage = [
       "---",
