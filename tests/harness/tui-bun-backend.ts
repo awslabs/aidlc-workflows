@@ -14,11 +14,13 @@ import { acquireNativeLock, getNativeProcessIdentity } from "./tui-process-ident
 import {
   assertDirectoryIdentity, type DirectoryIdentity, ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord,
 } from "./tui-record-file.ts";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REQUEST_LIMIT = 256 * 1024;
 const RESPONSE_LIMIT = 16 * 1024 * 1024;
 const RPC_TIMEOUT = 15_000;
+const STARTUP_DEADLINE_ENV = "AIDLC_TUI_STARTUP_DEADLINE_MS";
 const pause = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
 type Phase = "starting" | "running" | "exited" | "stopped" | "error";
@@ -223,6 +225,9 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
         if (old) await waitDaemonRetired(recordFor(session)!);
         await waitEndpointVacant(paths.endpoint);
         privateDirectoryIdentity(paths.root, rootIdentity);
+        const startupDeadlineMs = Date.now() + remainingOperationTimeoutMs(
+          NATIVE_STARTUP_TIMEOUT_MS, { phase: "native TUI startup" },
+        )!;
         await rm(paths.directory, { recursive: true, force: true });
         ensurePrivateRoot(paths.directory);
         const directoryIdentity = privateDirectoryIdentity(paths.directory);
@@ -241,13 +246,16 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
         let spawnError: Error | undefined;
         try {
           const child = spawn(nativeBun(), [fileURLToPath(import.meta.url), "--daemon", paths.directory, record.generation], {
-            cwd: record.cwd, env: { ...process.env, TERM: "xterm-256color" },
+            cwd: record.cwd, env: {
+              ...process.env, TERM: "xterm-256color",
+              [STARTUP_DEADLINE_ENV]: String(startupDeadlineMs),
+            },
             stdio: ["ignore", "ignore", stderr], detached: true,
           });
           child.once("error", (error) => { spawnError = error; });
           child.unref();
         } finally { closeSync(stderr); }
-        const deadline = Date.now() + RPC_TIMEOUT;
+        const deadline = startupDeadlineMs;
         while (Date.now() < deadline) {
           if (spawnError) {
             publishTuiRecord(paths.record, { ...record, phase: "error", error: spawnError.message, cleanupComplete: true }, directoryIdentity);
@@ -384,6 +392,21 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
     privateDirectoryIdentity(paths.root, rootIdentity);
     publishTuiRecord(file, record, directoryIdentity);
   };
+  let startupDeadlineMs: number;
+  try {
+    const raw = process.env[STARTUP_DEADLINE_ENV];
+    if (raw !== undefined && !/^\d+$/.test(raw)) throw new Error("invalid native TUI startup deadline");
+    startupDeadlineMs = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+      deadlineMs: raw === undefined ? undefined : Number(raw),
+      phase: "native TUI supervisor startup",
+    })!;
+  } catch (error) {
+    record.phase = "error";
+    record.error = error instanceof Error ? error.message : String(error);
+    record.cleanupComplete = true;
+    publishRecord();
+    throw error;
+  }
   const { createTuiScreen } = await import("./tui-screen.ts");
   const { runSupervisor } = await import("./tui-bun-process.ts");
   void runSupervisor; // Ensure supervisor module resolves before allocating resources.
@@ -600,14 +623,14 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
     });
     ownsEndpoint = true;
     if (process.platform !== "win32") await chmod(record.endpoint, 0o600);
-    const deadline = Date.now() + 10_000;
+    const deadline = startupDeadlineMs;
     while (Date.now() < deadline) {
       const value = status();
       if (value?.phase === "error" || rootExit !== undefined) throw new Error(value?.error || "supervisor exited before readiness");
       if (value?.phase === "ready") break;
       await pause(20);
     }
-    if (status()?.phase !== "ready") throw new Error("supervisor startup timed out");
+    if (status()?.phase !== "ready") throw new Error(`supervisor startup timed out (shared deadline ${startupDeadlineMs})`);
     await publish();
     // Pin both directories to the starter's record, after the handshake and all
     // asynchronous setup, immediately before allowing the command to execute.

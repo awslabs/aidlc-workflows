@@ -30,6 +30,36 @@ integration** (so the integration level rides along on every local
 shows where each level sits conceptually — the profile flags below are how you
 actually select them.
 
+The shared policy in `tests/harness/test-budget.ts` gives unspecified test cases
+a 15-second default on Linux/macOS and 60 seconds on Windows. The Windows
+allowance includes approximately three times the observed 19-second fixture
+copy plus a sub-second CLI call. These are ceilings, so a completed test exits
+immediately. Explicit tests of deadline behavior retain their operation limits.
+
+Budget measured work once, then add fixture, startup, assertion and cleanup
+allowances. The live-case helper reserves 60 seconds for fixtures, 120 seconds
+for startup and 60 seconds for teardown around the selected work allowance.
+Driver operations consume the actual remaining parent budget. A file shares
+that budget across its sequential operations; each operation is not promised
+its maximum allowance after earlier work has consumed the file's time.
+Native process startup and native fixture compilation have separate 30-second
+profiles; multi-compiler fixture setup has a 120-second envelope. The native
+terminal starter and daemon share one absolute startup deadline. These startup
+allowances are separate from the shorter IPC and ownership-check contracts.
+
+Every dispatched file has an independent supervisor deadline, including
+ordinary integration/SDK files. `--file-timeout N` caps it in seconds (40 minutes
+by default outside isolated E2E). `--run-timeout N` shares one work deadline
+across setup and all selected files. Exhausted budgets fail visibly; they do not
+skip required assertions. Drivers leave up to two minutes of the file envelope
+for teardown, while the runner still retires owned processes and records a
+failure if the work does not cooperate. These flags bound dispatched work;
+coordinator retirement, fixture retention and report publication follow it.
+Their native cleanup checks remain bounded, and CI's enclosing step/job limits
+provide the final wall-clock backstop for collection. Uncertain process cleanup
+retains its fixtures. Logs record the resolved allowance, absolute deadline and
+cleanup reserve.
+
 Distribution coverage is split by contract:
 
 - `t145-packaging-parity.test.ts` proves that copy, native, and plugin
@@ -477,10 +507,18 @@ test results.
 
 Shared deterministic jobs allow 15 minutes for smoke and 60 minutes for other
 tiers. Test steps stop after 10 and 50 minutes respectively, reserving time to
-sanitize and upload partial evidence after a timeout. E2E runs also cap each
+sanitize and upload partial evidence after a timeout. The runner stops admitting
+work after 8 minutes for smoke and 45 minutes for other tiers, leaving time to
+retire processes and finish its rollups before those step limits. E2E runs also cap each
 isolated file at 900 seconds. Unit work is
 partitioned into eight weighted shards per OS without duplicating files, and
 compiled producer/consumer affinity remains intact.
+
+PR native-terminal checks use captured `--debug -P 8` wrapper runs with
+15-minute work budgets and publish sanitized `ci-native-<OS>` evidence.
+Full Suite's broader native obligations retain their 120-minute job ceiling,
+with a 100-minute work budget, a 105-minute step limit and 30-minute file caps.
+These outer limits leave time to collect diagnostics after work stops.
 
 POSIX unit jobs require tmux: the shared setup first checks `command -v`, then
 uses apt on Linux or Homebrew on macOS only when it is missing. Linux unit jobs
@@ -595,7 +633,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AIDLC_TEST_TIMEOUT` | `1800` | Per-`claude -p` call timeout in seconds. Set to `0` to disable. |
+| `AIDLC_TEST_TIMEOUT` | `1800` | Per-`claude -p` call timeout in seconds. `0` disables that operation timer; file/run deadlines still apply. |
 | `AIDLC_TUI_BACKEND` | `auto` | Terminal driver: native `bun` on Linux/Windows/macOS. Explicit values: `bun`, `tmux`, `node-pty`; see [Terminal Driver](#terminal-driver). |
 | `AIDLC_TUI_BUN_ROOT` | `<os.tmpdir()>/aidlc-bun-tui` | Native records/snapshots; use the same root across commands. Must be user-owned and private (0700 on POSIX; current-user owner, no Everyone/Users/Authenticated Users allow ACEs on Windows), never a symlink/reparse point. A missing root is created privately; an unsafe existing root or identity-replaced session directory is refused. |
 | `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use on Linux/Windows/macOS requires Bun >=1.3.14. |
@@ -640,6 +678,8 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
                 # driver traces to tests/logs/
 --filter PAT    # Only run tests whose filename matches extended regex PAT
 --parallel N    # Run up to N test files concurrently within a tier (alias: -P N).
+--file-timeout N  # Independent file ceiling in seconds for every tier; caps isolated E2E too.
+--run-timeout N   # Shared work deadline in seconds across setup and all selected files.
                 # Default: 1 (serial). Smoke and unit tiers are always serial.
 --shard N/M     # Run one duration-balanced unit shard.
                 # Requires --unit with no other level or profile flags.
@@ -983,7 +1023,9 @@ signals. Creating that file stops dispatch and terminates active owned workers.
 POSIX SIGINT/SIGTERM uses the same cleanup path. Forced host/process termination
 cannot execute cleanup; the incremental results still show unfinished files.
 
-The legacy summary and failed-file exit convention remain available.
+The legacy summary and failed-file exit convention remain available. Failure
+exit codes cap at 255 so a run with 256 unfinished files cannot wrap to a
+successful process status; the summary retains the complete failure count.
 For a required nightly gate, add `--require-coverage`: skipped cases, empty
 files, unexecuted selected files, and an empty selection produce a nonzero exit.
 Every verbose run writes `coverage.json` with the selected inventory and case
@@ -1230,10 +1272,12 @@ Dependency preparation uses fast gzip compression and uploads the resulting
 archive without a second compression pass to shorten startup.
 
 Each credentialed job requests a 3,600-second session from the existing role.
-Jobs have a 55-minute limit, live test steps have a 45-minute limit, and isolated
-e2e files have a 2,400-second execution deadline. Collection still runs after
-failures and timeouts. An older journey's longer timeout does not override this
-budget: exceeding it is a performance failure with incomplete coverage.
+Jobs have a 55-minute limit and live test steps have a 45-minute limit. Every
+live family receives a 2,400-second shared runner budget and independent file
+deadline, including ordinary integration/SDK files. Driver work reserves up to
+two minutes within that envelope for cleanup; collection continues after
+failures and timeouts. An older journey's longer local timeout does not extend
+the hosted budget. Exhaustion is a visible failure with incomplete coverage.
 
 `bun scripts/ci-live-filter.ts claude-tui --platform linux` prints an anchored
 runner filter. Discovery uses each file's own integration/e2e live gate variables,

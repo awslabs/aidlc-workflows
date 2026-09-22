@@ -137,11 +137,12 @@ import { parseWindowsProcessChildrenReply, parseWindowsProcessDetailsReply, wind
 import { createBunBackend } from "./tui-bun-backend.ts";
 import { selectedTuiBackend } from "./tui-runtime.ts";
 import type { TuiSnapshot, TuiTextLayout, TuiTextViews } from "./tui-screen.ts";
+import { LIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const POLL_INTERVAL_MS = 150;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STABLE_MS = 600;
-const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = LIVE_STARTUP_TIMEOUT_MS;
 const DEFAULT_DEAD_TIMEOUT_MS = 5_000;
 const DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS = 2_000;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
@@ -154,6 +155,14 @@ const WIN_CONSOLE_LIST_TIMEOUT_MS = 5_000;
 const WINDOWS_SESSION_CLEANUP_ATTEMPTS = 20;
 const WINDOWS_SESSION_CLEANUP_WAIT_MS = 100;
 const RETRYABLE_WINDOWS_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+
+function tuiWorkTimeoutMs(requestedMs: number, phase: string): number {
+  // Zero is an immediate TUI poll, not the SDK's "unbounded" convention.
+  // Keep that exact contract while checking the shared parent work deadline.
+  return Math.min(requestedMs, remainingOperationTimeoutMs(
+    Math.max(1, Math.ceil(requestedMs)), { phase },
+  )!);
+}
 
 type Args = {
   positionals: string[];
@@ -3051,7 +3060,9 @@ export function matchTuiPattern(
 async function cmdWait(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const pattern = requireFlag(a, "pattern");
-  const timeoutMs = Number(a.flags["timeout-ms"] ?? DEFAULT_TIMEOUT_MS);
+  const timeoutMs = tuiWorkTimeoutMs(
+    Number(a.flags["timeout-ms"] ?? DEFAULT_TIMEOUT_MS), "TUI wait",
+  );
   const stableMs = Number(a.flags["stable-ms"] ?? DEFAULT_STABLE_MS);
   const re = new RegExp(pattern);
   const view = patternView(a);
@@ -3296,8 +3307,8 @@ export function advanceTuiStartup(
 async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const readyPatternText = requireFlag(a, "ready-pattern");
-  const timeoutMs = Number(
-    a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS,
+  const timeoutMs = tuiWorkTimeoutMs(
+    Number(a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS), "TUI startup",
   );
   const readyPattern = new RegExp(readyPatternText);
   const view = patternView(a);
@@ -4051,7 +4062,13 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // wedge (nothing ever reaches the disk terminator), and bun's own test timeout is
   // the hard ceiling above it. An explicit --per-gate-timeout-ms still overrides for
   // the rare case that wants faster wedge-detection.
-  const overallMs = Number(a.flags["overall-timeout-ms"] ?? "600000");
+  let overallMs: number;
+  try {
+    overallMs = tuiWorkTimeoutMs(Number(a.flags["overall-timeout-ms"] ?? "600000"), "TUI answer gates");
+  } catch (error) {
+    await teardownAnswerGate(backend, session, "work-budget-exhausted");
+    throw error;
+  }
   const perGateMs = Number(a.flags["per-gate-timeout-ms"] ?? String(overallMs));
   // The on-disk signal that means STOP answering — workshop affirmation by
   // default, or a journey-specific file/state-field via --until-* (see
@@ -4387,6 +4404,11 @@ async function main(): Promise<void> {
   if (sub === "__snapshot-timeout-probe") {
     return cmdSnapshotTimeoutProbe(a);
   }
+
+  if (["start", "send", "paste", "resize"].includes(sub)) {
+    remainingOperationTimeoutMs(undefined, { phase: `TUI ${sub}` });
+  }
+  // Capture and retirement remain available during the reserved cleanup phase.
 
   // Legacy Windows commands still run under Node. If a direct Node caller
   // selects native Bun, hand off before loading the OS lock/identity helpers.

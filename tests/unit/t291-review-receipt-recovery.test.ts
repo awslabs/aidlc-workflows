@@ -5,6 +5,7 @@
 // while a second invalidation refuses another recovery until the human resets
 // the attempt at the gate.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterEach,
   describe,
@@ -34,7 +35,7 @@ import {
 
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const tempDirs: string[] = [];
 const TEST_ENV = {

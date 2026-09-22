@@ -185,6 +185,9 @@ export function liveRunnerArgs(family: LiveFamily, platform: NodeJS.Platform, sh
   const spec: Family = FAMILIES[family];
   const tiers = new Set(files.map((file) => file.startsWith("plugins/") ? "integration" : file.split("/")[1]));
   const args = ["unit", "integration", "e2e"].filter((tier) => tiers.has(tier)).map((tier) => `--${tier}`);
+  // Every live family, including ordinary integration/SDK, gets the same
+  // independent deadline and shares one work budget with its preflight.
+  args.push("--file-timeout", "2400", "--run-timeout", "2400");
   if (tiers.has("e2e")) args.push("--isolated-e2e", "--bedrock-parallel", "2", "--e2e-file-timeout", "2400");
   if (spec.requireCoverage) args.push("--require-coverage");
   args.push("--filter", liveFilter(files));

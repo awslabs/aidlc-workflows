@@ -141,6 +141,13 @@ jobs:
             e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 900) ;;
             *) exit 2 ;;
           esac
+          # Finish test work before the step's hard stop so the runner can
+          # retire processes, finish its summaries, and preserve partial results.
+          if [ "$TEST_TIER" = smoke ]; then
+            args+=(--run-timeout 480)
+          else
+            args+=(--run-timeout 2700)
+          fi
           capture="$GITHUB_WORKSPACE/tmp/ci-deterministic"
           mkdir -p "$capture"
           bash tests/run-tests.sh --debug -P 8 --no-llm "${args[@]}" > "$capture/run.log" 2>&1 &

@@ -1952,13 +1952,17 @@ public static class AidlcCodexGuiProbe {
         $compiler.OutputAssembly = Join-Path $tools 'codex-gui-probe.exe'
         $compiled = $provider.CompileAssemblyFromSource($compiler, $guiProbeSource)
         if ($compiled.Errors.HasErrors) { throw 'Could not compile the native GUI inheritance probe.' }
+        $compiler.OutputAssembly = Join-Path $tools 'codex-capability-probe.exe'
+        $entry = 'public static class Entry { public static int Main(string[] args) { return AidlcCodexCapabilityProbe.Run(args); } }'
+        $compiled = $provider.CompileAssemblyFromSource($compiler, ((Get-CodexCapabilityProbeSource) + $entry))
+        if ($compiled.Errors.HasErrors) { throw 'Could not compile the native sandbox capability probe.' }
     } finally { $provider.Dispose(); $compiler.TempFiles.Delete() }
-    foreach ($name in @('codex-initialize-home.ps1', 'codex-managed.exe', 'codex-gui-probe.exe')) {
+    foreach ($name in @('codex-initialize-home.ps1', 'codex-managed.exe', 'codex-gui-probe.exe', 'codex-capability-probe.exe')) {
         Set-RuntimeAcl (Join-Path $tools $name) $sandboxSid 'ReadAndExecute' -RejectLinks
     }
     # Only executable inputs, never tools/jobs or tools/logs (which can contain
     # the original low user's credential-bearing launch environment).
-    $readable = @($tools, (Join-Path $tools 'bun.exe'), (Join-Path $tools 'node.exe'), $nativeDirectory) +
+    $readable = @($tools, (Join-Path $tools 'bun.exe'), (Join-Path $tools 'node.exe'), (Join-Path $tools 'codex-capability-probe.exe'), $nativeDirectory) +
         @([IO.Directory]::GetDirectories($nativeDirectory, '*', [IO.SearchOption]::AllDirectories)) +
         @([IO.Directory]::GetFiles($nativeDirectory, '*', [IO.SearchOption]::AllDirectories))
     foreach ($path in $readable) {
@@ -1967,6 +1971,66 @@ public static class AidlcCodexGuiProbe {
         if ([IO.Directory]::Exists($path)) { [IO.Directory]::SetAccessControl($path, $acl) }
         else { [IO.File]::SetAccessControl($path, $acl) }
     }
+}
+
+function Get-CodexCapabilityProbeSource {
+    return @'
+public static class AidlcCodexCapabilityProbe {
+    private static string Json(string value) {
+        var text = new System.Text.StringBuilder("\"");
+        foreach (char c in value) {
+            if (c == '\\' || c == '"') text.Append('\\').Append(c);
+            else if (c < 32) text.Append("\\u").Append(((int)c).ToString("x4"));
+            else text.Append(c);
+        }
+        return text.Append('"').ToString();
+    }
+    public static int Run(string[] args) {
+        try {
+            if (args.Length != 7) throw new System.InvalidOperationException("Expected seven capability arguments.");
+            string expectedSid = args[0], secret = args[1], forbidden = args[2], literal = args[3];
+            string expectedProject = args[4], marker = args[5], token = args[6];
+            using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent()) {
+                if (identity.User.Value != expectedSid)
+                    throw new System.InvalidOperationException("Wrong native sandbox identity.");
+                if (new System.Security.Principal.WindowsPrincipal(identity).IsInRole(
+                    System.Security.Principal.WindowsBuiltInRole.Administrator))
+                    throw new System.InvalidOperationException("Native sandbox identity is an administrator.");
+                if (literal != "space \"quoted\" & symbols \\tail\\")
+                    throw new System.InvalidOperationException("Native launcher changed an argument.");
+                string cwd = System.Environment.CurrentDirectory;
+                System.Console.WriteLine("{\"probe\":\"codex-native-capability-cwd\",\"expectedProject\":" +
+                    Json(expectedProject) + ",\"osCwd\":" + Json(cwd) + ",\"sid\":" + Json(identity.User.Value) + "}");
+                if (marker != ".aidlc-cwd-" + token ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(token, "^[0-9a-f]{32}$"))
+                    throw new System.InvalidOperationException("Invalid cwd proof marker.");
+                // A vendor-created junction may identify the same project.
+                // Verify the actual OS cwd without changing it or any shell state.
+                foreach (string directory in new string[] { expectedProject, cwd }) {
+                    if (!System.IO.Path.IsPathRooted(directory) ||
+                        !System.IO.File.Exists(System.IO.Path.Combine(directory, marker)) ||
+                        System.IO.File.ReadAllText(System.IO.Path.Combine(directory, marker)) != token)
+                        throw new System.InvalidOperationException("Native sandbox cwd does not identify the expected project.");
+                }
+                System.IO.File.WriteAllText(System.IO.Path.Combine(cwd, "workspace-write.txt"), "workspace-write verified");
+                bool denied = false;
+                try { using (System.IO.File.OpenRead(secret)) {} }
+                catch (System.UnauthorizedAccessException) { denied = true; }
+                if (!denied) throw new System.InvalidOperationException("Native sandbox can read its credential store.");
+                denied = false;
+                try { System.IO.File.WriteAllText(forbidden, "must not be written"); }
+                catch (System.UnauthorizedAccessException) { denied = true; }
+                if (!denied) throw new System.InvalidOperationException("Native sandbox can write outside its workspace.");
+            }
+            System.Console.WriteLine("Codex native identity, workspace write, secret denial and protected-tool denial verified.");
+            return 0;
+        } catch (System.Exception error) {
+            System.Console.Error.WriteLine("Codex native capability probe: " + error.GetType().FullName + ": " + error.Message);
+            return 1;
+        }
+    }
+}
+'@
 }
 
 function Get-CodexReadinessBody {
@@ -2008,43 +2072,12 @@ foreach ($network in @('false', 'true')) {
     # command must prove access denial, not mistake a missing file for a deny.
     $secretPath = Join-Path $env:CODEX_HOME '.sandbox-secrets\sandbox_users.json'
     if (-not [IO.File]::Exists($secretPath)) { throw 'Fresh Codex sandbox credential file is absent.' }
-    $probe = Join-Path $project 'probe.ps1'
-    [IO.File]::WriteAllText($probe, @"
-param([string]`$ExpectedSid, [string]`$SecretPath, [string]`$ForbiddenPath, [string]`$Literal,
-    [string]`$ExpectedProject, [string]`$CwdMarker, [string]`$CwdToken)
-`$ErrorActionPreference = 'Stop'
-if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne `$ExpectedSid) { throw 'Wrong native sandbox identity.' }
-`$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-if (`$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Native sandbox identity is an administrator.' }
-if (`$Literal -cne 'space "quoted" & symbols \tail\') { throw 'Native launcher changed an argument.' }
-`$providerCwd = (Get-Location).Path
-`$osCwd = [Environment]::CurrentDirectory
-[ordered]@{probe='codex-sandbox-cwd'; expectedProject=`$ExpectedProject; providerCwd=`$providerCwd; osCwd=`$osCwd; scriptRoot=`$PSScriptRoot} | ConvertTo-Json -Compress
-if (`$CwdMarker -cne ('.aidlc-cwd-' + `$CwdToken) -or `$CwdToken -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid cwd proof marker.' }
-# Check the actual directory through a unique fixture marker. This permits a
-# vendor-created junction to the same project without accepting another root.
-foreach (`$directory in @(`$ExpectedProject, `$osCwd, `$providerCwd)) {
-    `$markerPath = Join-Path `$directory `$CwdMarker
-    if (-not [IO.File]::Exists(`$markerPath) -or [IO.File]::ReadAllText(`$markerPath) -cne `$CwdToken) {
-        throw ('Native sandbox cwd does not identify the expected project: ' + `$directory)
-    }
-}
-[IO.File]::WriteAllText((Join-Path (Get-Location) 'workspace-write.txt'), 'workspace-write verified')
-`$denied = `$false
-try { `$s = [IO.File]::OpenRead(`$SecretPath); `$s.Dispose() } catch [UnauthorizedAccessException] { `$denied = `$true }
-if (-not `$denied) { throw 'Native sandbox can read its credential store.' }
-`$denied = `$false
-try { [IO.File]::WriteAllText(`$ForbiddenPath, 'must not be written') } catch [UnauthorizedAccessException] { `$denied = `$true }
-if (-not `$denied) { throw 'Native sandbox can write outside its workspace.' }
-Write-Output 'Codex native identity, workspace write, secret denial and protected-tool denial verified.'
-"@)
+    $probe = __CAPABILITY_PROBE__
     $invoke = Join-Path $project 'invoke.cjs'
     [IO.File]::WriteAllText($invoke, @"
 const {spawnSync} = require("node:child_process");
 const {writeSync, realpathSync} = require("node:fs");
-const {dirname} = require("node:path");
-const [launcher, shell, script, sid, secret, forbidden, network, cwdMarker, cwdToken] = process.argv.slice(2);
-const project = dirname(script);
+const [launcher, probe, project, sid, secret, forbidden, network, cwdMarker, cwdToken] = process.argv.slice(2);
 const callerCwd = process.cwd();
 writeSync(1, JSON.stringify({probe:"codex-caller-cwd",expectedProject:project,callerCwd}) + "\n");
 if (realpathSync.native(callerCwd).toLowerCase() !== realpathSync.native(project).toLowerCase()) {
@@ -2052,10 +2085,7 @@ if (realpathSync.native(callerCwd).toLowerCase() !== realpathSync.native(project
 }
 const args = ["-c", "sandbox_mode=workspace-write", "-c", "windows.sandbox=elevated",
   "-c", "sandbox_workspace_write.network_access=" + network, "sandbox", "--",
-  shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-  "-File", script, "-ExpectedSid", sid, "-SecretPath", secret, "-ForbiddenPath", forbidden,
-  "-ExpectedProject", project, "-CwdMarker", cwdMarker, "-CwdToken", cwdToken,
-  "-Literal", 'space "quoted" & symbols \\tail\\'];
+  probe, sid, secret, forbidden, 'space "quoted" & symbols \\tail\\', project, cwdMarker, cwdToken];
 const result = spawnSync(launcher, args, {cwd:project,
   env:{...process.env,AIDLC_CODEX_EXPECTED_CWD:project},encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:90000});
 writeSync(1, result.stdout || "");
@@ -2069,7 +2099,7 @@ process.exitCode = result.status === null ? 1 : result.status;
 "@)
     Set-Location -LiteralPath $project
     [Console]::WriteLine((@{probe='codex-parent-cwd'; expectedProject=$project; providerCwd=(Get-Location).Path; osCwd=[Environment]::CurrentDirectory} | ConvertTo-Json -Compress))
-    & $bun $invoke $native $powershell $probe $expectedSids[$index] $secretPath __FORBIDDEN__ $network $cwdMarker $cwdToken
+    & $bun $invoke $native $probe $project $expectedSids[$index] $secretPath __FORBIDDEN__ $network $cwdMarker $cwdToken
     if ($LASTEXITCODE -ne 0) { throw 'Fresh-home elevated sandbox readiness command failed.' }
     if (-not [IO.File]::Exists((Join-Path $project 'workspace-write.txt'))) { throw 'Native workspace write was not observed.' }
     # Resume-style reentry must validate the same generation without resetting
@@ -2084,6 +2114,7 @@ process.exitCode = result.status === null ? 1 : result.status;
     $native = Join-Path $tools 'codex-managed.exe'
     $body = $body.Replace('__NATIVE__', (ConvertTo-PSLiteral $native))
     $body = $body.Replace('__BUN__', (ConvertTo-PSLiteral (Join-Path $tools 'bun.exe')))
+    $body = $body.Replace('__CAPABILITY_PROBE__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-capability-probe.exe')))
     $body = $body.Replace('__PACKAGE_ROOT__', (ConvertTo-PSLiteral $nativeDirectory))
     $body = $body.Replace('__INITIALIZER__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-initialize-home.ps1')))
     $body = $body.Replace('__SIDS__', ('@(' + (($codexSandboxSids | ForEach-Object { ConvertTo-PSLiteral $_ }) -join ',') + ')'))

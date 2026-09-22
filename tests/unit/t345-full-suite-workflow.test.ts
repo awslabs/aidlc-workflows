@@ -284,7 +284,7 @@ describe("t345 complete nightly coverage", () => {
           });
           expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
-            .toEqual(["--debug", "-P", "8", "--no-llm", ...expected]);
+            .toEqual(["--debug", "-P", "8", "--no-llm", ...expected, "--run-timeout", tier === "smoke" ? "480" : "2700"]);
           expect(readFileSync(join(root, "tmp/ci-deterministic/run.log"), "utf8")).toContain("captured deterministic output");
           expect(readFileSync(join(root, "tmp/ci-deterministic/stamp.txt"), "utf8").trim())
             .toBe(`${root.replaceAll("\\", "/")}/tests/logs/fixture`);

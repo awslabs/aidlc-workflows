@@ -49,6 +49,7 @@ import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 const REAL_RUNNER = join(import.meta.dir, "..", "run-tests.sh");
 const REAL_RUNNER_TS = join(import.meta.dir, "..", "run-tests.ts");
 const REAL_PROFILE = join(import.meta.dir, "..", "harness", "runner-profile.ts");
+const REAL_BUDGET = join(import.meta.dir, "..", "harness", "test-budget.ts");
 const REAL_GLUE = join(import.meta.dir, "..", "lib", "bun-junit-to-meta.ts");
 const REAL_SHARDING = join(import.meta.dir, "..", "lib", "test-sharding.ts");
 const REAL_PLAN = join(import.meta.dir, "..", "lib", "e2e-plan.ts");
@@ -111,6 +112,7 @@ function driveRunner(
   copyFileSync(REAL_RUNNER, join(testsDir, "run-tests.sh"));
   copyFileSync(REAL_RUNNER_TS, join(testsDir, "run-tests.ts"));
   copyFileSync(REAL_PROFILE, join(harnessDir, "runner-profile.ts"));
+  copyFileSync(REAL_BUDGET, join(harnessDir, "test-budget.ts"));
   copyFileSync(REAL_GLUE, join(libDir, "bun-junit-to-meta.ts"));
   copyFileSync(REAL_SHARDING, join(libDir, "test-sharding.ts"));
   copyFileSync(REAL_PLAN, join(libDir, "e2e-plan.ts"));

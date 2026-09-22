@@ -14,6 +14,12 @@ import { publishSupervisorStop } from "../harness/tui-bun-process.ts";
 import { acquireNativeLock, getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
 import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord } from "../harness/tui-record-file.ts";
 import { physicalTuiText, type TuiSnapshot } from "../harness/tui-screen.ts";
+import { LIVE_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, liveCaseTimeoutMs } from "../harness/test-budget.ts";
+
+function nativeCaseTimeoutMs(workMs: number, starts = 1): number {
+  return liveCaseTimeoutMs(workMs, { fixtureMs: 0, startupMs: starts * NATIVE_STARTUP_TIMEOUT_MS });
+}
+const PROGRAM_BACKSTOP_MS = nativeCaseTimeoutMs(60_000);
 
 const supported = process.platform === "linux" || process.platform === "win32" || process.platform === "darwin";
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-tui-native-calibration-"));
@@ -45,12 +51,14 @@ process.stdin.on("data", (data) => {
 process.stdout.on("resize", paint);
 process.stdout.write("\\x1b[?2004h");
 paint();
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
 `);
 
 type Run = { code: number; stdout: string; stderr: string };
 async function drive(args: string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<Run> {
   const child = Bun.spawn([process.execPath, driver, ...args], {
-    env: { ...env, ...extraEnv }, stdout: "pipe", stderr: "pipe", timeout: 20_000,
+    env: { ...env, ...extraEnv }, stdout: "pipe", stderr: "pipe",
+    timeout: args[0] === "start" ? NATIVE_STARTUP_TIMEOUT_MS + 15_000 : 30_000,
   });
   const [code, stdout, stderr] = await Promise.all([
     child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
@@ -159,7 +167,7 @@ afterAll(async () => {
   const failed = cleanup.filter((result) => result.status === "rejected");
   if (failed.length) throw new Error(`native calibration cleanup failed; inspect ${root}: ${JSON.stringify(failed)}`);
   rmSync(scratch, { recursive: true, force: true });
-}, 30_000);
+}, LIVE_CLEANUP_TIMEOUT_MS);
 
 describe("native IPC probe completion", () => {
   for (const allowReset of [true, false]) {
@@ -362,7 +370,7 @@ process.stdin.setRawMode(true);
 process.stdin.resume();
 process.stdout.write("\\x1b[2J\\x1b[Habcdefghijklmnop");
 process.stdin.on("data", () => process.stdout.write("\\x1b[2J\\x1b[Hqrstuvwxyzabcdef"));
-setTimeout(() => process.exit(99), 30000);
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
 `);
     sessions.add(session);
     const previousRoot = process.env.AIDLC_TUI_BUN_ROOT;
@@ -409,7 +417,7 @@ setTimeout(() => process.exit(99), 30000);
       else process.env.AIDLC_TUI_BUN_ROOT = previousRoot;
       if (sessions.has(session)) await stop(session);
     }
-  }, 30_000);
+  }, nativeCaseTimeoutMs(30_000));
 
   test("physical repaint rows drive wait, startup and approval while public logical capture stays compatible", async () => {
     const session = `physical-${randomUUID()}`;
@@ -450,7 +458,7 @@ process.stdin.on("data", bytes => {
     }
   }
 });
-setTimeout(() => process.exit(99), 30000);
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
 `);
     sessions.add(session);
     let answering: Promise<Run> | undefined;
@@ -505,7 +513,7 @@ setTimeout(() => process.exit(99), 30000);
       if (sessions.has(session)) await stop(session);
       await answering;
     }
-  }, 30_000);
+  }, nativeCaseTimeoutMs(30_000));
 
   test("plain/ANSI/cell capture, literal/named input, bracketed paste, and real resize", async () => {
     const session = await start("interaction");
@@ -534,7 +542,7 @@ setTimeout(() => process.exit(99), 30000);
       expect(snapshot.rows).toBe(20);
       expect(snapshot.lines[19].cells.slice(0, 6).map((cell) => cell.chars).join("")).toBe("STATUS");
     } finally { await stop(session); }
-  }, 30_000);
+  }, nativeCaseTimeoutMs(30_000));
 
   test("eight concurrent sessions isolate their screens, input, and teardown", async () => {
     const labels = Array.from({ length: 8 }, (_, i) => `worker-${i}-${randomUUID().slice(0, 8)}`);
@@ -550,7 +558,7 @@ setTimeout(() => process.exit(99), 30000);
       await stop(started[0]);
       for (const session of started.slice(1)) expect((await frame(session)).text).toContain("STATUS");
     } finally { await Promise.all(started.filter((session) => sessions.has(session)).map(stop)); }
-  }, 60_000);
+  }, nativeCaseTimeoutMs(60_000));
 
   test("natural exit drains final UTF-8, preserves the target exit code, and permits same-name restart", async () => {
     const session = `restart-${randomUUID()}`;
@@ -562,7 +570,7 @@ setTimeout(() => process.exit(99), 30000);
       expect(record(session)).toMatchObject({ phase: "exited", targetExitCode: 7, cleanupComplete: true });
     }
     await stop(session);
-  }, 30_000);
+  }, nativeCaseTimeoutMs(30_000, 3));
 
   test("a delayed old-generation kill fallback cannot stop or overwrite a replacement's stop", async () => {
     const session = await start("old-generation");
@@ -612,7 +620,7 @@ setTimeout(() => process.exit(99), 30000);
       else process.env.AIDLC_TUI_BUN_ROOT = previousRoot;
       await stop(session);
     }
-  }, 30_000);
+  }, nativeCaseTimeoutMs(30_000, 2));
 
   test("kill completes while its caller already holds the native session lock", async () => {
     const session = await start("caller-owned-lock");
@@ -624,7 +632,7 @@ setTimeout(() => process.exit(99), 30000);
       unlock();
       if (sessions.has(session)) await stop(session);
     }
-  }, 20_000);
+  }, nativeCaseTimeoutMs(20_000));
 
   test("framed IPC accepts fragmented requests and refuses invalid ownership, malformed and oversized messages", async () => {
     const session = await start("protocol");
@@ -643,7 +651,7 @@ setTimeout(() => process.exit(99), 30000);
       expect(invalidResize.code).not.toBe(0);
       expect((await frame(session)).cols).toBe(80);
     } finally { await stop(session); }
-  }, 30_000);
+  }, nativeCaseTimeoutMs(30_000));
 
   test("failed target launch leaves a cleaned record and allows a same-name retry", async () => {
     const session = `bad-command-${randomUUID()}`;
@@ -656,7 +664,7 @@ setTimeout(() => process.exit(99), 30000);
     expect((await drive(["capture", "--session", session])).code).not.toBe(0);
     await start("after-failed-launch", session);
     await stop(session);
-  }, 30_000);
+  }, nativeCaseTimeoutMs(30_000, 2));
 
   test("an unfinished client cannot delay daemon retirement or produce a premature wait-dead", async () => {
     const session = await start("open-client");
@@ -677,5 +685,5 @@ setTimeout(() => process.exit(99), 30000);
       socket.destroy();
       if (sessions.has(session)) await stop(session);
     }
-  }, 20_000);
+  }, nativeCaseTimeoutMs(20_000));
 });

@@ -48,6 +48,7 @@
 // on-disk effects and rendered report - the same discipline as t314 (the plugin
 // reinstall twin) and t204. No live model runs here; the fixture is the seam.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -57,7 +58,7 @@ import { fileURLToPath } from "node:url";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 
 // Each case installs a project and makes several real CLI round trips.
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 
 const BUN = process.execPath;
 

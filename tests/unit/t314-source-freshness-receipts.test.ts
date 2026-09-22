@@ -36,6 +36,7 @@
 // per-unit branch resolves `none` and exercises the stage-level fallback -
 // exactly the receipt path the fingerprint filter protects.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, beforeEach, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -92,7 +93,7 @@ import {
 
 // The default also governs afterAll removal of a dozen-plus worktree fixtures,
 // which exceeds bun's 5s hook default under load; per-case literals stay.
-setDefaultTimeout(120_000);
+setDefaultTimeout(Math.max(120_000, deterministicCaseTimeoutMs()));
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");

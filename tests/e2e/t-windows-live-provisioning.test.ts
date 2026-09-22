@@ -1,8 +1,9 @@
 // Deterministic Windows account/ACL tests; no CLI download or model calls.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
@@ -24,11 +25,14 @@ describe.skipIf(process.platform !== "win32")("Windows live provisioning boundar
       const guiMatch = script.match(/function Get-CodexHostedGuiSource \{\r?\n\s*return @'\r?\n([\s\S]*?)\r?\n'@/);
       expect(guiMatch).not.toBeNull();
       const guiSource = guiMatch![1];
+      const capabilityMatch = script.match(/function Get-CodexCapabilityProbeSource \{\r?\n\s*return @'\r?\n([\s\S]*?)\r?\n'@/);
+      expect(capabilityMatch).not.toBeNull();
       native = writeWindowsExecutable(join(root, "native-fixture.exe"), `using System;
 using System.Text;
 using System.Security.AccessControl;
 using System.Security.Principal;
 ${guiSource}
+${capabilityMatch![1]}
 public static class NativeOutputFixture {
   [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
   private struct Attributes { public int Size; public IntPtr Security; public int Inherit; }
@@ -50,6 +54,60 @@ public static class NativeOutputFixture {
   private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
   [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
   private static extern bool GetFileInformationByHandle(IntPtr handle, out FileInfo info);
+  [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+  private struct SidAttributes { public IntPtr Sid; public uint Attributes; }
+  [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
+  [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+  [System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError=true)]
+  private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+  [System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError=true)]
+  private static extern bool CreateRestrictedToken(IntPtr token, uint flags, uint count, ref SidAttributes disabled,
+    uint privilegeCount, IntPtr privileges, uint restrictedCount, IntPtr restrictedSids, out IntPtr restricted);
+  private static int CapabilityFixture(string scenario) {
+    string cwd = Environment.CurrentDirectory;
+    string expected = scenario == "wrong-cwd" ? System.IO.Directory.GetParent(cwd).FullName : cwd;
+    string token = Guid.NewGuid().ToString("N"), marker = ".aidlc-cwd-" + token;
+    System.IO.File.WriteAllText(System.IO.Path.Combine(expected, marker), token);
+    string secret = System.IO.Path.Combine(cwd, "fixture-secret"), outside = System.IO.Path.Combine(cwd, "fixture-protected");
+    System.IO.File.WriteAllText(secret, "private fixture"); System.IO.File.WriteAllText(outside, "protected fixture");
+    var secretAcl = System.IO.File.GetAccessControl(secret);
+    var outsideAcl = System.IO.File.GetAccessControl(outside);
+    IntPtr original = IntPtr.Zero, restricted = IntPtr.Zero;
+    var admin = new SecurityIdentifier("S-1-5-32-544");
+    byte[] bytes = new byte[admin.BinaryLength]; admin.GetBinaryForm(bytes, 0);
+    var pin = System.Runtime.InteropServices.GCHandle.Alloc(bytes, System.Runtime.InteropServices.GCHandleType.Pinned);
+    try {
+      var sid = WindowsIdentity.GetCurrent().User;
+      if (scenario != "readable-secret") {
+        var acl = System.IO.File.GetAccessControl(secret);
+        acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.ReadData, AccessControlType.Deny));
+        System.IO.File.SetAccessControl(secret, acl);
+      }
+      if (scenario != "writable-outside") {
+        var acl = System.IO.File.GetAccessControl(outside);
+        acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.WriteData, AccessControlType.Deny));
+        System.IO.File.SetAccessControl(outside, acl);
+      }
+      if (scenario == "missing-secret") System.IO.File.Delete(secret);
+      Check(OpenProcessToken(GetCurrentProcess(), 0xE, out original), "Open own fixture token failed.");
+      var disabled = new SidAttributes { Sid = pin.AddrOfPinnedObject() };
+      Check(CreateRestrictedToken(original, 1, 1, ref disabled, 0, IntPtr.Zero, 0, IntPtr.Zero, out restricted),
+        "Restrict own fixture token failed.");
+      // Current account only. Disable privileges and administrator membership
+      // for this synchronous call; no logon, account, profile or process creation.
+      using (WindowsIdentity.Impersonate(restricted)) {
+        return AidlcCodexCapabilityProbe.Run(new string[] {
+          sid.Value, secret, outside, "space \\"quoted\\" & symbols \\\\tail\\\\", expected, marker, token
+        });
+      }
+    } finally {
+      if (System.IO.File.Exists(secret)) System.IO.File.SetAccessControl(secret, secretAcl);
+      System.IO.File.SetAccessControl(outside, outsideAcl);
+      if (restricted != IntPtr.Zero) CloseHandle(restricted);
+      if (original != IntPtr.Zero) CloseHandle(original);
+      pin.Free();
+    }
+  }
   private static string Name(IntPtr handle) {
     uint size;
     GetUserObjectInformationW(handle, 2, IntPtr.Zero, 0, out size);
@@ -152,6 +210,7 @@ public static class NativeOutputFixture {
   }
   public static int Main(string[] args) {
     Console.OutputEncoding = new UTF8Encoding(false);
+    if (args.Length == 2 && args[0] == "--capability-fixture") return CapabilityFixture(args[1]);
     if (args.Length >= 2 && (args[0] == "--explicit-desktop" || args[0] == "--explicit-timeout" || args[0] == "--explicit-powershell-cwd")) return ExplicitDesktop(args);
     if (args.Length >= 7 && (args[0] == "--desktop-child" || args[0] == "--desktop-timeout-child")) {
       Check(Name(GetProcessWindowStation()) == args[1] &&
@@ -224,7 +283,7 @@ public static class NativeOutputFixture {
         ["__POWERSHELL__", join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe")],
       ]) launcher = launcher.replaceAll(marker, JSON.stringify(value));
       executable = writeWindowsExecutable(join(root, "managed.exe"), launcher);
-    }, 45_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     afterAll(() => {
       if (root) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     });
@@ -295,12 +354,13 @@ public static class NativeOutputFixture {
     }, 20_000);
     test("PowerShell provider location and OS cwd survive explicit desktop launch", () => {
       const report = join(root!, "cwd-report.ps1");
-      const sourceText = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
-      const start = sourceText.indexOf("`$providerCwd = (Get-Location).Path");
-      const end = sourceText.indexOf("[IO.File]::WriteAllText((Join-Path (Get-Location)", start);
-      expect(start).toBeGreaterThan(0);
-      expect(end).toBeGreaterThan(start);
-      const cwdCheck = sourceText.slice(start, end).replaceAll("`$", "$");
+      const cwdCheck = `$providerCwd = (Get-Location).Path
+$osCwd = [Environment]::CurrentDirectory
+[ordered]@{expectedProject=$ExpectedProject; providerCwd=$providerCwd; osCwd=$osCwd; scriptRoot=$PSScriptRoot} | ConvertTo-Json -Compress
+foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
+  if (-not [IO.File]::Exists((Join-Path $directory $CwdMarker)) -or [IO.File]::ReadAllText((Join-Path $directory $CwdMarker)) -cne $CwdToken) { throw 'Native sandbox cwd does not identify the expected project' }
+}
+`;
       const token = "a".repeat(32);
       writeFileSync(join(root!, `.aidlc-cwd-${token}`), token);
       const setup = `$ErrorActionPreference='Stop'\n$ExpectedProject=$PSScriptRoot\n$CwdToken='${token}'\n$CwdMarker='.aidlc-cwd-${token}'\n`;
@@ -322,6 +382,35 @@ public static class NativeOutputFixture {
       expect(JSON.parse(wrong.stdout)).toMatchObject({ expectedProject: root, providerCwd: parse(root!).root, osCwd: root });
       expect(wrong.stderr).toContain("Native sandbox cwd does not identify the expected project");
     }, 20_000);
+    for (const [scenario, message] of [
+      ["allowed", "Codex native identity, workspace write, secret denial and protected-tool denial verified."],
+      ["wrong-cwd", "Native sandbox cwd does not identify the expected project"],
+      ["missing-secret", "System.IO.FileNotFoundException"],
+      ["readable-secret", "Native sandbox can read its credential store"],
+      ["writable-outside", "Native sandbox can write outside its workspace"],
+    ] as const) {
+      test(`native sandbox capability probe enforces ${scenario}`, () => {
+        const project = join(root!, `capability-${scenario}`);
+        mkdirSync(project);
+        const result = spawnSync(native, ["--capability-fixture", scenario], {
+          cwd: project, encoding: "utf8", timeout: 15_000,
+        });
+        const diagnostics = `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`;
+        expect(result.error, diagnostics).toBeUndefined();
+        expect(result.status, diagnostics).toBe(scenario === "allowed" ? 0 : 1);
+        expect(scenario === "allowed" ? result.stdout : result.stderr).toContain(message);
+        if (scenario === "allowed") {
+          expect(JSON.parse(result.stdout.trim().split(/\r?\n/)[0]!)).toMatchObject({
+            probe: "codex-native-capability-cwd", expectedProject: project, osCwd: project,
+          });
+          expect(readFileSync(join(project, "workspace-write.txt"), "utf8")).toBe("workspace-write verified");
+          expect(readFileSync(join(project, "fixture-protected"), "utf8")).toBe("protected fixture");
+        } else if (scenario === "wrong-cwd") {
+          expect(existsSync(join(project, "workspace-write.txt"))).toBe(false);
+        }
+      }, 20_000);
+    }
+
   });
 
   for (const [name, expected] of [

@@ -184,6 +184,7 @@ jobs:
           name: full-suite-native-plan
           path: "${{ runner.temp }}"
       - name: "Run exact native obligations"
+        timeout-minutes: 105
         run: |
           TEST_MATRIX_FILTER=$(bun -e '
             const plan = await Bun.file(process.argv[1]).json();
@@ -200,6 +201,7 @@ jobs:
           capture="$GITHUB_WORKSPACE/tmp/full-suite-native"
           mkdir -p "$capture"
           bash tests/run-tests.sh --debug -P 8 --unit --integration --e2e --no-llm --isolated-e2e \
+            --file-timeout 1800 --run-timeout 6000 \
             --filter "$TEST_MATRIX_FILTER" --matrix-plan "$RUNNER_TEMP/native-plan.json" --matrix-job "${{ matrix.job }}" \
             > "$capture/run.log" 2>&1 &
           test_pid=$!
@@ -317,6 +319,7 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/tmp/full-suite-production-guards"
           bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm \
+            --run-timeout 900 \
             --require-coverage --filter '^(t-runner-production-guards|t-guard-recovery-production)$' \
             > "$GITHUB_WORKSPACE/tmp/full-suite-production-guards/production-run.log" 2>&1
       - name: "Sanitize production guard evidence"

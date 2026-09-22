@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { codexExecTimeout, recordCodexExec } from "./codex-test-lifecycle.ts";
+import { remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
@@ -47,6 +48,7 @@ function initializeGit(projectDir: string): void {
     const result = spawnSync("git", args, {
       cwd: projectDir,
       encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(undefined, { phase: "exec fixture git" }),
     });
     if (result.status !== 0) {
       throw new Error(`git ${args[0]} failed: ${result.stderr}`);
@@ -108,7 +110,8 @@ export function setupCodexProject(): CodexProject {
       "--project",
       proj,
     ],
-    { encoding: "utf-8", cwd: REPO_ROOT },
+    { encoding: "utf-8", cwd: REPO_ROOT,
+      timeout: remainingOperationTimeoutMs(undefined, { phase: "Codex fixture trust" }) },
   );
   if (trust.status !== 0) {
     throw new Error(`trust emit failed: ${trust.stderr}`);
@@ -198,7 +201,7 @@ export function runCopilot(proj: string, args: string): ExecResult {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
+      timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "Copilot exec" }),
     },
   );
   return {
@@ -243,7 +246,7 @@ export function runOpencode(proj: string, args: string[]): ExecResult {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
+      timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "opencode exec" }),
     },
   );
   return {
@@ -291,7 +294,7 @@ export function runCursor(proj: string, promptText: string): ExecResult {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
+      timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "Cursor exec" }),
     },
   );
   return {

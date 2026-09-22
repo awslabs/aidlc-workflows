@@ -4,7 +4,7 @@
 // tests/run-tests.sh remains as a POSIX compatibility wrapper. Keep behavior
 // aligned with the old runner because smoke/t05 drives the public runner
 // contract: flags, tier banners, START/DONE markers, summary fields, verbose
-// log dirs, debug trace locations, and the "exit == failed files" convention.
+// log dirs, debug trace locations, and failed-file exit counts (capped at 255).
 
 import { type spawn, spawnSync } from "node:child_process";
 import {
@@ -26,9 +26,19 @@ import {
   parseRunnerArgs,
   preflightVerdict,
   RunnerArgsError,
+  runnerFileTimeoutSeconds,
+  runnerFailureExitCode,
   testGuardEnvironment,
   type ParsedArgs,
 } from "./harness/runner-profile.ts";
+import {
+  deterministicCaseTimeoutMs,
+  FILE_CLEANUP_ENV,
+  FILE_DEADLINE_ENV,
+  fileCleanupReserveMs,
+  remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
+} from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
 import {
   selectShard,
@@ -43,9 +53,7 @@ import type { E2eLimits, E2eTask } from "./lib/e2e-scheduler.ts";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const BUN = process.execPath;
-// Hosted Windows takes about three times as long for the same subprocess-heavy
-// unit inventory. Explicit test/hook deadlines still override this default.
-const DEFAULT_CASE_TIMEOUT_MS = process.platform === "win32" ? 15_000 : 5_000;
+const DEFAULT_CASE_TIMEOUT_MS = deterministicCaseTimeoutMs();
 const PACKAGE_READY_ENV = "AIDLC_TEST_PACKAGE_READY";
 const PACKAGE_LOCK = join(REPO_ROOT, ".aidlc", "test-package.lock");
 const UNIT_SHARD_CONFIG = join(SCRIPT_DIR, "unit-shard-weights.json");
@@ -85,6 +93,12 @@ interface IsolatedFileContext {
   env: NodeJS.ProcessEnv;
   artifacts: string;
   force?: boolean;
+  budget?: FileBudget;
+}
+
+interface FileBudget {
+  deadlineMs: number;
+  cleanupMs: number;
 }
 
 interface FileExecution {
@@ -135,6 +149,10 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
                   Recommended range: 1-8. See docs/reference/09-testing.md.
   --shard N/M     Run one deterministic, duration-balanced unit-test shard.
                   Requires --unit with no other level or profile flags.
+  --file-timeout N  Independent per-file work ceiling in seconds for every tier.
+                  Default: 2400 outside isolated e2e; caps its existing deadline.
+  --run-timeout N   Shared work ceiling in seconds, including setup and all files.
+                  Remaining work is bounded before each dispatch; cleanup is reserved.
   --isolated-e2e  Dispatch e2e files across -P isolated checkout workers.
                   Known serial driver families may overlap; assertions are unchanged.
   --e2e-plan      Print the isolated e2e inventory/resource plan; run no tests or builds.
@@ -181,6 +199,9 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 const args = parseArgs(process.argv.slice(2));
+const RUN_DEADLINE_MS = args.runTimeout === null
+  ? undefined
+  : Date.now() + args.runTimeout * 1000;
 
 function matchesE2eFilter(file: string, filter: RegExp | null): boolean {
   const base = basename(file);
@@ -711,6 +732,27 @@ function createIsolatedGitConfig(): string {
 
 const isolatedGitConfig = createIsolatedGitConfig();
 
+function allocateFileBudget(env: NodeJS.ProcessEnv, isolated: boolean): FileBudget {
+  const startedMs = Date.now();
+  const allowanceMs = remainingOperationTimeoutMs(
+    runnerFileTimeoutSeconds(args, isolated) * 1000,
+    { deadlineMs: RUN_DEADLINE_MS, env, nowMs: startedMs, phase: "test file" },
+  )!;
+  return {
+    deadlineMs: startedMs + allowanceMs,
+    cleanupMs: fileCleanupReserveMs(allowanceMs),
+  };
+}
+
+function requireFileWorkBudget(budget: FileBudget): void {
+  // The file's reserve was already assigned once. Do not interpret its own
+  // environment as a new parent and subtract another reserve at spawn time.
+  remainingOperationTimeoutMs(undefined, {
+    deadlineMs: budget.deadlineMs, reserveMs: budget.cleanupMs,
+    env: {}, phase: "test file launch",
+  });
+}
+
 async function runSpawnCapture(
   cmd: string,
   cmdArgs: string[],
@@ -719,19 +761,46 @@ async function runSpawnCapture(
   context?: IsolatedFileContext,
   streamPath?: string,
 ): Promise<{ rc: number; output: string; timedOut: boolean; cleanupError?: string }> {
+  let budget: FileBudget;
+  try {
+    budget = context?.budget ?? allocateFileBudget(env, context !== undefined);
+    requireFileWorkBudget(budget);
+  } catch (error) {
+    const output = `error: ${String(error)}\n`;
+    if (streamPath) appendFileSync(streamPath, output);
+    const timedOut = error instanceof TestBudgetExhaustedError;
+    return { rc: timedOut ? 124 : 2, output, timedOut };
+  }
+  const { deadlineMs, cleanupMs } = budget;
+  const allowanceMs = deadlineMs - Date.now();
+  env = {
+    ...env,
+    [FILE_DEADLINE_ENV]: String(deadlineMs),
+    [FILE_CLEANUP_ENV]: String(cleanupMs),
+  };
+  const budgetDiagnostic = `Test budget: ${JSON.stringify({
+    caseDefaultMs: DEFAULT_CASE_TIMEOUT_MS,
+    fileAllowanceMs: allowanceMs,
+    fileDeadlineMs: deadlineMs,
+    cleanupReserveMs: cleanupMs,
+    runDeadlineMs: RUN_DEADLINE_MS ?? null,
+  })}\n`;
+  if (streamPath) appendFileSync(streamPath, budgetDiagnostic);
+  if (debugPrefix !== null) process.stdout.write(`${debugPrefix}${budgetDiagnostic}`);
   const controller = new AbortController();
   const cancel = () => controller.abort();
   isolatedAbort.signal.addEventListener("abort", cancel, { once: true });
   if (isolatedAbort.signal.aborted) cancel();
   let timedOut = false;
-  const timeout = context ? setTimeout(() => {
+  const timeout = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, args.e2eFileTimeout * 1000) : undefined;
-  const chunks: Buffer[] = [];
+  }, Math.max(1, deadlineMs - Date.now()));
+  const chunks: Buffer[] = [Buffer.from(budgetDiagnostic)];
   const failures: string[] = [];
   let lineBuf = "";
   let supervised: IsolatedProcess | undefined;
+  let spawnAttempted = false;
   let transport: { worker: E2eWorker; env: NodeJS.ProcessEnv } | undefined = context;
   let child: ReturnType<typeof spawn>;
   try {
@@ -756,6 +825,8 @@ async function runSpawnCapture(
       // the snapshot, even if authored source changes while a file is queued.
       const { startIsolatedProcess }: typeof import("./lib/e2e-process.ts") =
         await import(pathToFileURL(supervisorPath).href);
+      requireFileWorkBudget(budget);
+      spawnAttempted = true;
       supervised = await startIsolatedProcess({
         command: [cmd, ...cmdArgs], cwd, env,
         artifacts, signal: controller.signal,
@@ -765,9 +836,23 @@ async function runSpawnCapture(
   } catch (error) {
     if (timeout) clearTimeout(timeout);
     isolatedAbort.signal.removeEventListener("abort", cancel);
-    const output = String(error);
+    timedOut ||= error instanceof TestBudgetExhaustedError;
+    let output = String(error);
+    let cleanupError: string | undefined = spawnAttempted
+      ? "startup did not return a confirmed process handle; retain fixtures for inspection"
+      : undefined;
+    if (!context && transport && !spawnAttempted) {
+      try {
+        const { cleanupE2eTransports, finishE2eTemporaryFiles } = await import("./lib/e2e-workers.ts");
+        await cleanupE2eTransports(transport.worker, transport.env);
+        await finishE2eTemporaryFiles(transport.env, transport.env.AIDLC_TEST_WORKER_ROOT!, true);
+      } catch (cleanup) {
+        cleanupError = String(cleanup);
+        output += `\nerror: setup retirement failed: ${cleanupError}\n`;
+      }
+    }
     if (streamPath) appendFileSync(streamPath, output);
-    return { rc: timedOut ? 124 : 127, output, timedOut };
+    return { rc: timedOut ? 124 : 127, output, timedOut, cleanupError };
   }
   const onData = (chunk: Buffer): void => {
     chunks.push(chunk);
@@ -992,7 +1077,7 @@ async function runBunTestFile(
     streamPath,
   );
   if (run.timedOut) {
-    run.output += `\nerror: isolated e2e file exceeded ${args.e2eFileTimeout}s deadline\n`;
+    run.output += `\nerror: test file exceeded its allocated file/run deadline (file ceiling ${runnerFileTimeoutSeconds(args, context !== undefined)}s)\n`;
   }
 
   let xml = "";
@@ -1248,6 +1333,9 @@ async function runIsolatedE2e(): Promise<void> {
   let pool: Awaited<ReturnType<typeof prepareE2eWorkers>>;
   let poolCleanupSafe = true;
   try {
+    remainingOperationTimeoutMs(undefined, {
+      deadlineMs: RUN_DEADLINE_MS, phase: "E2E checkout preparation",
+    });
     pool = await prepareE2eWorkers(REPO_ROOT, logDir, limits.workers);
   } catch (error) {
     isolatedRunError = true;
@@ -1280,10 +1368,34 @@ async function runIsolatedE2e(): Promise<void> {
   const execute = async (file: string, workerId: number): Promise<FileExecution> => {
     if (isolatedInterrupted) throw new Error("isolated e2e interrupted");
     const worker = pool.workers[workerId - 1];
+    let budget: FileBudget;
+    try {
+      budget = allocateFileBudget(process.env, true);
+      requireFileWorkBudget(budget);
+    } catch (error) {
+      const name = resultName(file);
+      const timedOut = error instanceof TestBudgetExhaustedError;
+      const outcome: FileExecution = {
+        status: "FAIL", cases: { total: 0, passed: 0, failed: 0, skipped: 0 },
+        wallTimeMs: 0, timedOut, throttlingSignals: 0, evidenceComplete: false,
+      };
+      const row: ResultRow = { name, status: "FAIL", tests: 0, skipped: 0, failed: 1, duration: "0" };
+      writeMeta(name, row);
+      writeTestLog(file, row, timedOut ? 124 : 2, `error: ${String(error)}\n`);
+      fileExecutions.set(name, outcome);
+      Object.assign(records.get(file)!, outcome, { state: timedOut ? "TIMED_OUT" : "FAIL", reason: String(error) });
+      process.stdout.write(`=== DONE ${basename(file)} (FAIL: ${String(error)}) ===\n`);
+      report();
+      return outcome;
+    }
     assertE2eDiskSpace(worker.root);
     assertE2eDiskSpace(logDir);
     const artifacts = join(logDir, "e2e-artifacts", resultName(file));
-    const env = await e2eWorkerEnvironment(worker, file, artifacts, process.env);
+    const env = await e2eWorkerEnvironment(worker, file, artifacts, {
+      ...process.env,
+      [FILE_DEADLINE_ENV]: String(budget.deadlineMs),
+      [FILE_CLEANUP_ENV]: String(budget.cleanupMs),
+    });
     const record = records.get(file)!;
     Object.assign(record, {
       state: "RUNNING", worker: workerId, checkout: worker.root, socket: worker.socket,
@@ -1311,7 +1423,7 @@ async function runIsolatedE2e(): Promise<void> {
       // Stay inside finally so even a never-launched file releases its fixtures.
       isolatedAbort.signal.throwIfAborted();
       await checkWorkerSource("before");
-      outcome = await runBunTestFile(file, true, { worker, env, artifacts, force: true });
+      outcome = await runBunTestFile(file, true, { worker, env, artifacts, force: true, budget });
       if (outcome?.cleanupError) {
         poolCleanupSafe = false;
         cleanupFailure = new Error(outcome.cleanupError);
@@ -1746,7 +1858,7 @@ async function main(): Promise<number> {
       ? `--filter ${JSON.stringify(args.filter)} matched no test files in the selected tiers/shard. Check the filename, tier and shard.`
       : `--filter ${JSON.stringify(args.filter)} executed no test cases. --no-llm excludes Claude-dependent files; select deterministic tests or enable the requested live coverage.`);
   }
-  return runFailed() ? Math.max(1, failedFiles) : 0;
+  return runFailed() ? runnerFailureExitCode(failedFiles) : 0;
 }
 
 try {
@@ -1758,7 +1870,7 @@ try {
   // Seal last, after cleanup and report publication. A PASS receipt has no
   // remaining filesystem work that could subsequently invalidate the run.
   sealMatrixReceipt();
-  process.exit(runFailed() ? Math.max(1, failedFiles) : rc);
+  process.exit(runFailed() ? runnerFailureExitCode(failedFiles) : rc);
 } catch (err) {
   isolatedRunError = true;
   runnerFailure ??= String(err);

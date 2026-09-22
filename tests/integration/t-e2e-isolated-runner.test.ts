@@ -43,6 +43,7 @@ function fixture(files: Record<string, string>): string {
     "tests/harness/claude-gate.ts", "tests/harness/tui-runtime.ts", "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
     "tests/harness/runner-profile.ts",
+    "tests/harness/test-budget.ts",
     "tests/lib/bun-junit-to-meta.ts", "tests/lib/test-sharding.ts",
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
   ]) {

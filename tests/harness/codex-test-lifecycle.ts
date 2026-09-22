@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { remainingOperationTimeoutMs } from "./test-budget.ts";
 
 export interface CodexExecution {
   rc: number;
@@ -23,9 +24,15 @@ export function codexExecTimeout(requestedMs: number): number {
   if (!Number.isFinite(requestedMs) || requestedMs <= 0 || (deadline !== undefined && !Number.isFinite(deadline))) {
     throw new Error("Codex exec requires a finite positive budget and deadline");
   }
-  const remaining = deadline === undefined ? requestedMs : Math.floor(deadline - performance.now() - 30_000);
-  if (remaining <= 0) throw new Error("Codex exec budget exhausted; fixture cleanup reserve must remain available");
-  return Math.min(requestedMs, remaining);
+  // Existing callers use performance.now(); file deadlines cross process
+  // boundaries as epoch milliseconds. Convert without resetting the case pool.
+  const nowMs = Date.now();
+  return remainingOperationTimeoutMs(requestedMs, {
+    nowMs,
+    deadlineMs: deadline === undefined ? undefined : nowMs + deadline - performance.now(),
+    reserveMs: 30_000,
+    phase: "Codex exec",
+  })!;
 }
 
 /** Keep assertion output bounded; the per-exec log retains the complete capture. */

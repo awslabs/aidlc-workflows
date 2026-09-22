@@ -43,6 +43,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { parseLiteralShellInvocation } from "../../core/tools/aidlc-lib.ts";
+import { remainingOperationTimeoutMs } from "./test-budget.ts";
 
 // --- Debug trace (parity with sdk-drive.ts) ---------------------------------
 //
@@ -271,6 +272,7 @@ export class AcpSession {
   };
 
   constructor(projectDir: string, agent: string, trustAllTools: boolean) {
+    remainingOperationTimeoutMs(undefined, { phase: "ACP launch" });
     this.tracePath = acpTracePath();
     const args = ["kiro-cli", "acp", "--agent", agent];
     if (trustAllTools) args.push("--trust-all-tools");
@@ -428,7 +430,11 @@ export class AcpSession {
   }
 
   request(method: string, params: unknown, timeoutMs: number): Promise<{ result?: unknown; error?: unknown }> {
+    const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: `ACP ${method}` });
+    if (allocation === undefined) throw new Error("Invalid test budget: ACP requests require a positive timeout");
+    timeoutMs = allocation;
     const id = this.nextId++;
+    writeAcpTrace(this.tracePath, "budget", { phase: method, timeoutMs });
     this.traceDiagnostic("outbound_request", { id, method }); // No prompt/body.
     this.send({ jsonrpc: "2.0", id, method, params });
     return new Promise((resolve, reject) => {
@@ -523,6 +529,9 @@ function parseAuditEvents(projectDir: string): string[] | undefined {
 /** Run one agentic turn through `kiro-cli acp` and return structure. */
 export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResult> {
   const timeoutMs = opts.timeoutMs ?? 240_000;
+  // Validate the parent allocation before spawning; each RPC re-reads the same
+  // file deadline, so initialize/session-new time is spent before prompt work.
+  remainingOperationTimeoutMs(timeoutMs, { phase: "ACP turn" });
   const session =
     opts.session ?? new AcpSession(opts.projectDir, opts.agent ?? "aidlc", opts.trustAllTools ?? true);
 

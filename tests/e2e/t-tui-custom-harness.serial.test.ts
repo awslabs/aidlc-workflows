@@ -109,6 +109,7 @@
 // tmux backends, Node with type stripping for explicit legacy node-pty. The
 // driver subprocess remains the source of the `tui` mechanism evidence.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -145,8 +146,10 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 // Wedge-ceiling, never a budget (the timer lesson): one generous cap; pass on
 // the on-disk signal, not the clock. Matches the suite convention.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 interface Run {
   rc: number;
@@ -314,7 +317,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         );
       }
     },
-    90_000,
+    liveCaseTimeoutMs(0),
   );
 
   // -------------------------------------------------------------------------
@@ -516,7 +519,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
               "--until-file",
               PLAN_OUTPUT_REL,
               "--overall-timeout-ms",
-              String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+            String(Math.max(60000, LIVE_WORK_TIMEOUT_MS - 30000)),
             ],
             { stdio: "inherit" },
           );

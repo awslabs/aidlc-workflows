@@ -175,6 +175,13 @@ describe("bounded live file sharding", () => {
         .toEqual([false, tier === "unit", tier === "integration", tier === "e2e"]);
       expect(parsed.requireCoverage).toBe(FAMILIES[family].requireCoverage);
       expect(parsed.isolatedE2e).toBe(tier === "e2e");
+      expect(parsed.fileTimeout).toBe(2400);
+      expect(parsed.runTimeout).toBe(2400);
+      const bounded = parseRunnerArgs(liveRunnerCommand(family, "linux", [
+        "--file-timeout", "9000", "--run-timeout", "9000",
+      ], shard).slice(1), {});
+      expect(bounded.fileTimeout).toBe(2400);
+      expect(bounded.runTimeout).toBe(2400);
       if (tier === "e2e") {
         expect(parsed.bedrockParallel).toBe(2);
         expect(parsed.e2eFileTimeout).toBe(2400);

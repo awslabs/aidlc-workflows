@@ -87,6 +87,7 @@ jobs:
   test_native_terminal:
     name: Native terminal units (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -109,8 +110,53 @@ jobs:
       - run: bun scripts/package.ts
       # Explicit filters require executed cases in every selected file; select
       # real supervisor controls only on their owning platform.
-      - run: bun tests/run-tests.ts --unit --filter '${{ matrix.filter }}'
+      - name: Run native terminal contracts
+        timeout-minutes: 18
+        env:
+          TEST_FILTER: ${{ matrix.filter }}
+        run: |
+          set -euo pipefail
+          capture="$GITHUB_WORKSPACE/tmp/ci-native"
+          mkdir -p "$capture"
+          bash tests/run-tests.sh --debug -P 8 --unit --no-llm \
+            --file-timeout 900 --run-timeout 900 --filter "$TEST_FILTER" > "$capture/run.log" 2>&1 &
+          test_pid=$!
+          realpath "$capture/run.log"
+          stamp=""
+          for ((attempt=0; attempt<50; attempt++)); do
+            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+            if [ -n "$stamp" ]; then
+              realpath "$stamp"
+              break
+            fi
+            if ! kill -0 "$test_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          result=0
+          wait "$test_pid" || result=$?
+          if [ -z "$stamp" ]; then
+            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+          fi
+          if [ -z "$stamp" ] || [ ! -f "$stamp/summary.txt" ]; then result=1; fi
+          exit "$result"
+      - name: Sanitize native terminal evidence
+        id: sanitize_native
+        if: always()
+        run: |
+          bun scripts/ci-sanitize-logs.ts tests/logs
+          bun scripts/ci-sanitize-logs.ts tmp/ci-native
+      - name: Preserve native terminal evidence
+        if: always() && steps.sanitize_native.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-native-${{ runner.os }}
+          path: |
+            tests/logs/
+            tmp/ci-native/
+          include-hidden-files: true
+          if-no-files-found: error
       - name: Run Windows node-pty compatibility on manual dispatch
+        timeout-minutes: 18
         if: github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'
         env:
           AIDLC_TUI_BACKEND: node-pty
@@ -119,6 +165,7 @@ jobs:
           capture="$GITHUB_WORKSPACE/tmp/ci-node-pty"
           mkdir -p "$capture"
           bash tests/run-tests.sh --debug -P 8 --integration --no-llm \
+            --file-timeout 900 --run-timeout 900 \
             --filter '^t-tui-node-pty-compat$' > "$capture/run.log" 2>&1 &
           test_pid=$!
           realpath "$capture/run.log"
@@ -181,7 +228,7 @@ jobs:
       - name: Exercise recovery with production guards
         run: |
           mkdir -p "$GITHUB_WORKSPACE/tmp/ci-guard-contract"
-          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
+          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --run-timeout 900 --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
 
       - name: Preserve guard evidence
         if: always()
