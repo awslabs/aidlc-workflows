@@ -8733,7 +8733,8 @@ export const CONSTRUCTION_POLICY_RECOVERY =
 // this event, so the conductor cannot mint it through `aidlc-audit append`.
 export const SUMMARY_CONFIRMATION_CHECKPOINT =
   "Consolidated Summary Confirmation";
-export const SUMMARY_CONFIRMATION_HASH_SCOPE = "confirmed-content-v1";
+export const SUMMARY_CONFIRMATION_HASH_SCOPE = "confirmed-content-v2";
+const LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES: readonly string[] = ["confirmed-content-v1"];
 
 // Keep an opaque marker where an HTML comment was removed. It preserves the
 // required whitespace boundary in `##<!-- comment --> Heading` while allowing
@@ -9889,13 +9890,15 @@ export function checkSummaryConfirmationEvidence(
       );
     if (
       hashScope !== null &&
-      hashScope !== SUMMARY_CONFIRMATION_HASH_SCOPE
+      hashScope !== SUMMARY_CONFIRMATION_HASH_SCOPE &&
+      !LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES.includes(hashScope)
     ) {
       return failure(
         "SUMMARY_HASH_SCOPE_INVALID",
         `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
           `Hash Scope "${hashScope}". Supported: ` +
-          `"${SUMMARY_CONFIRMATION_HASH_SCOPE}". ${recovery}`,
+          `"${SUMMARY_CONFIRMATION_HASH_SCOPE}"; legacy scopes checked under current semantics: ` +
+          `${LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES.map((scope) => `"${scope}"`).join(", ")}. ${recovery}`,
         "stale",
       );
     }
@@ -9923,7 +9926,7 @@ export function checkSummaryConfirmationEvidence(
           value = createHash("sha256")
             .update(readFileSync(question.path))
             .digest("hex");
-        } else if (scope === SUMMARY_CONFIRMATION_HASH_SCOPE) {
+        } else if (scope === SUMMARY_CONFIRMATION_HASH_SCOPE || LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES.includes(scope)) {
           value = summaryConfirmationContentHash(
             readFileSync(question.path, "utf-8"),
           );
@@ -9952,6 +9955,16 @@ export function checkSummaryConfirmationEvidence(
     if (
       auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
     ) {
+			if (hashScope !== null && LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES.includes(hashScope)) {
+				return failure(
+					"SUMMARY_CONTENT_SEMANTICS_CHANGED",
+					`Refusing to complete "${stage.slug}": the summary-confirmation receipt for ${question.path} ` +
+						"predates the Markdown-parser upgrade. Either the confirmed content changed after confirmation " +
+						"or raw HTML content that v1 treated as confirmed text is no longer part of it. " +
+						"Raw HTML headings and control tags are now excluded from Markdown recognition. " + recoveryMessage,
+					"stale",
+				);
+			}
       return failure(
         "SUMMARY_CONTENT_STALE",
         `Refusing to complete "${stage.slug}": ${question.path} changed after ` +

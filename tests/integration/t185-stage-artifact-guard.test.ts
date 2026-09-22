@@ -1609,7 +1609,7 @@ X. Other (please specify)
       // Asserted without quote characters: this surface is JSON-encoded, so a quoted
       // substring would have to match the escaped wire form.
       expect(result.out).toContain("Supported:");
-      expect(result.out).toContain("confirmed-content-v1");
+      expect(result.out).toContain("confirmed-content-v2");
     });
 
     test("refuses same-second matching receipts from different audit shards", () => {
