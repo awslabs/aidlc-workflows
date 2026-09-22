@@ -24,6 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   guardProfileDescription,
   parseRunnerArgs,
+  preflightVerdict,
   RunnerArgsError,
   testGuardEnvironment,
   type ParsedArgs,
@@ -34,8 +35,8 @@ import {
   type ShardConfig,
 } from "./lib/test-sharding.ts";
 import type { E2eWorker } from "./lib/e2e-workers.ts";
-import type { E2eCaseCounts } from "./lib/e2e-plan.ts";
 import { createE2eNativeRoot, createE2eTemporaryRoot } from "./lib/e2e-workers.ts";
+import type { E2eCaseCounts } from "./lib/e2e-plan.ts";
 import type { IsolatedProcess } from "./lib/e2e-process.ts";
 import type { E2eLimits, E2eTask } from "./lib/e2e-scheduler.ts";
 
@@ -1550,9 +1551,7 @@ function writeVerboseSummary(): void {
 }
 
 function prerequisitePassed(result: FileExecution | undefined): boolean {
-  return result?.status === "PASS" && result.evidenceComplete === true &&
-    result.cases.total > 0 && result.cases.skipped === 0 &&
-    !result.timedOut && !result.cleanupError;
+  return preflightVerdict(result, { liveRequested: false, requireCoverage: true }) === "pass";
 }
 
 function sealMatrixReceipt(): void {
@@ -1650,12 +1649,18 @@ async function main(): Promise<number> {
       preflightRan = true;
       aggregateTierResults();
 
-      const preflightFailed = !prerequisitePassed(preflightResult);
-      if (preflightFailed) {
+      const verdict = preflightVerdict(preflightResult, {
+        liveRequested: process.env.AIDLC_CLAUDE_SDK_LIVE === "1" || process.env.AIDLC_TUI_LIVE === "1",
+        requireCoverage: args.requireCoverage,
+      });
+      if (verdict === "fail") {
         isolatedRunError = true;
         runnerFailure = "Claude capability prerequisite did not pass with complete, non-skipped evidence";
         process.stdout.write("\nPREFLIGHT FAILURE -- skipping remaining Claude-dependent tests\n");
         process.stdout.write("  Fix: ensure claude CLI is authenticated and API is responsive\n");
+        claudeGateOpen = false;
+      } else if (verdict === "skip") {
+        process.stdout.write("\nPREFLIGHT SKIP -- skipping remaining Claude-dependent tests\n");
         claudeGateOpen = false;
       }
     }

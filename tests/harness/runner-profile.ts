@@ -278,3 +278,21 @@ export function guardProfileDescription(profile: GuardProfile): string {
     ? "Guard profile: production (runner bypasses off; inherited off-switches forced to 0)"
     : "Guard profile: fixture (synthetic guard skips and direct audit authority enabled)";
 }
+
+interface PreflightResult {
+  status: "PASS" | "SKIP" | "FAIL";
+  cases: { total: number; skipped: number };
+  evidenceComplete?: boolean;
+  timedOut: boolean;
+  cleanupError?: string;
+}
+
+export function preflightVerdict(
+  result: PreflightResult | undefined,
+  options: { liveRequested: boolean; requireCoverage: boolean },
+): "pass" | "skip" | "fail" {
+  if (!result || result.status === "FAIL" || result.timedOut || result.cleanupError) return "fail";
+  if (result.status === "SKIP" && !options.liveRequested && !options.requireCoverage) return "skip";
+  return result.status === "PASS" && result.evidenceComplete === true &&
+    result.cases.total > 0 && result.cases.skipped === 0 ? "pass" : "fail";
+}

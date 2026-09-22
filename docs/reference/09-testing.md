@@ -393,7 +393,7 @@ they do not inherit development instructions or external-import prompts.
 
 ## Preflight Validation
 
-Before running unfiltered live-capable levels (integration or e2e), the runner executes `tests/integration/t19.test.ts` as a gate. It drives a tiny real turn through the **Claude Agent SDK** (the same live path the integration tier uses) and asserts only on deterministic surfaces. If the preflight fails, deterministic files still run and Claude-dependent files are skipped with per-file `SKIP` entries.
+Before running unfiltered live-capable levels (integration or e2e), the runner executes `tests/integration/t19.test.ts` as a gate. It drives a tiny real turn through the **Claude Agent SDK** (the same live path the integration tier uses) and asserts only on deterministic surfaces. A skipped preflight closes the Claude gate without failing a default run; `AIDLC_CLAUDE_SDK_LIVE=1`, `AIDLC_TUI_LIVE=1`, or `--require-coverage` instead requires complete, non-skipped passing evidence. An actual preflight failure, timeout, or cleanup error fails the run in every mode. Whether the preflight skips or fails, deterministic files still run and Claude-dependent files receive per-file `SKIP` entries.
 
 The SDK driver gives each `driveAidlc()` call an ephemeral `CLAUDE_CONFIG_DIR`
 and disables session persistence. Live tests therefore leave the user's
