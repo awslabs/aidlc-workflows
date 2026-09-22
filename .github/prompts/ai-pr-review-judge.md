@@ -31,9 +31,11 @@ not the PR description:
   deterministically and renders accepted risks from the ledger itself. Restate
   a still-`open` finding when it still holds so it keeps its identity; an open
   P0/P1 you omit while its cited lines are provably unchanged is retained by
-  the publisher and still requires author changes. Identity is category plus
-  cited lines: report a finding as new only when no ledger entry of the same
-  category covers any of its cited lines.
+  the publisher and still requires author changes. Set `ledgerId` to the id of
+  the ledger entry a finding IS (the same defect, whatever its wording), or
+  `null` for a new one. Identity is category plus cited lines; a finding on
+  lines covered by an `accepted` or `rejected` entry is treated as a NEW defect
+  unless you set that entry's id.
 - Verify concrete correctness, compatibility, security, state, recovery,
   user-experience, workflow-cost, and AIDLC direction consequences.
 - Consolidate candidates with one root cause and choose the category that best
@@ -167,6 +169,7 @@ preamble, progress, or trailing text:
       "priority": "P1",
       "category": "contracts",
       "title": "Concise title",
+      "ledgerId": null,
       "evidence": [
         {"source": "DIFF", "path": "path/to/file", "line": 42, "side": "RIGHT"}
       ],

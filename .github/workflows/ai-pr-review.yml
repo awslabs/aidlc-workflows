@@ -271,6 +271,16 @@ jobs:
           elif [ "$EXISTING_DECISION" = "maintainer/merge" ]; then
             label_outcome="reviewed-merge"
           fi
+          # Maintainer decisions made since that review live in the ledger: its
+          # verdict for this head is the effective one for every surface.
+          ledger_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+            --repo "$REPO" --pr "$PR_NUMBER")"
+          if [ "$(jq -r '.head // empty' <<<"$ledger_verdict")" = "$HEAD_SHA" ]; then
+            case "$(jq -r .decision <<<"$ledger_verdict")" in
+              merge) label_outcome="reviewed-merge"; EXISTING_STATE="COMMENTED" ;;
+              change) label_outcome="reviewed-change"; EXISTING_STATE="CHANGES_REQUESTED" ;;
+            esac
+          fi
           if [ -n "$label_outcome" ]; then
             bun .ai-review-controls/scripts/ai-pr-review.ts labels \
               --repo "$REPO" \
@@ -654,10 +664,10 @@ jobs:
               --context-dir .ai-review-context \
               --repo-dir .)"
             publish_status=0
-            bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
+            ledger_published_record="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
               --repo "$REPO" \
               --pr "$PR_NUMBER" \
-              --input .ai-pr-review-final/ledger.json || publish_status=$?
+              --input .ai-pr-review-final/ledger.json)" || publish_status=$?
             if [ "$publish_status" -eq 0 ]; then
               ledger_published=true
               break
@@ -731,6 +741,22 @@ jobs:
           done
           echo "published=true" >> "$GITHUB_OUTPUT"
           : > .ai-pr-review-final/published
+
+          # A /aida command may have landed between the ledger write above and the
+          # review just posted. If the ledger moved, apply its verdict for this head
+          # to the labels and review state exactly as the command workflow would.
+          published_digest="${ledger_published_record##*digest=}"
+          live_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+            --repo "$REPO" --pr "$PR_NUMBER")"
+          if [ "$(jq -r '.digest // empty' <<<"$live_verdict")" != "$published_digest" ] \
+            && [ "$(jq -r '.head // empty' <<<"$live_verdict")" = "$HEAD_SHA" ]; then
+            echo "::notice::Maintainer decisions landed during publication; refreshing the verdict from the ledger"
+            live_decision="$(jq -r .decision <<<"$live_verdict")"
+            bun .ai-review-controls/scripts/ai-pr-review.ts refresh-verdict \
+              --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+              --decision "$live_decision" --reason "maintainer /aida command during publication"
+            if [ "$live_decision" = "change" ]; then EVENT="REQUEST_CHANGES"; else EVENT="COMMENT"; fi
+          fi
 
           if [ "$EVENT" = "REQUEST_CHANGES" ]; then
             echo "::error::AI review found a P0 or P1 issue"

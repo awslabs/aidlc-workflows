@@ -73,38 +73,14 @@ jobs:
           REFRESH_DECISION: ${{ steps.command.outputs.refresh_decision }}
         run: |
           set -euo pipefail
-          # A decision changes the effective verdict of the reviewed head. The
-          # decision itself was re-derived by the script from persisted state under
-          # the SAME invariants the review validator uses (open findings at that
-          # head, readiness, risk, the stored decision), never from a blocker count
-          # alone. Reflect it in the managed labels and, when the derived decision
-          # is merge, dismiss the bot's stale CHANGES_REQUESTED review so the head
-          # can proceed without an artificial commit. The workflow check of the
-          # original run is not rewritten; labels and review state are the surfaces
-          # a command owns. Only acts when the reviewed head is still the PR head.
-          head="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
-          if [ "$head" != "$REFRESH_HEAD" ]; then
-            echo "::notice::The PR advanced past the reviewed head; the next review applies the ledger"
-            exit 0
-          fi
-          current="$(bun .github/scripts/ai-pr-review.ts label-state \
-            --repo "$REPO" --pr "$PR_NUMBER" --expected-head "$head")"
-          if [ "$current" != "reviewed-change" ] && [ "$current" != "reviewed-merge" ]; then
-            echo "::notice::No published AIDA review for the current head; labels left unchanged"
-            exit 0
-          fi
-          if [ "$REFRESH_DECISION" = "merge" ]; then
-            outcome="reviewed-merge"
-          else
-            outcome="reviewed-change"
-          fi
-          bun .github/scripts/ai-pr-review.ts labels \
-            --repo "$REPO" --pr "$PR_NUMBER" --expected-head "$head" --outcome "$outcome"
-          if [ "$outcome" = "reviewed-merge" ]; then
-            mapfile -t blocking_reviews < <(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-              --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state == \"CHANGES_REQUESTED\" and .commit_id == \"$head\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=\"))) | .id")
-            for review_id in "${blocking_reviews[@]}"; do
-              gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$review_id/dismissals" \
-                -f message="The re-derived decision for this head is maintainer/merge after /aida decisions; see the findings ledger." >/dev/null
-            done
-          fi
+          # The decision was re-derived by the script from persisted state under
+          # the SAME invariants the review validator uses (every open finding,
+          # readiness, risk, the stored decision), never from a blocker count
+          # alone. refresh-verdict applies it to the labels and the bot's review
+          # state for the reviewed head, and does nothing when the PR moved on.
+          bun .github/scripts/ai-pr-review.ts refresh-verdict \
+            --repo "$REPO" \
+            --pr "$PR_NUMBER" \
+            --head "$REFRESH_HEAD" \
+            --decision "$REFRESH_DECISION" \
+            --reason "maintainer /aida command"

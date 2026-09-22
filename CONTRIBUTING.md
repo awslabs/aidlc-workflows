@@ -156,16 +156,20 @@ line, and a line may name several findings:
 - `reopen` — reverse an accept or reject.
 - `status` — re-render the ledger.
 
-A comment is applied all-or-nothing: if one line is invalid, nothing is applied
-and AIDA replies naming the line. The workflow verifies the commenter's
+A comment is applied all-or-nothing: if one line is invalid (an unknown
+command, a missing reason, a reason over 500 characters, a rejected P0/P1),
+nothing is applied and AIDA replies naming the line. The workflow verifies the commenter's
 permission through GitHub's collaborators API before applying anything and
 reacts 👍 (applied), 👎 (no write access), or 😕 (usage error, with a reply).
 After a command changes the ledger, AIDA re-derives the decision for the
-reviewed head from persisted state under the same rules the review uses (open
-findings at that head, readiness, risk), refreshes the managed labels and, when
-that decision is `maintainer/merge`, dismisses its own `CHANGES_REQUESTED`
-review so the head can proceed without an artificial commit. The check of the
-original review run is not rewritten. An open P0/P1 that a later review omits
+reviewed head from persisted state under the same rules the review uses (every
+open finding, readiness, risk) and refreshes the managed labels. When that
+decision is `maintainer/merge`, it dismisses its own `CHANGES_REQUESTED`
+review so the head can proceed without an artificial commit; when a `reopen`
+turns it back into `author/change`, it posts a blocking review for the head.
+The check of the original review run is not rewritten. A review that finishes
+while a command is being applied re-checks the ledger before it ends and
+applies the same refresh. An open P0/P1 that a later review omits
 while at least one of its cited lines is provably unchanged is *retained*: it
 stays in the review and keeps the next action with the author until the code
 changes or a maintainer accepts it. A finding whose cited code is gone, or

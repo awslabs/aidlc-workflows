@@ -38,6 +38,9 @@ export interface LedgerAnchor {
   path?: string;
   side?: DiffSide;
   line?: number;
+  // quote anchors: the length of the trimmed quote, so presence can be checked
+  // against current PR metadata without storing the quote itself.
+  length?: number;
   sha256: string;
 }
 
@@ -115,6 +118,9 @@ export interface LedgerCommand {
 }
 
 export interface ReviewFindingInput {
+  // The judge's explicit identification of an existing ledger entry. Only an
+  // explicit id lets a finding inherit that entry's maintainer decision.
+  ledgerId?: string;
   priority: Priority;
   category: string;
   title: string;
@@ -189,7 +195,15 @@ export function fileAnchor(path: string, contentSha256: string): LedgerAnchor {
 }
 
 export function quoteAnchor(quote: string): LedgerAnchor {
-  return { kind: "quote", sha256: sha256(`quote\0${quote.trim()}`) };
+  const trimmed = quote.trim();
+  return { kind: "quote", length: trimmed.length, sha256: sha256(`quote\0${trimmed}`) };
+}
+
+// Anchors written before their evaluation existed (a migrated v1 anchor, a
+// position without its line, a quote without its length). They identify a
+// finding but can never be evaluated at a head.
+export function isLegacyAnchor(anchor: LedgerAnchor): boolean {
+  return (anchor.kind === "position" && anchor.line === undefined) || (anchor.kind === "quote" && anchor.length === undefined);
 }
 
 // The fallback when a cited line has no readable text. Its presence at a head is
@@ -214,6 +228,9 @@ function validateAnchor(value: unknown, label: string): LedgerAnchor {
   if (value.line !== undefined && (!Number.isInteger(value.line) || Number(value.line) < 1)) {
     throw new Error(`${label}.line must be a positive integer`);
   }
+  if (value.length !== undefined && (!Number.isInteger(value.length) || Number(value.length) < 1)) {
+    throw new Error(`${label}.length must be a positive integer`);
+  }
   if (!/^[0-9a-f]{64}$/.test(text(value.sha256))) throw new Error(`${label}.sha256 is invalid`);
   if (value.path !== undefined && (typeof value.path !== "string" || value.path.length === 0)) {
     throw new Error(`${label}.path must be a non-empty string`);
@@ -228,6 +245,7 @@ function validateAnchor(value: unknown, label: string): LedgerAnchor {
     ...(typeof value.path === "string" ? { path: value.path } : {}),
     ...(value.side === "LEFT" || value.side === "RIGHT" ? { side: value.side } : {}),
     ...(typeof value.line === "number" ? { line: value.line } : {}),
+    ...(typeof value.length === "number" ? { length: value.length } : {}),
     sha256: text(value.sha256),
   };
 }
@@ -378,7 +396,7 @@ export function compactLedger(input: Ledger, budget = TARGET_LEDGER_BYTES): Ledg
   while (size() > budget && ledger.events.length > 0) {
     ledger.events.splice(0, Math.max(1, Math.floor(ledger.events.length / 10)));
   }
-  while (size() > budget) {
+  while (size() > budget || ledger.findings.length > MAX_FINDINGS) {
     const index = ledger.findings.findIndex(entry => entry.status === "resolved");
     if (index === -1) break;
     ledger.findings.splice(index, 1);
@@ -537,14 +555,21 @@ export function ledgerVerdict(ledger: Ledger): LedgerVerdict | null {
 // findings; the reason is everything after the last id.
 export function parseCommands(body: string): LedgerCommand[] {
   const commands: LedgerCommand[] = [];
-  for (const rawLine of body.replace(/\r\n/g, "\n").split("\n")) {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  for (const [index, rawLine] of lines.entries()) {
     const line = rawLine.trim();
+    const where = `line ${index + 1}: `;
     if (line.length === 0) {
       if (commands.length === 0) continue;
       break;
     }
+    // Prose ends the command block. A `/aida` line that is not a valid command
+    // is a usage error for the whole comment (all-or-nothing), never prose.
+    if (!line.startsWith("/aida")) break;
     const match = /^\/aida\s+(accept|reject|reopen|status)\b(.*)$/.exec(line);
-    if (!match) break;
+    if (!match) {
+      throw new Error(`${where}unrecognized command \`${line.slice(0, 60)}\`; commands are accept, reject, reopen, status`);
+    }
     const kind = match[1] as CommandKind;
     const rest = match[2].trim();
     const ids: string[] = [];
@@ -556,7 +581,11 @@ export function parseCommands(body: string): LedgerCommand[] {
       remainder = remainder.slice(idMatch[0].length);
     }
     const command: LedgerCommand = { kind, ids: [...new Set(ids)] };
-    if (remainder.trim().length > 0) command.reason = remainder.trim().slice(0, MAX_REASON_LENGTH);
+    const reason = remainder.trim();
+    if (reason.length > MAX_REASON_LENGTH) {
+      throw new Error(`${where}the reason is ${reason.length} characters; the limit is ${MAX_REASON_LENGTH}`);
+    }
+    if (reason.length > 0) command.reason = reason;
     commands.push(command);
     if (commands.length > MAX_COMMANDS_PER_COMMENT) throw new Error(`more than ${MAX_COMMANDS_PER_COMMENT} commands in one comment`);
   }
@@ -596,7 +625,6 @@ export function applyCommands(
         finding.status = "open";
         delete finding.decision;
         event("reopened", { id });
-        messages.push(`${id} reopened.`);
         continue;
       }
       if (command.kind === "reject" && isBlocking(finding.priority)) {
@@ -608,13 +636,30 @@ export function applyCommands(
       finding.status = command.kind === "accept" ? "accepted" : "rejected";
       finding.decision = decision;
       event(finding.status, { id, reason: command.reason });
-      messages.push(`${id} ${finding.status} by @${actor.login}: ${command.reason}`);
     }
+    const ids = command.ids.join(", ");
+    messages.push(
+      command.kind === "reopen"
+        ? `${ids} reopened by @${actor.login}.`
+        : `${ids} ${command.kind === "accept" ? "accepted" : "rejected"} by @${actor.login}: ${command.reason}`,
+    );
   });
   return { ledger: next, messages };
 }
 
 // --- reconciliation ---------------------------------------------------------
+
+// Frees one slot for a new finding by dropping the oldest resolved entry. Ids
+// never renumber; earlier review bodies keep the dropped entry's record.
+function makeRoom(ledger: Ledger): void {
+  while (ledger.findings.length >= MAX_FINDINGS) {
+    const index = ledger.findings.findIndex(entry => entry.status === "resolved");
+    if (index === -1) {
+      throw new Error(`the ledger holds ${MAX_FINDINGS} undecided findings; accept, reject, or fix some before new ones can be recorded`);
+    }
+    ledger.findings.splice(index, 1);
+  }
+}
 
 function anchorSet(anchors: LedgerAnchor[]): Set<string> {
   return new Set(anchors.map(anchor => anchor.sha256));
@@ -643,17 +688,26 @@ export function reconcileLedger<T extends ReviewFindingInput>(
 
   for (const finding of findings) {
     const hashes = anchorSet(finding.anchors);
-    // Identity is a defect fingerprint: the same category AND at least one shared
-    // exact anchor. A different category on the same lines is a different
-    // finding and never inherits another finding's decision.
-    const match = ledger.findings.find(
-      entry =>
-        entry.status !== "resolved" &&
-        !matchedIds.has(entry.id) &&
-        entry.category === finding.category &&
-        entry.anchors.some(anchor => hashes.has(anchor.sha256)),
-    );
+    // Identity. An explicit `ledgerId` from the judge names the entry this
+    // finding IS, and is the only way to reach an accepted or rejected entry.
+    // Without it, the fingerprint (same category AND a shared exact anchor)
+    // matches OPEN entries only: a finding on lines a maintainer decided on is a
+    // new defect until the judge says otherwise, so a distinct vulnerability on
+    // an accepted line can never ride that acceptance.
+    const explicit = finding.ledgerId
+      ? ledger.findings.find(entry => entry.id === finding.ledgerId && entry.status !== "resolved" && !matchedIds.has(entry.id))
+      : undefined;
+    const match =
+      explicit ??
+      ledger.findings.find(
+        entry =>
+          entry.status === "open" &&
+          !matchedIds.has(entry.id) &&
+          entry.category === finding.category &&
+          entry.anchors.some(anchor => hashes.has(anchor.sha256)),
+      );
     if (!match) {
+      makeRoom(ledger);
       const id = `F${ledger.nextId}`;
       ledger.nextId += 1;
       ledger.findings.push({
@@ -705,25 +759,29 @@ export function reconcileLedger<T extends ReviewFindingInput>(
 
   for (const entry of ledger.findings) {
     if (entry.status !== "open" || matchedIds.has(entry.id)) continue;
-    // Retention needs positive presence. An open finding the judge did not
-    // restate is retained (verdict-bearing when blocking) only while at least
-    // one of its anchors is provably still at the head. Otherwise it resolves:
-    // either the cited code is gone, or nothing about it can be evaluated (a
-    // deleted line, a position, a quote, a migrated anchor) and the judge, who
-    // read the head, no longer reports it. Unknown never means retained forever.
+    // An open finding the judge did not restate resolves only when its cited
+    // condition is positively gone (every anchor false), or when none of its
+    // anchors can ever be evaluated (all legacy: migrated, or written before
+    // evaluation existed). Otherwise it is retained: present anchors mean the
+    // code is unchanged; an unknown verdict on an evaluable anchor is not
+    // evidence of a fix, and a model omission never closes a blocker.
     const verdicts = entry.anchors.map(anchor => presentAtHead(anchor));
-    if (verdicts.some(verdict => verdict === true)) {
+    const gone = verdicts.every(verdict => verdict === false);
+    const legacy = entry.anchors.every(isLegacyAnchor);
+    if (!gone && !legacy) {
       if (!isBlocking(entry.priority)) continue;
       entry.lastSeen = { head, at };
-      push("seen", entry.id, { reason: "retained: not restated, cited code unchanged" });
+      push("seen", entry.id, {
+        reason: verdicts.some(verdict => verdict === true)
+          ? "retained: not restated, cited code unchanged"
+          : "retained: not restated, presence could not be evaluated",
+      });
       result.retained.push(structuredClone(entry));
       continue;
     }
     entry.status = "resolved";
     entry.lastSeen = { head, at };
-    push("resolved", entry.id, {
-      reason: verdicts.every(verdict => verdict === false) ? "cited code is gone" : "not restated; cited code not evaluable at this head",
-    });
+    push("resolved", entry.id, { reason: gone ? "cited code is gone" : "not restated; legacy anchors cannot be evaluated" });
     result.resolvedIds.push(entry.id);
   }
   return result;
@@ -803,17 +861,82 @@ export function headFileSha256(contextDir: string, path: string): string | null 
   return sha256(readFileSync(target));
 }
 
-// true: the anchored content is still present at the head; false: positively
-// gone (including a file that no longer exists at the head); null: unknown
-// (deleted-line, position, and quote anchors cannot be evaluated from head
-// contents).
-export function headContainsAnchor(contextDir: string, anchor: LedgerAnchor): boolean | null {
-  if (!anchor.path || anchor.kind === "position" || anchor.kind === "quote") return null;
+interface ManifestFile {
+  path: string;
+  previousPath?: string;
+  added: Array<{ start: number; end: number }>;
+  deleted: Array<{ start: number; end: number }>;
+}
+
+function readJson(path: string): unknown {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function manifestFiles(contextDir: string): ManifestFile[] {
+  const manifest = readJson(resolve(contextDir, "changed-files.json"));
+  if (!isRecord(manifest) || !Array.isArray(manifest.files)) return [];
+  return manifest.files.filter(isRecord).map(file => ({
+    path: text(file.path),
+    ...(typeof file.previousPath === "string" ? { previousPath: file.previousPath } : {}),
+    added: Array.isArray(file.added) ? (file.added as ManifestFile["added"]) : [],
+    deleted: Array.isArray(file.deleted) ? (file.deleted as ManifestFile["deleted"]) : [],
+  }));
+}
+
+function inRanges(line: number, ranges: Array<{ start: number; end: number }>): boolean {
+  return ranges.some(range => line >= range.start && line <= range.end);
+}
+
+// Evaluates an anchor against the immutable review context of the current head:
+//   line/RIGHT    the exact line is still in the head snapshot of the file
+//   line/LEFT     the exact base line is still deleted by the current diff
+//                 (base tree + deleted ranges in changed-files.json)
+//   position      the cited line number is still inside the diff ranges
+//   quote         the quoted text still occurs in the PR title or body (pr.json)
+//   file          the file's content hash is unchanged
+// true: still present; false: positively gone (including a file that no longer
+// exists at the head or a path no longer in the diff); null: cannot be evaluated
+// (legacy anchors, escaped paths, missing context files).
+export function headContainsAnchor(contextDir: string, anchor: LedgerAnchor, repoDir = process.cwd()): boolean | null {
+  if (isLegacyAnchor(anchor)) return null;
+  if (anchor.kind === "quote") {
+    const metadata = readJson(resolve(contextDir, "pr.json"));
+    if (!isRecord(metadata) || anchor.length === undefined) return null;
+    const length = anchor.length;
+    for (const source of [text(metadata.title), text(metadata.body)]) {
+      for (let start = 0; start + length <= source.length; start++) {
+        if (quoteAnchor(source.slice(start, start + length)).sha256 === anchor.sha256) return true;
+      }
+    }
+    return false;
+  }
+  if (!anchor.path) return null;
+  const path = anchor.path;
+  if (anchor.kind === "position") {
+    if (anchor.line === undefined || anchor.side === undefined) return null;
+    if (!existsSync(resolve(contextDir, "changed-files.json"))) return null;
+    const files = manifestFiles(contextDir);
+    const file = files.find(entry => (anchor.side === "RIGHT" ? entry.path : (entry.previousPath ?? entry.path)) === path);
+    return file ? inRanges(anchor.line, anchor.side === "RIGHT" ? file.added : file.deleted) : false;
+  }
+  if (anchor.kind === "line" && anchor.side === "LEFT") {
+    if (!existsSync(resolve(contextDir, "changed-files.json"))) return null;
+    const target = confined(resolve(repoDir), path);
+    if (!target) return null;
+    const file = manifestFiles(contextDir).find(entry => (entry.previousPath ?? entry.path) === path);
+    if (!file || !existsSync(target)) return false;
+    const lines = readFileSync(target, "utf8").split("\n");
+    return lines.some((lineText, index) => inRanges(index + 1, file.deleted) && lineAnchor(path, "LEFT", lineText).sha256 === anchor.sha256);
+  }
   if (anchor.kind === "line" && anchor.side !== "RIGHT") return null;
-  const target = confined(resolve(contextDir, "head"), anchor.path);
+  const target = confined(resolve(contextDir, "head"), path);
   if (!target) return null;
   if (!existsSync(target)) return false;
-  const path = anchor.path;
   if (anchor.kind === "file") return fileAnchor(path, sha256(readFileSync(target))).sha256 === anchor.sha256;
   return readFileSync(target, "utf8").split("\n").some(lineText => lineAnchor(path, "RIGHT", lineText).sha256 === anchor.sha256);
 }
@@ -917,7 +1040,7 @@ function react(repository: string, commentId: number, content: "+1" | "-1" | "co
   }
 }
 
-const USAGE = "Usage: put commands on the first lines of a comment, one per line — `/aida accept F# [F#…] <reason>`, `/aida reject F# [F#…] <reason>`, `/aida reopen F# [F#…]`, `/aida status`. Nothing was applied.";
+const USAGE = `Usage: put commands on the first lines of a comment, one per line — \`/aida accept F# [F#…] <reason>\`, \`/aida reject F# [F#…] <reason>\`, \`/aida reopen F# [F#…]\`, \`/aida status\`. Reasons are limited to ${MAX_REASON_LENGTH} characters. Nothing was applied.`;
 
 export interface CommandOutcome {
   status: "applied" | "denied" | "ignored" | "rejected";
@@ -939,12 +1062,21 @@ export function runCommand(
   if (!isRecord(comment) || !isRecord(comment.user)) throw new Error("comment is unreadable");
   if (comment.user.login !== actorLogin) throw new Error("comment author does not match the event actor");
   if (comment.user.type === "Bot") return { status: "ignored", message: "bot author", openBlocking: null, refresh: null };
+  const reject = (error: unknown): CommandOutcome => {
+    react(repository, commentId, "confused", ghExecutable);
+    const message = error instanceof Error ? error.message : String(error);
+    ghJson(
+      ["api", "--method", "POST", `repos/${repository}/issues/${pullRequest}/comments`, "--input", "-"],
+      ghExecutable,
+      `${JSON.stringify({ body: `@${actorLogin} ${message}.\n\n${USAGE}` })}\n`,
+    );
+    return { status: "rejected", message, openBlocking: null, refresh: null };
+  };
   let commands: LedgerCommand[];
   try {
     commands = parseCommands(text(comment.body));
   } catch (error) {
-    react(repository, commentId, "confused", ghExecutable);
-    return { status: "rejected", message: error instanceof Error ? error.message : String(error), openBlocking: null, refresh: null };
+    return reject(error);
   }
   if (commands.length === 0) return { status: "ignored", message: "not a command", openBlocking: null, refresh: null };
   if (!actorHasWrite(repository, actorLogin, ghExecutable)) {
@@ -957,14 +1089,7 @@ export function runCommand(
     try {
       applied = applyCommands(structuredClone(loaded.ledger), commands, { login: actorLogin, at: now, commentId });
     } catch (error) {
-      react(repository, commentId, "confused", ghExecutable);
-      const message = error instanceof Error ? error.message : String(error);
-      ghJson(
-        ["api", "--method", "POST", `repos/${repository}/issues/${pullRequest}/comments`, "--input", "-"],
-        ghExecutable,
-        `${JSON.stringify({ body: `@${actorLogin} ${message}.\n\n${USAGE}` })}\n`,
-      );
-      return { status: "rejected", message, openBlocking: null, refresh: null };
+      return reject(error);
     }
     try {
       publishLedgerComment(repository, pullRequest, applied.ledger, loaded.commentId, loaded.migrated, ghExecutable, loaded.digest);
@@ -1041,12 +1166,21 @@ function main(): void {
     const existing = loadLedgerComment(repository, pullRequest);
     try {
       const id = publishLedgerComment(repository, pullRequest, input.ledger, existing.commentId, input.migrated, "gh", input.expectedDigest);
-      process.stdout.write(`comment ${id}\n`);
+      process.stdout.write(`comment ${id} digest=${ledgerDigest(compactLedger(input.ledger))}\n`);
     } catch (error) {
       if (!(error instanceof LedgerConflictError)) throw error;
       process.stderr.write("::notice::ai-pr-ledger publish: the ledger comment changed since it was read\n");
       process.exit(LEDGER_CONFLICT_EXIT);
     }
+    return;
+  }
+  if (command === "verdict") {
+    // The live ledger's effective verdict for the head it last reviewed, plus the
+    // comment's digest, so a publisher can tell whether a command landed after
+    // its own write.
+    const live = loadLedgerComment(argValue(args, "--repo"), Number(argValue(args, "--pr")));
+    const verdict = ledgerVerdict(live.ledger);
+    process.stdout.write(`${JSON.stringify({ ...(verdict ?? { head: null, decision: null, openBlocking: null }), digest: live.digest })}\n`);
     return;
   }
   if (command === "command") {
@@ -1055,7 +1189,7 @@ function main(): void {
     process.stdout.write(`${outcome.status}: ${outcome.message}\n`);
     return;
   }
-  throw new Error("usage: ai-pr-ledger.ts fetch|merge|publish|command");
+  throw new Error("usage: ai-pr-ledger.ts fetch|merge|publish|verdict|command");
 }
 
 if (import.meta.main) {

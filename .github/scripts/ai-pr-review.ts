@@ -430,6 +430,85 @@ export function reconcileReviewLabels(
   return true;
 }
 
+export type RefreshOutcome = "applied" | "moved" | "no-review";
+
+// Applies a verdict re-derived from the findings ledger to every surface a
+// command owns for the reviewed head: the managed labels and the bot's review
+// state. `change` needs an active CHANGES_REQUESTED review from the bot on the
+// head (a stale merge review cannot be dismissed, so a blocking one is posted
+// under the same context); `merge` dismisses the bot's blocking reviews. The
+// workflow check of the original run is not rewritten.
+export function refreshVerdict(
+  repository: string,
+  pullRequest: number,
+  head: string,
+  decision: "merge" | "change",
+  reason: string,
+  ghExecutable = "gh",
+): RefreshOutcome {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("repository must use owner/name format");
+  }
+  assertSha(head, "head");
+  const pull = record(
+    JSON.parse(ghRaw(["api", `repos/${repository}/pulls/${pullRequest}`], ghExecutable)),
+    "pull request",
+  );
+  if (!pullIsEligible(pull, head)) return "moved";
+  const current = outcomeForLabels(pullLabels(pull));
+  if (current !== "reviewed-change" && current !== "reviewed-merge") return "no-review";
+  const reviews = paginatedRecords(`repos/${repository}/pulls/${pullRequest}/reviews`, ghExecutable).filter(
+    review =>
+      record(review.user ?? {}, "review user").login === "github-actions[bot]" &&
+      text(review.commit_id) === head &&
+      text(review.body).startsWith("<!-- ai-pr-review context="),
+  );
+  if (reviews.length === 0) return "no-review";
+  reconcileReviewLabels(
+    repository,
+    pullRequest,
+    decision === "merge" ? "reviewed-merge" : "reviewed-change",
+    head,
+    ghExecutable,
+  );
+  const blocking = reviews.filter(review => text(review.state) === "CHANGES_REQUESTED");
+  if (decision === "merge") {
+    for (const review of blocking) {
+      ghRaw(
+        [
+          "api",
+          "--method",
+          "PUT",
+          `repos/${repository}/pulls/${pullRequest}/reviews/${integer(review.id, "review id")}/dismissals`,
+          "--input",
+          "-",
+        ],
+        ghExecutable,
+        `${JSON.stringify({ message: `The decision for this head was re-derived as maintainer/merge from the findings ledger (${reason}).` })}\n`,
+      );
+    }
+    return "applied";
+  }
+  if (blocking.length > 0) return "applied";
+  const contextMatch = /<!-- ai-pr-review context=([0-9a-f]{64}) -->/.exec(text(reviews[0].body));
+  if (!contextMatch) return "no-review";
+  const body = [
+    `<!-- ai-pr-review context=${contextMatch[1]} -->`,
+    "<!-- ai-pr-review decision=author/change -->",
+    `The decision for \`${head}\` was re-derived as **author/change** from the findings ledger (${reason}). The open blocking findings are listed in the ledger comment; the earlier review body stays as the assessment of this head.`,
+    "",
+    "Reviewed by AIDA (AI-DLC Developer Agent).",
+    "",
+    `[AI-PR-REVIEWED] ${head}`,
+  ].join("\n");
+  ghRaw(
+    ["api", "--method", "POST", `repos/${repository}/pulls/${pullRequest}/reviews`, "--input", "-"],
+    ghExecutable,
+    `${JSON.stringify({ commit_id: head, event: "REQUEST_CHANGES", body })}\n`,
+  );
+  return "applied";
+}
+
 export function currentReviewLabelOutcome(
   repository: string,
   pullRequest: number,
@@ -1024,10 +1103,21 @@ export function parseStructuredReview(
 
     const title = requiredText(finding.title, `findings[${index}].title`, 160);
     if (/[\r\n]/.test(title)) throw new Error(`findings[${index}].title must be one line`);
+    // The judge's explicit identification of an existing ledger entry (null or
+    // absent when the finding is new). Validated as a shape here; the ledger
+    // decides whether the id exists.
+    let ledgerId: string | undefined;
+    if (finding.ledgerId !== undefined && finding.ledgerId !== null) {
+      if (typeof finding.ledgerId !== "string" || !/^F[1-9][0-9]*$/.test(finding.ledgerId)) {
+        throw new Error(`findings[${index}].ledgerId must be a ledger id such as F3`);
+      }
+      ledgerId = finding.ledgerId;
+    }
     return {
       priority,
       category: category as FindingCategory,
       title,
+      ...(ledgerId ? { ledgerId } : {}),
       evidence,
       problem: requiredText(finding.problem, `findings[${index}].problem`, 3000),
       impact: requiredText(finding.impact, `findings[${index}].impact`, 1500),
@@ -1106,8 +1196,9 @@ export function applyLedgerToReview(
   repoDir: string,
   at = new Date().toISOString(),
 ): { review: StructuredReview; ledger: LoadedLedger["ledger"] } {
-  const presence = (anchor: LedgerAnchor): boolean | null => headContainsAnchor(contextDir, anchor);
+  const presence = (anchor: LedgerAnchor): boolean | null => headContainsAnchor(contextDir, anchor, repoDir);
   const inputs = review.findings.map(finding => ({
+    ...(finding.ledgerId ? { ledgerId: finding.ledgerId } : {}),
     priority: finding.priority,
     category: finding.category,
     title: finding.title,
@@ -1504,6 +1595,18 @@ function main(): void {
     process.stdout.write(applied ? "applied\n" : "stale\n");
     return;
   }
+  if (command === "refresh-verdict") {
+    const decision = argValue(args, "--decision");
+    if (decision !== "merge" && decision !== "change") throw new Error("decision must be merge or change");
+    process.stdout.write(`${refreshVerdict(
+      argValue(args, "--repo"),
+      Number(argValue(args, "--pr")),
+      argValue(args, "--head"),
+      decision,
+      args.includes("--reason") ? argValue(args, "--reason") : "maintainer decision",
+    )}\n`);
+    return;
+  }
   if (command === "label-state") {
     const expectedHead = args.includes("--expected-head")
       ? argValue(args, "--expected-head")
@@ -1516,7 +1619,7 @@ function main(): void {
     return;
   }
   throw new Error(
-    "usage: ai-pr-review.ts build-discussion|build-context|validate|label-state|labels (run with --help in repository docs)",
+    "usage: ai-pr-review.ts build-discussion|build-context|validate|label-state|labels|refresh-verdict (run with --help in repository docs)",
   );
 }
 
