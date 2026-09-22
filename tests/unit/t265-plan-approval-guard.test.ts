@@ -534,6 +534,7 @@ function publishRestartRecovery(
 }
 
 function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
+  const started = performance.now();
   const result = spawnSync(
     BUN,
     [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
@@ -544,7 +545,15 @@ function recordRecoverySelection(proj: string, prompt = "Restart code-generation
       encoding: "utf-8",
     },
   );
-  expect(result.status, result.stderr).toBe(0);
+  expect(result.status, JSON.stringify({
+    prompt,
+    elapsedMs: Math.ceil(performance.now() - started),
+    status: result.status,
+    signal: result.signal,
+    error: result.error?.message,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  })).toBe(0);
 }
 
 function seedUnit(
@@ -1147,7 +1156,9 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  });
+    // This history crosses six human-turn hooks and eight dispatch hooks. The
+    // hosted Windows 15s default expired partway through that sequence.
+  }, process.platform === "win32" ? 45_000 : undefined);
 
   test("native reset checks the effective plan and rejects a forward target even with a reset direction", () => {
     const proj = scratchProject();

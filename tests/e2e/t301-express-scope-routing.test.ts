@@ -214,12 +214,32 @@ function runThroughBuild(p: string): void {
   expect(stateField(p, "Lifecycle Phase")).toBe("OPERATION");
 }
 
-function detectedScope(p: string, input: string): {
+function detectedScope(input: string): {
   scope: string;
   source: string;
 } {
+  const fixtureStarted = performance.now();
+  const p = project();
+  const fixtureMs = Math.ceil(performance.now() - fixtureStarted);
+  console.error(`t301 detect-scope fixture: ${JSON.stringify({ input, fixtureMs })}`);
+  const childStarted = performance.now();
   const result = utility(p, ["detect-scope", "--from-text", "--input", input]);
-  expect(result.status).toBe(0);
+  const diagnostic = JSON.stringify({
+    input,
+    fixtureMs,
+    childMs: Math.ceil(performance.now() - childStarted),
+    status: result.status,
+    signal: result.signal,
+    error: result.error ? {
+      message: result.error.message,
+      code: (result.error as NodeJS.ErrnoException).code,
+    } : null,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  });
+  console.error(`t301 detect-scope child: ${diagnostic}`);
+  expect(result.error, diagnostic).toBeUndefined();
+  expect(result.status, diagnostic).toBe(0);
   return JSON.parse(result.stdout.trim()) as {
     scope: string;
     source: string;
@@ -228,11 +248,13 @@ function detectedScope(p: string, input: string): {
 
 describe("t301 express scope routing (deterministic CLI journey)", () => {
   test('keyword "express" routes to express', () => {
-    expect(detectedScope(project(), "express")).toMatchObject({
+    expect(detectedScope("express")).toMatchObject({
       scope: "express",
       source: "keyword",
     });
-  });
+    // Hosted Windows exhausted the 15s case budget during the first fixture/CLI
+    // call. Keep this cold-start allowance local; timings above separate both costs.
+  }, process.platform === "win32" ? 60_000 : undefined);
 
   test("explicit --scope express writes the exact 10-stage plan", () => {
     const p = project();
@@ -261,7 +283,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
   });
 
   test("freeform text with no scope keyword falls back to the classic default", () => {
-    expect(detectedScope(project(), "build a simple task tracker")).toMatchObject(
+    expect(detectedScope("build a simple task tracker")).toMatchObject(
       {
         scope: "classic",
         source: "freeform",

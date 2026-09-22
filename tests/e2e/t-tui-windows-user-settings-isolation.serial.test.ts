@@ -207,8 +207,11 @@ function runProbe(
         expect(captured.rc).toBe(0);
         return captured.stdout;
       },
-      send: (keys) => {
-        expect(drive(["send", "--session", session, "--keys", keys], env).rc).toBe(0);
+      send: (keys, noEnter) => {
+        expect(drive([
+          "send", "--session", session, "--keys", keys,
+          ...(noEnter ? ["--no-enter"] : []),
+        ], env).rc).toBe(0);
       },
       waitFor: (pattern, timeoutMs) => waitFor(session, pattern, timeoutMs, 300, env),
     });
@@ -265,7 +268,9 @@ function runProbe(
     expect(promptSend.noEnter).toBe(true);
 
     const enterSend = onlyRecord(
-      trace,
+      // Startup menus can also need Enter. Pin the explicit submission that
+      // follows this literal prompt, independently of those earlier actions.
+      trace.slice(trace.indexOf(promptSend) + 1),
       (record) => record.event === "send" && record.keys === "Enter",
       "Enter send",
     );
