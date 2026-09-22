@@ -294,6 +294,39 @@ committed. `package.ts --check` builds the complete projection set twice in
 independent temporary roots and byte-compares those results. CI, tests, binary
 builds, and release packaging regenerate before consuming either local root.
 
+### Vendored Markdown parser
+
+`core/tools/vendor/markdown-parser.js` is a deliberate exception to the
+hand-authored source rule: a **committed**, self-contained ESM bundle of
+`micromark@4.0.2` + `micromark-extension-gfm@3.0.0`, built by Bun. It implements
+CommonMark 0.31.2 plus GFM without a runtime `node_modules` dependency. The header
+retains MIT notices for every bundled package; `core/tools/vendor/LICENSES.md`
+records the dependency/license inventory. This is dependency code, not vendored
+CommonMark specification text.
+
+`markdownBlocks` in `core/tools/aidlc-lib.ts` is the single Markdown block
+interpreter for visibility, containers, link reference definitions, claim
+splitting, and confirmation parsing. It parses the original source before any
+destructive visibility projection. `visibleMarkdownLines` is a projection of
+that structure, not another scanner; its consumer options preserve the existing
+raw-source and invisible-boundary contracts. Raw HTML blocks of kinds 1–7 never
+supply Markdown headings, answers, or control tags. The security-sensitive
+`Bun.markdown.render` review-authority rendering and terminal Review appendix
+validation are deliberately separate and unchanged.
+
+The adapter synchronously loads the bundle through a cached relative `require`
+on first use; importing `aidlc-lib.ts` alone does not load it. Core source mode
+uses that committed file directly. `bun scripts/package.ts` copies `tools/vendor/`
+into every harness's `dist/` and `dist-release/`; the native compiler bundles the
+same relative dependency. Neither packaging nor runtime regenerates the parser.
+
+Regenerate only with `bun scripts/vendor-markdown-parser.ts` under **Bun 1.3.14**,
+matching `package.json`'s `packageManager` and CI. The script asserts this pin
+before writing. `t340-vendored-markdown-parser.test.ts` rebuilds and byte-compares
+the committed bundle under that version (and explicitly skips parity on another
+Bun). See [contributor regeneration instructions](11-contributing.md#vendored-markdown-parser)
+and [parser coverage](09-testing.md#vendored-markdown-parser-coverage).
+
 ### Projection identity and ownership
 
 Every generated harness directory carries three distinct metadata contracts

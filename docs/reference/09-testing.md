@@ -101,6 +101,38 @@ machine-checked index of what each test covers lives in
 from the `covers:` headers on disk), not in a hand-maintained table here — see
 [Test Registry](#test-registry) below.
 
+### Vendored Markdown parser coverage
+
+`markdownBlocks` in `core/tools/aidlc-lib.ts` is the single block interpreter for
+visibility, containers, definitions, and claim splitting; `visibleMarkdownLines`
+projects it. Tests defend consumer outcomes rather than maintaining a second
+CommonMark oracle. The separate `Bun.markdown.render` review-authority path keeps
+its existing security coverage.
+
+- `t340-vendored-markdown-parser.test.ts` regenerates the committed
+  `core/tools/vendor/markdown-parser.js` with `bun scripts/vendor-markdown-parser.ts`
+  and byte-compares it. The script requires Bun **1.3.14**, matching the
+  `packageManager` and CI pins; parity explicitly skips with a reason on other
+  versions. The same test checks the pinned `micromark@4.0.2` and
+  `micromark-extension-gfm@3.0.0` versions, bundled upstream MIT notices against
+  `core/tools/vendor/LICENSES.md`, and a standalone copy without `node_modules`.
+- `t341-markdown-blocks.test.ts` covers authored CommonMark/GFM block-boundary
+  examples and lazy parser loading: importing the library does not load the
+  vendored module before the first `markdownBlocks` call.
+- `t343-raw-html-consumer-contracts.test.ts` checks summary digests and answers,
+  Change Control sections, and Plan Approval selection/re-baselining inside and
+  outside raw HTML. `t344-visible-markdown-goldens.test.ts` pins unaffected
+  visibility and digest bytes; `t345-receipt-scope-migration.test.ts` covers v1/v2
+  receipt compatibility and parser-upgrade recovery.
+- `t247-claim-sources-sensor.test.ts` defends both visibility safety directions:
+  hidden text cannot ground a claim, and hidden fence-looking text cannot erase
+  a real reference definition or shorten a confirmed assumption.
+
+For a direct test-file run importing `dist/claude`, run `bun scripts/package.ts`
+first so all harness projections contain the committed parser. Packaging copies
+the bundle; only the dedicated vendoring script regenerates it. See
+[regeneration instructions](11-contributing.md#vendored-markdown-parser).
+
 ## Layer 1: Protocol (every change, no LLM, seconds)
 
 Verifies the orchestrator's structural correctness without invoking the LLM. If these pass, the protocol is internally consistent — stages reference valid files, inputs/outputs chain correctly, routing tables match stage files.
