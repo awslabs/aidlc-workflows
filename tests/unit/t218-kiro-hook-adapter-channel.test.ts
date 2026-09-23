@@ -4119,6 +4119,22 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     ["trailing background", "bun .kiro/tools/aidlc.ts engine status &"],
     ["a tool script, not just the dispatcher", "bun .kiro/tools/aidlc-state.ts get > probe-state.txt"],
     ["bun run form", "bun run .kiro/tools/aidlc.ts engine status > probe-run.txt"],
+    // The rest of the POSIX redirection inventory, none of which appears in any token
+    // list in this repository. Each was verified against the packaged tree through the
+    // real `engine adapter kiro shell-boundary` route, not only through this harness.
+    ["here-document", "bun .kiro/tools/aidlc.ts engine status <<EOF"],
+    ["both streams to a file", "bun .kiro/tools/aidlc.ts engine status &> all.txt"],
+    ["clobbering redirection", "bun .kiro/tools/aidlc.ts engine status >| f.txt"],
+    ["read-write redirection", "bun .kiro/tools/aidlc.ts engine status <> f.txt"],
+    ["pipe with stderr", "bun .kiro/tools/aidlc.ts engine status |& tee f"],
+    ["descriptor duplication that is not the permitted merge", "bun .kiro/tools/aidlc.ts engine status 1>&2"],
+    // The `2>&1` exception must be exactly one, exactly terminal. Both of these strip
+    // one occurrence and are still left holding a redirection.
+    ["2>&1 followed by a pipe", "bun .kiro/tools/aidlc.ts engine status 2>&1 | tee f"],
+    ["a doubled 2>&1", "bun .kiro/tools/aidlc.ts engine status 2>&1 2>&1"],
+    ["a redirection before the permitted merge", "bun .kiro/tools/aidlc.ts engine status > f 2>&1"],
+    ["2>&1 not at a word boundary", "bun .kiro/tools/aidlc.ts engine status2>&1"],
+    ["an empty substitution", "date -u +%s$(:)"],
   ];
 
   // Forms that must still pass. A boundary refusing these would break the workflow it
@@ -4133,7 +4149,19 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     ["a semicolon inside single quotes", "bun .kiro/tools/aidlc.ts engine status --text 'a; b'"],
     ["a redirection glyph inside single quotes", "bun .kiro/tools/aidlc.ts engine status --text 'a > b'"],
     ["an ampersand inside double quotes", 'bun .kiro/tools/aidlc.ts engine status --text "a & b"'],
+    ["a literal 2>&1 inside quotes is an argument, not a redirection", 'bun .kiro/tools/aidlc.ts engine status --text "2>&1"'],
     ["a compiled-dispatcher invocation", "aidlc engine status"],
+    ["collapsed whitespace", "bun  .kiro/tools/aidlc.ts   engine   status"],
+    ["a quoted script path", 'bun ".kiro/tools/aidlc.ts" engine status'],
+    // Expansion is deliberately NOT refused. It changes a command's arguments, not how
+    // many commands run, so refusing it would widen this boundary past composition into
+    // ordinary argument construction - and the shell performs expansion AFTER operator
+    // parsing, so an expanded `;` is never re-read as a separator. The Copilot row
+    // tracks expansion (aidlc-copilot-adapter.ts:452) for a different purpose: it
+    // declines to CLAIM and rewrite such a command, which is not a refusal.
+    ["a variable expansion", 'bun .kiro/tools/aidlc.ts engine status --at "$STAMP"'],
+    ["ANSI-C quoting in an argument", "date -u +$'%Y'"],
+    ["a glob in an argument", "date -u +%Y*"],
   ];
 
   // Commands AI-DLC does not pre-approve are none of this hook's business: they reach
@@ -4145,6 +4173,12 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     ["a script outside the harness tools directory", "bun scripts/other.ts > out.txt"],
     ["an absolute path into another project", "bun /elsewhere/.kiro/tools/aidlc.ts engine status > out.txt"],
     ["a traversing path", "bun .kiro/tools/../../evil.ts > out.txt"],
+    // A brace group's first word is `{`, so no AI-DLC pre-approval recognises it - and
+    // neither does the platform, whose patterns are literal outside their own `*`. It
+    // therefore reaches the ordinary consent prompt, which is the correct outcome:
+    // this boundary narrows grants, it does not police the shell in general.
+    ["a brace group", "{ date -u ; }"],
+    ["a subshell", "(date -u)"],
   ];
 
   function boundary(dir: string, command: unknown): { stderr: string; code: number } {

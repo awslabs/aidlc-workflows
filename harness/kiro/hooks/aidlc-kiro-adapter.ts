@@ -4547,5 +4547,24 @@ if (import.meta.main) {
       }
     }
   }
-  process.exit(await run(target, input, process.argv.slice(3)));
+  try {
+    process.exit(await run(target, input, process.argv.slice(3)));
+  } catch (error) {
+    // A rejection out of `run` exits 1, and 1 is not a block - the platform treats it
+    // as a hook that errored and lets the tool call proceed. For a target whose whole
+    // purpose is to refuse, that is the boundary failing open on its own bug, so its
+    // exceptions are mapped to a refusal instead. Measured: `process.exit(await …)` on
+    // a rejecting promise yields exit 1.
+    //
+    // Only the shell boundary is listed. Every other target here is an observer, a
+    // mint, or a guard whose refusal is a bonus rather than its reason for existing,
+    // and turning their bugs into refusals would stall workflows on a defect that
+    // currently degrades quietly. This target's own body already catches; this is the
+    // layer above it, for anything that throws before or around that catch.
+    if (target === "shell-boundary") {
+      process.stderr.write(SHELL_BOUNDARY_REFUSAL);
+      process.exit(2);
+    }
+    throw error;
+  }
 }
