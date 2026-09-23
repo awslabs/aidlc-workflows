@@ -292,7 +292,7 @@ beforeAll(() => {
   // --- Idempotency: re-compile, assert byte-equivalent (.sh:103-107). ------
   run(RUNTIME, ["compile", "--project-dir", proj], { CLAUDE_PROJECT_DIR: proj });
   rawAfterRecompile = readFileSync(graphPathOf(proj), "utf-8");
-});
+}, 15_000); // One real init/review/approval/compile sequence; Windows exceeded the 5s hook default.
 
 afterAll(() => {
   cleanupTestProject(proj);

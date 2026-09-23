@@ -92,6 +92,38 @@
             {
               "classname": "native launch namespace security",
               "name": "daemon refuses a replaced session before PTY/supervisor creation"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a reader retries atomic publications and returns only a fully validated record"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "continuous replacement is bounded and closes every discarded descriptor"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced session directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced parent directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a replacement still needs the pinned directory identity in its content"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "open failures propagate immediately without retrying or consuming record content"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for oversized rejection"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for incomplete reply"
             }
           ]
         },
@@ -289,6 +321,18 @@
             {
               "classname": "native private namespace",
               "name": "publication refuses a directory replaced after opening its temporary record"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a private root replay in phase exited cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a private root replay in phase starting cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root below a group-writable non-sticky ancestor is rejected before spawn"
             },
             {
               "classname": "native private namespace",
@@ -895,6 +939,38 @@
             {
               "classname": "native launch namespace security",
               "name": "daemon refuses a replaced session before PTY/supervisor creation"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a reader retries atomic publications and returns only a fully validated record"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "continuous replacement is bounded and closes every discarded descriptor"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced session directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced parent directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a replacement still needs the pinned directory identity in its content"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "open failures propagate immediately without retrying or consuming record content"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for oversized rejection"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for incomplete reply"
             }
           ]
         },
@@ -1723,6 +1799,38 @@
             {
               "classname": "native launch namespace security",
               "name": "daemon refuses a replaced session before PTY/supervisor creation"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a reader retries atomic publications and returns only a fully validated record"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "continuous replacement is bounded and closes every discarded descriptor"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced session directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a retry cannot adopt a replaced parent directory"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "a replacement still needs the pinned directory identity in its content"
+            },
+            {
+              "classname": "native record publication races",
+              "name": "open failures propagate immediately without retrying or consuming record content"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for oversized rejection"
+            },
+            {
+              "classname": "native IPC probe completion",
+              "name": "peer EOF settles a pending write for incomplete reply"
             }
           ]
         },
@@ -1920,6 +2028,18 @@
             {
               "classname": "native private namespace",
               "name": "publication refuses a directory replaced after opening its temporary record"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a private root replay in phase exited cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "a private root replay in phase starting cannot execute the prior command"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root below a group-writable non-sticky ancestor is rejected before spawn"
             },
             {
               "classname": "native private namespace",
@@ -2502,6 +2622,98 @@
             {
               "classname": "t-tui-preflight (terminal substrate capability gate)",
               "name": "Windows until-file paths detect early, preserve post-write work, and reap on teardown"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "one native snapshot shares the remaining cleanup budget despite slow bridge startup"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "a complete snapshot excludes absent and reused PIDs but retains the same creation identity"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "real native liveness tolerates bridge startup beyond the former per-PID cap"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "query failure never establishes process absence: timed out with no exit status"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "query failure never establishes process absence: timed out with zero exit status"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "query failure never establishes process absence: nonzero exit status"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "query failure never establishes process absence: access denied with zero exit status"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "malformed or incomplete identities cannot establish absence: null snapshot"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "malformed or incomplete identities cannot establish absence: non-array snapshot"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "malformed or incomplete identities cannot establish absence: duplicate PID"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "malformed or incomplete identities cannot establish absence: unrequested PID"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "malformed or incomplete identities cannot establish absence: invalid creation time"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "an exhausted deadline refuses without starting another query"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "an invalid recorded creation time refuses without treating its PID as gone"
+            },
+            {
+              "classname": "",
+              "name": "the stable Windows wrapper stays alive until its owner terminates it"
+            },
+            {
+              "classname": "",
+              "name": "target exit is published while identity discovery is pending and cannot be rewritten by a late identity"
+            },
+            {
+              "classname": "",
+              "name": "identity query failure cannot synthesize target exit metadata for a live child"
+            },
+            {
+              "classname": "Windows terminating process snapshots",
+              "name": "signaled retained handle establishes exit after command-line metadata disappears"
+            },
+            {
+              "classname": "Windows terminating process snapshots",
+              "name": "terminating metadata with an unsignaled retained handle still refuses absence"
+            },
+            {
+              "classname": "Windows terminating process snapshots",
+              "name": "failed retained-handle wait still refuses absence after metadata disappears"
+            },
+            {
+              "classname": "Windows terminating process snapshots",
+              "name": "failed handle close invalidates observed exit after metadata disappears"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "terminating native metadata requires a fresh complete snapshot within the original budget"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "persistent terminating native metadata exhausts its original budget without establishing absence"
             }
           ]
         }

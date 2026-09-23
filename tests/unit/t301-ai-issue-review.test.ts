@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -30,6 +29,13 @@ import {
   validateStructuredIssueReview,
 } from "../../.github/scripts/ai-issue-review.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+function writeGhFixture(path: string, source: string): readonly [string, string] {
+  // Spaces and cmd metacharacters must stay literal in the argv prefix.
+  const script = `${path} fixture & (argv).js`;
+  writeFileSync(script, source);
+  return [process.execPath, script];
+}
 
 const BASE = "b".repeat(40);
 const CONTEXT_ID = "c".repeat(64);
@@ -729,6 +735,8 @@ describe("t301 AI issue intent review", () => {
     });
   });
 
+  // Exercise all three CLI-backed transitions, including failed publication
+  // and recovery, within a budget that includes Windows process startup.
   test("Issue labels expose only alignment and the highest finding priority", () => {
     const state = labelStateForIssueReview(review());
     expect(state).toEqual({ alignment: "aligned", priority: "P1" });
@@ -751,12 +759,11 @@ describe("t301 AI issue intent review", () => {
     try {
       const log = join(root, "calls.jsonl");
       const stateFile = join(root, "state.json");
-      const fakeGh = join(root, "gh");
       writeFileSync(stateFile, JSON.stringify({
         labels: ["enhancement", "aida:not-aligned", "aida:p0"],
         failNextIssueLabelPost: false,
       }));
-      writeFileSync(fakeGh, `#!/usr/bin/env bun
+      const fakeGh = writeGhFixture(join(root, "gh"), `#!/usr/bin/env bun
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
@@ -789,7 +796,6 @@ if (endpoint === "repos/acme/repo/issues/1285") {
   process.stdout.write("{}");
 }
 `);
-      chmodSync(fakeGh, 0o755);
       expect(reconcileIssueReviewLabels(
         "acme/repo",
         1285,
@@ -860,7 +866,7 @@ if (endpoint === "repos/acme/repo/issues/1285") {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("renderer refuses a comment larger than GitHub's issue-comment limit", () => {
     const candidate = review();

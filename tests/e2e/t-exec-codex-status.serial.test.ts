@@ -31,13 +31,15 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   execCodex,
   setupCodexProject,
 } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { codexExecDiagnostic, codexExecTimeout, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
@@ -63,26 +65,86 @@ function skipReason(): string | null {
 }
 const SKIP_REASON = skipReason();
 
+describe("Codex fixture failure and retirement contract", () => {
+  const unowned = join(tmpdir(), "unowned-codex-proof");
+
+  test("a cleanup failure preserves the original assertion object and cause", async () => {
+    const primary = new Error("original return-code assertion");
+    const cleanup = Object.assign(new Error("fixture still busy"), { code: "EBUSY" });
+    const failure = await withCodexFixture(unowned, () => { throw cleanup; }, () => { throw primary; })
+      .then(() => undefined, (error) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.errors[0]).toBe(primary);
+    expect(failure.errors[1]).toBe(cleanup);
+    expect(failure.cause).toBe(primary);
+  });
+
+  test("cleanup outside a verified runner context remains mandatory", async () => {
+    const order: string[] = [];
+    const cleanup = new Error("unowned cleanup refused");
+    const failure = await withCodexFixture(unowned, () => { order.push("cleanup"); throw cleanup; },
+      () => { order.push("body"); }).then(() => undefined, (error) => error);
+    expect(order).toEqual(["body", "cleanup"]);
+    expect(failure).toBe(cleanup);
+  });
+
+  test("exec diagnostics retain the beginning, tail and spawn failure within a bounded message", () => {
+    const message = codexExecDiagnostic({
+      rc: -1, signal: "SIGTERM", error: "ETIMEDOUT", out: `BEGIN${"x".repeat(40_000)}END`,
+    });
+    expect(message.length).toBeLessThan(13_000);
+    expect(message).toContain("BEGIN");
+    expect(message).toContain("END");
+    expect(message).toContain("ETIMEDOUT");
+    expect(message).toContain("SIGTERM");
+  });
+
+  test("an exec cannot consume the case's cleanup reserve", async () => {
+    await withCodexFixture(unowned, () => {}, () => {
+      expect(codexExecTimeout(600_000)).toBeLessThanOrEqual(15_000);
+      expect(codexExecTimeout(600_000)).toBeGreaterThan(0);
+    }, performance.now() + 45_000);
+  });
+
+  test("Windows runner-owned fixture deletion is handed to post-job cleanup with a receipt", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "codex-exec-")));
+    let removed = false;
+    await withCodexFixture(root, () => { rmSync(root, { recursive: true, force: true }); removed = true; }, () => {});
+    const isolatedWindows = process.platform === "win32" && process.env.AIDLC_CODEX_EXEC_LIVE === "1" &&
+      /^[1-9]\d*$/.test(process.env.AIDLC_TEST_WORKER_ID ?? "");
+    if (isolatedWindows) {
+      expect(removed).toBe(false);
+      expect(existsSync(root)).toBe(true);
+      const artifacts = process.env.AIDLC_TEST_WORKER_ROOT!;
+      const receipts = readdirSync(artifacts).filter((name) => name.startsWith("codex-deferred-cleanup-"))
+        .map((name) => JSON.parse(readFileSync(join(artifacts, name), "utf8")));
+      expect(receipts.some((record) => record.root === root && record.temporaryDirectory === process.env.TEMP)).toBe(true);
+    } else {
+      expect(removed).toBe(true);
+      expect(existsSync(root)).toBe(false);
+    }
+  });
+});
+
 describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via codex exec", () => {
   test.skipIf(SKIP_REASON !== null)(
     `no-state: status renders 'no active workflow' and scaffolds nothing${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
-    () => {
+    async () => {
+      const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const { proj, home, root } = setupCodexProject();
-      try {
+      await withCodexFixture(root, () => rmSync(root, { recursive: true, force: true }), () => {
         const r = execCodex(proj, home, "Use the $aidlc skill to run: /aidlc --status");
-        expect(r.rc, r.out).toBe(0);
+        expect(r.rc, codexExecDiagnostic(r)).toBe(0);
         // The engine's no-workflow status text, surfaced verbatim by the
         // print-directive terminal arm.
-        expect(r.out.toLowerCase()).toContain("no active");
+        expect(r.out.toLowerCase().includes("no active"), codexExecDiagnostic(r)).toBe(true);
         // Read-only: the status path must not scaffold a workspace. The
         // hooks-health heartbeat dir is hook plumbing (the byte-shared Stop
         // hook writes it on every turn, same as the Claude harness) — the
         // workspace signals are the state file and the scaffold tree.
         expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
         expect(existsSync(join(proj, "aidlc-docs", "ideation"))).toBe(false);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
+      }, deadlineMs);
     },
     TEST_TIMEOUT_MS,
   );

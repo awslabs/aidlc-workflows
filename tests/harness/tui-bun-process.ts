@@ -24,6 +24,7 @@ import { constants as osConstants, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { DARWIN_BSDINFO_SIZE, type DarwinProcessIdentity, readDarwinProcessIdentity } from "./tui-process-identity.ts";
 import { publishTuiRecord } from "./tui-record-file.ts";
+import { NATIVE_PROCESS_CLEANUP_TIMEOUT_MS } from "./test-budget.ts";
 
 export interface SupervisorConfig {
   token: string;
@@ -174,7 +175,7 @@ export function isDarwinDescendant(
 }
 
 const POLL_MS = 25;
-const CLEANUP_MS = 7_000; // Leaves a second for status I/O within the 8s stop budget.
+const CLEANUP_MS = NATIVE_PROCESS_CLEANUP_TIMEOUT_MS;
 const GRACE_MS = 300;
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -276,7 +277,7 @@ function initialStopRequested(config: SupervisorConfig): boolean {
 }
 
 function withinDeadline(deadline: number): void {
-  if (performance.now() >= deadline) throw new Error("descendant cleanup exceeded its 7s budget");
+  if (performance.now() >= deadline) throw new Error(`descendant cleanup exceeded its ${CLEANUP_MS}ms budget`);
 }
 
 function readProc(pid: number): LinuxProcessIdentity | null {

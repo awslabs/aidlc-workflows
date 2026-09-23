@@ -25,6 +25,8 @@ export interface ParsedArgs {
   bedrockParallel: number;
   kiroParallel: number;
   ideParallel: number;
+  fileTimeout: number | null;
+  runTimeout: number | null;
   e2eFileTimeout: number;
   e2eTimings: string;
   e2eCancelFile: string;
@@ -66,6 +68,8 @@ export function parseRunnerArgs(
     bedrockParallel: 2,
     kiroParallel: 2,
     ideParallel: 1,
+    fileTimeout: null,
+    runTimeout: null,
     e2eFileTimeout: 10_800,
     e2eTimings: "",
     e2eCancelFile: "",
@@ -160,6 +164,19 @@ export function parseRunnerArgs(
         out.e2ePlan = true;
         out.isolatedE2e = true;
         break;
+      case "--file-timeout":
+      case "--run-timeout": {
+        const value = argv[++i] ?? "";
+        if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+          throw new RunnerArgsError(`${arg} requires a positive safe integer`, 2, true);
+        }
+        if (Number(value) > 2_147_483) {
+          throw new RunnerArgsError(`${arg} exceeds the supported timer range`, 2, true);
+        }
+        if (arg === "--file-timeout") out.fileTimeout = Number(value);
+        else out.runTimeout = Number(value);
+        break;
+      }
       case "--bedrock-parallel":
       case "--kiro-parallel":
       case "--ide-parallel":
@@ -221,6 +238,20 @@ export function parseRunnerArgs(
     out.verbose = true;
   }
   return out;
+}
+
+/** The common cap can shorten, but cannot extend, an isolated-file deadline. */
+export function runnerFileTimeoutSeconds(args: ParsedArgs, isolated: boolean): number {
+  return isolated
+    ? Math.min(args.e2eFileTimeout, args.fileTimeout ?? Number.POSITIVE_INFINITY)
+    : args.fileTimeout ?? 2400;
+}
+
+/** POSIX exit statuses are eight bits; 256 failed files must never wrap to success. */
+export function runnerFailureExitCode(failedFiles: number): number {
+  return Number.isSafeInteger(failedFiles) && failedFiles > 0
+    ? Math.min(255, failedFiles)
+    : 1;
 }
 
 // The fixture profile preserves the runner's historical synthetic-fixture defaults.

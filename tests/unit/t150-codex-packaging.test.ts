@@ -131,7 +131,35 @@ function runDoctorWithCodexVersion(version: string): {
     const binDir = join(root, "bin");
     mkdirSync(binDir, { recursive: true });
     if (process.platform === "win32") {
-      writeFileSync(join(binDir, "codex.cmd"), `@echo off\r\necho codex-cli ${version}\r\n`);
+      // The doctor executes the resolved path without a shell. Node-compatible
+      // spawnSync rejects .cmd files; use a small native CLI (as in t255).
+      const source = join(binDir, "codex.cs");
+      const executable = join(binDir, "codex.exe");
+      writeFileSync(source, `using System;
+public static class CodexVersionFixture {
+  public static int Main(string[] args) {
+    if (args.Length != 1 || args[0] != "--version") return 2;
+    Console.WriteLine(${JSON.stringify(`codex-cli ${version}`)});
+    return 0;
+  }
+}
+`);
+      const compiler = join(
+        process.env.WINDIR ?? "C:\\Windows",
+        "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe",
+      );
+      const compiled = spawnSync(
+        compiler,
+        ["/nologo", "/optimize+", "/target:exe", `/out:${executable}`, source],
+        { encoding: "utf-8", timeout: 5_000 },
+      );
+      if (compiled.error || compiled.status !== 0) {
+        throw new Error(`Codex fixture compile failed: ${compiled.error?.message || compiled.stderr || compiled.stdout}`);
+      }
+      const probe = spawnSync(executable, ["--version"], { encoding: "utf-8", timeout: 5_000 });
+      expect(probe.error).toBeUndefined();
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(probe.stdout.trim()).toBe(`codex-cli ${version}`);
     } else {
       const fakeCodex = join(binDir, "codex");
       writeFileSync(fakeCodex, `#!/bin/sh\necho "codex-cli ${version}"\n`);
@@ -572,20 +600,22 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(r.stdout).not.toContain("<PROJECT_DIR>");
   });
 
-  test("13: doctor enforces Codex 0.145.0 as the compact-session reload floor", () => {
-    const unsupported = runDoctorWithCodexVersion("0.144.9");
-    expect(unsupported.status).toBe(0);
-    expect(unsupported.output).toContain(
-      "Harness CLI: codex codex-cli 0.144.9 is below 0.145.0",
-    );
-    expect(unsupported.output).toContain(
-      "Install or upgrade Codex CLI to 0.145.0 or later",
-    );
-
-    const supported = runDoctorWithCodexVersion("0.145.0");
-    expect(supported.status).toBe(0);
-    expect(supported.output).toContain("Harness CLI: codex codex-cli 0.145.0");
-  });
+  test.each(["0.144.9", "0.145.0"])("13: doctor enforces the compact-session reload floor for Codex %s", (version) => {
+    const result = runDoctorWithCodexVersion(version);
+    expect(result.status, result.output).toBe(0);
+    if (version === "0.144.9") {
+      expect(result.output).toContain(
+        "Harness CLI: codex codex-cli 0.144.9 is below 0.145.0",
+      );
+      expect(result.output).toContain(
+        "Install or upgrade Codex CLI to 0.145.0 or later",
+      );
+    } else {
+      expect(result.output).toContain("Harness CLI: codex codex-cli 0.145.0");
+    }
+    // Each version owns one native fixture and doctor run, including cleanup.
+    // Compiler/probe caps remain 5s; neither version spends the other's budget.
+  }, process.platform === "win32" ? 30_000 : 15_000);
 
   test("14: both generated Codex configs select workspace-write at the TOML root", () => {
     for (const output of ["dist", "dist-release"]) {

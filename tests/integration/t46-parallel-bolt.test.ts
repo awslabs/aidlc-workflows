@@ -149,7 +149,7 @@ let race: RaceResult;
 
 beforeEach(async () => {
   race = await raceFiveBolts();
-});
+}, 15_000); // Hook budget is independent of test(); retain the 10s race assertion below.
 
 afterEach(() => {
   cleanupTestProject(current?.proj);

@@ -1,7 +1,14 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { CI_BEDROCK_MODELS } from "./ci-credential-broker.ts";
-import { FAMILIES, type LiveFamily } from "./ci-live-filter.ts";
+import { FAMILIES, selectedLiveFiles, type LiveFamily } from "./ci-live-filter.ts";
+
+/** Validate before runtime setup and forward each selector as a separate argument. */
+export function sandboxCommand(family: LiveFamily, platform: NodeJS.Platform, shard?: string): string[] {
+  selectedLiveFiles(family, platform, shard);
+  return [process.execPath, "scripts/ci-live-filter.ts", family, "--platform", platform,
+    ...(shard === undefined ? [] : ["--shard", shard]), "--run", "--", "--debug", "-P", "8"];
+}
 
 /** Values are explicit and nonsecret; nothing is inherited from the runner identity. */
 export function sandboxEnvironment(family: LiveFamily, home: string, path: string, source: NodeJS.ProcessEnv): Record<string, string> {
@@ -12,7 +19,15 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
       APPDATA: join(home, "AppData/Roaming"), LOCALAPPDATA: join(home, "AppData/Local"),
       GIT_CONFIG_GLOBAL: join(home, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
       SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
     });
+    if (family === "codex" && source.AIDLC_CODEX_BIN !== undefined) {
+      const managed = win32.join(win32.dirname(home), "tools", "codex-managed.exe");
+      if (source.AIDLC_CODEX_BIN.toLowerCase() !== managed.toLowerCase()) {
+        throw new Error("Expected the sealed native Codex launcher");
+      }
+      env.AIDLC_CODEX_BIN = managed;
+    }
   } else {
     Object.assign(env, { TMPDIR: join(home, "tmp"), BUN_INSTALL: join(home, ".bun"), XDG_CACHE_HOME: join(home, ".cache") });
   }
@@ -32,6 +47,7 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
       CLAUDE_CODE_USE_BEDROCK: "1", CLAUDE_CODE_SKIP_BEDROCK_AUTH: "1", ANTHROPIC_BEDROCK_BASE_URL: url.origin,
     });
   } else if (family === "opencode") {
+    env.AWS_PROFILE = "broker";
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ provider: { "amazon-bedrock": { options: {
       region: "us-east-1", endpoint: url.origin, profile: "broker", accessKeyId: "broker", secretAccessKey: "broker",
     } } } });
@@ -41,10 +57,11 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
 
 if (import.meta.main) {
   try {
-    const [family, platform] = process.argv.slice(2);
-    if (!["claude-sdk", "claude-tui", "codex", "opencode", "release-contract"].includes(family) || !["linux", "darwin", "win32"].includes(platform)) {
+    const [family, platform, shard, ...extra] = process.argv.slice(2);
+    if (extra.length || !["claude-sdk", "claude-tui", "codex", "opencode", "release-contract"].includes(family) || !["linux", "darwin", "win32"].includes(platform)) {
       throw new Error("Unsupported sandbox family/platform");
     }
+    const command = sandboxCommand(family as LiveFamily, platform as NodeJS.Platform, shard);
     const home = process.env.HOME!;
     const path = process.env.PATH!;
     const env = sandboxEnvironment(family as LiveFamily, home, path, process.env);
@@ -54,7 +71,7 @@ if (import.meta.main) {
       writeFileSync(join(home, ".aws/config"), `[profile ${family === "codex" ? "codex" : "broker"}]\nregion = ${family === "codex" ? "us-east-2" : "us-east-1"}\naws_access_key_id = broker\naws_secret_access_key = broker\n`, { mode: 0o600 });
     }
     process.chdir(process.env.AIDLC_LIVE_ROOT || join(home, "workspace"));
-    const child = Bun.spawn([process.execPath, "scripts/ci-live-filter.ts", family, "--platform", platform, "--run", "--", "--debug", "-P", "4"], {
+    const child = Bun.spawn(command, {
       env, stdin: "inherit", stdout: "inherit", stderr: "inherit",
     });
     process.exitCode = await child.exited;

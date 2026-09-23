@@ -600,7 +600,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       proj,
     ]);
     expect(result.out).toContain('"kind":"done"');
-  });
+  }, 15_000); // Decision/answer, three write hooks, and completion took 6.5s on macOS CI.
 
   describe("isolated NFR review with a parent plan that skips Units Generation", () => {
     const stage = "nfr-requirements";
@@ -700,6 +700,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
         expect(report.out).toContain('"kind":"done"');
         expect(readFileSync(statePath, "utf-8")).toBe(parentState);
       },
+      10_000, // Real next/log/write-hook/review/report chain: 5.9s on Windows CI.
     );
 
     test.each([
@@ -729,7 +730,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       const review = requestReview(proj);
       expect(review.status, review.out).toBe(0);
       expect(review.out).toContain('"emitted":"REVIEW_REQUESTED"');
-    });
+    }, 10_000); // prepare() plus the guarded review exceeded 5s on Windows CI.
   });
 
   test("12f: isolated hash recovery stays on the --single workflow", () => {

@@ -14,7 +14,7 @@
 //       its dispatch surface lives, and Kiro IDE documents the prose-only
 //       absence.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -69,7 +69,9 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
@@ -547,6 +549,7 @@ function publishRestartRecovery(
 
 function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
   writeSessionPidEntry(proj, process.pid, "01995000-0265-7000-8000-000000000001");
+  const started = performance.now();
   const result = spawnSync(
     BUN,
     [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
@@ -561,7 +564,15 @@ function recordRecoverySelection(proj: string, prompt = "Restart code-generation
       encoding: "utf-8",
     },
   );
-  expect(result.status, result.stderr).toBe(0);
+  expect(result.status, JSON.stringify({
+    prompt,
+    elapsedMs: Math.ceil(performance.now() - started),
+    status: result.status,
+    signal: result.signal,
+    error: result.error?.message,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  })).toBe(0);
 }
 
 function seedUnit(
@@ -777,6 +788,8 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // Seven source CLI invocations plus Git-backed fixture setup and approval
+  // fingerprints exceed Bun's 5s default on hosted macOS.
   test("a handoff that quotes the plan's excluded review appendix is refused; the brief command hands off the body", () => {
     const proj = scratchProject();
     try {
@@ -1013,7 +1026,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test("direct abort recovery keeps source/native admission parity without a selection marker or Plan Approval", () => {
     const proj = scratchProject();
@@ -1060,7 +1073,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test("native redo requires the issued recovery's human selection and leaves generation closed", () => {
     const proj = scratchProject();
@@ -1129,7 +1142,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test("native backward recovery must match the actual current position", () => {
     const proj = scratchProject();
@@ -1179,6 +1192,8 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
+    // This history crosses six human-turn hooks and eight dispatch hooks. The
+    // hosted Windows 15s default expired partway through that sequence.
   });
 
   test("native reset checks the effective plan and rejects a forward target even with a reset direction", () => {
@@ -1206,9 +1221,11 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   for (const published of [false, true]) {
+    // Each publication state checks 72 commands in separate source-hook
+    // processes. Budget the whole matrix, preserving every admission check.
     test(`the shipped Bun entry point permits planning ${published ? "with pending approval" : "before directive publication"}`, () => {
       const proj = scratchProject();
       try {
@@ -1305,7 +1322,7 @@ describe("t265b hook lifecycle", () => {
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }
-    }, 30000);
+    });
   }
 
   test("a redundant absolute cd permits recovery without changing execution context", () => {
@@ -1356,7 +1373,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test.skipIf(process.platform === "win32")(
     "a removed shell continuation cannot authorize a different cwd",
@@ -1382,7 +1399,6 @@ describe("t265b hook lifecycle", () => {
         rmSync(other, { recursive: true, force: true });
       }
     },
-    30000,
   );
 
   test.skipIf(process.platform !== "win32")(
@@ -1452,6 +1468,8 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // This transition checks 53 hook invocations against the same authority
+  // before and after approval; its deadline covers the full process sequence.
   test("zero-unit inline generation is refused before approval and allowed after approval", () => {
     const proj = scratchProject();
     try {
@@ -1592,8 +1610,10 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
+  // Keep real Git-backed authority/fingerprint checks and both hook processes;
+  // the aggregate fixture work can exceed Bun's 5s default on hosted macOS.
   test("a conductor-authored Approve Plan markdown answer has no authority receipt", () => {
     const proj = scratchProject();
     try {
@@ -2075,7 +2095,7 @@ describe("t265b hook lifecycle", () => {
       releaseAuditLock(proj);
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 15000);
+  });
 
   test("missing and legacy directive markers fail closed instead of selecting stage-level authority", () => {
     const proj = scratchProject();

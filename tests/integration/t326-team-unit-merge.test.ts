@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin, subcommand:aidlc-unit:gate, subcommand:aidlc-unit:land, subcommand:aidlc-unit:merge-status, subcommand:aidlc-state:fold-unit-merge, audit:UNIT_MERGED, function:UNIT_MERGE_DIR, function:unitMergeTransactionPath, function:readUnitMergeTransaction, function:writeUnitMergeTransaction, function:unitMergedReceipts
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -47,7 +48,7 @@ import {
 } from "../harness/fixtures.ts";
 
 // The default also governs afterEach cleanup of several git trees per case, which exceeds bun's 5s hook default under --parallel 4.
-setDefaultTimeout(120_000);
+setDefaultTimeout(Math.max(120_000, deterministicCaseTimeoutMs()));
 
 const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -78,15 +79,19 @@ function run(
   enforceHumanPresence = false,
   extraEnv: Record<string, string> = {},
 ): { status: number; stdout: string; out: string } {
-  // Keep Git's own diagnostics for Windows claim/pin failures: the production
-  // helper currently replaces git-show stderr with a missing-artifact message.
+  // Keep Git's diagnostics for Windows claim/pin failures and receipt
+  // revalidation during gate/land on every platform.
   // Store traces outside the checkout so dirty-tree policies stay meaningful.
-  const traceDir = process.platform === "win32" && tool === UNIT &&
-      (args[0] === "claim" || args[0] === "pin")
+  const reviewOperation = tool === UNIT && (args[0] === "gate" || args[0] === "land");
+  const windowsClaimOrPin = process.platform === "win32" && tool === UNIT &&
+    (args[0] === "claim" || args[0] === "pin");
+  const traceNeeded = reviewOperation || windowsClaimOrPin;
+  const traceDir = traceNeeded && extraEnv.GIT_TRACE2_EVENT === undefined
     ? mkdtempSync(join(tmpdir(), "aidlc-inc3-git-trace-"))
     : null;
   if (traceDir) tempDirs.push(traceDir);
-  const tracePath = traceDir ? join(traceDir, "git-events.ndjson") : null;
+  const tracePath = extraEnv.GIT_TRACE2_EVENT ??
+    (traceDir ? join(traceDir, "git-events.ndjson") : null);
   const result = spawnSync(
     process.execPath,
     [tool, ...args, "--project-dir", cwd],
@@ -103,13 +108,21 @@ function run(
       },
     },
   );
-  if (result.status !== 0 && tracePath && existsSync(tracePath)) {
+  const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  const reviewUnit = reviewOperation ? args[1] : undefined;
+  if (result.status !== 0 && reviewUnit && tracePath &&
+      (out.includes("reviewer READY receipts") || out.includes("candidate-exact"))) {
+    console.error(`t326 merge validation failed:\n${JSON.stringify({
+      args, status: result.status, signal: result.signal, error: result.error?.message, out,
+    }, null, 2)}`);
+    reportPinnedMergeFailure(cwd, reviewUnit, tracePath, out);
+  } else if (result.status !== 0 && windowsClaimOrPin && tracePath && existsSync(tracePath)) {
     console.error(`t326 ${args[0]} Git trace (${tracePath}):\n${readFileSync(tracePath, "utf-8")}`);
   }
   return {
     status: result.status ?? -1,
     stdout: result.stdout ?? "",
-    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+    out,
   };
 }
 
@@ -309,6 +322,97 @@ function reviewAuditExtras(
       `**Artifact Fingerprint**: ${fingerprint}\n**Request Id**: ${requestId}\n` +
       `**Review Record**: ${path}\n**Review Record Digest**: ${reviewRecordDigest(bytes)}\n`,
   };
+}
+
+// The fixture cleanup removes candidate checkouts even when an assertion fails.
+// Keep the pinned inputs and the original Git command outcomes in the test log
+// when any gate/land call rejects review evidence or candidate-exact content.
+function reportPinnedMergeFailure(
+  projectDir: string,
+  unit: string,
+  tracePath: string,
+  failureOutput: string,
+): void {
+  try {
+    const prefix = relative(projectDir, seededRecordDir(projectDir)).replaceAll("\\", "/");
+    const filesAt = (oid: string) => {
+      const paths = git(projectDir, ["ls-tree", "-r", "--name-only", oid, "--", prefix])
+        .split("\n").filter(Boolean);
+      return Object.fromEntries(paths.map((path) => {
+        const result = spawnSync("git", ["show", `${oid}:${path}`, "--"], {
+          cwd: projectDir,
+          encoding: "utf-8",
+        });
+        return [path, {
+          status: result.status,
+          signal: result.signal,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          error: result.error?.message,
+        }];
+      }));
+    };
+    const transaction = readUnitMergeTransaction(projectDir, unit);
+    const pinnedOid = transaction?.pinned_oid ?? null;
+    const landingHead = git(projectDir, ["rev-parse", "HEAD"]);
+    let candidateExact = null;
+    try { candidateExact = JSON.parse(failureOutput).candidate_exact ?? null; } catch { /* Keep the other captures. */ }
+    const readBlob = (oid: string | null, treeish: string, path: string) => {
+      const args = oid ? ["cat-file", "blob", oid] : ["show", `${treeish}:${path}`, "--"];
+      const result = spawnSync("git", args, {
+        cwd: projectDir,
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" },
+        maxBuffer: 64 * 1024,
+      });
+      const bytes = result.stdout ?? Buffer.alloc(0);
+      return {
+        args, status: result.status, signal: result.signal,
+        error: result.error?.message,
+        errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
+        stderr: result.stderr?.toString("utf8"),
+        capturedBytes: bytes.length,
+        capturedSha256: createHash("sha256").update(bytes).digest("hex"),
+        capturedBase64: bytes.toString("base64"),
+        utf8Preview: bytes.toString("utf8").slice(0, 4000),
+      };
+    };
+    const mismatches = candidateExact?.object_mismatches ?? [];
+    // Read the captured identities, including a rolled-back commit, before
+    // cleanup. These probes supplement rather than replace the original reads.
+    const blobComparisons = mismatches.slice(0, 8).map((entry: {
+      path: string; expected_treeish: string;
+      actual: { oid: string | null }; expected: { oid: string | null };
+    }) => ({
+      path: entry.path,
+      expectedAfterFailure: readBlob(entry.expected.oid, entry.expected_treeish, entry.path),
+      actualAfterFailure: readBlob(entry.actual.oid, candidateExact.treeish, entry.path),
+      pendingAfterFailure: candidateExact.passed_pending_tree_oid
+        ? readBlob(null, candidateExact.passed_pending_tree_oid, entry.path)
+        : null,
+    }));
+    console.error(`t326 pinned merge diagnostics:\n${JSON.stringify({
+      unit,
+      pinnedOid,
+      landingHead,
+      transaction,
+      candidateExact,
+      blobComparisons,
+      omittedBlobComparisons: Math.max(0, mismatches.length - blobComparisons.length),
+      pinnedFiles: pinnedOid ? filesAt(pinnedOid) : null,
+      landingFiles: filesAt(landingHead),
+      checkedTreeFiles: candidateExact?.treeish ? filesAt(candidateExact.treeish) : null,
+      passedPendingTreeFiles: candidateExact?.passed_pending_tree_oid
+        ? filesAt(candidateExact.passed_pending_tree_oid)
+        : null,
+    }, null, 2)}`);
+  } catch (error) {
+    console.error(`t326 pinned merge diagnostics unavailable: ${String(error)}`);
+  }
+  try {
+    console.error(`t326 landing Git trace:\n${readFileSync(tracePath, "utf-8")}`);
+  } catch (error) {
+    console.error(`t326 landing Git trace unavailable: ${String(error)}`);
+  }
 }
 
 function prepareCandidate(
@@ -843,7 +947,7 @@ describe("t326 pinned team Unit merge", () => {
   // Two full gate-and-land cycles measure ~110 s alone on an M3 Pro (each tool call is a fresh bun process), so 120 s leaves no headroom under --parallel 4.
   }, 300000);
 
-  test("moved refs require re-pin and released attempts cannot pin", () => {
+  test("moved refs require re-pin", () => {
     const { seed, remote } = makeSeed();
     const first = prepareCandidate(remote, "alpha", "move-team");
     const pin = run(UNIT, ["pin", "alpha"], seed);
@@ -882,7 +986,9 @@ describe("t326 pinned team Unit merge", () => {
     expect(readFileSync(join(seed, "src", "alpha.ts"), "utf-8")).toContain(
       "moved",
     );
+  }, 120000);
 
+  test("released attempts cannot pin", () => {
     const released = makeSeed();
     prepareCandidate(released.remote, "alpha", "release-team");
     const releaseMain = clone(released.remote, "release-main");
@@ -923,11 +1029,48 @@ describe("t326 pinned team Unit merge", () => {
       cwd: beta.checkout,
       encoding: "utf-8",
     });
+    const rebaseResult = (result: typeof rebased) => ({
+      status: result.status, signal: result.signal, error: result.error?.message,
+      stdout: result.stdout, stderr: result.stderr,
+    });
+    const reportRebaseFailure = (continued?: typeof rebased) => {
+      try {
+        const probes = [
+          ["status", "--porcelain=v1", "--branch"],
+          ["ls-files", "--unmerged"],
+          ["diff", "--cached", "--name-status"],
+          ["rev-parse", "--verify", "REBASE_HEAD"],
+          ["rev-parse", "--verify", "HEAD"],
+        ].map((args) => ({
+          args,
+          ...rebaseResult(spawnSync("git", args, {
+            cwd: beta.checkout, encoding: "utf-8", timeout: 5000,
+          })),
+        }));
+        console.error(`t326 rebase diagnostics:\n${JSON.stringify({
+          checkout: beta.checkout, initial: rebaseResult(rebased),
+          continued: continued ? rebaseResult(continued) : null, probes,
+        }, null, 2)}`);
+      } catch (error) {
+        console.error(`t326 rebase diagnostics unavailable: ${String(error)}`);
+      }
+    };
     if ((rebased.status ?? 1) !== 0) {
       const statePath = seededStateFile(beta.checkout);
       const stateRelative = statePath
         .slice(beta.checkout.length + 1)
         .replaceAll("\\", "/");
+      // Resolve only the expected state conflict. An unrelated Git failure must
+      // not cause us to manufacture staged changes and mask the original error.
+      const unmerged = spawnSync("git", ["diff", "--name-only", "--diff-filter=U"], {
+        cwd: beta.checkout, encoding: "utf-8",
+      });
+      const conflicts = (unmerged.stdout ?? "").split(/\r?\n/).filter(Boolean);
+      if (unmerged.status !== 0 || conflicts.length !== 1 || conflicts[0] !== stateRelative) {
+        reportRebaseFailure();
+      }
+      expect(unmerged.status, JSON.stringify({ initial: rebaseResult(rebased), unmerged: rebaseResult(unmerged) })).toBe(0);
+      expect(conflicts, JSON.stringify(rebaseResult(rebased))).toEqual([stateRelative]);
       git(beta.checkout, ["checkout", "origin/main", "--", stateRelative]);
       writeFileSync(
         statePath,
@@ -942,6 +1085,7 @@ describe("t326 pinned team Unit merge", () => {
         encoding: "utf-8",
         env: { ...process.env, GIT_EDITOR: "true" },
       });
+      if (continued.status !== 0) reportRebaseFailure(continued);
       expect(continued.status, `${continued.stdout}${continued.stderr}`).toBe(0);
     }
     const rebasedStatePath = seededStateFile(beta.checkout);
@@ -1550,6 +1694,19 @@ describe("t326 pinned team Unit merge", () => {
     expect(landed.out).toContain("candidate-exact merge policy");
     expect(landed.out).toContain("src/shared.ts");
     expect(landed.out).toContain("Rebase");
+    const policy = JSON.parse(landed.out).candidate_exact;
+    expect(policy).toMatchObject({
+      phase: "pending-index", unit: "alpha", pinned_oid: pinPayload.pinned_oid,
+    });
+    const mismatch = policy.object_mismatches.find((entry: { path: string }) => entry.path === "src/shared.ts");
+    expect(mismatch).toMatchObject({
+      expected_treeish: pinPayload.pinned_oid,
+      expected: { status: 0, oid: git(fixture.seed, ["rev-parse", `${pinPayload.pinned_oid}:src/shared.ts`]) },
+      actual: { status: 0 },
+    });
+    expect(mismatch.actual.oid).not.toBe(mismatch.expected.oid);
+    expect(git(fixture.seed, ["cat-file", "blob", mismatch.actual.oid])).toContain('export const right = "main";');
+    expect(git(fixture.seed, ["cat-file", "blob", mismatch.expected.oid])).toContain('export const right = "base";');
     expect(git(fixture.seed, ["rev-parse", "HEAD"])).toBe(headBefore);
     expect(git(fixture.seed, ["ls-files", "-u"])).toBe("");
   }, 120000);
@@ -1633,7 +1790,12 @@ describe("t326 pinned team Unit merge", () => {
     git(conflict.seed, ["commit", "-m", "main conflict"]);
     const stateBefore = readFileSync(seededStateFile(conflict.seed), "utf-8");
     const headBefore = git(conflict.seed, ["rev-parse", "HEAD"]);
-    const landed = run(UNIT, ["land", "alpha", "--step", "git"], conflict.seed);
+    const traceDir = mkdtempSync(join(tmpdir(), "aidlc-inc3-landing-trace-"));
+    tempDirs.push(traceDir);
+    const tracePath = join(traceDir, "git-events.ndjson");
+    const landed = run(UNIT, ["land", "alpha", "--step", "git"], conflict.seed, false, {
+      GIT_TRACE2_EVENT: tracePath.replaceAll("\\", "/"),
+    });
     expect(landed.status).not.toBe(0);
     expect(landed.out).toContain("src/alpha.ts");
     expect(readFileSync(seededStateFile(conflict.seed), "utf-8")).toBe(stateBefore);
@@ -2448,6 +2610,7 @@ describe("t326 pinned team Unit merge", () => {
     const reviewPin = run(UNIT, ["pin", "alpha"], reviewFixture.seed);
     expect(reviewPin.status).not.toBe(0);
     expect(reviewPin.out).toContain("reviewer READY receipts");
+    expect(reviewPin.out).toContain(`reviewer READY receipts (${reviewerStage.slug})`);
 
     const planFixture = makeSeed();
     const planned = prepareCandidate(

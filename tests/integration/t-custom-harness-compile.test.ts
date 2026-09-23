@@ -597,7 +597,13 @@ outputs: none
       );
 
       // THE CONTRACT: the hook exits 0 (never blocks) even though the sensor broke.
-      expect(hook.status).toBe(0);
+      expect(hook.status, JSON.stringify({
+        status: hook.status,
+        signal: hook.signal,
+        error: hook.error?.message,
+        stdout: hook.stdout,
+        stderr: hook.stderr,
+      })).toBe(0);
 
       // THE EVIDENCE: a hook-drop was recorded naming the broken sensor + the
       // dispatcher's missing-script reason (advisory surface, not silent). P4:
@@ -611,7 +617,7 @@ outputs: none
     } finally {
       cleanupTestProject(proj);
     }
-  });
+  }, 10_000); // Compile + init + the hook/dispatcher chain exceeded 5s on Windows.
 
   // E10a — two stages produce the same artifact and a third consumes it.
   // Guard: compileStageGraph duplicate-producer check in aidlc-graph.ts.

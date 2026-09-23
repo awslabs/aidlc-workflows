@@ -1,5 +1,9 @@
 // covers: subcommand:aidlc-orchestrate:team-board, function:parseTeamBoardArgs, function:buildTeamConstructionBoard, function:buildTeamConstructionBoardForIntent, function:renderTeamConstructionBoard, function:localUnitClaimOverviewForIntent, function:unitMergeTransactionsForIdentity, function:CLAIM_ACTIVITY_STALE_HOURS
 
+import {
+  deterministicCaseTimeoutMs,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -38,7 +42,7 @@ import {
 } from "../harness/fixtures.ts";
 
 // Every case spawns several tool processes plus real git remotes; bun's 5s default is too tight under --parallel 4.
-setDefaultTimeout(60_000);
+setDefaultTimeout(Math.max(60_000, deterministicCaseTimeoutMs()));
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -1059,8 +1063,9 @@ describe("t327 team construction dispatcher", () => {
     const movedDoctor = run(UTILITY, ["doctor", "--verbose"], moved.project);
     expect(movedDoctor.out).not.toContain("no observed ref movement");
     // Four board fixtures and five doctor processes share this case's budget.
-    // Keep it bounded while allowing the full subprocess scenario to finish.
-  }, 30_000);
+    // Use the shared native-fixture profile instead of overriding the file
+    // default with a shorter, unbuffered case limit.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("local board failures name the real source instead of blaming the registry", () => {
     const fixture = boardFixture();

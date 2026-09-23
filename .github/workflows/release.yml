@@ -69,23 +69,35 @@ jobs:
               continue
             fi
             result="$evidence/full-suite-result.json"
-            if jq -e --arg sha "$tag_sha" '.sha == $sha and .passed == true' "$result"; then
+            # A policy marker rejects older artifacts that allowed disabled live jobs.
+            # Require each declared job independently of the producer's passed flag.
+            if jq -e --arg sha "$tag_sha" --arg run "$run" '
+              .sha == $sha and .passed == true
+              and .purpose == "release"
+              and .verificationFamily == "all"
+              and .omittedLegs == []
+              and .runId == $run
+              and .coveragePolicy == "required-hosted-live-v1"
+              and .disabledLegs == []
+              and (.excluded | type == "array")
+              and (.legs | type == "object")
+              and ([.legs.plan, .legs.native_terminal, .legs.native_reconcile,
+                    .legs.deterministic, .legs.production_guards, .legs.live_prepare, .legs.live_hosted,
+                    .legs.live_windows, .legs.release_contract_windows] | all(. == "success"))
+              and (.legs | all(. == "success"))
+            ' "$result"; then
               exclusions="$(jq -c '.excluded // []' "$result")"
               if [ "$exclusions" != '[]' ]; then
                 echo "::warning::Full-suite evidence for $tag_sha excludes families: $exclusions"
               fi
-              disabled_legs="$(jq -c '.disabledLegs // []' "$result")"
-              if [ "$disabled_legs" != '[]' ]; then
-                echo "::warning::Full-suite evidence for $tag_sha has disabled live lanes: $disabled_legs"
-              fi
               accepted=true
               break
             fi
-            echo "Evidence run $run: wrong source or failing full-suite legs"
-            jq '{sha, passed, complete, excluded, disabledLegs, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
+            echo "Evidence run $run: wrong source/run/purpose/family, obsolete coverage policy, or missing/disabled/failing full-suite legs"
+            jq '{sha, runId, purpose, verificationFamily, coveragePolicy, passed, complete, excluded, disabledLegs, omittedLegs, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
           done
           if [ "$accepted" != true ]; then
-            echo "::error::No successful preview or full-suite dispatch has passing full-suite-result evidence for $tag_sha. Missing/failing legs are listed above; no artifact means every leg is unproven. Renew evidence by dispatching full-suite.yml on main with ref=$tag_sha."
+            echo "::error::No successful preview or full-suite dispatch has release-purpose required-hosted-live-v1 full-suite-result evidence for $tag_sha. Live verification, omitted/missing/disabled/failing legs or obsolete evidence block publication. Verify ai-pr-review environment prerequisites, then renew evidence by dispatching full-suite.yml on main with ref=$tag_sha and live_verification=false."
             exit 1
           fi
 
@@ -98,7 +110,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # Regenerate the projections from core/ + harness/ so the release gate
       # tests CI-built bytes; the --check inside `bun run check` then acts as a
@@ -108,78 +120,9 @@ jobs:
       - name: ShellCheck installer
         run: shellcheck scripts/install.sh
 
-  test_smoke:
-    name: Release tests (smoke)
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ needs.validate.outputs.sha }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      - run: bun scripts/package.ts
-      - run: bun tests/run-tests.ts --smoke
-
-  test_unit:
-    name: Release tests (unit shard ${{ matrix.shard }}/4)
-    needs: validate
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ needs.validate.outputs.sha }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      # Each shard owns an independent checkout. Tests remain serial inside
-      # the shard so package regeneration cannot race dist/ readers.
-      - run: bun scripts/package.ts
-      - name: Install zsh (t244 completion syntax check)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
-      - run: bun tests/run-tests.ts --unit --shard ${{ matrix.shard }}/4
-
-  test_deep:
-    name: Release tests (integration + e2e, deterministic)
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ needs.validate.outputs.sha }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      - run: bun scripts/package.ts
-      - run: bun tests/run-tests.ts --integration --e2e --no-llm --parallel 8
-
-  test:
-    name: Release tests
-    if: ${{ always() }}
-    needs: [test_smoke, test_unit, test_deep]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require every release test tier
-        env:
-          SMOKE_RESULT: ${{ needs.test_smoke.result }}
-          UNIT_RESULT: ${{ needs.test_unit.result }}
-          DEEP_RESULT: ${{ needs.test_deep.result }}
-        run: |
-          test "$SMOKE_RESULT" = "success"
-          test "$UNIT_RESULT" = "success"
-          test "$DEEP_RESULT" = "success"
-
   native-smoke:
-    needs: [validate, verify, test]
+    # validate already requires passing Full Suite evidence for this exact SHA.
+    needs: [validate, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -191,7 +134,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # t238 builds the native binary from dist-release/; regenerate first so
       # the smoke proves CI-built bytes on every OS in the matrix.
@@ -243,7 +186,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # Build from projections regenerated on this runner, never from the
       # committed trees; the --check that follows is the generator-determinism
@@ -294,7 +237,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -596,7 +539,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}

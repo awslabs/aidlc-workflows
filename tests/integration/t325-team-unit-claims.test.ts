@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-unit:adopt, subcommand:aidlc-unit:claim, subcommand:aidlc-unit:release, subcommand:aidlc-unit:participate, subcommand:aidlc-unit:status, subcommand:aidlc-utility:claim, subcommand:aidlc-utility:release, subcommand:aidlc-utility:participate, subcommand:aidlc-state:sync-unit-scope-stage, subcommand:aidlc-orchestrate:next, function:UNIT_SCOPE_FILE, function:UNIT_PARKED_FILE, function:CLAIM_GENERATIONS_FILE, function:UNIT_PARTICIPANT_FILE, function:CLAIM_REGISTRY_CACHE_FILE, function:UNIT_RELEASE_PENDING_FILE, function:unitScopePath, function:unitParkedPath, function:claimGenerationsPath, function:unitParticipantPath, function:claimRegistryCachePath, function:unitReleasePendingPath, function:readUnitScopeStamp, function:readApplicableTeamUnitScopeStamp, function:writeUnitScopeStamp, function:clearUnitScopeStamp, function:readClaimGenerations, function:writeClaimGeneration, function:clearClaimGeneration, function:readUnitClaimRegistryCache, function:writeUnitClaimRegistryCache, function:claimAttemptFields, function:eventMatchesClaimAttempt, function:effectiveUnitGateRhythm, function:hasAnyUnitClaimRefs, function:validateLiveUnitScope, function:requireLiveClaimForTeamUnit, function:isWalkingSkeletonUnitOnMain, function:worktreeClaimBoundaryMatches, function:ensureCloneId, function:invalidateLiveClaimPayloadCache
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -32,7 +33,7 @@ import {
 } from "../harness/fixtures.ts";
 
 // Every case spawns several tool processes plus real git remotes; bun's 5s default is too tight under --parallel 4.
-setDefaultTimeout(60_000);
+setDefaultTimeout(Math.max(60_000, deterministicCaseTimeoutMs()));
 
 const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -643,15 +644,30 @@ describe("t325 atomic team Unit claims", () => {
   }, 120000);
 
   test("claim-time rhythm overrides are authoritative in both directions", () => {
+    const claimWithDiagnostics = (cwd: string, args: string[]) => {
+      const traceDir = mkdtempSync(join(tmpdir(), "aidlc-inc2-claim-trace-"));
+      tempDirs.push(traceDir);
+      const tracePath = join(traceDir, "git-events.ndjson");
+      const claimed = run(UNIT, args, cwd, {
+        GIT_TRACE2_EVENT: tracePath.replaceAll("\\", "/"),
+      });
+      if (claimed.status !== 0) {
+        console.error(`t325 claim diagnostics:\n${JSON.stringify({ args, cwd, ...claimed }, null, 2)}`);
+        try {
+          console.error(`t325 claim Git trace:\n${readFileSync(tracePath, "utf-8")}`);
+        } catch (error) {
+          console.error(`t325 claim Git trace unavailable: ${String(error)}`);
+        }
+      }
+      return claimed;
+    };
     const perStageState = makeSeed({ rhythm: "unit-end" });
     const perStage = clone(perStageState.remote, "override-per-stage");
-    expect(
-      run(
-        UNIT,
-        ["claim", "alpha", "--team", "per-stage", "--rhythm", "per-stage"],
-        perStage,
-      ).status,
-    ).toBe(0);
+    const perStageClaim = claimWithDiagnostics(
+      perStage,
+      ["claim", "alpha", "--team", "per-stage", "--rhythm", "per-stage"],
+    );
+    expect(perStageClaim.status, perStageClaim.out).toBe(0);
     expect(nextDirective(perStage)).toMatchObject({
       kind: "run-stage",
       stage: "functional-design",
@@ -722,13 +738,11 @@ describe("t325 atomic team Unit claims", () => {
 
     const unitEndState = makeSeed({ rhythm: "per-stage" });
     const unitEnd = clone(unitEndState.remote, "override-unit-end");
-    expect(
-      run(
-        UNIT,
-        ["claim", "alpha", "--team", "unit-end", "--rhythm", "unit-end"],
-        unitEnd,
-      ).status,
-    ).toBe(0);
+    const unitEndClaim = claimWithDiagnostics(
+      unitEnd,
+      ["claim", "alpha", "--team", "unit-end", "--rhythm", "unit-end"],
+    );
+    expect(unitEndClaim.status, unitEndClaim.out).toBe(0);
     expect(nextDirective(unitEnd)).toMatchObject({
       kind: "run-stage",
       stage: "functional-design",
@@ -1089,6 +1103,7 @@ describe("t325 atomic team Unit claims", () => {
   }, 120000);
 
   test("partial clones explicitly hydrate claim payload blobs with lazy fetch disabled", () => {
+    // Two clones plus claim/release/reclaim/publish share this case's Git budget.
     const { remote } = makeSeed();
     const owner = clone(remote, "payload-owner");
     const partial = partialClone(remote, "payload-partial");
@@ -1127,7 +1142,7 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(published.status, published.out).toBe(0);
     expect(published.out).not.toContain("payload is invalid");
-  }, 15000);
+  }, 60_000);
 
   test("release refuses completed rows and claim metadata is ref/table safe", () => {
     const unsafe = makeSeed();

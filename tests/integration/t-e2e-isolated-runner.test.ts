@@ -43,8 +43,10 @@ function fixture(files: Record<string, string>): string {
     "tests/harness/claude-gate.ts", "tests/harness/tui-runtime.ts", "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
     "tests/harness/runner-profile.ts",
+    "tests/harness/test-budget.ts",
     "tests/lib/bun-junit-to-meta.ts", "tests/lib/test-sharding.ts",
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
+    "tests/lib/e2e-deferred-cleanup.ts",
   ]) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     copyFileSync(join(SOURCE, path), join(root, path));
@@ -437,6 +439,37 @@ test("worker isolation", async()=>{
       .trim().split("\n").map((line) => JSON.parse(line));
     expect(events.slice(0, 2).every((event) => event.kind === "start")).toBe(true);
     expect(events.filter((event) => event.kind === "finish")).toHaveLength(2);
+  }, 60_000);
+
+  test("parallel file retirement preserves every result across repeated worker reuse", () => {
+    // Exercise overlapping process-tree cleanup over several waves. A runtime
+    // pipe/handle failure must not silently lose later files or their reports.
+    const files = Object.fromEntries(Array.from({ length: 24 }, (_, index) => [
+      `t-retire-${String(index).padStart(2, "0")}.test.ts`,
+      `import {test,expect} from "bun:test";
+test("owned file ${index}", async () => {
+  await Bun.sleep(${20 + (index % 8) * 10});
+  expect(process.env.AIDLC_TEST_WORKER_ID).toBeDefined();
+});`,
+    ]));
+    const root = fixture(files);
+    const result = run(root, ["--isolated-e2e", "--bedrock-parallel", "8", "--require-coverage"]);
+    expect(result.code, result.output).toBe(0);
+    const report = json<{ state: string; coverageComplete: boolean; files: Array<{ state: string; worker: number }> }>(
+      join(result.log!, "e2e-results.json"),
+    );
+    expect(report.state).toBe("COMPLETE");
+    expect(report.coverageComplete).toBe(true);
+    expect(report.files).toHaveLength(24);
+    expect(report.files.every((file) => file.state === "PASS")).toBe(true);
+    expect(new Set(report.files.map((file) => file.worker)).size).toBe(8);
+    const coverage = json<{ files: Array<{ cases: { total: number; skipped: number } }> }>(
+      join(result.log!, "coverage.json"),
+    );
+    expect(coverage.files.reduce((sum, file) => sum + file.cases.total, 0)).toBe(24);
+    expect(coverage.files.reduce((sum, file) => sum + file.cases.skipped, 0)).toBe(0);
+    const storage = json<{ root: string }>(join(result.log!, "e2e-worker-storage.json"));
+    expect(existsSync(storage.root)).toBe(false);
   }, 60_000);
 
   test("outer file deadline records a failure and retains incremental evidence", () => {

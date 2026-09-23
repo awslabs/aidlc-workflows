@@ -16,6 +16,7 @@ import {
   preflightVerdict,
   PRODUCTION_GUARD_OFF_SWITCHES,
   RunnerArgsError,
+  runnerFileTimeoutSeconds,
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
@@ -87,6 +88,24 @@ describe("runner guard profile options", () => {
       const selected = parseRunnerArgs(["--production-guards", flag], {});
       expect(selected.guardProfile).toBe("production");
       expect(selected.runE2e).toBe(flag !== "--ci");
+    }
+  });
+
+  test("file and run budgets apply to ordinary tiers and cannot extend an isolated deadline", () => {
+    const ordinary = parseRunnerArgs(["--integration", "--file-timeout", "2400", "--run-timeout", "2700"], {});
+    expect(ordinary.isolatedE2e).toBe(false);
+    expect(ordinary.runTimeout).toBe(2700);
+    expect(runnerFileTimeoutSeconds(ordinary, false)).toBe(2400);
+    const isolated = parseRunnerArgs([
+      "--e2e", "--isolated-e2e", "--e2e-file-timeout", "900", "--file-timeout", "2400",
+    ], {});
+    expect(runnerFileTimeoutSeconds(isolated, true)).toBe(900);
+    isolated.fileTimeout = 600;
+    expect(runnerFileTimeoutSeconds(isolated, true)).toBe(600);
+    for (const flag of ["--file-timeout", "--run-timeout"]) {
+      for (const value of ["0", "-1", "1.5", "Infinity", "2147484"]) {
+        expect(() => parseRunnerArgs([flag, value], {})).toThrow(RunnerArgsError);
+      }
     }
   });
 
@@ -186,6 +205,7 @@ function runnerFixture(files: Record<string, string>) {
     "tests/run-tests.sh",
     "tests/run-tests.ts",
     "tests/harness/runner-profile.ts",
+    "tests/harness/test-budget.ts",
     "tests/gen-coverage-registry.ts",
     "tests/harness/tui-runtime.ts",
     "tests/harness/tui-record-file.ts",
@@ -193,6 +213,7 @@ function runnerFixture(files: Record<string, string>) {
     "tests/lib/e2e-plan.ts",
     "tests/lib/e2e-scheduler.ts",
     "tests/lib/e2e-workers.ts",
+    "tests/lib/e2e-deferred-cleanup.ts",
     "tests/lib/e2e-process.ts",
     "tests/lib/bun-junit-to-meta.ts",
     "tests/lib/test-sharding.ts",

@@ -1,5 +1,5 @@
 // covers: file:scripts/ci-sanitize-logs.ts
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -49,6 +49,73 @@ afterEach(() => {
 });
 
 describe("CI log credential redaction", () => {
+  for (const keepTraces of [false, true]) {
+    test(`removes Codex sandbox secret subtrees without reading them (keepTraces=${keepTraces})`, async () => {
+      const root = fixture();
+      const secretRoot = "e2e-artifacts/codex/retained-fixtures/project/.home/.sandbox-secrets";
+      put(root, `${secretRoot}/nested/account.json`, '{"opaque":"synthetic-unrecognized-credential"}');
+      put(root, "other-home/.SANDBOX-SECRETS/account.json", '{"opaque":"synthetic-other-credential"}');
+      const diagnostic = put(root, "e2e-artifacts/codex/retained-fixtures/project/.home/.sandbox/sandbox.log", "setup diagnostic\n");
+      const similar = put(root, ".sandbox-secrets-not-a-secret-dir/summary.log", "keep exact-name siblings\n");
+      const read = fs.readFileSync;
+      const hook = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+        if (String(args[0]).toLowerCase().includes(".sandbox-secrets/") ||
+          String(args[0]).toLowerCase().includes(".sandbox-secrets\\")) {
+          throw new Error("secret content must not be opened");
+        }
+        return read(...args);
+      }) as typeof fs.readFileSync);
+      // sanitizeFile reads through a descriptor; prohibit opening these files too.
+      const open = fs.openSync;
+      const opener = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+        if (String(path).toLowerCase().split(/[\\/]/).includes(".sandbox-secrets")) {
+          throw new Error("secret content must not be opened");
+        }
+        return open(path, flags, mode);
+      });
+      try { await sanitizeLogs(root, { keepTraces }); }
+      finally { hook.mockRestore(); opener.mockRestore(); }
+      expect(fs.existsSync(join(root, secretRoot))).toBe(false);
+      expect(fs.existsSync(join(root, "other-home/.SANDBOX-SECRETS"))).toBe(false);
+      expect(fs.readFileSync(diagnostic, "utf8")).toBe("setup diagnostic\n");
+      expect(fs.readFileSync(similar, "utf8")).toBe("keep exact-name siblings\n");
+      const report = fs.readFileSync(join(root, "sanitizer-report.json"), "utf8");
+      expect(report).toContain('"reason": "sandbox-secrets"');
+      expect(report).not.toContain("account.json");
+      expect(report).not.toContain("synthetic-unrecognized-credential");
+    });
+  }
+
+  test("a selected log root beneath .sandbox-secrets is removed without a report inside it", async () => {
+    const outer = fixture();
+    const root = join(outer, ".sandbox-secrets", "nested");
+    put(root, "account.json", '{"opaque":"synthetic-credential"}');
+    await sanitizeLogs(root, { keepTraces: true });
+    expect(fs.existsSync(root)).toBe(false);
+  });
+
+  test("a .sandbox-secrets junction is removed without touching its target", async () => {
+    const root = fixture();
+    const outside = fixture();
+    const file = put(outside, "account.json", "synthetic outside data");
+    fs.symlinkSync(outside, join(root, ".sandbox-secrets"), process.platform === "win32" ? "junction" : "dir");
+    await sanitizeLogs(root, { keepTraces: true });
+    expect(fs.existsSync(join(root, ".sandbox-secrets"))).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe("synthetic outside data");
+  });
+
+  test("redacts the run's broker identity while retaining unrelated numeric fixtures", () => {
+    const account = "123456789012";
+    const arn = `arn:aws:sts::${account}:assumed-role/test-role/test-session`;
+    const text = `account=${account}\ncaller=${arn}\nfixture=111122223333\nBearer fixture-token\n`;
+    expect(redactSecrets(text, JSON.stringify({ account, arn }))).toBe(
+      "account=[REDACTED]\ncaller=[REDACTED]\nfixture=111122223333\nBearer [REDACTED]\n",
+    );
+    for (const invalid of ["", "invalid-json", "null", '{"account":42,"arn":"invalid"}']) {
+      expect(redactSecrets(text, invalid)).toBe(text.replace("fixture-token", "[REDACTED]"));
+    }
+  });
+
   test("redacts standalone AWS and Kiro keys without changing surrounding text", () => {
     expect(redactSecrets(`first ${accessKey}, second ${sessionKey}; ksk_fixture-123_abc. done\n`))
       .toBe("first [REDACTED], second [REDACTED]; [REDACTED]. done\n");
