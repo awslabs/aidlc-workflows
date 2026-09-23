@@ -40,6 +40,7 @@ import {
   candidateReviewCoverageProjection,
   consumeSharedDirectiveAsk,
   evaluateGuardRefusal,
+  type GuardRefusalInput,
   type GuardRecoveryFeedbackStatus,
   type GuardRemedyOp,
   findStageBySlug,
@@ -832,7 +833,10 @@ describe("bounded guard-remedy liveness", () => {
       status: "pending",
       gateStage: "code-generation",
     });
-    const refusal = evaluateGuardRefusal({
+    if (resolved?.resolved !== true) {
+      throw new Error("expected a resolved unit-end gate");
+    }
+    const input: GuardRefusalInput = {
       code: "UNIT_END_TEST",
       blockedAction: "artifact-write",
       stage: "functional-design",
@@ -848,7 +852,8 @@ describe("bounded guard-remedy liveness", () => {
       },
       humanAuthority: { freshTurn: false, unattended: false },
       teamGate: resolved,
-    });
+    };
+    const refusal = evaluateGuardRefusal(input);
     expect(refusal.stage).toBe("functional-design");
     const rejection = refusal.remedies.find((remedy) =>
       remedy.action.includes('Ask "What should change?"')
@@ -857,6 +862,22 @@ describe("bounded guard-remedy liveness", () => {
       'stage "code-generation" for Unit "alpha"',
     );
     expect(rejection?.command).toBeUndefined();
+
+    const revising = evaluateGuardRefusal({
+      ...input,
+      projectDir: "/workspace",
+      teamGate: { ...resolved, status: "revising" },
+    });
+    const finish = revising.remedies.find((remedy) =>
+      remedy.op === "finish-revision"
+    );
+    expect(finish?.action).toContain(
+      "report --stage code-generation --unit alpha --result revised " +
+        "--project-dir /workspace",
+    );
+    expect(finish?.action).not.toContain(
+      "report --stage functional-design --unit alpha",
+    );
 
     const unresolvedState = unitEndState.replace(
       /\u2014 EXECUTE/g,

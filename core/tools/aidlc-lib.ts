@@ -23180,12 +23180,12 @@ function lifecycleResetRemedies(
   if (input.teamGate?.resolved === false) {
     return [unresolvedTeamGateRemedy(input.teamGate)];
   }
+  const reportStage =
+    input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
   if (state === "pending" || state === "skipped") {
     return [restartStageRemedy(input.stage)];
   }
   if (state === "in-progress" || state === "awaiting-approval") {
-    const reportStage =
-      input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
     const unitContext =
       input.teamGate?.resolved === true && input.unit
         ? ` for Unit "${input.unit}"`
@@ -23223,7 +23223,7 @@ function lifecycleResetRemedies(
       args: [
         "report",
         "--stage",
-        input.stage,
+        reportStage,
         ...(input.unit ? ["--unit", input.unit] : []),
         "--result",
         "revised",
