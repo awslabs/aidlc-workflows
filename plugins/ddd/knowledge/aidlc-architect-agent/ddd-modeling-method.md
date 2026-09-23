@@ -29,7 +29,12 @@ example-based fallback.
    - `kind: invariant` with `expr` for data/cardinality (→ runtime assertion + property test);
    - `kind: functional` (given/when/then) only when neither fits.
 6. Write `ddd-domain-model.md`: machine-checkable YAML frontmatter + prose body; stable IDs
-   `{project}.{context}.{type}.{name}`.
+   `{project}.{context}.{type}.{name}`. The frontmatter shape is normative — see
+   `ddd-model-and-rule-schema.md` (this knowledge folder) and author against it. The blocking
+   `ddd-model-schema` sensor enforces it at the gate. Easy to drop, always required: `aggregate:` on
+   every event and every `kind: invariant` rule; `{ from, on, to }` (not `event`) for FSM transitions;
+   a declared `bounded_contexts` entry for every context prefix used in an ID (including a shared
+   kernel); past-tense event names.
 
 Brownfield: seed from `business-overview.md` (Business Dictionary → glossary; Component descriptions →
 candidate contexts; Business Transactions → candidate events). Extraction never infers identity or

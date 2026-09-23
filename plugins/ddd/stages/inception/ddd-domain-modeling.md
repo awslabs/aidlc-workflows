@@ -32,6 +32,7 @@ requires_stage:
 sensors:
   - required-sections
   - upstream-coverage
+  - ddd-model-schema
 scopes:
   - enterprise
   - feature
@@ -103,10 +104,25 @@ event naming) are NOT authored here — the conformance generator derives them f
 ### Step 7: Write the Domain Model Artifact
 
 Write `<record>/inception/ddd-domain-modeling/ddd-domain-model.md` with machine-checkable YAML
-frontmatter (`ubiquitous_language`, `bounded_contexts`, `context_map`, `entities`, `value_objects`,
-`aggregates` with `state_machine`, `domain_events`, `rules`) plus a human-readable prose body. Use
-stable IDs `{project}.{context}.{type}.{name}`. Include `## Ubiquitous Language`, `## Bounded
-Contexts`, and `## Aggregates` H2 sections in the body.
+frontmatter plus a human-readable prose body. The frontmatter shape is **normative** and is defined in
+`ddd-model-and-rule-schema.md` (architect knowledge) — author against that file, not from memory. The
+blocking `ddd-model-schema` sensor checks every stated rule at this gate; the approval cannot open
+until the model conforms. The keys are `model`, `version`, `ubiquitous_language`, `bounded_contexts`,
+`context_map`, `entities`, `value_objects`, `aggregates` (with optional `state_machine`),
+`domain_events`, `rules`. Use stable IDs `{project}.{context}.{type}.{name}`. Include
+`## Ubiquitous Language`, `## Bounded Contexts`, and `## Aggregates` H2 sections in the body.
+
+The fields most often dropped when authoring from memory — each is REQUIRED and each is consumed by
+`ddd-conformance`:
+
+- every `domain_events[]` entry and every `kind: invariant` rule carries `aggregate: <declared
+  aggregate id>` (the emitting aggregate / the aggregate whose root hosts the runtime assertion);
+- `state_machine.transitions[]` entries are `{ from, on, to }` — the key is `on`, never `event`;
+- every context that appears in any element ID is declared in `bounded_contexts` — if shared-kernel
+  types carry `{project}.shared.*` IDs, declare a `{project}.shared` context (type it `shared-kernel`
+  in the `context_map`) or give those types a declared context prefix;
+- event names are past-tense: at least one hyphen token of the id name is a past participle
+  (`loan-checked-out`, `hold-expired`; not `loan-return`).
 
 ### Step 8: Open the Approval Gate (business confirmation)
 
@@ -125,7 +141,11 @@ re-presenting. Any later amendment re-enters through this stage and bumps the mo
 ## Sensors
 
 This stage's output is a markdown artifact under its record dir; `required-sections` and
-`upstream-coverage` check it.
+`upstream-coverage` check it. `ddd-model-schema` (ddd plugin, **blocking**, fires at the gate) parses
+the frontmatter and enforces `ddd-model-and-rule-schema.md` deterministically — required fields,
+ID discipline, declared-context membership, `aggregate` citations on events and invariants, FSM
+closure with the `on` key, past-tense event naming, and the rule that structural rule-0 is derived,
+never authored. A `SENSOR_FAILED` here holds the gate; fix the frontmatter and re-present.
 
 ## Learn
 

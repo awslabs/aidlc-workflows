@@ -56,26 +56,36 @@ Adopt aidlc-product-agent (business adjudication voice) and aidlc-quality-agent 
 
 ### Step 2: Load the Domain Model and Code
 
-Read `ddd-domain-model.md` (required) and the generated workspace code. Parse the model frontmatter:
-`bounded_contexts`, `context_map`, `aggregates` (+ `state_machine`), `entities`, `value_objects`,
-`ubiquitous_language`, `domain_events`, `rules`.
+Read `ddd-domain-model.md` (required) and the generated workspace code. Parse the model frontmatter
+using the field names in `ddd-model-and-rule-schema.md` (architect knowledge) — `bounded_contexts`,
+`context_map`, `aggregates` (+ `state_machine` with `{ from, on, to }` transitions), `entities`,
+`value_objects`, `ubiquitous_language`, `domain_events` (each with `aggregate`), `rules` (invariants
+each with `aggregate`). Compile from the SCHEMA's field names, never from whatever key the model happens
+to use: a model that has drifted from the schema is a `ddd-model-schema` sensor failure upstream, not
+something this stage adapts to. Note the model `version` — every generated test cites it.
 
 ### Step 3: Derive Rule-0 Structural Rules
 
 From the model shape, derive the structural conformance rules (NOT authored): boundary integrity
 (each module maps to one context; cross-context only via a declared context-map seam), aggregate
 integrity (members reached only through the root), repository-per-aggregate-root, reference-by-ID/ACL,
-ubiquitous-language naming, past-tense event naming, and FSM model-closure.
+ubiquitous-language naming, past-tense event naming, FSM model-closure, and **aggregate citation** —
+every domain event the code emits and every invariant assertion the code hosts lives in the aggregate
+the model's `aggregate:` field names (an event raised from, or an assertion placed in, a different
+aggregate is a structural divergence).
 
 ### Step 4: Compile Rules to Tests (per the project tech environment)
 
 Emit executable tests into the workspace, using the language/tooling the tech environment declares
 (e.g. JVM → ArchUnit; TS/JS → dependency-cruiser / ts-arch; Python → import-linter / pytest-arch):
 - **rule-0 conformance** → architecture/boundary/naming tests;
-- **`kind: invariant`** → property-based tests (and verify the runtime assertion injected at
-  code-generation is present);
-- **`state_machine`** → an exhaustive (state × event) transition-matrix test (every allowed edge
-  succeeds, every disallowed edge is rejected) + verify the guarded transition function;
+- **`kind: invariant`** → property-based tests, and verify the runtime assertion injected at
+  code-generation is present **in the root of the aggregate the rule's `aggregate:` names** (that
+  field is where the assertion lives; do not search for it elsewhere);
+- **`state_machine`** → an exhaustive (state × `on`) transition-matrix test built from
+  `transitions[].on` (every allowed edge succeeds, every disallowed (state, on) pair is rejected) +
+  verify the guarded transition function; non-transition events named in `state_machine.note` are
+  matrix rows too, permitted only in the states the note names;
 - **`kind: functional`** → one example test per given/when/then rule.
 
 ### Step 5: Run the Suite

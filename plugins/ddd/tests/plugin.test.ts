@@ -33,6 +33,22 @@ describe("ddd plugin own content validation", () => {
     expect(
       existsSync(join(PLUGIN_ROOT, "sensors", "aidlc-ddd-conformance.md")),
     ).toBe(true);
+    expect(
+      existsSync(join(PLUGIN_ROOT, "sensors", "aidlc-ddd-model-schema.md")),
+    ).toBe(true);
+    expect(
+      existsSync(join(PLUGIN_ROOT, "tools", "aidlc-sensor-ddd-model-schema.ts")),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          PLUGIN_ROOT,
+          "knowledge",
+          "aidlc-architect-agent",
+          "ddd-model-and-rule-schema.md",
+        ),
+      ),
+    ).toBe(true);
     expect(existsSync(join(PLUGIN_ROOT, "scopes", "ddd-modeling.md"))).toBe(
       true,
     );
@@ -121,6 +137,12 @@ describe(`${PLUGIN_NAME} plugin — composed into a disposable claude install`, 
     ).toBe(true);
     expect(
       existsSync(join(harnessDir, "tools", "aidlc-sensor-ddd-conformance.ts")),
+    ).toBe(true);
+    expect(
+      existsSync(join(harnessDir, "sensors", "aidlc-ddd-model-schema.md")),
+    ).toBe(true);
+    expect(
+      existsSync(join(harnessDir, "tools", "aidlc-sensor-ddd-model-schema.ts")),
     ).toBe(true);
     expect(existsSync(join(harnessDir, "scopes", "ddd-modeling.md"))).toBe(
       true,
