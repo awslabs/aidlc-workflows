@@ -32,7 +32,7 @@ The scope frontmatter fields are:
 
 | Field | Required | What it does |
 |-------|----------|--------------|
-| `name` | Yes | The scope name. Core files use `aidlc-<name>.md`; plugin scope files use a stem equal to `name`. |
+| `name` | Yes | The scope identity. New core files use `aidlc-<name>.md`; existing core files may also use `<name>.md`. `<name>` is the exact frontmatter value, including any `aidlc-` prefix. Plugin scope files use a stem equal to `name`. |
 | `depth` | Yes | The default detail level — `Minimal`, `Standard`, or `Comprehensive`. |
 | `testStrategy` | No | Overrides test volume independent of depth. Defaults to matching `depth`. |
 | `review_cap` | No | Maximum review class under this scope: `adversarial`, `advisory`, or `none`. Absence means no scope-level lowering. A cap can lower but never raise a stage's `review_class`; autonomous swarm reviews retain the stage's declared class. |

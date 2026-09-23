@@ -55,6 +55,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertComposedScopeFile } from "../harness/composed-scope.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 
 // Each case installs a project and makes several real CLI round trips.
@@ -246,6 +247,105 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     const healedRow = durabilityRow(after.out);
     expect(healedRow).toContain("recorded and projected");
     expect(healedRow).not.toContain("problem(s)");
+  });
+
+  test.each([
+    `aidlc-${SCOPE}.md`,
+    `aidlc-aidlc-${SCOPE}.md`,
+  ])("record metadata refresh from %s requires deleting the actual projection", (filename) => {
+    const proj = freshProject();
+    const name = `aidlc-${SCOPE}`;
+    const scopes = join(proj, ".claude", "scopes");
+    const initialPath = join(scopes, filename);
+    const canonicalPath = join(scopes, `aidlc-${name}.md`);
+    const durablePath = join(proj, "aidlc", "scopes", `${name}.md`);
+    const identity = LIVE_SCOPE_MD.replaceAll(SCOPE, name);
+
+    // Both filenames are supported for this exact prefixed identity. Back-fill
+    // through the packaged CLI, keeping the live fixture's approved plan intact.
+    writeFileSync(initialPath, identity, "utf-8");
+    const grid = readGrid(proj);
+    grid[name] = { stages: { ...LIVE_STAGES } };
+    writeFileSync(gridPath(proj), JSON.stringify(grid, null, 2), "utf-8");
+    expect(existsSync(durablePath)).toBe(false);
+    const backfilled = compile(proj);
+    expect(backfilled.status, backfilled.out).toBe(0);
+    expect(assertComposedScopeFile(scopes, name)).toBe(initialPath);
+    expect(readFileSync(initialPath, "utf-8")).toBe(identity);
+    const record = readFileSync(durablePath, "utf-8");
+    expect(record).toContain(identity.trimEnd());
+    expect(gridInRecord(record)).toEqual(LIVE_STAGES);
+
+    const updatedIdentity = identity
+      .replace(/^depth: Standard$/m, "depth: Minimal")
+      .replace(/^description:.*$/m, "description: Refreshed durable scope metadata");
+    expect(updatedIdentity).toContain("\ndepth: Minimal\n");
+    expect(updatedIdentity).toContain("\ndescription: Refreshed durable scope metadata\n");
+    const updatedRecord = record.replace(identity.trimEnd(), updatedIdentity.trimEnd());
+    writeFileSync(durablePath, updatedRecord, "utf-8");
+    const manualProjection = `${identity}\nLocal projection note: preserve until explicitly refreshed.\n`;
+    writeFileSync(initialPath, manualProjection, "utf-8");
+
+    // Grid authority and identity preservation are separate contracts: compile
+    // repairs a divergent generated cell without erasing a projection hand edit.
+    const divergentGrid = readGrid(proj);
+    divergentGrid[name].stages[AUTHORED_EXECUTE] = "SKIP";
+    writeFileSync(gridPath(proj), JSON.stringify(divergentGrid, null, 2), "utf-8");
+    const preserved = compile(proj);
+    expect(preserved.status, preserved.out).toBe(0);
+    expect(assertComposedScopeFile(scopes, name)).toBe(initialPath);
+    expect(readFileSync(initialPath, "utf-8")).toBe(manualProjection);
+    expect(readFileSync(durablePath, "utf-8")).toBe(updatedRecord);
+    expect(readGrid(proj)[name].stages).toEqual(LIVE_STAGES);
+
+    if (initialPath !== canonicalPath) {
+      // The old refresh instruction assumed aidlc-<name>.md. Removing that
+      // absent path leaves <name>.md installed, so compile correctly preserves it.
+      expect(existsSync(canonicalPath)).toBe(false);
+      rmSync(canonicalPath, { force: true });
+      const assumedDeletion = compile(proj);
+      expect(assumedDeletion.status, assumedDeletion.out).toBe(0);
+      expect(assertComposedScopeFile(scopes, name)).toBe(initialPath);
+      expect(readFileSync(initialPath, "utf-8")).toBe(manualProjection);
+      expect(existsSync(canonicalPath)).toBe(false);
+      expect(readFileSync(durablePath, "utf-8")).toBe(updatedRecord);
+      expect(readGrid(proj)[name].stages).toEqual(LIVE_STAGES);
+    }
+
+    // Resolve by declared name before deleting. Recovery always uses the
+    // canonical filename, even when the previous projection used the alias.
+    const actualPath = assertComposedScopeFile(scopes, name);
+    expect(actualPath).toBe(initialPath);
+    rmSync(actualPath);
+    expect(existsSync(actualPath)).toBe(false);
+    const refreshed = compile(proj);
+    expect(refreshed.status, refreshed.out).toBe(0);
+    // The helper requires exactly one declared identity: no stale duplicate.
+    expect(assertComposedScopeFile(scopes, name)).toBe(canonicalPath);
+    expect(readFileSync(canonicalPath, "utf-8").trimEnd()).toBe(updatedIdentity.trimEnd());
+    expect(readFileSync(durablePath, "utf-8")).toBe(updatedRecord);
+    expect(readGrid(proj)[name].stages).toEqual(LIVE_STAGES);
+    if (initialPath !== canonicalPath) expect(existsSync(initialPath)).toBe(false);
+    const row = durabilityRow(doctor(proj).out);
+    expect(row).toContain("recorded and projected");
+    expect(row).not.toContain("problem(s)");
+
+    // A new intent resolves the same identity and approved plan, with the
+    // refreshed default depth coming from the recovered projection.
+    const created = runTool(proj, "aidlc-utility.ts", [
+      "intent-create", "--scope", name, "--project-dir", proj,
+    ]);
+    expect(created.status, created.out).toBe(0);
+    const space = existsSync(join(proj, "aidlc", "active-space"))
+      ? readFileSync(join(proj, "aidlc", "active-space"), "utf-8").trim() || "default"
+      : "default";
+    const intents = join(proj, "aidlc", "spaces", space, "intents");
+    const rec = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const state = readFileSync(join(intents, rec, "aidlc-state.md"), "utf-8");
+    expect(state.split("\n")).toContain(`- **Scope**: ${name}`);
+    expect(state.split("\n")).toContain("- **Depth**: Minimal");
+    expect(state).toContain(`${AUTHORED_SKIP} — SKIP`);
+    expect(state).toContain(`${AUTHORED_EXECUTE} — EXECUTE`);
   });
 
   test("a phantom (identity file, no grid column) fails doctor and self-heals", () => {
