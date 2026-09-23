@@ -30,6 +30,7 @@ const HARNESS_NAMES = [
   "cursor",
   "kiro",
   "kiro-ide",
+  "kirocrew",
   "opencode",
 ] as const;
 

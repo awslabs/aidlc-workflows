@@ -116,6 +116,7 @@ const harnessLabels: Record<string, string> = {
   cursor: "Cursor",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",
+  kirocrew: "Kiro Crew",
   opencode: "opencode",
 };
 
@@ -260,6 +261,7 @@ describe("documentation parity derives current behavior from authored implementa
       "cursor",
       "kiro",
       "kiro-ide",
+      "kirocrew",
       "opencode",
     ]);
     expect(Object.keys(harnessLabels).sort()).toEqual(harnessNames);

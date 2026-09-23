@@ -167,6 +167,32 @@ const HARNESS_CAPABILITIES = {
     ideAgentTools: false,
     reviewerScopeRegistration: "kiro-agent-json",
   },
+  kirocrew: {
+    // Kiro Crew drives the Kiro CLI, so this row mirrors `kiro`: same .kiro
+    // tree, the same agents/aidlc.json hooks block, kiro-resources memory
+    // include, and the kiro plugin kind. The one Kiro Crew specific — hook
+    // registration via *.sh autoimport shims emitted into .kiro/hooks — is a
+    // structural emission validated by the file-structure/hook tests, not a
+    // capability field here.
+    harnessDir: ".kiro",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+      harnessDist: ".kiro/steering/aidlc-onboarding.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".kiro/skills",
+    plugin: {
+      kind: "kiro",
+      manifestDir: ".kiro-plugin",
+      wiringFile: null,
+    },
+    memoryInclude: "kiro-resources",
+    kiroAgentJson: true,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "kiro-agent-json",
+  },
   opencode: {
     harnessDir: ".aidlc",
     onboarding: {

@@ -121,11 +121,11 @@ describe("t151 neutral and native onboarding", () => {
     }
   });
 
-  test("all five identical-sharing harnesses ship byte-identical root instructions", () => {
+  test("all six identical-sharing harnesses ship byte-identical root instructions", () => {
     const sharing = HARNESS_MATRIX.filter((h) => h.manifest.rootIntegrations.some(
       (integration) => integration.path === "AGENTS.md" && integration.shared === "identical",
     ));
-    expect(sharing.map((h) => h.name)).toEqual(["codex", "cursor", "kiro", "kiro-ide", "opencode"]);
+    expect(sharing.map((h) => h.name)).toEqual(["codex", "cursor", "kiro", "kiro-ide", "kirocrew", "opencode"]);
     const expected = Buffer.from(NEUTRAL);
     for (const harness of sharing) {
       expect(readFileSync(harness.onboardingDist), harness.name).toEqual(expected);

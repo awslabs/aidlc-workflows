@@ -130,6 +130,7 @@ function runWizard(
       cursor: { found: false, probed: true },
       kiro: { found: false, probed: true },
       "kiro-ide": { found: false, probed: false },
+      kirocrew: { found: false, probed: true },
       opencode: { found: false, probed: true },
     },
     aws: {

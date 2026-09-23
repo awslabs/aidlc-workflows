@@ -964,8 +964,14 @@ describe("t221 (c) harness registration and protocol prose", () => {
           readFileSync(join(harness.engineRoot, "agents", `${agent}.json`), "utf-8"),
         ) as { hooks?: { preToolUse?: Array<{ matcher?: string; command?: string }> } };
         const entries = a.hooks?.preToolUse ?? [];
+        // Each kiro-family harness wires its OWN branded adapter route: kiro
+        // uses `engine adapter kiro`, kirocrew uses `engine adapter kirocrew`
+        // (the sanctioned branded-route precedent). Derive the route token from
+        // the harness so the assertion tracks whichever kiro-agent-json harness
+        // is under test rather than pinning a single literal.
+        const route = harness.name;
         const reviewerEntries = entries.filter((entry) =>
-          entry.command?.includes("aidlc.ts engine adapter kiro reviewer-scope")
+          entry.command?.includes(`aidlc.ts engine adapter ${route} reviewer-scope`)
         );
         expect(reviewerEntries.length, `${harness.name}/${agent}`).toBe(3);
         const matchers = reviewerEntries.map((e) => e.matcher).sort();
@@ -974,12 +980,12 @@ describe("t221 (c) harness registration and protocol prose", () => {
           // The registration passes its own agent name so the adapter forwards
           // a real identity instead of a bare scoped_registration.
           expect(e.command).toBe(
-            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter kiro reviewer-scope ${agent}`,
+            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter ${route} reviewer-scope ${agent}`,
           );
         }
         expect(
           entries.some((entry) =>
-            entry.command?.includes(`aidlc.ts engine adapter kiro state-transition-guard ${agent}`)
+            entry.command?.includes(`aidlc.ts engine adapter ${route} state-transition-guard ${agent}`)
           ),
           `${harness.name}/${agent}`,
         ).toBe(true);

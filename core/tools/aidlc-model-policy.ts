@@ -46,6 +46,7 @@ export type ModelHarness =
   | "cursor"
   | "kiro"
   | "kiro-ide"
+  | "kirocrew"
   | "opencode";
 export type ModelPolicyLayer =
   | "agent-exception"
@@ -138,6 +139,13 @@ export const HARNESS_HONESTY = Object.freeze({
     groupEffort: false,
     message:
       "Kiro CLI cannot express group effort dials today; a per-agent model exception can carry effort through chat.modelDefaults.",
+  }),
+  kirocrew: Object.freeze({
+    model: true,
+    effort: true,
+    groupEffort: false,
+    message:
+      "Kiro Crew drives kiro-cli and shares its policy surface; a per-agent model exception can carry effort through chat.modelDefaults.",
   }),
   "kiro-ide": Object.freeze({
     model: false,

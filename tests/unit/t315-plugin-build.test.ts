@@ -47,6 +47,7 @@ const EXPECTED_HARNESSES = [
   "cursor",
   "kiro",
   "kiro-ide",
+  "kirocrew",
   "opencode",
 ];
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t315-"));

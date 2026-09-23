@@ -208,6 +208,7 @@ function humanReport(
     cursor: "Cursor",
     kiro: "Kiro CLI",
     "kiro-ide": "Kiro IDE",
+    kirocrew: "Kiro Crew",
     opencode: "opencode",
   };
   const frameworkPattern =
