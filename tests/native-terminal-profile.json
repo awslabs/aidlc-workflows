@@ -2625,7 +2625,7 @@
             },
             {
               "classname": "Windows cleanup identity snapshots",
-              "name": "one snapshot shares the remaining cleanup budget despite slow PowerShell startup"
+              "name": "one native snapshot shares the remaining cleanup budget despite slow bridge startup"
             },
             {
               "classname": "Windows cleanup identity snapshots",
@@ -2633,7 +2633,7 @@
             },
             {
               "classname": "Windows cleanup identity snapshots",
-              "name": "real CIM liveness tolerates startup beyond the former per-PID cap"
+              "name": "real native liveness tolerates bridge startup beyond the former per-PID cap"
             },
             {
               "classname": "Windows cleanup identity snapshots",
@@ -2682,6 +2682,38 @@
             {
               "classname": "",
               "name": "the stable Windows wrapper stays alive until its owner terminates it"
+            },
+            {
+              "classname": "",
+              "name": "target exit is published while identity discovery is pending and cannot be rewritten by a late identity"
+            },
+            {
+              "classname": "",
+              "name": "identity query failure cannot synthesize target exit metadata for a live child"
+            },
+            {
+              "classname": "Windows terminating process snapshots",
+              "name": "signaled retained handle establishes exit after command-line metadata disappears"
+            },
+            {
+              "classname": "Windows terminating process snapshots",
+              "name": "terminating metadata with an unsignaled retained handle still refuses absence"
+            },
+            {
+              "classname": "Windows terminating process snapshots",
+              "name": "failed retained-handle wait still refuses absence after metadata disappears"
+            },
+            {
+              "classname": "Windows terminating process snapshots",
+              "name": "failed handle close invalidates observed exit after metadata disappears"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "terminating native metadata requires a fresh complete snapshot within the original budget"
+            },
+            {
+              "classname": "Windows cleanup identity snapshots",
+              "name": "persistent terminating native metadata exhausts its original budget without establishing absence"
             }
           ]
         }

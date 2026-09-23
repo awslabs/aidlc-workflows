@@ -10,9 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { nativeSnapshotReply } from "../harness/windows-identity-fixture.ts";
-import { getWindowsProcessDetailsWithBun } from "../harness/tui-process-identity.ts";
+import { getWindowsProcessDetailsWithBun, readWindowsProcessDetails, type WindowsProcessDetailsApi } from "../harness/tui-process-identity.ts";
 import {
-  type BoundedCommandResult, legacyWinSessionDir, liveOwnedWindowsProcesses, resolveWinNode, runBoundedCommand,
+  type BoundedCommandResult, captureWindowsTargetExit, legacyWinSessionDir, liveOwnedWindowsProcesses, resolveWinNode, runBoundedCommand,
   WIN_KILL_TIMEOUT_MS, type WindowsProcessIdentity, winSessionDir,
 } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
@@ -290,6 +290,33 @@ describe("Windows cleanup identity snapshots", () => {
       .toEqual({ status: "ok", value: [] });
   });
 
+  test("terminating native metadata requires a fresh complete snapshot within the original budget", () => {
+    const budgets: number[] = [];
+    const result = liveOwnedWindowsProcesses(identities, 2000, "regression-terminating", (_file, args, budget) => {
+      expect(args.slice(2)).toEqual(["101", "202", "303"]);
+      budgets.push(budget);
+      return budgets.length === 1
+        ? { status: 1, stdout: "", stderr: "NtQueryInformationProcess(202, 60) failed: NTSTATUS 0xc000010a\n", timedOut: false }
+        : reply([identities[0], { ...identities[1], creationDate: "2026-09-22T05:47:00.000Z" }]);
+    });
+    expect(result).toEqual({ status: "ok", value: [identities[0]] });
+    expect(budgets).toHaveLength(2);
+    expect(budgets[0]).toBe(2000);
+    expect(budgets[1]).toBeGreaterThan(0);
+    expect(budgets[1]).toBeLessThan(budgets[0]);
+  });
+
+  test("persistent terminating native metadata exhausts its original budget without establishing absence", () => {
+    const budgets: number[] = [];
+    const result = liveOwnedWindowsProcesses(identities, 20, "regression-terminating-deadline", (_file, _args, budget) => {
+      budgets.push(budget);
+      return { status: 1, stdout: "", stderr: "NtQueryInformationProcess(202, 60) failed: NTSTATUS 0xc000010a\n", timedOut: false };
+    });
+    expect(result.status).toBe("error");
+    expect(budgets.length).toBeGreaterThan(0);
+    expect(budgets.every(budget => budget > 0 && budget <= 20)).toBe(true);
+  });
+
   test.skipIf(!IS_WIN)("real native liveness tolerates bridge startup beyond the former per-PID cap", () => {
     const current = getWindowsProcessDetailsWithBun([process.pid], 2_000);
     expect(current).toHaveLength(1);
@@ -351,6 +378,59 @@ describe("Windows cleanup identity snapshots", () => {
   });
 });
 
+describe("Windows terminating process snapshots", () => {
+  for (const scenario of [
+    { name: "signaled retained handle establishes exit after command-line metadata disappears", wait: 0, close: 1, error: null },
+    { name: "terminating metadata with an unsignaled retained handle still refuses absence", wait: 258, close: 1, error: "NTSTATUS 0xc000010a" },
+    { name: "failed retained-handle wait still refuses absence after metadata disappears", wait: 0xffffffff, close: 1, error: "WaitForSingleObject" },
+    { name: "failed handle close invalidates observed exit after metadata disappears", wait: 0, close: 0, error: "CloseHandle" },
+  ]) {
+    test(scenario.name, () => {
+      const handle = {};
+      const handles: object[] = [];
+      let opens = 0;
+      let waits = 0;
+      let closes = 0;
+      const api: WindowsProcessDetailsApi<object> = {
+        OpenProcess(access, inherit, pid) {
+          expect([access, inherit, pid]).toEqual([0x100400, 0, 42]);
+          opens++;
+          return handle;
+        },
+        WaitForSingleObject(actual, timeout) {
+          handles.push(actual);
+          expect(timeout).toBe(0);
+          return waits++ === 0 ? 258 : scenario.wait;
+        },
+        GetProcessTimes(actual, creation) {
+          handles.push(actual);
+          const ticks = 134029728000000123n;
+          creation[0] = Number(ticks & 0xffffffffn);
+          creation[1] = Number(ticks >> 32n);
+          return 1;
+        },
+        NtQueryInformationProcess(actual, informationClass, buffer, _bytes, returned) {
+          handles.push(actual);
+          if (informationClass === 60) return 0xc000010a | 0;
+          expect(informationClass).toBe(0);
+          const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+          view.setBigUint64(32, 42n, true);
+          view.setBigUint64(40, 10n, true);
+          returned[0] = 48;
+          return 0;
+        },
+        bufferAddress() { throw new Error("failed command-line query must not read its buffer"); },
+        CloseHandle(actual) { handles.push(actual); closes++; return scenario.close; },
+        GetLastError() { return 6; },
+      };
+      if (scenario.error) expect(() => readWindowsProcessDetails(42, api)).toThrow(scenario.error);
+      else expect(readWindowsProcessDetails(42, api)).toBeNull();
+      expect({ opens, waits, closes }).toEqual({ opens: 1, waits: 2, closes: 1 });
+      expect(handles.every(actual => actual === handle)).toBe(true);
+    });
+  }
+});
+
 test("the stable Windows wrapper stays alive until its owner terminates it", async () => {
   const startedAt = Date.now();
   const child = spawn(process.env.AIDLC_NODE_BIN || "node", [
@@ -387,6 +467,67 @@ await waitForWindowsWrapperRetirement();`,
     await exited;
   }
 }, liveCaseTimeoutMs(300, { fixtureMs: 0, startupMs: NATIVE_STARTUP_TIMEOUT_MS }));
+
+test("target exit is published while identity discovery is pending and cannot be rewritten by a late identity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-target-exit-"));
+  const path = join(root, "exit.json");
+  const startedAfter = new Date().toISOString();
+  const child = spawn(process.execPath, ["-e", "process.exit(23)"], { stdio: "ignore" });
+  const exited = new Promise<number | null>((accept, reject) => {
+    child.once("exit", accept);
+    child.once("error", reject);
+  });
+  let release!: (value: { status: "ok"; value: WindowsProcessIdentity }) => void;
+  const pending = new Promise<{ status: "ok"; value: WindowsProcessIdentity }>((accept) => { release = accept; });
+  const spawnAuthority = { pid: child.pid!, parentPid: process.pid, startedAfter };
+  const capture = captureWindowsTargetExit(child, spawnAuthority, path, () => pending);
+  try {
+    expect(await exited).toBe(23);
+    // The native identity bridge is still pending. The real ChildProcess exit
+    // already provides the bounded spawn lifetime needed by descendant cleanup.
+    expect(existsSync(path)).toBe(true);
+    const bytes = readFileSync(path, "utf8");
+    const record = JSON.parse(bytes);
+    expect(record).toMatchObject({ code: 23, childPid: child.pid, spawn: spawnAuthority });
+    expect(record.child).toBeUndefined();
+    expect(Date.parse(record.exitedAt)).toBeGreaterThanOrEqual(Date.parse(startedAfter));
+    release({ status: "ok", value: {
+      pid: child.pid!, parentPid: process.pid, commandLine: "late reused PID",
+      creationDate: new Date(Date.parse(record.exitedAt) + 1000).toISOString(),
+    } });
+    await capture;
+    expect(readFileSync(path, "utf8")).toBe(bytes);
+  } finally {
+    release({ status: "ok", value: {
+      pid: child.pid!, parentPid: process.pid, commandLine: "", creationDate: startedAfter,
+    } });
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exited;
+    await capture;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 10_000);
+
+test("identity query failure cannot synthesize target exit metadata for a live child", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-target-live-"));
+  const path = join(root, "exit.json");
+  const startedAfter = new Date().toISOString();
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const exited = new Promise<number | null>((accept, reject) => {
+    child.once("exit", accept);
+    child.once("error", reject);
+  });
+  try {
+    await captureWindowsTargetExit(child, { pid: child.pid!, parentPid: process.pid, startedAfter }, path,
+      async () => ({ status: "error", message: "identity query timed out" }));
+    expect(child.exitCode).toBeNull();
+    expect(existsSync(path)).toBe(false);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exited;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 10_000);
 
 describe("t-tui-preflight (terminal substrate capability gate)", () => {
   test.skipIf(!IS_WIN || LEGACY_ABSENT_REASON !== null)(
@@ -977,7 +1118,8 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               10_000,
             ),
           ).toBe(true);
-          expect(legacyDrive(["kill", "--session", session]).rc).toBe(0);
+          const killed = legacyDrive(["kill", "--session", session]);
+          expect(killed.rc, killed.stderr).toBe(0);
           expect(
             await waitUntil(
               () =>

@@ -1460,6 +1460,11 @@ inherited permission to list their contents or read their files.
 Each native CLI process is assigned to its own Windows job before being resumed.
 After the CLI exits, the launcher retires that job's descendants before draining
 stdout and stderr, so inherited pipe handles cannot hold the invocation open.
+The legacy node-pty wrapper records the target's observed exit while optional
+identity discovery runs asynchronously; a late lookup cannot replace that exit
+record with another process's identity. If native metadata disappears during
+termination, the original retained process handle must signal exit before the
+driver treats that process as gone.
 
 POSIX collection stops the dedicated account's processes before administrator
 copying. On macOS it first retires that account's launchd user/GUI domains to

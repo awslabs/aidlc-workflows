@@ -167,12 +167,20 @@ function inspectWindowsProcess<Handle, Result>(
   };
   try {
     if (!running()) return null;
-    const times = Array.from({ length: 4 }, () => new Uint32Array(2));
-    if (!api.GetProcessTimes(handle, times[0], times[1], times[2], times[3])) {
-      throw failure("GetProcessTimes");
+    let result: Result;
+    try {
+      const times = Array.from({ length: 4 }, () => new Uint32Array(2));
+      if (!api.GetProcessTimes(handle, times[0], times[1], times[2], times[3])) {
+        throw failure("GetProcessTimes");
+      }
+      const creation = (BigInt(times[0][1]) << 32n) | BigInt(times[0][0]);
+      result = inspect(handle, creation);
+    } catch (error) {
+      // Metadata can disappear during termination (for example NTSTATUS
+      // 0xc000010a). Only this retained handle signaling proves exit.
+      if (!running()) return null;
+      throw error;
     }
-    const creation = (BigInt(times[0][1]) << 32n) | BigInt(times[0][0]);
-    const result = inspect(handle, creation);
     if (!running()) return null;
     return result;
   } finally {

@@ -115,7 +115,7 @@
 //
 // Exit codes: 0 success, 1 wait-timeout / assertion miss, 2 usage/spawn error.
 
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -125,6 +125,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -737,6 +738,82 @@ function windowsProcessFallbackQuery(
   return current;
 }
 
+async function windowsTargetIdentityQuery(
+  pid: number,
+  timeoutMs: number,
+  context: string,
+): Promise<WindowsProcessQuery<WindowsProcessIdentity>> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return { status: "error", message: `process identity deadline exhausted for ${context}` };
+  }
+  if (shouldInjectCimFailure(context)) return { status: "error", message: `injected CIM failure for ${context}` };
+  const [bin, args] = windowsProcessDetailsCommand([pid]);
+  const started = Date.now();
+  return new Promise((accept) => {
+    execFile(bin, args, { encoding: "utf8", windowsHide: true, timeout: timeoutMs,
+      killSignal: "SIGKILL", maxBuffer: 256 * 1024 }, (error, stdout, stderr) => {
+      writeCimTrace(`target-identity context=${context} budget=${timeoutMs}ms elapsed=${Date.now() - started}ms error=${!!error}`);
+      if (error) {
+        accept({ status: "error", message: `native target identity query failed for ${context}: ${stderr || error.message}` });
+        return;
+      }
+      try {
+        accept(processFromSnapshot({ status: "ok", value: parseWindowsProcessDetailsReply(stdout, [pid]) }, pid));
+      } catch (error) {
+        accept({ status: "error", message: `invalid target identity reply for ${context}: ${String(error)}` });
+      }
+    });
+  });
+}
+
+/** Only the retained ChildProcess's events establish exit, never an identity-query result. */
+export async function captureWindowsTargetExit(
+  child: ChildProcess,
+  spawnAuthority: WindowsSpawnAuthority | undefined,
+  exitFile: string,
+  query: typeof windowsTargetIdentityQuery = windowsTargetIdentityQuery,
+): Promise<void> {
+  let exited = false;
+  let identity: WindowsProcessIdentity | undefined;
+  const publish = (record: Omit<WindowsTargetExit, "childPid" | "child" | "spawn">): void => {
+    if (exited) return;
+    exited = true;
+    const temporary = `${exitFile}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify({
+        ...record, childPid: child.pid, child: identity, spawn: spawnAuthority,
+      } satisfies WindowsTargetExit), { flag: "wx" });
+      renameSync(temporary, exitFile);
+    } finally { rmSync(temporary, { force: true }); }
+  };
+  child.once("error", (error) => publish({ error: error.message, exitedAt: new Date().toISOString() }));
+  child.once("exit", (code, signal) => publish({ code, signal, exitedAt: new Date().toISOString() }));
+
+  // Keep the event loop available so a fast target can publish its observed
+  // lifetime while the optional native identity bridge is still pending.
+  const deadline = Date.now() + 2_000;
+  while (!exited && spawnAuthority && Date.now() < deadline) {
+    for (const context of ["target-start-fallback", "target-start"]) {
+      if (exited || Date.now() >= deadline) return;
+      let current: WindowsProcessQuery<WindowsProcessIdentity>;
+      try {
+        current = await query(spawnAuthority.pid, Math.max(1, deadline - Date.now()), context);
+      } catch (error) {
+        current = { status: "error", message: String(error) };
+      }
+      if (exited) return; // a late/reused PID cannot rewrite the completed lifetime
+      if (current.status === "ok") {
+        const validated = validateWindowsSpawnIdentity(spawnAuthority, current.value);
+        if (validated.status === "ok") {
+          identity = validated.value;
+          return;
+        }
+      }
+    }
+    if (!exited && Date.now() < deadline) await sleep(Math.min(25, deadline - Date.now()));
+  }
+}
+
 function windowsDirectChildrenQuery(
   parentPid: number,
   timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
@@ -1035,11 +1112,25 @@ export function queryWindowsProcessIdentities(
   // Every PID has an explicit identity/absence reply; failures never omit rows.
   const [bin, args] = windowsProcessDetailsCommand(pids);
   const startedAt = Date.now();
-  const result = run(bin, args, timeoutMs);
-  writeCimTrace(
-    `native-identity-snapshot context=${context} count=${pids.length} budget=${timeoutMs}ms ` +
-      `elapsed=${Date.now() - startedAt}ms status=${result.status} timedOut=${result.timedOut}`,
-  );
+  const deadline = startedAt + timeoutMs;
+  let budget = timeoutMs;
+  let result: BoundedCommandResult;
+  for (;;) {
+    const attemptStarted = Date.now();
+    result = run(bin, args, budget);
+    writeCimTrace(
+      `native-identity-snapshot context=${context} count=${pids.length} budget=${budget}ms ` +
+        `elapsed=${Date.now() - attemptStarted}ms status=${result.status} timedOut=${result.timedOut}`,
+    );
+    // Termination may invalidate metadata before the retained handle signals.
+    // Retry this native status only; it never establishes absence itself.
+    if (result.timedOut || result.errorCode || result.status === 0 ||
+      !/^NtQueryInformationProcess\([1-9]\d*, (?:0|60)\) failed: NTSTATUS 0xc000010a\s*$/m.test(result.stderr)) break;
+    if (Date.now() >= deadline) break;
+    sleepSync(Math.min(25, deadline - Date.now()));
+    budget = deadline - Date.now();
+    if (budget <= 0) break;
+  }
   if (result.timedOut || result.errorCode || result.status !== 0) {
     return {
       status: "error",
@@ -2101,68 +2192,7 @@ async function runWinChildWrapper(a: Args): Promise<void> {
   if (spawnAuthority) {
     writeFileSync(spawnFile, JSON.stringify(spawnAuthority));
   }
-  let childIdentity: WindowsProcessIdentity | undefined;
-  let identityCaptureComplete = false;
-  let pendingExit: Omit<
-    WindowsTargetExit,
-    "childPid" | "child" | "spawn"
-  > | undefined;
-  const writeTargetExit = (
-    record: Omit<WindowsTargetExit, "childPid" | "child" | "spawn">,
-  ): void => {
-    if (!identityCaptureComplete) {
-      pendingExit = record;
-      return;
-    }
-    writeFileSync(
-      exitFile,
-      JSON.stringify({
-        ...record,
-        childPid: child.pid,
-        child: childIdentity,
-        spawn: spawnAuthority,
-      } satisfies WindowsTargetExit),
-    );
-  };
-  child.on("error", (err) => {
-    writeTargetExit({
-      error: err.message,
-      exitedAt: new Date().toISOString(),
-    });
-  });
-  child.on("exit", (code, signal) => {
-    writeTargetExit({
-      code,
-      signal,
-      exitedAt: new Date().toISOString(),
-    });
-  });
-  const identityDeadline = Date.now() + 2_000;
-  while (child.pid !== undefined && Date.now() < identityDeadline) {
-    const fallback = windowsProcessFallbackQuery(
-      child.pid,
-      process.pid,
-      Math.max(1, identityDeadline - Date.now()),
-      "target-start-fallback",
-    );
-    if (fallback.status === "ok") {
-      childIdentity = fallback.value;
-      break;
-    }
-    if (Date.now() >= identityDeadline) break;
-    const query = windowsProcessQuery(
-      child.pid,
-      Math.max(1, identityDeadline - Date.now()),
-      "target-start",
-    );
-    if (query.status === "ok") {
-      childIdentity = query.value;
-      break;
-    }
-    await sleep(25);
-  }
-  identityCaptureComplete = true;
-  if (pendingExit) writeTargetExit(pendingExit);
+  await captureWindowsTargetExit(child, spawnAuthority, exitFile);
   // Stay alive as the stable ConPTY root until the daemon has cleaned every
   // other console member and terminates this wrapper.
   await waitForWindowsWrapperRetirement();
