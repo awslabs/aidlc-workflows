@@ -1013,6 +1013,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "e2e/t-tui-t27-depth-override.serial.test.ts",
     "unit/gen-coverage-registry.test.ts",
     "unit/t-claude-hook-project-root.test.ts",
+    "unit/t-guard-plan-continuation-swarm.test.ts",
     "unit/t-kiro-acp-protocol-trace.test.ts",
     "unit/t-memory-seed.test.ts",
     "unit/t-tui-process-identity.test.ts",

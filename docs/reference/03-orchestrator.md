@@ -603,9 +603,15 @@ autonomy. Explicit `Construction Execution: swarm` requires stage-major and
 supports gated or autonomous batch completion. Unit-major stays serial and refuses
 a contradictory swarm setting. Without the execution field, legacy workflows
 retain their existing autonomy-based swarm route. An approved inline Unit is not
-repeated in later swarm batches. Every emitted swarm Unit still needs an approved
-plan; grouped Plan Approval binds the exact live Unit set and produces individual
+repeated in later swarm batches. Every emitted swarm Unit still needs initial
+Plan Approval; grouped Plan Approval binds the exact live Unit set and produces individual
 receipts, with a single-Unit fallback for unsupported or legacy mediation.
+After approval, plan, test instruction, and Testing Contract edits for the same
+target and attempt follow the effective plan-approval fence: lowered permits
+continuation, on reopens approval. `testing-posture verify` reports permission
+as `execution_allowed`; an accompanying `ok: false` says the current content
+is not approved, not that another approval stop is required. The original human
+approval evidence remains intact.
 
 **Initial prepare requires committed approved source.** For protected Code
 Generation in either legacy autonomy or new checkpoint workflows, the approved
@@ -624,11 +630,15 @@ must be ready, and approval returns to `next` before another batch. It never
 completes the whole Code Generation stage on behalf of unbuilt batches.
 
 After a batch Request Changes, the emitted `resume_existing: true` uses
-`prepare --resume-existing` after fresh Plan Approval for the same rejection
-revision. A surviving child keeps its source while prior metadata is archived.
+`prepare --resume-existing`. If the rejection retired the prior approval, obtain
+fresh Plan Approval for that revision. Once that actual approval exists, retries
+for the same intent, target, and attempt retain it and may use lowered-fence
+postapproval continuation. `execution_allowed: true` (exit 0) permits that
+continuation even with `ok: false`; it does not restore approval from an older
+attempt. A surviving child keeps its source while prior metadata is archived.
 If native source landing removed the child, verified landing evidence permits a
 fresh fork from the already-landed parent source, retaining the revision and
-fresh approval. A missing child without that evidence is refused. Do not assume
+its actual approval evidence. A missing child without that evidence is refused. Do not assume
 all post-merge children are preserved, or substitute initial prepare for a
 rejected-batch resume.
 

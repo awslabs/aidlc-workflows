@@ -1784,8 +1784,8 @@ approval. Later completion-only stage directives settle bookkeeping without
 another body, reviewer, or human learnings/approval question.
 
 After Request Changes, an `invoke-swarm` directive with `resume_existing: true`
-uses the same batch and exact Unit set, after fresh Plan Approval for that
-rejection revision:
+uses the same batch and exact Unit set. If rejection retired the prior approval,
+obtain fresh Plan Approval for that revision before preparation:
 
 ```bash
 aidlc engine swarm prepare --resume-existing --batch <N> --units "<exact emitted Units>"
@@ -1794,7 +1794,11 @@ aidlc engine swarm prepare --resume-existing --batch <N> --units "<exact emitted
 If a worktree survives, the tool preserves its source and archives old metadata.
 If native source landing removed it, the tool can create a fresh child from the
 already-landed parent source after validating that landing evidence. Both paths
-retain the rejection revision and require fresh Plan Approval. A missing child
+retain the rejection revision and its actual approval evidence. Once approval
+exists for the same intent, target, and attempt, retrying setup does not require
+another answer: `testing-posture verify` with `execution_allowed: true` (exit 0)
+also permits postapproval continuation under a lowered fence when `ok: false`.
+That allowance never revives an older attempt's approval. A missing child
 without that evidence is refused. Do not assume every merged child survives, or
 replace a refused resume with ordinary prepare. Source that differs from the
 approved starting point must be reconciled and approved before work resumes.
@@ -1823,12 +1827,21 @@ For **Request Changes**, record that choice in the files and use
 exact live Units, plan/questions fingerprints, and unchanged planned source.
 When some approved Units have landed, the remaining prepared workers retain
 their original approval as `next` narrows the pending set. Continue their
-existing worktrees after verifying the current approvals; a partial batch does
-not require another approval answer or a fresh `prepare`. This also applies
+existing worktrees when `testing-posture verify` reports `execution_allowed:
+true` (exit 0), including when `ok: false` truthfully reports that edited content
+was not approved. For that continuation, `reason` says to continue without a
+new approval; `approval_reason` holds the detailed stale binding reason, which
+does not block execution. Existing workers use the live plan-approval fence
+of their verified parent intent, including later lowering or raising.
+A partial batch does not require another approval answer or a fresh `prepare`. This also applies
 after a checkpoint revision has been prepared. An interrupted revision setup
 can retry with its existing current approval; successful preparation removes
-the revision-preparation signal from subsequent `next` directives. Substantive
-plan or attempt changes still require the reported approval repair.
+the revision-preparation signal from subsequent `next` directives. After initial
+approval, plan, test instruction, and Testing Contract edits for the same target
+and attempt continue without reapproval when the effective plan-approval fence
+is lowered by `relaxed`, `off`, or `guard.plan-approval off`. A fence that is on
+reopens approval; a new attempt still needs its own approval. Keep the original
+approval evidence without describing the edited content as approved.
 When a human Retry explicitly discards a worker, its native discard can retain
 the committed approved baseline for recreation. The replacement can keep the
 same approval while other batch members continue or have already landed.

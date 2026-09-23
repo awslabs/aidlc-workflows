@@ -51,7 +51,26 @@ Run the engine binary directly via the shell tool. If a directive looks malforme
 
 **Saying what is happening (the `narration` field).** A directive may carry a `narration` string, already worded for the user by the tool that knows the facts. When `narration` is present, its text is what the user hears about this step: reproduce it, adapting only tense, names, or a detail that would otherwise be wrong, and add no further account of how the step works. When `narration` is absent, carry out the step without describing it. That is not terseness; the user reads the questions, the gates, and the artifacts, and the moves between them are not events in their project. So no description of the tools, the fields, or the routing ever substitutes for that text or rides alongside it. Substance the user asks for, error detail, and everything the gate ritual and the stage protocol tell you to present are all unaffected.
 
-**Guard Policy notices (the `change_notices` field).** A directive, or the JSON a stage tool prints, may carry `change_notices`: one or more sentences, already worded for the user, each saying that an input changed after an approval and that the run is continuing because the intent's Guard Policy value is `relaxed` or `off`. Say each one to the user verbatim, once, then act on `directive.kind` (or the tool's result) normally. Never add a second account of the change, never turn a notice into a stop or a re-run, and never speak one that is not there: under `strict` the same situation is a refusal with its own plain sentence.
+**Guard Policy notices (the `change_notices` field).** A directive, or the JSON a stage tool prints, may carry `change_notices`: one or more sentences, already worded for the user, each saying that an input changed after an approval and that the run is continuing under the effective Guard Policy or a lowered fence, including a per-work `guard.<fence> off` switch while the policy is `strict`. Say each one to the user verbatim, once, then act on `directive.kind` (or the tool's result) normally. Never add a second account of the change, never turn a notice into a stop or a re-run, and never speak one that is not there: when the applicable check holds, the same situation is a refusal with its own plain sentence.
+
+**Postapproval plan changes.** For the same Code Generation target and attempt,
+a `plan-approval` fence lowered by `relaxed`, `off`, or
+`guard.plan-approval off` permits continuation after plan, test instruction, or
+Testing Contract edits. This includes updates after Testing Posture, scope,
+test strategy, or project type changes within the same intent, target, and
+attempt: refresh the current contract and instructions as needed, then follow
+Code Generation Step 3 and use the current tool-produced brief; do not add a
+reapproval stop, reset the human's answer, or claim the edited content was approved. An effective fence-on setting (`strict`
+by default or explicit `guard.plan-approval on`) reopens approval for those
+edits. When checking continuation, use `verify`'s `execution_allowed`: true
+with exit 0 permits execution even when `ok: false` describes the approval.
+For allowed continuation, `reason` is the user-facing message and
+`approval_reason` is diagnostic detail; never turn that detail into a refusal
+or a new approval question. Existing delegated workers use the live fence of
+their verified parent intent, so lowering or raising applies at the next check.
+Missing artifacts or malformed contract JSON need repair before execution,
+not an automatic reapproval question. Initial Plan Approval and other gates
+remain required.
 
 Everything written about speaking, here and in the protocol, describes WHEN and WHETHER to speak. Only text inside double quotes on a **SAY:** line is ever itself speakable. So the field's own name, the marker, these sentences, any label or heading around them, any count of sentences, any timing clause beside a marker, and any example quoted to rule it out all stay internal: what reaches the user is a `narration` value, a `stage_validity.warning`, the filled-in text of a **SAY:** line, and the surfaces named below, as ordinary prose with nothing announcing it in front.
 
@@ -113,7 +132,7 @@ checkpoint action always returns to `next`, never report-approves the whole Code
 Generation stage for one Unit. When `construction_policy.offer_autonomy` is
 true, present **Continue automatically** / **Review each checkpoint**, record the
 human's choice through `bolt set-autonomy`, and re-run `next` before proceeding.
-For remaining body work, preserve Plan Approval and any summary-confirmation stop
+For remaining body work, preserve required Plan Approval and any summary-confirmation stop
 enabled by `directive.ceremony.summary_confirmation === "on"`.
 At completion, `human_completion_required: false` skips only the routine human
 completion/learnings questions; report the lifecycle outcomes without invented
@@ -121,7 +140,7 @@ completion/learnings questions; report the lifecycle outcomes without invented
 calls `next`, not whole-stage approval. Without the metadata, retain the legacy
 gate path. Grouped Plan Approval follows the Construction module and falls back
 to individual Unit approval on unsupported harnesses; every Unit still needs its
-own valid approval receipt.
+own human-backed initial approval receipt.
 
 **Settled swarm branch.** When a `run-stage` carries `directive.swarm_settled === true`, apply Construction routing first, then branch before ordinary run-stage context or body handling. Load every module named in `directive.protocol_modules`, do not run the stage body or reviewer, and follow the swarm module's settled-swarm re-entry rule, honoring any completion-only or autonomous policy before the legacy human gate; on the legacy path, run learnings only when `directive.protocol_modules` lists `learnings`, then the single approval gate, and with the module absent go directly to the gate.
 

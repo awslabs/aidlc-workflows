@@ -238,9 +238,15 @@ Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. I
 
 **How hard the fences hold.** `strict` leaves all five fences up. `relaxed` lowers plan approval and review freeze. `off` lowers those two plus state transition and reviewer read scope. No value lowers human presence or claimed-checkout Unit write ownership. A lowered fence still writes an audit row every time it lets something through.
 
-No value removes a gate. Every approval question is still asked, a reviewer's verdict is never changed, no evidence is deleted, an agent can never answer for you, and editing the approved plan itself (or its test instructions or Testing Contract) reopens approval under all three values. Guard Policy decides the consequence of a change or an undirected action, not whether the framework notices it.
+**When the plan itself changes after approval.** For the same Unit or stage target and attempt, edits to the plan, test instructions, or Testing Contract continue without mandatory reapproval when the plan-approval fence is lowered by `relaxed`, `off`, or `guard.plan-approval off`. If that fence is on (`strict` by default, or explicit `guard.plan-approval on`), those edits reopen approval. The same rule covers updates after Testing Posture, scope, test strategy, or project type changes within the same intent, target, and attempt: refresh the contract and instructions as needed, and continue while the fence stays lowered. The effective fence setting decides; `/aidlc --status` shows it. You can still ask to review the plan again.
 
-Asking every approval question is a conductor prose obligation, not something a lowered fence enforces.
+Initial Plan Approval and other gates remain required. A lowered fence does not mean the edited content was approved: your original answer and approval evidence remain a record of what you actually approved. No reviewer's verdict is changed, no evidence is deleted, and an agent can never answer for you.
+
+The conductor still asks required approval questions, but does not add a reapproval stop for content changes that a lowered plan-approval fence permits.
+
+Existing delegated workers follow their verified parent intent's live
+plan-approval setting. Lowering or raising it applies on their next check;
+you do not need to recreate workers to apply that setting.
 
 #### Defaults per scope
 

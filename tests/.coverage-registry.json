@@ -108,6 +108,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-guard-plan-continuation-swarm.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t322-fix-round-hardening.test.ts",
           "mechanism": "cli"
         },
@@ -372,6 +376,10 @@
         },
         {
           "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -968,6 +976,10 @@
         },
         {
           "file": "tests/integration/t135-invoke-swarm.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-guard-plan-continuation-swarm.test.ts",
           "mechanism": "cli"
         },
         {
@@ -9845,6 +9857,10 @@
         },
         {
           "file": "tests/unit/t-claude-hook-project-root.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-guard-plan-continuation-swarm.test.ts",
           "mechanism": "cli"
         },
         {

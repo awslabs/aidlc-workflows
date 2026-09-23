@@ -69,7 +69,6 @@ import {
   auditFilePath,
   authorityFor,
   type ClaudeCodeHookInput,
-  decideFence,
   decideGuard,
   docsRoot,
   errorMessage,
@@ -104,6 +103,7 @@ import {
 } from "../tools/aidlc-lib.ts";
 import {
   beginCodeGeneration,
+  codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
@@ -1370,9 +1370,14 @@ export async function run(input: string): Promise<number> {
   // one printed line and one audit row; the approval gate itself is untouched.
   // Otherwise the refusal below carries the switch, so the way past is in hand.
   {
-    let gate: ReturnType<typeof decideFence> | null = null;
+    let gate: ReturnType<typeof codeGenerationPlanApprovalFence> | null = null;
     try {
-      gate = decideFence(projectDir, "plan-approval", { hookInput: parsed });
+      const marker = readActiveDirectiveMarker(projectDir, state ?? "");
+      gate = codeGenerationPlanApprovalFence(
+        projectDir,
+        { unit: marker?.unit ?? marker?.units?.[0] ?? null },
+        { hookInput: parsed },
+      );
     } catch (e) {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
     }

@@ -2549,16 +2549,16 @@ describe("t265c registrations", () => {
     expect(skill).not.toContain("plan-approval guard is likewise prose-only");
   });
 
-  test("the documented off-switch is scoped to the dispatch hook", () => {
+  test("the documented off-switch preserves initial approval and permits lowered continuation", () => {
     const docs = readFileSync(
       join(REPO_ROOT, "docs", "reference", "06-hooks-and-tools.md"),
       "utf-8",
     );
     expect(docs).toContain(
-      "disables this PreToolUse hook only",
+      "Initial approval evidence and executable artifacts are still required",
     );
     expect(docs).toContain(
-      "does **not** disable the autonomous `aidlc-swarm.ts prepare` precondition",
+      "postapproval content changes use the effective-fence continuation rule",
     );
   });
 });

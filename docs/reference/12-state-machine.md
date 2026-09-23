@@ -550,9 +550,15 @@ the change and continue. Second, which authority fences stand aside for this
 piece of work: `strict` lowers none, `relaxed` lowers `plan-approval` and
 `review-freeze`, and `off` lowers those two plus `state-transition` and
 `reviewer-scope`. Claimed-checkout Unit write ownership remains mandatory. No
-value removes a gate, alters a reviewer's verdict, deletes evidence, lets an
-agent answer for a human, or lowers `human-presence`. A
+value removes initial Plan Approval or other gates, alters a reviewer's verdict,
+deletes evidence, lets an agent answer for a human, or lowers `human-presence`. A
 governed checkpoint reads the setting only when it meets such a change.
+After Plan Approval, plan, test instruction, and Testing Contract edits for the
+same target and attempt continue without reapproval when the effective
+`plan-approval` fence is lowered by `relaxed`, `off`, or an explicit per-work
+off setting. An effective fence-on setting reopens approval. Continuation
+preserves the original human approval evidence and does not certify the edits
+as approved.
 Configuration reads and writes, `intent-create`, and status also resolve the
 relevant policy. An invalid memory `Mode:` is a validation error naming the file
 and the three allowed values when read; a governed check that meets no input
@@ -854,6 +860,11 @@ Post-finalize source merge recovers the creating repository from durable
 authority, not the intent: it uses the selected workflow intent. See
 [Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
 for the selector refusal.
+
+New `SWARM_STARTED` resume rows use `Resume execution fingerprints` for the
+current executed content, which may not have been newly approved. Readers
+also accept the legacy `Resume approvals` field; neither field supplies a new
+human approval.
 
 | Event | Emitter | Trigger |
 |---|---|---|

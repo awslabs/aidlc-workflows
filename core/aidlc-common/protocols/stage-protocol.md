@@ -140,6 +140,16 @@ Before and during EVERY stage, verify:
 
 Every stage (except the 3 stages in the Initialization phase: workspace-scaffold, workspace-detection, state-init) requires explicit user approval before proceeding.
 
+Code Generation's initial Plan Approval remains required. After it, plan, test
+instruction, and Testing Contract edits for the same target and attempt follow
+that stage's Step 3: a lowered `plan-approval` fence permits continuation without
+reapproval; an effective fence-on setting reopens approval. Do not turn the
+gate rules here into an extra content-change stop when that fence is lowered,
+or record the edited content as human-approved. This includes refreshing the
+contract and instructions after Testing Posture, scope, test strategy, or
+project type changes within the same intent, target, and attempt. Other gates
+are unchanged.
+
 **Open-gate re-entry (`directive.gate_only === true`).** Present this gate now.
 The stage body and its review are settled. Do not run the stage, dispatch its
 agents or reviewer, repeat its questions, or edit its outputs. Read the stage

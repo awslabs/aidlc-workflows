@@ -706,11 +706,31 @@ swarm module's **Continuing a partially completed batch** rule. Valid remaining
 workers keep their original plans and approvals and proceed to the protected
 brief in step 4; do not reset their questions or run initial preparation again.
 
+After initial approval, plan, test instruction, and Testing Contract edits for
+the same intent, Unit, and attempt follow Code Generation Step 3's
+effective-fence rule.
+A lowered `plan-approval` fence permits continuation with the updated brief
+without reapproval; a fence that is on reopens approval. Preserve the original
+human answer and evidence without claiming the edits were approved. This rule
+also applies to approved members of a group; it does not change initial
+approval, source reproducibility, new-attempt approval, or completion gates.
+Testing Posture, scope, test strategy, and project type changes use the same
+rule: refresh the current contract and instructions as needed, then continue
+without reapproval when the fence remains lowered.
+Use `verify`'s `execution_allowed` to decide whether work can continue;
+`ok: false` alone describes stale approval, not a refusal to execute.
+When continuation is allowed, `reason` explains it to the user;
+`approval_reason` is diagnostic detail, not another approval stop. Delegated
+workers follow the live fence of their verified parent intent, so later
+lowering or raising applies to existing workers at their next check.
+Missing artifacts or malformed contract JSON must be repaired before execution;
+do not turn that prerequisite into an automatic reapproval ceremony.
+
 1. For every Unit in `directive.units`, prepare Code Generation Part 1 in the
    main workspace: the plan, embedded `## Testing Contract`, test instructions,
    questions file, `[Approval Fingerprint]`, and `[Planned Source]`. Leave each
-   `[Answer]:` blank until the human answers. A revision resets it before
-   re-fingerprinting. Every Unit remains individually bound and approved.
+   `[Answer]:` blank until the human answers. A revision requiring reapproval
+   resets it before re-fingerprinting. Every Unit remains individually bound and approved.
 2. Present Plan Approval individually, or group the exact live `invoke-swarm`
    Unit set through **Grouped Plan Approval** below. A real `Approve Plans`
    answer maps to `[Answer]: Approve Plan` for each named Unit and produces
@@ -718,47 +738,52 @@ brief in step 4; do not reset their questions or run initial preparation again.
    for the answer; do not fork worktrees or dispatch implementation workers
    during planning. Re-run `next` after recording approval and use the current
    emitted Unit set.
-3. Call `prepare` only after every unit in the emitted batch has current
-   approval evidence. Before initial protected prepare, the approved parent
-   application source must be committed and reproducible, including an inline
+3. Call `prepare` only after every unit in the emitted batch has completed
+   Plan Approval, applying the postapproval continuation rule above. Before
+   initial protected prepare, the approved parent application source must be
+   committed and reproducible, including an inline
    skeleton's source before a later parallel batch. The swarm module's
    **Before initial protected prepare** rule applies to legacy autonomy and new
    checkpoints alike: preflight the whole batch before creating any child, and
    never commit automatically. On swarm Code Generation, `prepare` verifies the
    plan, test instructions, embedded contract, answer, target-bound fingerprint,
    current stage attempt, planned source, and human-owned receipt before
-   creating any worktree. A stale memory/scope/test-strategy/project-type input
-   therefore reopens approval instead of silently changing execution; re-running
-   `next` for the same units and attempt does not.
+   creating any worktree. If memory Testing Posture, scope, test strategy, or
+   project type inputs changed, refresh the current contract and instructions
+   as needed and apply the same effective-fence rule: a lowered fence permits
+   continuation without reapproval. Re-running `next` for the same intent,
+   units, and attempt does not reopen approval.
 4. Every worker brief starts with the output of
    `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts brief --unit <unit>`,
    verbatim and unedited. That output begins with exactly:
 
    ```text
    AIDLC-UNIT: <unit>
-   AIDLC-TESTING-CONTRACT: <contract_sha256 from that unit's approved plan>
+   AIDLC-TESTING-CONTRACT: <contract_sha256 from that unit's current plan>
    ```
 
-   and carries the approved plan exactly as the approval fingerprint bound it
+   and carries the current plan using the approval-content projection
    (every line before a terminal `## Review` appendix and none of that appendix,
    task markers reset to `[ ]`, spacing normalized; a replayed plan may still
    carry an appendix from a review recorded under the earlier protocol) and the
-   approved `unit-test-instructions.md` byte for byte. Do not write either
+   current `unit-test-instructions.md` byte for byte. Do not write either
    marker line yourself and never read the plan file into a brief: the
-   fingerprint excludes the appendix, so its bytes were never approved as work,
-   and the plan-approval guard refuses a handoff that quotes them. The command
-   refuses until the unit's approval is current. Any further context for the
-   worker follows the command's output; the worker reads and ticks its own
+   fingerprint excludes the appendix, so its bytes are not work to execute.
+   With its fence on, the plan-approval guard refuses a handoff that quotes them.
+   Use the tool-produced brief for current approval or permitted postapproval
+   continuation; do not substitute a fabricated approval. Any further context
+   for the worker follows the command's output; the worker reads and ticks its own
    progress in the plan file inside its worktree. The worker must produce the unit's
    `construction/<unit>/code-generation/source-manifest.json` in the worktree,
    listing every application-source path it creates, modifies, or deletes,
    before the in-Bolt review. Because a Bolt is the single selected repository,
    these paths are worktree-relative and omit `repo` even when the parent intent
-   records multiple repositories. The approved Testing Contract is authoritative:
-   workers do not re-resolve memory, and retries reuse the same approved bytes.
-   The plan-approval guard rejects a delegated worker whose marker is missing,
-   stale, or different from the approved plan. Headless worker harnesses that
-   cannot run the hook still remain protected by `prepare` and this mandatory
+   records multiple repositories. The Testing Contract in the current brief is
+   authoritative: workers do not re-resolve memory, and retries use the current
+   tool-produced brief. With its fence on, the plan-approval guard rejects a
+   delegated worker whose marker is missing, stale, or different from the plan.
+   Headless worker harnesses that cannot run the hook still remain protected
+   by `prepare` and this mandatory
    brief contract.
 
 Only after all four obligations are satisfied does the ordinary swarm
@@ -855,8 +880,10 @@ and call the same answer command with `--details "Request Changes"`; gather the
 human's feedback, revise the affected plans, and re-present current evidence.
 Never write either choice before the human answers. Grouped approval binds the
 manifest's exact live Unit set and each plan/questions fingerprint, produces
-individual approval receipts, and refuses source drift even under relaxed Change
-Control. It does not approve future batches or remove any Unit's Plan Approval.
+individual approval receipts, and refuses source drift while recording that
+answer even under relaxed Change Control. After approval, content edits follow
+the effective-fence rule above without rewriting the group's original approval.
+Grouping does not approve future batches or remove any Unit's initial Plan Approval.
 
 Do not combine `--batch-file` with `--unit`, `--stage-level`, `--questions-file`,
 `--single`, or `--override`. Legacy protected-choice mediation and harnesses

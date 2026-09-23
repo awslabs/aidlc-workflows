@@ -257,21 +257,37 @@ re-running `/aidlc`, by a session restart or a context compaction, by a Stop-hoo
 probe, or by `/aidlc --status`. Ticking a plan checkbox does not reopen it
 either, and recording a review never touches the plan.
 
-If you are asked again, one of these moved:
+For the same target and attempt, plan, test instruction, or Testing Contract
+edits reopen approval only when the effective plan-approval fence is on
+(`strict` by default or explicit `guard.plan-approval on`). With that fence
+lowered by `relaxed`, `off`, or `guard.plan-approval off`, work continues with
+the updated content and the original approval record stays intact; it does
+not claim you approved the edits. Check `/aidlc --status` for the effective
+fence setting. You can still ask to review the plan again.
 
-- the plan content (anything beyond a ticked task marker, or a terminal
-  `## Review` section left by a review recorded before review records existed)
+Testing Posture, scope, test strategy, or project type changes follow the same
+rule within the same intent, target, and attempt. Refresh the current contract
+and instructions as needed; a lowered fence permits continued execution
+without asking for approval again solely because those inputs changed.
+
+If you are asked again, check what changed and which rule applies:
+
+- the plan content or embedded Testing Contract while the plan-approval fence
+  is on (beyond a ticked task marker, or a terminal `## Review` section left by a
+  review recorded before review records existed)
 - the unit-test instructions content, any byte of it: the instructions are handed
   to the developer in full, so they bind byte-exactly, and a section appended to
-  them after approval reopens it
-- the Testing Posture, scope, test strategy, or project type
-- the active Unit or stage target
+  them after approval reopens it when the plan-approval fence is on
+- the Testing Posture, scope, test strategy, or project type while the
+  plan-approval fence is on
+- the active intent, Unit, or stage target
 - the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
   workflow restart
-- the workspace source, if it changed after the plan was fingerprinted
+- the workspace source, if it changed after the plan was fingerprinted and the
+  applicable source-drift check requires reapproval
 
-The refusal message names which one. On a workspace-source change the remedy is
-always the same: re-run the fingerprint command, record both tags it prints, and
+The refusal message names which one. When a workspace-source change requires
+reapproval, re-run the fingerprint command, record both tags it prints, and
 present the plan again. A fingerprint recorded by an older version of the tool
 reads as "was written under an earlier format" and needs the same re-run.
 

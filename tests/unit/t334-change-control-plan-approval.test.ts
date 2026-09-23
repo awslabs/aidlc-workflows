@@ -7,17 +7,22 @@
 // subcommand:aidlc-testing-posture:fingerprint, subcommand:aidlc-testing-posture:begin,
 // hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED, function:planSourceDriftRefusal,
 // function:reapprovePlanRemedy, function:showPlanDriftRemedy, function:stopHereRemedy,
-// function:isGuardRecoveryEngineInvocation
+// function:isGuardRecoveryEngineInvocation, function:workerBrief,
+// function:codeGenerationExecutionAllowed, subcommand:aidlc-testing-posture:brief,
+// subcommand:aidlc-testing-posture:verify, audit:GUARD_STOOD_ASIDE
 //
 // t334 - Guard Policy at the Plan Approval checkpoint. The plan binds to the
 // workspace source it was written against; when that source moves after the
 // human approved (or is about to approve), `strict` refuses with the remedy and
 // `relaxed` records one CHANGE_ACCEPTED row naming the files, tells the human
 // once, re-baselines the recorded source, and continues into generation. The
-// content members of the approval (plan, instructions, Testing Contract) reopen
-// approval under EVERY value: no Guard Policy value touches them.
+// content members (plan, instructions, Testing Contract) must still match when
+// recording the human's answer. After approval, a lowered plan-approval fence
+// permits changed content through the hook, begin, and brief without rewriting
+// the human's approval. An enabled fence still requires current approval.
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -32,15 +37,19 @@ import {
   readPlanApprovalReceipt,
   sessionsDir,
   setGuardPolicyLine,
+  setGuardsOffLine,
+  setGuardsOnLine,
   stateDigest,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   codeGenerationRecordDir,
   evaluateCodeGenerationApproval,
+  parseTestingContract,
   renderTestingContract,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  resolveTestingPostureFromSections,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   AIDLC_SRC,
@@ -48,6 +57,7 @@ import {
   seededRecordDir,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -75,7 +85,13 @@ function hookDrops(project: string): string {
 function spawn(cmd: string[], project: string, stdin?: string): Spawned {
   const result = Bun.spawnSync(cmd, {
     cwd: project,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+    // Real approvals and fence decisions must not pass via the runner's
+    // synthetic-fixture bypasses or an inherited machine-wide off switch.
+    env: {
+      ...testGuardEnvironment(process.env, "production"),
+      AIDLC_UNATTENDED: "0",
+      CLAUDE_PROJECT_DIR: project,
+    },
     ...(stdin === undefined ? {} : { stdin: Buffer.from(stdin) }),
     stdout: "pipe",
     stderr: "pipe",
@@ -111,7 +127,7 @@ function driftNotice(count: string, paths: string): string {
 
 /** A code-generation project at the plan step, on `mode`, with a git baseline.
  *  The fixture carries the retired `Change Control` line; the writer renames it. */
-function createProject(mode: Mode): string {
+function createProject(mode: Mode, planApprovalFence?: "on" | "off"): string {
   const project = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
   projects.push(project);
   const statePath = join(seededRecordDir(project), "aidlc-state.md");
@@ -122,6 +138,8 @@ function createProject(mode: Mode): string {
       "- [-] code-generation$1EXECUTE",
     );
   state = setGuardPolicyLine(state, `${mode} (set by you)`);
+  if (planApprovalFence === "off") state = setGuardsOffLine(state, ["plan-approval"]);
+  if (planApprovalFence === "on") state = setGuardsOnLine(state, ["plan-approval"]);
   expect(getField(state, GUARD_POLICY_FIELD)).toBe(`${mode} (set by you)`);
   expect(state).not.toContain("- **Change Control**:");
   writeFileSync(statePath, state, "utf-8");
@@ -225,6 +243,26 @@ function answer(project: string, questions: string, session: string): Spawned {
 
 function begin(project: string): Spawned {
   return spawn([BUN, POSTURE, "begin", "--stage-level", "--project-dir", project], project);
+}
+
+function brief(project: string): Spawned {
+  return spawn([BUN, POSTURE, "brief", "--stage-level", "--project-dir", project], project);
+}
+
+function approvalRows(project: string) {
+  return readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
+}
+
+/** Compare every receipt, including any newly minted one, with the actual human approval. */
+function receiptFiles(project: string): Record<string, string> {
+  const dir = join(sessionsDir(project), "plan-approval");
+  if (!existsSync(dir)) return {};
+  return Object.fromEntries(
+    readdirSync(dir)
+      .filter((name) => /^receipt-.*\.json$/.test(name))
+      .sort()
+      .map((name) => [name, readFileSync(join(dir, name), "utf-8")]),
+  );
 }
 
 function plannedSourceTag(questions: string): string {
@@ -477,10 +515,17 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
   }, 60000);
 });
 
-describe("t334 (5) the approval's content members reopen approval under every value", () => {
-  for (const mode of ["strict", "relaxed", "off"] as const) {
-    test(`an edited plan, instructions, or Testing Contract is refused under ${mode}`, () => {
-      const project = createProject(mode);
+describe("t334 (5) changed content or prompt before the answer cannot be recorded as human approval", () => {
+  const settings: Array<{ mode: Mode; fence?: "off" }> = [
+    { mode: "strict" },
+    { mode: "relaxed" },
+    { mode: "off" },
+    { mode: "strict", fence: "off" },
+  ];
+  for (const { mode, fence } of settings) {
+    const setting = `${mode}${fence ? " with guard.plan-approval off" : ""}`;
+    test(`an answer to edited plan, instructions, or Testing Contract is refused under ${setting}`, () => {
+      const project = createProject(mode, fence);
       const questions = presentPlan(project);
       startSession(project, `content-${mode}`);
       expect(decide(project, questions, `content-${mode}`).code).toBe(0);
@@ -507,12 +552,308 @@ describe("t334 (5) the approval's content members reopen approval under every va
       expect(contractEdit.code).not.toBe(0);
       expect(contractEdit.stderr).toMatch(/Testing Contract|fingerprint does not match/);
       expect(acceptedRows(project)).toHaveLength(0);
+      expect(approvalRows(project)).toHaveLength(0);
+      expect(receiptFiles(project)).toEqual({});
+      expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
+    }, 60000);
+
+    test(`an answer to a changed approval prompt is refused under ${setting}`, () => {
+      const project = createProject(mode, fence);
+      const questions = presentPlan(project);
+      const session = `prompt-${mode}-${fence ?? "default"}`;
+      startSession(project, session);
+      const decision = decide(project, questions, session);
+      expect(decision.code, decision.stderr).toBe(0);
+      humanTurn(project, session);
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "A. Approve Plan",
+          "The approval now includes additional deployment work.\nA. Approve Plan",
+        ),
+      );
+      const refused = answer(project, questions, session);
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain("actual offered choice from this prompt and session");
+      expect(approvalRows(project)).toHaveLength(0);
+      expect(receiptFiles(project)).toEqual({});
       expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
     }, 60000);
   }
 });
 
-describe("t334 (5) strict drift at the dispatch guard is a typed ask, not a wall", () => {
+describe("t334 (6) F16: lowered fences allow post-approval content edits without inventing approval", () => {
+  const settings: Array<{ mode: Mode; fence?: "on" | "off"; lowered: boolean }> = [
+    { mode: "strict", lowered: false },
+    { mode: "relaxed", lowered: true },
+    { mode: "off", lowered: true },
+    { mode: "strict", fence: "off", lowered: true },
+    { mode: "relaxed", fence: "on", lowered: false },
+    { mode: "off", fence: "on", lowered: false },
+  ];
+
+  for (const { mode, fence, lowered } of settings) {
+    for (const member of ["plan", "test instructions", "Testing Contract"] as const) {
+      const setting = `${mode}${fence ? ` with guard.plan-approval ${fence}` : ""}`;
+      test(`${setting} ${lowered ? "permits" : "blocks"} ${member} edits after a real approval`, () => {
+        const project = createProject(mode, fence);
+        const questions = presentPlan(project);
+        const session = `f16-${mode}-${fence ?? "default"}-${member.replaceAll(" ", "-")}`;
+        startSession(project, session);
+        const decision = decide(project, questions, session);
+        expect(decision.code, decision.stderr).toBe(0);
+        humanTurn(project, session);
+        const answered = answer(project, questions, session);
+        expect(answered.code, answered.stderr).toBe(0);
+
+        const approval = evaluateCodeGenerationApproval(project, { unit: null });
+        expect(approval.ok, approval.reason).toBe(true);
+        const authority = resolveCodeGenerationAuthority(project, { unit: null });
+        const receiptKey = {
+          targetId: authority.targetId,
+          runFloor: authority.runFloor,
+          fingerprint: approval.approvalFingerprint!,
+        };
+        const receipt = readPlanApprovalReceipt(project, receiptKey);
+        if (!receipt) throw new Error("The fixture did not record its real Plan Approval receipt");
+        expect(receipt?.status).toBe("approved");
+        expect(receipt?.choice).toBe("Approve Plan");
+        expect(receipt?.session).toBe(session);
+        expect(receipt?.override).toBeUndefined();
+        const receiptsBefore = receiptFiles(project);
+        expect(Object.keys(receiptsBefore)).toHaveLength(1);
+        const approvalsBefore = approvalRows(project);
+        expect(approvalsBefore).toHaveLength(1);
+        const questionsBefore = readFileSync(questions, "utf-8");
+
+        // Approve first, then change exactly one content member. The contract
+        // edit remains valid JSON with its own correct hash, so it exercises
+        // changed testing requirements rather than a broken contract parser.
+        const dir = codeGenerationRecordDir(project, null);
+        const planPath = join(dir, "code-generation-plan.md");
+        const instructionsPath = join(dir, "unit-test-instructions.md");
+        const planBefore = readFileSync(planPath, "utf-8");
+        const instructionsBefore = readFileSync(instructionsPath, "utf-8");
+        let changedText: string;
+        let contractHash = approval.contractHash!;
+        if (member === "plan") {
+          changedText = "- [ ] Implement the revised behavior";
+          writeFileSync(planPath, planBefore.replace("- [ ] Implement", changedText));
+        } else if (member === "test instructions") {
+          changedText = "Run the revised unit test suite twice.";
+          writeFileSync(instructionsPath, `${instructionsBefore}\n${changedText}\n`);
+        } else {
+          const contract = parseTestingContract(planBefore);
+          expect(contract).not.toBeNull();
+          changedText = "Run the revised unit test suite twice.";
+          const changedContract = resolveTestingPostureFromSections(
+            { project: changedText },
+            {
+              scope: contract!.scope,
+              testStrategy: contract!.test_strategy,
+              projectType: contract!.project_type,
+            },
+          );
+          contractHash = changedContract.contract_sha256;
+          expect(contractHash).not.toBe(contract!.contract_sha256);
+          writeFileSync(
+            planPath,
+            planBefore.replace(renderTestingContract(contract!), renderTestingContract(changedContract)),
+          );
+          expect(parseTestingContract(readFileSync(planPath, "utf-8"))).toEqual(changedContract);
+        }
+        const currentPlan = readFileSync(planPath, "utf-8");
+        const currentInstructions = readFileSync(instructionsPath, "utf-8");
+        if (member === "test instructions") {
+          expect(currentPlan).toBe(planBefore);
+          expect(currentInstructions).not.toBe(instructionsBefore);
+        } else {
+          expect(currentPlan).not.toBe(planBefore);
+          expect(currentInstructions).toBe(instructionsBefore);
+        }
+
+        const assertApprovalUnchanged = () => {
+          // Continuing by policy is not a new Approve Plan answer. Only the
+          // original receipt's execution status may advance to generation;
+          // every approval field and its audit row remain unchanged.
+          expect(readFileSync(questions, "utf-8")).toBe(questionsBefore);
+          expect(Object.keys(receiptFiles(project))).toEqual(Object.keys(receiptsBefore));
+          const currentReceipt = readPlanApprovalReceipt(project, receiptKey);
+          if (!currentReceipt) throw new Error("Continuation removed the original Plan Approval receipt");
+          expect(currentReceipt?.status).toMatch(/^(approved|generation)$/);
+          expect(currentReceipt).toEqual({
+            ...receipt,
+            status: lowered ? currentReceipt.status : "approved",
+          });
+          expect(approvalRows(project)).toEqual(approvalsBefore);
+          const current = evaluateCodeGenerationApproval(project, { unit: null });
+          expect(current.ok, current.reason).toBe(false);
+          expect(current.reason).toMatch(/fingerprint does not match|Testing Contract/);
+        };
+        assertApprovalUnchanged();
+
+        // verify exposes execution permission separately from approval
+        // currentness; the lowered policy must not turn stale content into ok.
+        const checkVerification = () => {
+          const verified = spawn(
+            [BUN, POSTURE, "verify", "--stage-level", "--project-dir", project],
+            project,
+          );
+          expect(verified.code, verified.stderr).toBe(lowered ? 0 : 2);
+          const result = JSON.parse(verified.stdout);
+          expect(result.ok).toBe(false);
+          expect(result.execution_allowed).toBe(lowered);
+          if (lowered) {
+            expect(result.reason).toContain("without a new approval");
+            expect(result.approval_reason).toMatch(/fingerprint does not match|Testing Contract/);
+          } else {
+            expect(result.reason).toMatch(/fingerprint does not match|Testing Contract/);
+          }
+          assertApprovalUnchanged();
+        };
+        checkVerification();
+        expect(readPlanApprovalReceipt(project, receiptKey)?.status).toBe("approved");
+
+        const stoodAsideRows = () => readAuditShardEvents(project).filter(
+          (entry) => entry.event === "GUARD_STOOD_ASIDE" &&
+            auditBlockField(entry.block, "Guard") === "plan-approval",
+        );
+        const checkHook = (tool: "Write" | "Task", input: Record<string, string>) => {
+          const rowsBefore = stoodAsideRows().length;
+          const guarded = spawn([BUN, GUARD], project, JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: tool,
+            tool_input: input,
+            session_id: session,
+            cwd: project,
+          }));
+          expect(
+            guarded.code,
+            `${guarded.stderr}\n${guarded.stdout}\n${hookDrops(project)}`,
+          ).toBe(lowered ? 0 : 2);
+          if (lowered) {
+            expect(guarded.stdout).toContain("Continuing past the plan-approval check");
+            expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
+            const rows = stoodAsideRows();
+            expect(rows).toHaveLength(rowsBefore + 1);
+            const row = rows[rows.length - 1];
+            expect(auditBlockField(row.block, "Stage")).toBe("code-generation");
+            expect(auditBlockField(row.block, "Tool")).toBe(tool);
+            expect(auditBlockField(row.block, "Details")).toContain(
+              tool === "Write" ? "<project-dir>/src/base.ts" : "aidlc-developer-agent",
+            );
+          } else {
+            expect(guarded.stderr).toMatch(/fingerprint does not match|Testing Contract/);
+            expect(guarded.stdout).not.toContain("Continuing past");
+            expect(stoodAsideRows()).toHaveLength(0);
+          }
+          assertApprovalUnchanged();
+        };
+
+        // Test an actual workspace write target; the hook is consulted without
+        // performing the write, so this case contains no source-drift confound.
+        checkHook("Write", {
+          file_path: join(project, "src", "base.ts"),
+          content: "export const base = 2;\n",
+        });
+
+        // A brief must work before begin as well as at worker dispatch. Use its
+        // real current-contract marker instead of a deliberately invalid marker.
+        const beforeBrief = stoodAsideRows().length;
+        const handoff = brief(project);
+        if (lowered) {
+          expect(handoff.code, handoff.stderr).toBe(0);
+          expect(handoff.stdout).toContain("AIDLC-STAGE: code-generation");
+          expect(handoff.stdout).toContain(`AIDLC-TESTING-CONTRACT: ${contractHash}`);
+          expect(handoff.stdout).toContain(changedText);
+          expect(handoff.stdout).toContain(currentInstructions);
+          expect(handoff.stdout).toContain("## Current plan (plan-approval fence off)");
+          expect(handoff.stdout).toContain("## Current unit-test instructions");
+          expect(handoff.stdout).not.toContain("## Approved plan");
+          expect(handoff.stdout).not.toContain("## Approved unit-test instructions");
+          expect(handoff.stderr).toContain("Continuing past the plan-approval check");
+          expect(stoodAsideRows()).toHaveLength(beforeBrief + 1);
+          const row = stoodAsideRows()[beforeBrief];
+          expect(auditBlockField(row.block, "Tool")).toBe("testing-posture brief");
+          expect(auditBlockField(row.block, "Stage")).toBe("code-generation");
+        } else {
+          expect(handoff.code).not.toBe(0);
+          expect(handoff.stderr).toMatch(/fingerprint does not match|Testing Contract/);
+          expect(handoff.stdout).toBe("");
+          expect(stoodAsideRows()).toHaveLength(0);
+        }
+        assertApprovalUnchanged();
+        checkHook("Task", {
+          subagent_type: "aidlc-developer-agent",
+          prompt: lowered ? handoff.stdout :
+            `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contractHash}\n\n${currentPlan}\n${currentInstructions}`,
+        });
+
+        const beforeBegin = stoodAsideRows().length;
+        const started = begin(project);
+        if (lowered) {
+          expect(started.code, started.stderr).toBe(0);
+          expect(JSON.parse(started.stdout.trim().split("\n").pop() ?? "{}").status).toBe("generation");
+          const notices = changeNotices(started.stdout);
+          expect(notices).toHaveLength(1);
+          expect(notices[0]).toContain("Continuing past the plan-approval check");
+          expect(stoodAsideRows()).toHaveLength(beforeBegin + 1);
+          const row = stoodAsideRows()[beforeBegin];
+          expect(auditBlockField(row.block, "Tool")).toBe("testing-posture begin");
+          expect(auditBlockField(row.block, "Stage")).toBe("code-generation");
+        } else {
+          expect(started.code).not.toBe(0);
+          expect(started.stderr).toMatch(/fingerprint does not match|Testing Contract/);
+          expect(stoodAsideRows()).toHaveLength(0);
+        }
+        assertApprovalUnchanged();
+        expect(readPlanApprovalReceipt(project, receiptKey)?.status).toBe(lowered ? "generation" : "approved");
+        checkVerification();
+        expect(acceptedRows(project)).toHaveLength(0);
+        expect(readFileSync(join(project, "src", "base.ts"), "utf-8")).toBe("export const base = 1;\n");
+        const blockedRows = readAuditShardEvents(project).filter(
+          (entry) => entry.event === "PLAN_APPROVAL_BLOCKED",
+        );
+        expect(blockedRows).toHaveLength(lowered ? 0 : 2);
+      }, 60000);
+    }
+  }
+
+  test("a lowered fence still needs executable contract fields, not just a valid digest", () => {
+    const project = createProject("off");
+    const questions = presentPlan(project);
+    const session = "f16-invalid-contract-shape";
+    startSession(project, session);
+    expect(decide(project, questions, session).code).toBe(0);
+    humanTurn(project, session);
+    expect(answer(project, questions, session).code).toBe(0);
+    const approvalsBefore = approvalRows(project);
+    const receiptsBefore = receiptFiles(project);
+    const planPath = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
+    const plan = readFileSync(planPath, "utf-8");
+    const contract = parseTestingContract(plan)!;
+    const body = { version: 1 };
+    const malformed = {
+      ...body,
+      contract_sha256: `sha256:${createHash("sha256").update(JSON.stringify(body)).digest("hex")}`,
+    };
+    writeFileSync(planPath, plan.replace(
+      renderTestingContract(contract),
+      `## Testing Contract\n\n\`\`\`json\n${JSON.stringify(malformed, null, 2)}\n\`\`\`\n`,
+    ));
+    expect(parseTestingContract(readFileSync(planPath, "utf-8"))).not.toBeNull();
+    const verified = spawn([BUN, POSTURE, "verify", "--stage-level", "--project-dir", project], project);
+    expect(verified.code).toBe(2);
+    expect(JSON.parse(verified.stdout).execution_allowed).toBe(false);
+    expect(JSON.parse(verified.stdout).reason).toContain("Repair");
+    expect(begin(project).code).not.toBe(0);
+    expect(brief(project).code).not.toBe(0);
+    expect(approvalRows(project)).toEqual(approvalsBefore);
+    expect(receiptFiles(project)).toEqual(receiptsBefore);
+  }, 60000);
+});
+
+describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall", () => {
   test("the hook refuses with the human sentence first and a guard-recovery ask last", () => {
     const project = createProject("strict");
     const questions = presentPlan(project);
