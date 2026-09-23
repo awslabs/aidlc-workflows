@@ -165,7 +165,10 @@ test("ordinary file with a live descendant", async () => {
  const leaf=spawn(process.execPath,["-e",\`
   const fs=require("node:fs");
   process.on("SIGTERM",()=>{});
-  fs.writeFileSync(process.env.RUNNER_LEAF,JSON.stringify({pid:process.pid}));
+  // Publish only complete JSON: the parent waits for this path to appear.
+  const staged=process.env.RUNNER_LEAF+".tmp";
+  fs.writeFileSync(staged,JSON.stringify({pid:process.pid}));
+  fs.renameSync(staged,process.env.RUNNER_LEAF);
   console.log("ORDINARY_DESCENDANT_READY");
   setInterval(()=>{},1000);
   setTimeout(()=>process.exit(99),30000);
@@ -224,7 +227,10 @@ test("owned descendant",async()=>{
  const leaf=spawn(process.execPath,["-e",\`
   const fs=require("node:fs");
   process.on("SIGTERM",()=>{});
-  fs.writeFileSync(process.env.RUNNER_LEAF,JSON.stringify({pid:process.pid}));
+  // Publish only complete JSON: the parent waits for this path to appear.
+  const staged=process.env.RUNNER_LEAF+".tmp";
+  fs.writeFileSync(staged,JSON.stringify({pid:process.pid}));
+  fs.renameSync(staged,process.env.RUNNER_LEAF);
   console.log("DESCENDANT_STDIO_READY");
   setInterval(()=>{},1000);
   setTimeout(()=>process.exit(99),${mode === "detached" ? 5000 : 30000});
