@@ -1024,26 +1024,19 @@ function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void 
   if (m.tierFlavor !== "kiro") return;
   const agentsDir = join(outRoot, m.harnessDir, "agents");
   for (const file of walk(agentsDir)) {
-    if (file.endsWith(".md")) {
-      // Kiro persona and conductor surfaces carry a YAML shell allowlist; the
-      // native channel replaces the bun tool glob with the aidlc command prefix.
-      // The conductor carries a second entry for the dispatcher — a path glob
-      // cannot express a route namespace that lives in the arguments — and on
-      // this channel both entries project to the same command, so the second
-      // becomes a duplicate and is dropped.
-      const value = readFileSync(file, "utf-8");
-      const native = `- "${trustedCommand("*")}"`;
-      const rewritten = value
-        .replaceAll(`- "bun ${m.harnessDir}/tools/aidlc-*"`, native)
-        .replace(
-          new RegExp(
-            `( *)${escapeRegExp(native)}\\n(?:[^\\n]*\\n)*? *${escapeRegExp(native)}\\n`,
-          ),
-          `$1${native}\n`,
-        );
-      if (rewritten !== value) writeFileSync(file, rewritten);
-      continue;
-    }
+    // A `.md` agent surface needs nothing here any more. This branch used to rewrite
+    // `- "bun <harness>/tools/aidlc-*"` into the native command prefix, and then collapse
+    // the duplicate that produced, because the conductor carried that glob BESIDE its
+    // dispatcher entry and on this channel both projected to the same command. The glob
+    // is gone - it granted execution over a directory the project can write - so the
+    // rewrite matched nothing and the duplicate it existed to collapse could not occur.
+    //
+    // Every shell pattern a `.md` surface carries now is either already channel-neutral
+    // (the exact `date -u` spellings, the deny globs, the filesystem paths) or is written
+    // through `{{INVOKE}}`, which the shared token substitution resolves to the native
+    // command before this pass runs. Adding a rewrite back here would mean a pattern had
+    // been introduced that cannot be expressed in the token - state that reason if it is.
+    if (file.endsWith(".md")) continue;
     if (!file.endsWith(".json")) continue;
     const value = JSON.parse(readFileSync(file, "utf-8")) as {
       toolsSettings?: {
