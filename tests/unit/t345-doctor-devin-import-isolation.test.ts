@@ -72,13 +72,14 @@ function runDoctor(
 ): DoctorRow[] {
   const xdg = mkdtempSync(join(tmpdir(), "t345-xdg-"));
   created.push(xdg);
+  const appData = join(xdg, "appdata");
   if (userConfig !== undefined) {
-    mkdirSync(join(xdg, "devin"), { recursive: true });
-    writeFileSync(
-      join(xdg, "devin", "config.json"),
-      JSON.stringify(userConfig, null, 2),
-      "utf-8",
+    const userPath = userDevinConfigPath(
+      { XDG_CONFIG_HOME: xdg, APPDATA: appData },
+      process.platform,
     );
+    mkdirSync(join(userPath, ".."), { recursive: true });
+    writeFileSync(userPath, JSON.stringify(userConfig, null, 2), "utf-8");
   }
   const r = spawnSync(
     BUN,
@@ -89,7 +90,7 @@ function runDoctor(
         ...process.env,
         AIDLC_HARNESS_DIR: ".devin",
         XDG_CONFIG_HOME: xdg,
-        APPDATA: join(xdg, "appdata"),
+        APPDATA: appData,
       },
     },
   );
