@@ -42,6 +42,8 @@ import {
 } from "../../core/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../core/tools/aidlc-testing-posture.ts";
 import {
+  clearSyntheticHumanTurnHost,
+  registerSyntheticHumanTurnHost,
   fixtureIntentId8,
   createTestProject,
   DEFAULT_SPACE,
@@ -319,12 +321,20 @@ class Fixture {
   hook(name: string, payload: Json): Run {
     const argv = this.projection === "native"
       ? ["aidlc", "engine", "hook", name, "--project-dir", this.project]
-      : [BUN, join(this.project, this.harness.dir, "hooks", `aidlc-${name}.ts`)];
-    const output = run(argv, this.cwd, this.env, {
+      : name === "record-human-turn"
+        ? [BUN, join(this.tools, "aidlc.ts"), "engine", "hook", name]
+        : [BUN, join(this.project, this.harness.dir, "hooks", `aidlc-${name}.ts`)];
+    const input = {
       cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
-    });
-    if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
-    return output;
+    };
+    if (name === "record-human-turn") registerSyntheticHumanTurnHost(this.project, input.session_id);
+    try {
+      const output = run(argv, this.cwd, this.env, input);
+      if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
+      return output;
+    } finally {
+      if (name === "record-human-turn") clearSyntheticHumanTurnHost(this.project);
+    }
   }
 
   guard(toolName: string, toolInput: Json): Run {
@@ -338,12 +348,17 @@ class Fixture {
     const argv = this.projection === "native"
       ? ["aidlc", "engine", "adapter", "copilot", target, "--project-dir", this.project]
       : [BUN, join(this.project, this.harness.dir, "hooks", "aidlc-copilot-adapter.ts"), target];
-    const output = run(
-      argv, this.cwd, this.env,
-      { cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload },
-    );
-    if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
-    return output;
+    const input = {
+      cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
+    };
+    if (target === "record-human-turn") registerSyntheticHumanTurnHost(this.project, input.session_id);
+    try {
+      const output = run(argv, this.cwd, this.env, input);
+      if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
+      return output;
+    } finally {
+      if (target === "record-human-turn") clearSyntheticHumanTurnHost(this.project);
+    }
   }
 
   remedy(op: string, input: Partial<GuardRefusalInput> = {}) {

@@ -27,6 +27,7 @@ import {
   resolveTestingPosture,
 } from "../../core/tools/aidlc-testing-posture.ts";
 import {
+  clearSyntheticHumanTurnHost,
   registerSyntheticHumanTurnHost,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -68,8 +69,8 @@ afterAll(() => {
   }
 });
 
-// Guard Policy never lowers Plan Approval. Both variants share every other
-// detail so native recovery proves the mandatory barrier under each value.
+// Both policies publish authority and preserve the approval gate. Only strict
+// keeps the fence up for undirected source writes before Plan Approval.
 function fixture(policy: "relaxed" | "strict" = "relaxed"): string {
   const project = mkdtempSync(join(scratch, "project-"));
   cpSync(join(runtimeRoot, "kiro-ide", ".kiro"), join(project, ".kiro"), {
@@ -91,7 +92,7 @@ function fixture(policy: "relaxed" | "strict" = "relaxed"): string {
   }]));
   const previous = readFileSync(
     join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8",
-  ).replace("- **Scope**: feature", "- **Scope**: poc")
+  ).replace("- **Scope**: feature", "- **Scope**: poc\n- **Skeleton Stance**: on")
     // The retired "Change Control" field name is deliberate: the engine still
     // reads it as the Guard Policy alias for one release, and this fixture is
     // where that alias stays exercised.
@@ -206,7 +207,7 @@ function stoodAsideRows(project: string): number {
 
 // Drive the stale upstream directive through `next` and every receipt-continued
 // part until the engine publishes code-generation authority.
-function publishAuthority(project: string): void {
+function publishAuthority(project: string): Record<string, unknown> {
   expect(marker(project).stage).toBe("requirements-analysis");
   const admitted = guard(project, "execute_pwsh", {
     command: "aidlc engine orchestrate next",
@@ -228,6 +229,7 @@ function publishAuthority(project: string): void {
   }
   expect(directive.kind, response.stdout).toBe("run-stage");
   assertPublished(project);
+  return directive;
 }
 
 function sourceWriteOf(project: string) {
@@ -238,13 +240,18 @@ function sourceWriteOf(project: string) {
 }
 
 describe("native Kiro IDE recovery from a stale upstream directive", () => {
-  test("populated shell next publishes authority but relaxed still enforces plan approval", () => {
+  test("populated shell next publishes authority and relaxed stands aside without removing the approval gate", () => {
     const project = fixture();
-    publishAuthority(project);
-    const blocked = sourceWriteOf(project);
-    expect(blocked.code, blocked.stdout).toBe(2);
-    expect(blocked.stderr).toContain(LOWER_FENCE_SWITCH);
+    const directive = publishAuthority(project);
+    expect(directive.gate).toBe(true);
     expect(stoodAsideRows(project)).toBe(0);
+    const allowed = sourceWriteOf(project);
+    expect(allowed.code, allowed.stderr).toBe(0);
+    expect(allowed.stdout).toContain(
+      "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope poc))",
+    );
+    expect(stoodAsideRows(project)).toBe(1);
+    expect(auditRows(project)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
   }, 120_000);
 
   test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {
@@ -271,7 +278,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
   }, 120_000);
 
   test("native recovery can record Plan Approval and admit generation after the human response", () => {
-    const project = fixture();
+    const project = fixture("strict");
     const recovered = run(
       project,
       ["engine", "adapter", "kiro-ide", "plan-approval-guard"],
@@ -319,9 +326,13 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(stoodAsideRows(project)).toBe(0);
     // Only the fixture's exact offered human choice may authorize this plan.
     registerSyntheticHumanTurnHost(project, LEGACY_SESSION);
-    const human = run(project, ["engine", "adapter", "kiro-ide", "record-human-turn"],
-      { prompt: approveChoice }, true);
-    expect(human.code, human.stderr).toBe(0);
+    try {
+      const human = run(project, ["engine", "adapter", "kiro-ide", "record-human-turn"],
+        { prompt: approveChoice }, true);
+      expect(human.code, human.stderr).toBe(0);
+    } finally {
+      clearSyntheticHumanTurnHost(project);
+    }
     writeFileSync(questions, readFileSync(questions, "utf-8")
       .replace("[Answer]:", "[Answer]: Approve Plan"));
     const answer = mediateQuestions();
@@ -351,8 +362,12 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(pending.code, pending.stderr).toBe(2);
     expect(pending.stderr).toContain("recovery requires a human response");
     registerSyntheticHumanTurnHost(project, LEGACY_SESSION);
-    const response = legacy("record-human-turn", { prompt: "Recover Plan Approval" });
-    expect(response.code, response.stderr).toBe(0);
+    try {
+      const response = legacy("record-human-turn", { prompt: "Recover Plan Approval" });
+      expect(response.code, response.stderr).toBe(0);
+    } finally {
+      clearSyntheticHumanTurnHost(project);
+    }
     const recovered = shell();
     expect(recovered.code, recovered.stderr).toBe(2);
     expect(recovered.stderr).toContain("recovery issued a fresh directive");
