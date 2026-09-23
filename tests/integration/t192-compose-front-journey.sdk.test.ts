@@ -22,8 +22,8 @@
 //   (a) a gate fired (askedQuestions >= 1);
 //   (b) the creation ran (`State initialized:` tool-result - only
 //       handleIntentCreate emits it);
-//   (c) a NEW scope .md landed in .claude/scopes/ (10 files, was 9) AND
-//       scope-grid.json gained its entry (10 keys, was 9) - BOTH files, the
+//   (c) a NEW scope .md landed in .claude/scopes/ (12 files, was 11) AND
+//       scope-grid.json gained its entry (12 keys, was 11) - BOTH files, the
 //       write contract;
 //   (d) the created state's Scope names the composed scope (not a stock name);
 //   (e) the composed .md carries keywords: [] (empty list or no entries).
@@ -43,6 +43,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertToolResultContains } from "../harness/assert.ts";
+import { assertComposedScopeFile } from "../harness/composed-scope.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
@@ -117,8 +118,9 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> cre
         expect(gridKeys.length).toBe(12);
         const composedName = gridKeys.find((k) => !STOCK_SCOPES.has(k));
         expect(composedName).toBeDefined();
+        if (composedName === undefined) throw new Error("No composed scope in grid");
         // The grid entry is a real stages map, not an empty stub.
-        expect(Object.keys(grid[composedName as string].stages ?? {}).length).toBeGreaterThan(0);
+        expect(Object.keys(grid[composedName].stages ?? {}).length).toBeGreaterThan(0);
 
         // (d) the created state froze the COMPOSED scope.
         const spaceCursor = join(proj, "aidlc", "active-space");
@@ -134,26 +136,10 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> cre
           .find((line) => line.startsWith("- **Project**:"));
         expect(projectLine).toBe(`- **Project**: ${TASK}`);
 
-        // (e) keyword hygiene: the composed .md ships keywords: [] (no
-        // keyword entries - inferability is an explicit gate choice).
-        const composedMd = readFileSync(
-          join(scopesDir, `aidlc-${composedName}.md`),
-          "utf-8",
-        );
-        const fm = composedMd.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
-        const kwLine = fm.match(/^keywords:(.*)$/m);
-        if (kwLine) {
-          // Either inline empty list, or a block with no `- entry` lines.
-          const inline = kwLine[1].trim();
-          if (inline !== "[]" && inline !== "") {
-            throw new Error(`composed scope has inline keywords: ${inline}`);
-          }
-          if (inline === "") {
-            const after = fm.slice(fm.indexOf(kwLine[0]) + kwLine[0].length);
-            const block = after.match(/^((?:\s+-\s+.*\n?)*)/)?.[1] ?? "";
-            expect(block.trim()).toBe("");
-          }
-        }
+        // (e) Join the grid/state name to exactly one declared scope identity.
+        // It may already include aidlc-; the filename is not the identity.
+        // Empty keywords remain mandatory, including in CRLF frontmatter.
+        assertComposedScopeFile(scopesDir, composedName);
       } finally {
         cleanupTestProject(proj);
       }
