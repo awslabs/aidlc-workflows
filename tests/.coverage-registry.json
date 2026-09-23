@@ -315,6 +315,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-live-chat-lowering.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/unit/t328-plan-approval-runtime-authority.test.ts",
           "mechanism": "cli"
         },
@@ -330,6 +334,10 @@
       "unitId": "GUARD_POLICY_SET",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-live-chat-lowering.sdk.test.ts",
+          "mechanism": "sdk"
+        },
         {
           "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
@@ -9896,6 +9904,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-guard-live-chat-lowering.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t-guard-recovery-production.test.ts",
           "mechanism": "cli"
         },
@@ -10374,6 +10386,10 @@
       "unitId": "enterprise",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-guard-live-chat-lowering.sdk.test.ts",
+          "mechanism": "sdk"
+        },
         {
           "file": "tests/integration/t141-enterprise-scope-routing.test.ts",
           "mechanism": "sdk"
@@ -12794,6 +12810,10 @@
           "mechanism": "tui"
         },
         {
+          "file": "tests/integration/t-guard-live-chat-lowering.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t28-integration-test-strategy.test.ts",
           "mechanism": "sdk"
         },
@@ -13116,6 +13136,10 @@
         {
           "file": "tests/e2e/t301-express-scope-routing.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-guard-live-chat-lowering.sdk.test.ts",
+          "mechanism": "sdk"
         },
         {
           "file": "tests/integration/t-journey-workspace.sdk.test.ts",
@@ -13483,6 +13507,10 @@
         {
           "file": "tests/e2e/t-acp-kiro-utilities.serial.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-guard-live-chat-lowering.sdk.test.ts",
+          "mechanism": "sdk"
         },
         {
           "file": "tests/integration/t20.test.ts",
