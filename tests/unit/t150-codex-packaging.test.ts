@@ -131,7 +131,35 @@ function runDoctorWithCodexVersion(version: string): {
     const binDir = join(root, "bin");
     mkdirSync(binDir, { recursive: true });
     if (process.platform === "win32") {
-      writeFileSync(join(binDir, "codex.cmd"), `@echo off\r\necho codex-cli ${version}\r\n`);
+      // The doctor executes the resolved path without a shell. Node-compatible
+      // spawnSync rejects .cmd files; use a small native CLI (as in t255).
+      const source = join(binDir, "codex.cs");
+      const executable = join(binDir, "codex.exe");
+      writeFileSync(source, `using System;
+public static class CodexVersionFixture {
+  public static int Main(string[] args) {
+    if (args.Length != 1 || args[0] != "--version") return 2;
+    Console.WriteLine(${JSON.stringify(`codex-cli ${version}`)});
+    return 0;
+  }
+}
+`);
+      const compiler = join(
+        process.env.WINDIR ?? "C:\\Windows",
+        "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe",
+      );
+      const compiled = spawnSync(
+        compiler,
+        ["/nologo", "/optimize+", "/target:exe", `/out:${executable}`, source],
+        { encoding: "utf-8", timeout: 5_000 },
+      );
+      if (compiled.error || compiled.status !== 0) {
+        throw new Error(`Codex fixture compile failed: ${compiled.error?.message || compiled.stderr || compiled.stdout}`);
+      }
+      const probe = spawnSync(executable, ["--version"], { encoding: "utf-8", timeout: 5_000 });
+      expect(probe.error).toBeUndefined();
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(probe.stdout.trim()).toBe(`codex-cli ${version}`);
     } else {
       const fakeCodex = join(binDir, "codex");
       writeFileSync(fakeCodex, `#!/bin/sh\necho "codex-cli ${version}"\n`);
@@ -147,6 +175,8 @@ function runDoctorWithCodexVersion(version: string): {
       encoding: "utf-8",
       env: {
         ...process.env,
+        // The version-floor fixture exercises copied source, not the host install.
+        AIDLC_INSTALL_ROOT: join(root, "install"),
         PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
       },
       },
@@ -247,6 +277,35 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(graph).toContain('"aidlc/spaces/default/memory/org.md"');
     expect(graph).not.toContain(".codex/aidlc-rules/");
     expect(graph).not.toContain('".claude/rules/');
+  });
+
+  test("Codex config injects the native onboarding in both distribution channels", () => {
+    for (const channel of ["dist", "dist-release"]) {
+      const root = join(REPO_ROOT, channel, "codex", ".codex");
+      const raw = readFileSync(join(root, "config.toml"), "utf-8");
+      // The parser's object return type omits these shipped Codex config fields.
+      const config = Bun.TOML.parse(raw) as {
+        developer_instructions?: string;
+        shell_environment_policy?: { set?: Record<string, string> };
+      };
+      const onboarding = readFileSync(join(root, "onboarding.md"), "utf-8");
+      expect(typeof config.developer_instructions).toBe("string");
+      // Bun 1.3.14 incorrectly preserves the opening newline of a TOML literal string.
+      const instructions = config.developer_instructions as string;
+      expect(instructions.replace(/^\n/, "")).toBe(onboarding);
+      const standardConfig = parse(raw) as typeof config;
+      expect(standardConfig.developer_instructions).toBe(onboarding);
+      expect(config.developer_instructions).toContain("# AI-DLC on Codex CLI");
+      expect(config.developer_instructions).toContain(".agents/skills/");
+      expect(config.shell_environment_policy).toMatchObject({
+        set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },
+      });
+      expect(raw).toContain('set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }');
+      if (channel === "dist-release") {
+        expect(config.developer_instructions).toContain("- **Runtime**:");
+        expect(config.developer_instructions).not.toMatch(/\bbun\b/);
+      }
+    }
   });
 
   test("5: hooks.json wires only Codex-real events through the adapter (no SessionEnd)", () => {
@@ -541,18 +600,39 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(r.stdout).not.toContain("<PROJECT_DIR>");
   });
 
-  test("13: doctor enforces Codex 0.145.0 as the compact-session reload floor", () => {
-    const unsupported = runDoctorWithCodexVersion("0.144.9");
-    expect(unsupported.status).toBe(0);
-    expect(unsupported.output).toContain(
-      "Harness CLI: codex codex-cli 0.144.9 is below 0.145.0",
-    );
-    expect(unsupported.output).toContain(
-      "Install or upgrade Codex CLI to 0.145.0 or later",
-    );
+  test.each(["0.144.9", "0.145.0"])("13: doctor enforces the compact-session reload floor for Codex %s", (version) => {
+    const result = runDoctorWithCodexVersion(version);
+    expect(result.status, result.output).toBe(0);
+    if (version === "0.144.9") {
+      expect(result.output).toContain(
+        "Harness CLI: codex codex-cli 0.144.9 is below 0.145.0",
+      );
+      expect(result.output).toContain(
+        "Install or upgrade Codex CLI to 0.145.0 or later",
+      );
+    } else {
+      expect(result.output).toContain("Harness CLI: codex codex-cli 0.145.0");
+    }
+    // Each version owns one native fixture and doctor run, including cleanup.
+    // Compiler/probe caps remain 5s; neither version spends the other's budget.
+  }, process.platform === "win32" ? 30_000 : 15_000);
 
-    const supported = runDoctorWithCodexVersion("0.145.0");
-    expect(supported.status).toBe(0);
-    expect(supported.output).toContain("Harness CLI: codex codex-cli 0.145.0");
+  test("14: both generated Codex configs select workspace-write at the TOML root", () => {
+    for (const output of ["dist", "dist-release"]) {
+      const configPath = join(REPO_ROOT, output, "codex", ".codex", "config.toml");
+      const config = parse(readFileSync(configPath, "utf-8"));
+      // A text match also accepts sandbox_mode inside shell_environment_policy,
+      // where it does not select the sandbox. Check the generated TOML structure.
+      expect(config.sandbox_mode, configPath).toBe("workspace-write");
+      expect(config.shell_environment_policy, configPath).toEqual({
+        set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },
+      });
+      // Keep the existing network policy and absence of extra grants/approval
+      // overrides while correcting only the sandbox setting's table placement.
+      expect(config.sandbox_workspace_write, configPath).toEqual({
+        network_access: true,
+      });
+      expect(config.approval_policy, configPath).toBeUndefined();
+    }
   });
 });

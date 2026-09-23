@@ -280,7 +280,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on" });
     expect(restored.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(restored.protocol_modules).toContain("learnings");
-  });
+  }, 15_000); // Setup and four real CLI handshakes exceeded the macOS 5s default.
 
   test("classic caps an adversarial override to advisory, while a none override still silences the reviewer", () => {
     const { project, path } = legacyClassic();
@@ -317,5 +317,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(workshop.stage).toBe("requirements-analysis");
     expect(workshop.reviewer).toBeUndefined();
     expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("none");
-  });
+    // Keep the complete override history together. Hosted Windows exhausted
+    // the former 10s cap at the final next handshake; ordinary runs stay fast.
+  }, process.platform === "win32" ? 30_000 : 10_000);
 });

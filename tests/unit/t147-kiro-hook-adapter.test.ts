@@ -24,6 +24,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -55,6 +56,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
@@ -108,6 +110,11 @@ function seedShell(dir: string): void {
 function scratchProject(withState: boolean): string {
   const dir = mkdtempSync(join(tmpdir(), "t147-"));
   cpSync(KIRO_TREE, join(dir, ".kiro"), { recursive: true });
+  // Exercise the authored shim even when the packaged dependency tree is older.
+  cpSync(
+    join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"),
+    join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
+  );
   seedShell(dir);
   if (withState) {
     // State fixture into the default record so the active-intent cursor resolves.
@@ -188,6 +195,29 @@ function runAdapter(
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
   };
+}
+
+function runEngine(projectDir: string, args: string[]) {
+  const result = spawnSync(process.execPath, [
+    join(projectDir, ".kiro", "tools", "aidlc-orchestrate.ts"), ...args,
+  ], {
+    cwd: projectDir, encoding: "utf-8", timeout: 30_000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return { stdout: result.stdout, directive: JSON.parse(result.stdout) };
+}
+
+/** A deterministic engine fixture behind the real adapter subprocess boundary. */
+function stubNext(projectDir: string, response: string): string {
+  const calls = join(projectDir, "next-calls.ndjson");
+  writeFileSync(join(projectDir, "next-response.txt"), response);
+  writeFileSync(join(projectDir, ".kiro", "tools", "aidlc-orchestrate.ts"), `
+import { appendFileSync, readFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.stdout.write(readFileSync(${JSON.stringify(join(projectDir, "next-response.txt"))}, "utf8"));
+`);
+  return calls;
 }
 
 function runDispatchCore(
@@ -720,6 +750,199 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("3d: only complete non-steering packets within the 10 KiB UTF-8 hook budget are pre-dispatched", () => {
+    const dir = scratchProject(false);
+    try {
+      const args = ["--depth", "Standard"];
+      const prompt = "/aidlc --depth Standard";
+      const empty = JSON.stringify({ kind: "print", message: "" });
+      const calls = stubNext(dir, empty);
+      const first = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(first.code).toBe(0);
+      expect(first.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      const framing = Buffer.byteLength(first.stdout) - Buffer.byteLength(empty);
+      expect(framing).toBeGreaterThan(0);
+      for (const packetBytes of [10 * 1024 - 1, 10 * 1024, 10 * 1024 + 1]) {
+        const remaining = packetBytes - framing - Buffer.byteLength(empty);
+        // UTF-8 exceeds JS string length, so a character-count bound fails here.
+        const message = "界".repeat(Math.floor(remaining / 3)) + "x".repeat(remaining % 3);
+        const response = JSON.stringify({ kind: "print", message });
+        expect(Buffer.byteLength(response) + framing).toBe(packetBytes);
+        expect(response.length + framing).toBeLessThan(10 * 1024);
+        writeFileSync(join(dir, "next-response.txt"), response);
+        const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(result.code).toBe(0);
+        const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+        if (packetBytes <= 10 * 1024) {
+          expect(Buffer.byteLength(result.stdout)).toBe(packetBytes);
+          expect(result.stdout).toContain(`--- DIRECTIVE ---\n${response}\n--- END DIRECTIVE ---`);
+          expect(existsSync(latch)).toBe(false);
+        } else {
+          expect(result.stdout).toContain("deterministic argument forwarding");
+          expect(result.stdout).not.toContain("ALREADY");
+          expect(result.stdout).not.toContain(message);
+          expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(args);
+        }
+      }
+      expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
+        .toEqual(Array.from({ length: 4 }, () => ["next", ...args]));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("3e: steering of any size and incomplete JSON use exact-argv forwarding under every native shell alias", () => {
+    const dir = scratchProject(false);
+    try {
+      const raw = '--stage "reverse-engineering" --depth Standard';
+      const args = ["--stage", "reverse-engineering", "--depth", "Standard"];
+      const token = Buffer.from('{"opaque":"keep-this-token-verbatim"}').toString("base64url");
+      const calls = stubNext(dir, "");
+      for (const [tool_name, text] of [
+        ["execute_bash", "small complete rule\n"],
+        ["execute_pwsh", "large complete rule 界\n".repeat(1000)],
+        ["shell", "another complete rule\n"],
+      ]) {
+        const response = JSON.stringify({
+          kind: "load-steering", stage: "reverse-engineering", part: 1, parts: 1,
+          rules_content: [{ path: "aidlc/spaces/default/memory/org.md", text }],
+          continue_token: token,
+        });
+        writeFileSync(join(dir, "next-response.txt"), response);
+        const hook = runAdapter(dir, "verb-intercept", {
+          cwd: dir, prompt: `Step 1: run \`aidlc engine orchestrate next ${raw}\``,
+        });
+        expect(hook.code).toBe(0);
+        expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
+        expect(hook.stdout).not.toContain(token);
+        expect(hook.stdout).not.toContain("rules_content");
+        expect(hook.stdout).not.toContain("ALREADY");
+        const guard = (suffix: string) => runAdapter(dir, "guard-tool-call", {
+          cwd: dir, tool_name,
+          tool_input: { command: `bun .kiro/tools/aidlc.ts engine orchestrate next${suffix}` },
+        });
+        expect(guard("").code).toBe(2);
+        expect(guard(" --stage reverse-engineering").code).toBe(2);
+        expect(guard(` ${raw}`).code).toBe(0);
+        expect(existsSync(join(dir, "aidlc", ".aidlc-forwarding-latch"))).toBe(false);
+        // Actual child stdout carries the entire packet, including the final
+        // token; no hook prefix or simulated truncation participates in delivery.
+        const tool = runEngine(dir, ["next", ...args]);
+        expect(tool.stdout).toBe(response);
+        expect(tool.directive.rules_content[0].text).toBe(text);
+        expect(tool.directive.continue_token).toBe(token);
+      }
+      expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
+        .toEqual(Array.from({ length: 6 }, () => ["next", ...args]));
+      writeFileSync(join(dir, "next-response.txt"), '{"kind":"print","message":"incomplete');
+      const incomplete = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${raw}` });
+      expect(incomplete.stdout).toContain("deterministic argument forwarding");
+      expect(incomplete.stdout).not.toContain("--- DIRECTIVE ---");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("3f: small config pre-dispatch keeps its terminal latch and native roll-forward guards", () => {
+    const dir = scratchProject(false);
+    try {
+      const response = JSON.stringify({ kind: "print", message: "Configure the requested values, then stop." });
+      stubNext(dir, response);
+      const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: "/aidlc --config" });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(response);
+      expect(result.stdout).toContain("deterministic engine pre-dispatch");
+      expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-readonly-latch"), "utf8")).source)
+        .toBe("config-alias");
+      for (const tool_name of ["execute_bash", "execute_pwsh", "shell"]) {
+        const guard = runAdapter(dir, "guard-tool-call", {
+          cwd: dir, tool_name, tool_input: { command: "bun .kiro/tools/aidlc.ts engine orchestrate next" },
+        });
+        expect(guard.code, tool_name).toBe(2);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("3g: single-stage tool delivery issues once and retains every real rule chunk and opaque continuation", () => {
+    const dir = scratchProject(true);
+    try {
+      const memory = join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory");
+      cpSync(join(REPO_ROOT, "core", "memory"), memory, { recursive: true });
+      const rule = `# Native rule delivery\n${"Keep the full rule: café 日本語; never invent a token.\n".repeat(900)}`;
+      writeFileSync(join(memory, "org.md"), rule);
+      const stateBefore = readFileSync(seededStateFile(dir), "utf8");
+      const started = () => (readAudit(dir).match(/\*\*Event\*\*: STAGE_STARTED/g) ?? []).length;
+      const before = started();
+      const raw = "--stage reverse-engineering --single";
+      const hook = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${raw}` });
+      expect(hook.code).toBe(0);
+      expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
+      expect(hook.stdout).not.toContain("ALREADY");
+      expect(started()).toBe(before); // No hook-side isolated attempt or issuance.
+      expect(existsSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"))).toBe(false);
+      const accepted = runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_pwsh",
+        tool_input: { command: `bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}` },
+      });
+      expect(accepted.code).toBe(0);
+      let packet = runEngine(dir, ["next", "--stage", "reverse-engineering", "--single"]);
+      expect(packet.directive.kind).toBe("load-steering");
+      expect(Buffer.byteLength(packet.stdout)).toBeGreaterThan(10 * 1024);
+      expect(started()).toBe(before + 1);
+      const texts = new Map<string, string>();
+      const parts = packet.directive.parts;
+      expect(parts).toBeGreaterThan(1);
+      for (let part = 1; part <= parts; part++) {
+        expect(packet.directive).toMatchObject({ kind: "load-steering", part, parts });
+        expect(Buffer.byteLength(packet.stdout.trim())).toBeLessThanOrEqual(28 * 1024);
+        for (const entry of packet.directive.rules_content as Array<{ path: string; text: string }>) {
+          texts.set(entry.path, (texts.get(entry.path) ?? "") + entry.text);
+        }
+        const token = packet.directive.continue_token as string;
+        expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
+        // Pass the exact emitted token; the real engine verifies its envelope.
+        packet = runEngine(dir, ["continue", token]);
+        expect(started()).toBe(before + 1);
+      }
+      expect(packet.directive).toMatchObject({ kind: "run-stage", stage: "reverse-engineering", single: true });
+      expect([...texts.keys()]).toEqual(packet.directive.rules_in_context);
+      for (const [path, text] of texts) expect(text).toBe(readFileSync(join(dir, path), "utf8"));
+      expect(texts.get(`aidlc/spaces/${DEFAULT_SPACE}/memory/org.md`)).toBe(rule);
+      expect(readFileSync(seededStateFile(dir), "utf8")).toBe(stateBefore);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, 30_000);
+
+  test("3h: single-stage bypass also precedes compiled engine dispatch", () => {
+    const dir = scratchProject(false);
+    try {
+      const called = join(dir, "compiled-next.json");
+      const script = join(dir, "compiled-spy.ts");
+      writeFileSync(script, `
+import { writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "engine" && args[1] === "orchestrate") {
+  writeFileSync(${JSON.stringify(called)}, JSON.stringify(args));
+  console.log(JSON.stringify({ kind: "print", message: "compiled next response" }));
+}
+`);
+      const executable = join(dir, process.platform === "win32" ? "compiled-spy.cmd" : "compiled-spy");
+      writeFileSync(executable, process.platform === "win32"
+        ? `@"${process.execPath}" "${script}" %*\r\n`
+        : `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+      if (process.platform !== "win32") chmodSync(executable, 0o755);
+      const env = { AIDLC_COMPILED_EXECUTABLE: executable };
+      const single = runAdapter(dir, "verb-intercept", {
+        cwd: dir, prompt: "/aidlc --stage reverse-engineering --single",
+      }, [], env);
+      expect(single.code).toBe(0);
+      expect(single.stdout).toContain("deterministic argument forwarding");
+      expect(existsSync(called)).toBe(false);
+      const ordinary = runAdapter(dir, "verb-intercept", {
+        cwd: dir, prompt: "/aidlc --stage reverse-engineering",
+      }, [], env);
+      expect(ordinary.code).toBe(0);
+      expect(ordinary.stdout).toContain("compiled next response");
+      expect(JSON.parse(readFileSync(called, "utf8")))
+        .toEqual(["engine", "orchestrate", "next", "--stage", "reverse-engineering"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("4: todo_list create with [slug] suffix syncs the state file", () => {
     const dir = scratchProject(true);
     try {
@@ -770,7 +993,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("5b: subagent dispatch warns on incomplete rules (proceeds) and accepts exact rules", () => {
+  test("5b: subagent dispatch silently uses native preload for incomplete briefs and accepts exact rules", () => {
     const dir = scratchProject(true);
     try {
       cpSync(
@@ -796,20 +1019,30 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         },
       });
 
-      // Incomplete brief: advisory warning, dispatch PROCEEDS (exit 0). A
-      // block-with-retry contract deadlocked live (byte-exact paste never
-      // converges); Kiro agents preload the memory tree natively, so the
-      // brief bundle is redundant defense there, not the delivery channel.
+      // Native preload is the delivery channel, so an incomplete brief is
+      // expected and silent. Its diagnostic is opt-in, not a retry warning.
       const incomplete = runAdapter(
         dir,
         "deliver-stage-rules",
         payload(basePrompt),
       );
       expect(incomplete.code, incomplete.stderr).toBe(0);
-      expect(incomplete.stderr).toContain(
-        "did not carry the active-stage rule bundle verbatim",
+      expect(incomplete.stdout).toBe("");
+      expect(incomplete.stderr).toBe("");
+      const debugLog = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "hook-debug.log");
+      const traced = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        payload(basePrompt),
+        [],
+        { AIDLC_HOOK_DEBUG: "1" },
       );
-      expect(incomplete.stderr).toContain("The dispatch proceeded");
+      expect(traced.code, traced.stderr).toBe(0);
+      expect(traced.stdout).toBe("");
+      expect(traced.stderr).toBe("");
+      expect(readFileSync(debugLog, "utf-8")).toContain(
+        'target="deliver-stage-rules" transport="native-preload"',
+      );
 
       const proposed = runDispatchCore(dir, payload(basePrompt));
       expect(proposed.code, proposed.stderr).toBe(0);
@@ -831,6 +1064,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       );
       expect(complete.code, complete.stderr).toBe(0);
       expect(complete.stdout).toBe("");
+      expect(complete.stderr).toBe("");
 
       const direct = runAdapter(dir, "deliver-stage-rules", {
         ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
@@ -838,9 +1072,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         tool_input: { name: "aidlc-product-agent", prompt: basePrompt },
       });
       expect(direct.code).toBe(0);
-      expect(direct.stderr).toContain(
-        "did not carry the active-stage rule bundle verbatim",
-      );
+      expect(direct.stdout).toBe("");
+      expect(direct.stderr).toBe("");
 
       const blankPrompt = runAdapter(dir, "deliver-stage-rules", {
         ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
@@ -854,9 +1087,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         },
       });
       expect(blankPrompt.code, blankPrompt.stderr).toBe(0);
-      expect(blankPrompt.stderr).toContain(
-        "did not carry the active-stage rule bundle verbatim",
-      );
+      expect(blankPrompt.stdout).toBe("");
+      expect(blankPrompt.stderr).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -882,7 +1114,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         `# Organization\n\n${"x".repeat(600_000)}\n`,
         "utf-8",
       );
-      const oversized = runAdapter(oversizedDir, "deliver-stage-rules", {
+      const payload = {
         cwd: oversizedDir,
         tool_name: "subagent",
         tool_input: {
@@ -890,13 +1122,24 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             role: "aidlc-product-agent",
             prompt_template:
               "Run .kiro/aidlc-common/stages/inception/user-stories.md.",
+          }, {
+            role: "aidlc-quality-agent",
+            prompt_template: "Review the user stories.",
           }],
         },
-      });
+      };
+      const oversized = runAdapter(oversizedDir, "deliver-stage-rules", payload);
       expect(oversized.code, oversized.stderr).toBe(0);
       expect(oversized.stdout).toBe("");
       expect(oversized.stderr).toContain("exceeds the safe");
       expect(oversized.stderr).toContain("active-memory preload fallback");
+      const workerFile = join(oversizedDir, ".kiro", "agents", "aidlc-quality-agent.json");
+      writeFileSync(workerFile, JSON.stringify({ resources: [] }));
+      const blocked = runAdapter(oversizedDir, "deliver-stage-rules", payload);
+      expect(blocked.code, blocked.stderr).toBe(2);
+      expect(blocked.stdout).toBe("");
+      expect(blocked.stderr).toContain(workerFile);
+      expect(blocked.stderr).not.toContain("active-memory preload fallback");
     } finally {
       rmSync(oversizedDir, { recursive: true, force: true });
     }
@@ -933,6 +1176,195 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(missing.stderr).toContain("Cannot load required stage rule");
     } finally {
       rmSync(missingDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["empty resources", JSON.stringify({ resources: [] })],
+    ["absent resources", "{}"],
+    ["stale-space glob", JSON.stringify({ resources: ["file://aidlc/spaces/old-space/memory/**/*.md"] })],
+    ["malformed JSON", "{not json"],
+    ["missing worker file", null],
+    ["partial memory glob", JSON.stringify({ resources: ["file://aidlc/spaces/default/memory/org*.md"] })],
+  ])("native preload blocks %s and names the worker repair", (_name, config) => {
+    const dir = scratchProject(false);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      const memory = join(dir, "aidlc", "spaces", "default", "memory");
+      writeFileSync(join(memory, "org.md"), "# Organization\n\nKeep the mandated review.\n");
+      const oldMemory = join(dir, "aidlc", "spaces", "old-space", "memory");
+      mkdirSync(oldMemory, { recursive: true });
+      writeFileSync(join(oldMemory, "org.md"), "# Previous organization\n");
+      if (config === null) rmSync(workerFile);
+      else writeFileSync(workerFile, config);
+
+      const result = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "invoke_sub_agent",
+        tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
+      });
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(workerFile);
+      expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      expect(result.stderr).toContain("/aidlc space switch default");
+      expect(result.stderr).toContain("/aidlc --doctor");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload allows a repaired resource with a nested memory file", () => {
+    const dir = scratchProject(false);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      const phases = join(dir, "aidlc", "spaces", "default", "memory", "phases");
+      mkdirSync(phases, { recursive: true });
+      writeFileSync(join(phases, "inception.md"), "# Inception\n\nKeep the phase mandates.\n");
+      const payload = {
+        cwd: dir,
+        tool_name: "subagent_aidlc-product-agent",
+        tool_input: { prompt: "Inspect the project." },
+      };
+      writeFileSync(workerFile, JSON.stringify({ resources: [] }));
+      expect(runAdapter(dir, "deliver-stage-rules", payload).code).toBe(2);
+
+      writeFileSync(workerFile, JSON.stringify({
+        resources: ["skill://aidlc", "file://aidlc/spaces/default/memory/**/*.md"],
+      }));
+      const result = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload blocks a correct glob with no Markdown files", () => {
+    const dir = scratchProject(false);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      writeFileSync(workerFile, JSON.stringify({
+        resources: ["file://aidlc/spaces/default/memory/**/*.md"],
+      }));
+      const memory = join(dir, "aidlc", "spaces", "default", "memory");
+      writeFileSync(join(memory, "notes.txt"), "Not a rule file.\n");
+      mkdirSync(join(memory, "not-a-file.md"));
+      const result = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [{ role: "aidlc-product-agent", prompt_template: "Inspect the project." }],
+        },
+      });
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(workerFile);
+      expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload leaves non-roster helpers untouched, including mixed crews", () => {
+    const dir = scratchProject(false);
+    try {
+      const helper = "aidlc-custom-helper-agent";
+      writeFileSync(join(dir, ".kiro", "agents", `${helper}.json`), JSON.stringify({ resources: [] }));
+      const result = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "invoke_sub_agent",
+        tool_input: { name: helper, prompt: "Inspect the project." },
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+
+      writeFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "# Organization\n");
+      const crew = {
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [
+            { role: helper, prompt_template: "Inspect the project." },
+            { role: "aidlc-product-agent", prompt_template: "Inspect the project." },
+          ],
+        },
+      };
+      const allowed = runAdapter(dir, "deliver-stage-rules", crew);
+      expect(allowed.code, allowed.stderr).toBe(0);
+      expect(allowed.stdout).toBe("");
+      expect(allowed.stderr).toBe("");
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      writeFileSync(workerFile, JSON.stringify({ resources: [] }));
+      const blocked = runAdapter(dir, "deliver-stage-rules", crew);
+      expect(blocked.code, blocked.stderr).toBe(2);
+      expect(blocked.stderr).toContain(workerFile);
+      expect(blocked.stderr).not.toContain(`${helper}.json`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload leaves the installed composer exempt", () => {
+    const dir = scratchProject(false);
+    try {
+      writeFileSync(join(dir, ".kiro", "agents", "aidlc-composer-agent.json"), JSON.stringify({ resources: [] }));
+      const result = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "subagent_aidlc-composer-agent",
+        tool_input: { prompt: "Compose the requested workflow." },
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload gives plugin roster workers an actionable JSON repair", () => {
+    const dir = scratchProject(false);
+    try {
+      cpSync(join(REPO_ROOT, "core", "memory"), join(dir, "aidlc", "spaces", "default", "memory"), { recursive: true });
+      const agent = "test-pro-metrics-agent";
+      writeFileSync(join(dir, ".kiro", "agents", `${agent}.md`),
+        `---\nname: ${agent}\ndisplay_name: Test Pro Metrics Agent\nplugin: test-pro\n---\n\nInspect testing metrics.\n`);
+      const workerFile = join(dir, ".kiro", "agents", `${agent}.json`);
+      const config = { name: agent, prompt: `file://${agent}.md`, tools: ["fs_read"], resources: [] as string[] };
+      writeFileSync(workerFile, JSON.stringify(config));
+      const conductorFile = join(dir, ".kiro", "agents", "aidlc.json");
+      const conductor = JSON.parse(readFileSync(conductorFile, "utf-8"));
+      conductor.toolsSettings.subagent.trustedAgents.push(agent);
+      writeFileSync(conductorFile, JSON.stringify(conductor));
+      const prompt = "Run .kiro/aidlc-common/stages/inception/user-stories.md.";
+      const shared = runDispatchCore(dir, {
+        cwd: dir, tool_name: "Task", tool_input: { subagent_type: agent, prompt },
+      });
+      expect(shared.code, shared.stderr).toBe(0);
+      const delivered = JSON.parse(shared.stdout).hookSpecificOutput.updatedInput.prompt;
+      expect(delivered).toContain(readFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "utf-8"));
+
+      const payload = { cwd: dir, tool_name: "invoke_sub_agent", tool_input: { name: agent, prompt } };
+      const blocked = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(blocked.code, blocked.stderr).toBe(2);
+      expect(blocked.stdout).toBe("");
+      expect(blocked.stderr).toContain(workerFile);
+      expect(blocked.stderr).toContain("resources");
+      expect(blocked.stderr).toContain("plugin's agent JSON");
+      expect(blocked.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      expect(blocked.stderr).not.toContain("/aidlc space switch");
+      expect(blocked.stderr).not.toContain("/aidlc --doctor");
+
+      config.resources.push("file://aidlc/spaces/default/memory/**/*.md");
+      writeFileSync(workerFile, JSON.stringify(config));
+      const repaired = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(repaired.code, repaired.stderr).toBe(0);
+      expect(repaired.stdout).toBe("");
+      expect(repaired.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1463,13 +1895,6 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   // fails ENOENT and the whole hook layer dies. The fix reuses the exact bun
   // running the adapter (process.execPath), which needs no PATH at all.
 
-  /** PATH stripped of every dir that resolves a `bun` binary (the fragile hook
-   *  environment the fix targets). Deterministic: reads real disk. */
-  function pathWithoutBun(): string {
-    const entries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
-    return entries.filter((d) => !existsSync(join(d, "bun"))).join(delimiter);
-  }
-
   test("14: session-start dispatches even when the child PATH has no bun (respawn uses process.execPath)", () => {
     // The adapter is launched via the ABSOLUTE bun (process.execPath), so it
     // starts regardless of PATH; the contract under test is that its OWN child
@@ -1477,10 +1902,12 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     // argv[0] this session-start would ENOENT in runCore and emit nothing.
     const dir = scratchProject(true);
     try {
-      const strippedPath = pathWithoutBun();
+      const strippedEnv = envWithoutCommandOnPath("bun");
+      const strippedPath = strippedEnv.PATH ?? "";
       // Premise guard: bun must genuinely be unresolvable on the stripped PATH,
       // else the test proves nothing.
       expect(strippedPath.split(delimiter).some((d) => existsSync(join(d, "bun")))).toBe(false);
+      expect(Bun.which("bun", { PATH: strippedPath })).toBeNull();
       const r = spawnSync(
         process.execPath,
         [join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "session-start"],
@@ -1488,7 +1915,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           cwd: dir,
           input: JSON.stringify(FIXTURES.agentSpawn),
           encoding: "utf-8",
-          env: { ...process.env, CLAUDE_PROJECT_DIR: dir, PATH: strippedPath },
+          env: { ...strippedEnv, CLAUDE_PROJECT_DIR: dir },
           timeout: 30_000,
         },
       );

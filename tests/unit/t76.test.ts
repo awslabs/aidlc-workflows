@@ -92,8 +92,8 @@
 // for the cases that read audit row COUNTS — starts from the bare
 // "# AI-DLC Audit Log\n" header so post-fire counts are unambiguous (the .sh
 // did NOT seed audit-sample.md here; it used a bare header). Worktree dirs are
-// created under <proj>/.aidlc/worktrees/bolt-<slug>/ exactly as mk_worktree_dir
-// did. All temp dirs cleaned in afterAll, plus a best-effort chmod-restore +
+// created through the intent-scoped worktreePath helper. All temp dirs are
+// cleaned in afterAll, plus a best-effort chmod-restore +
 // lock-dir rmdir to mirror the .sh's cleanup_all trap.
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -109,8 +109,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditLockDir, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  fixtureIntentId8,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   createTestProject,
@@ -188,17 +189,11 @@ const auditPath = (p: string): string => join(seededAuditDir(p), "fixture.md");
 // (relativeRecordDir → aidlc/spaces/default/intents/<record>), so the forked
 // state lands at <wt>/aidlc/spaces/default/intents/<record>/aidlc-state.md.
 const wtRecordDir = (p: string, slug: string): string =>
-  join(
-    p,
-    ".aidlc",
-    "worktrees",
-    `bolt-${slug}`,
-    "aidlc",
-    "spaces",
-    DEFAULT_SPACE,
-    "intents",
-    DEFAULT_RECORD_DIR,
-  );
+  join(worktreePath(p, fixtureIntentId8(p), slug), "aidlc",
+  "spaces",
+  DEFAULT_SPACE,
+  "intents",
+  DEFAULT_RECORD_DIR,);
 const wtStatePath = (p: string, slug: string): string =>
   join(wtRecordDir(p, slug), "aidlc-state.md");
 
@@ -241,9 +236,9 @@ function makeFixture(): string {
   return proj;
 }
 
-/** mk_worktree_dir: mkdir -p <proj>/.aidlc/worktrees/bolt-<slug>. */
+/** Seed the canonical directory for a fork without invoking git. */
 function mkWorktreeDir(proj: string, slug: string): void {
-  mkdirSync(join(proj, ".aidlc", "worktrees", `bolt-${slug}`), {
+  mkdirSync(worktreePath(proj, fixtureIntentId8(proj), slug), {
     recursive: true,
   });
 }

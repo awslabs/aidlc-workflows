@@ -200,6 +200,12 @@ Create `<record>/inception/requirements-analysis/requirements.md` containing:
 These IDs are permanent traceability keys. Downstream stages must preserve
 them exactly rather than renumbering or replacing them with prose references.
 
+Keep review lifecycle content in the separate review file returned by the
+review request. A newly generated `requirements.md` must not contain a
+`## Review` section, a pending-review placeholder, or a reviewer verdict.
+Finish the primary requirements content before requesting its review; do not
+change it after a terminal review receipt to remove a placeholder.
+
 ### Step 11: Completion Handoff
 
 Hand completion to `stage-protocol.md` via

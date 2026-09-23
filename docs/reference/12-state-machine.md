@@ -409,7 +409,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**99 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 99 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `CHANGE_CONTROL_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` and are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**102 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 102 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `CHANGE_CONTROL_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` and are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -462,9 +462,12 @@ legacy Unit-less rows retain stage-global behavior.
 | `DECISION_RECORDED` | `tools/aidlc-log.ts` | Fires before a non-gate `AskUserQuestion` so options are captured |
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v1`, which preserves the canonical order of the preamble and all visible Q<n> and feedback sections, including follow-up questions after an assumption decision. Exactly one post-summary `Assumption Confirmation` section and its contents are excluded; a same-named pre-summary section remains hashed. Any other visible Markdown or raw-HTML heading after the summary fails closed. Stage-specific pre-summary headings remain valid. Unscoped receipts retain legacy whole-file verification and need reconfirmation after an allowed append. A `Looks correct` receipt also carries `Summary Authorization Id`, the authorization the confirmation minted (a digest of the attempt, stage, Unit, workflow, questions path, confirmed content, and choice); the same id becomes the scope's active authorization under `<record>/.aidlc-engine/summary-authorization/`, and a `Request changes` reply withdraws it. Reserved from public audit append. |
+| `VERIFICATION_COMMAND_RECORDED` | `tools/aidlc-log.ts` | Human-approved project check command for the current intent workflow. Binds `Checkpoint: Construction Verification Command`, the canonical single-line command's `Command SHA-256`, the full canonical `Command Label` (at most 1024 control-free characters), and exact `User Input: Approve` to the matching pending decision's one-shot challenge and offered choice from the invoking `Session`. Unrelated human turns and cross-session responses cannot authorize it. The typed state setter and Unit verification require the latest receipt; changing the command requires a new receipt and re-verification. Reserved from public audit append and worktree audit merge. |
+| `CONSTRUCTION_POLICY_RECORDED` | `tools/aidlc-log.ts` | Human-approved Construction policy change bound to the invoking `Session`, `Field` (Construction Checkpoints, Execution, or Iteration), `Value`, and exact `User Input: Approve`. The pending decision's one-shot challenge binds field and value; the hook records the offered choice. During Construction, the typed setter requires the latest unambiguous current-workflow receipt for that field, matching the new value; applying it spends the receipt. A later proposal supersedes it. Other gate answers and unrelated human turns are not consent. Outside Construction the setters retain their existing behavior. Reserved from public audit append and worktree audit merge. |
+| `CHECKPOINT_VERIFICATION_RECORDED` | `tools/aidlc-construction-checkpoints.ts` | Emitted by `verifyConstructionCheckpoint` under the audit lock after the command's final proof is written. Carries `Unit`, `Kind`, last `Stage`, `Stages`, `Verification Id`, `Fingerprint`, `Command SHA-256`, `Exit Code`, `Verified`, `Run floor`, and claim-attempt fields. Verification requires the latest current-attempt receipt to match the proof id, evidence fingerprint, authorized command digest, and current run floor with `Verified: true`; hand-written proof JSON cannot authorize approval. Reserved from public audit append and worktree audit merge. |
 | `PLAN_APPROVAL_RECORDED` | `tools/aidlc-log.ts` | Human-backed Code Generation plan receipt. The authority it records binds to intent, stage or Unit target, stage attempt (run floor), content fingerprint (the projected plan and instructions plus the Testing Contract hash), prompt (the questions file with answers blanked), and session response, never to the identity of the directive that presented the question nor to row order. The row also carries the directive epoch and the raw questions-file digest (`Questions SHA-256`) as provenance; both are recorded and never compared, so a note appended to the questions file after approval leaves the decision standing while a change to the prompt the human saw retires it. Protected runtime state is the authority; this row is provenance only. |
 | `PLAN_APPROVAL_OVERRIDDEN` | `tools/aidlc-log.ts` | The human-only break-glass exit for Plan Approval. Fires only when the human typed `Override Plan Approval: <reason>` as a prompt (the human-turn hook records that typed text under the session; a picked option never does), the conductor ran `answer --checkpoint plan-approval --override "<reason>"` with the same reason, and the normal receipt path refused. Carries `Reason`, `Failed Checks` (what the normal path refused), `Session`, `Unit` or `stage-level`, and `Fingerprint`; the paired `PLAN_APPROVAL_RECORDED` row carries `Override: yes`. The receipt it accompanies binds to plan content and stage attempt only, so no later check compares its source. The typed request is single-use and the conductor never proposes or initiates it |
-| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a. The stage's required `review_artifact` scalar names the Markdown output the review is about; plugin-added outputs and produces ordering cannot change it. A new `--unit` request must name a member of the authoritative DAG or a Unit proven by a matching open or merge-confirmed tool-owned Bolt attempt in the current no-DAG attempt; a completion still awaiting its `AUDIT_MERGED` merge evidence, like a historyless Unit, refuses. A single stable file-identity snapshot captures the declared artifacts and binds the reviewed output bytes (`Artifact Fingerprint`) and the request-time workspace source for `workspace_requires` stages; summary-owned questions use the `summary-input:sha256:<digest>` projection described above, masking only the canonical confirmation answer unless explicitly named by `review_artifact`; the row mints a `Request Id` that the completion row and the review record echo. The command's JSON returns `requestId` and `reviewFile`, the slot under `<record>/.aidlc-engine/reviews/` where the reviewer writes its review; the request opens that slot, removing a draft an earlier incomplete dispatch of the same iteration left. `--retry-pending` re-issues one unmatched request with the original binding and request id when the artifacts and source still match; a request recorded before request ids or source binding gains them through that one retry, marked `Upgrade: legacy-request`. Rows written under the retired appendix protocol also carry `Review Appendix Artifact`, `Review Appendix Offset`, `Review Appendix Prior Digest`, `Review Appendix Prior Length`, and `Review Challenge`; they stay readable and a completion of such a request echoes them unchanged. |
+| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a. The stage's required `review_artifact` scalar names the Markdown output the review is about; plugin-added outputs and produces ordering cannot change it. A new `--unit` request must name a member of the authoritative DAG or a Unit proven by a matching open or merge-confirmed tool-owned Bolt attempt in the current no-DAG attempt; a completion still awaiting its `AUDIT_MERGED` merge evidence, like a historyless Unit, refuses. A single stable file-identity snapshot captures the declared artifacts and binds the reviewed output bytes (`Artifact Fingerprint`) and the request-time workspace source for `workspace_requires` stages; summary-owned questions use the `summary-input:sha256:<digest>` projection described above, masking only the canonical confirmation answer unless explicitly named by `review_artifact`; the row mints a `Request Id` that the completion row and the review record echo. The command's JSON returns `requestId` and `reviewFile`, the slot under `<record>/.aidlc-engine/reviews/` where the reviewer writes its review; the request opens that slot, removing a draft an earlier incomplete dispatch of the same iteration left. It also returns `recordVerdict`, the same command with `--verdict <READY|NOT-READY>` added, which is what records the terminal receipt. `--retry-pending` re-issues one unmatched request with the original binding and request id when the artifacts and source still match; a request recorded before request ids or source binding gains them through that one retry, marked `Upgrade: legacy-request`. Rows written under the retired appendix protocol also carry `Review Appendix Artifact`, `Review Appendix Offset`, `Review Appendix Prior Digest`, `Review Appendix Prior Length`, and `Review Challenge`; they stay readable and a completion of such a request echoes them unchanged. |
 | `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration request and a fresh check of current summary confirmation and output admission. One coherent artifact snapshot must reproduce the request's review fingerprint, including exact reviewed output bytes and the summary-input projection above: the reviewer writes no artifact, so `Request Fingerprint` and `Artifact Fingerprint` are the same identity. The review is read from the request's review file (or `--review-file`), validated with Bun's Markdown parser (one rendered Verdict matching `--verdict`, one Reviewer, one Iteration, no later Markdown or raw-HTML H1/H2; literal examples in fenced/inline code and HTML comments carry no authority, while list/blockquote/table containers cannot mint ownership), and written as the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` or `<record>/.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` in the same locked transaction; the row names it (`Review Record`) and pins its bytes (`Review Record Digest`), and echoes the `Request Id`. Request-time and completion source fingerprints use the same Git-independent bounded filesystem identity and must match. Deprecated for this release cycle: a verdict is still accepted from a terminal `## Review` section a reviewer appended to `review_artifact` after the request (the bytes before it are the requested bytes and the request saw no appendix); that validated section is copied into the review record. A retried incomplete review may record `NOT-READY` with an empty review record. A malformed row is ignored and does not consume its pending request. |
 | `PIPELINE_LINK_COMPLETED` | `tools/aidlc-log.ts` | Fires after one declared pipeline link returns. Carries `Stage`, `Link`, and `Position k/N`; multi-repo chains also carry `Repo`, and isolated runs carry `Workflow=single-stage:<slug>`. The tool refuses undeclared, duplicate, or out-of-order links within that receipt scope. Main-workflow gate-start, approval, advance, finalize, and workflow completion ignore isolated rows and require every scanned-repo current-attempt link receipt. |
 
@@ -626,15 +629,62 @@ document's history across shards and make it unreconstructible.
 
 Pre-registered for v0.4.0; the three `WORKTREE_*` rows ship with `aidlc-worktree.ts` (milestone 7); `STATE_*` lands in milestone 9 (state fork/merge); `AUDIT_*` lands in milestone 10 (audit fork/merge). t48 forward check skips rows whose Emitter cell still reads `Reserved`.
 
+New `Worktree path` values use `.aidlc/worktrees/bolt-<id8>_<slug>` and
+`Branch name` records `bolt-<id8>_<slug>` verbatim. `<id8>` is the intent registry
+UUID suffix shared with Unit claims; `Bolt slug` remains unchanged. Retained
+source refs use `refs/aidlc/reviewed-source/<id8>/<slug>/<commit>`. See
+[Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for naming, missing-UUID refusal, and provenance-gated legacy completion.
+
 | Event | Emitter | Trigger |
 |---|---|---|
-| `WORKTREE_CREATED` | `tools/aidlc-worktree.ts` | Audit-first per-Bolt creation records the immutable Base commit, `Base Source Listing`, and portable creating-repo selector (`Repo`, `-` for root); private worktree metadata also binds the canonical Git common-dir. Swarm prepare additionally stamps intent/Unit/batch/stage/floor provenance (subcommand: `create`) |
+| `WORKTREE_CREATED` | `tools/aidlc-worktree.ts` | Audit-first per-Bolt creation records the intent-scoped Worktree path and Branch name, immutable Base commit, `Base Source Listing`, and portable creating-repo selector (`Repo`, `-` for root); private worktree metadata also binds the canonical Git common-dir and adds `intentId8` and `branch` without changing version 1. Swarm prepare additionally stamps intent/Unit/batch/stage/floor provenance (subcommand: `create`) |
 | `WORKTREE_MERGED` | `tools/aidlc-worktree.ts` | Bolt's worktree merged back to main on gate approval (subcommand: `merge`) |
-| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission; `Parked ref` records that namespace prefix and `Parked commit` the snapshot commit or branch tip (`-` when only reviewed refs remain). The live checkout and branch are then removed (subcommand: `discard`) |
+| `WORKTREE_DISCARDED` | `tools/aidlc-worktree.ts` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<id8>/<slug>/<stamp>/` before audit emission; `Repo` records the same portable repository selector as creation (`-` for root), `Parked ref` records that namespace prefix and `Parked commit` the snapshot commit or branch tip (`-` when only reviewed refs remain). The live checkout and branch are then removed (subcommand: `discard`) |
 | `STATE_FORKED` | `tools/aidlc-state.ts` | State file forked to worktree on Bolt start (subcommand: `fork`) |
 | `STATE_MERGED` | `tools/aidlc-state.ts` | Worktree's state merged back to main on gate approval; alphabetical-slug tiebreak as defence-in-depth (subcommand: `merge`) |
 | `AUDIT_FORKED` | `tools/aidlc-audit.ts` (`audit-fork`) | Audit log forked to worktree on Bolt start; audit-of-intent — emit precedes the byte-copy |
 | `AUDIT_MERGED` | `tools/aidlc-audit.ts` (`audit-merge`) | Worktree's audit entries appended to main audit on gate approval; per-Bolt entry order preserved, cross-Bolt order reflects merge-completion order. Under the same lock, before any row lands, the review records named by the delta's `REVIEW_COMPLETED` rows are carried into the main intent record: only for a completion that descends from a `REVIEW_REQUESTED` row in the same delta, read without following symlinks, refused when hardlinked, oversize, or not hashing to the pinned digest, and never overwriting a record already present with different bytes. A merge that cannot carry a record refuses. |
+
+Pre-upgrade legacy `bolt-<slug>` Bolts retain their old paths, branches, and ref
+prefixes through merge, discard, and purge; new Bolts never use that shape.
+`doctor` reports both. Legacy resolution requires exactly one causal-frontier
+row among the selected intent's `WORKTREE_CREATED`, `WORKTREE_MERGED`, and
+`WORKTREE_DISCARDED` rows for the slug. That row must name the legacy worktree
+path, plus the legacy branch for a creation. Ordering uses timestamps and
+same-shard append order, not shard filenames; an unreadable shard or ambiguous
+frontier does not authorize legacy resolution.
+
+A live legacy checkout also needs readable metadata: matching `intentRecord`
+permits any of those frontier events, because merge/discard rows record intent,
+not completed Git operations. Pre-P7 metadata without `intentRecord` requires an
+open creation on the frontier; missing, unreadable, or foreign-intent metadata
+never authorizes that checkout. With no legacy directory, any matching frontier
+event permits cleanup-only resolution, but destructive verbs still verify Git
+state. A cleanup-only swarm merge requires a creation row matching its resolved
+path. Discard checks a remaining legacy branch tip against this intent's latest
+discard's parked `/branch-tip` (falling back to `/head`), refusing a mismatch;
+if the frontier is a creation, discard has not started and ordinary Git checks
+apply.
+
+When neither a legacy directory nor durable Git evidence remains, creation uses
+the namespaced identity. Leftover branches or retained refs instead require
+discard under their intent before creation. With no evidence for the selected
+identity, discard refuses if another identity has a same-slug Bolt directory in
+this checkout; only an absent same-slug directory permits `already-discarded`.
+See [Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for the exact refusals. Cleanup refuses to delete a Bolt branch or its
+retained/parked refs if the branch is checked out outside its own Bolt directory.
+Stderr names the owner path; the audit records
+`(checked out in another worktree of this repository)`.
+Only correctly shaped retained reviewed-source and parked-source refs are
+eligible for cleanup; unrelated nested or malformed refs are never deleted.
+
+Namespaced and legacy restore/purge both require the selected intent's own
+`WORKTREE_DISCARDED` rows to record the exact `Parked ref` and stamp. An
+unrecorded requested stamp refuses with
+`parked attempt <stamp> is not recorded by intent <record>`; other unrecorded
+parks are ignored.
 
 ### Practices
 
@@ -681,7 +731,14 @@ Pre-registered for v0.5.0 in milestone 4; `MEMORY_EMPTY` emitter lands in milest
 
 ### Swarm
 
-The swarm taxonomy has seven events. Six emit from the stateless referee `aidlc-swarm.ts`: `prepare` captures the exact stage-attempt token, stamps it into worktree creation metadata, and forks the batch; `finalize` requires that token to remain current, re-verifies every claimed Unit, snapshots its exact declared record artifacts plus bound source manifest, merges those records and AIDLC metadata, and emits convergence/failure, baton, and batch rows. `SWARM_SOURCE_MERGED` emits later from `aidlc-worktree.ts merge`, after the immutable reviewed application source lands in main. It correlates durable worktree provenance with the exact current Bolt, batch, stage, and run floor, then links the main checkout from the stage baseline, the prior attempt's accepted rejection fingerprint, or the previous current-attempt aggregate. Selector-free merges recover the creating intent from durable creation authority; explicit mismatches name the required `--space`/`--intent` recovery, and authority-path comparison canonicalizes filesystem aliases. Pre-binding fieldless convergence retains historical branch-merge behavior; modern convergence does not advance routing until its source-merge authority exists. The `check` subcommand remains advisory and emits nothing. The conductor handles `invoke-swarm` as an orthogonal directive kind beside the stage `mode` enum; it does not activate the reserved `agent-team` mode.
+The swarm taxonomy has seven events. Six emit from the stateless referee `aidlc-swarm.ts`: `prepare` captures the exact stage-attempt token, stamps it into worktree creation metadata, and forks the batch; `finalize` requires that token to remain current, re-verifies every claimed Unit, snapshots its exact declared record artifacts plus bound source manifest, merges those records and AIDLC metadata, and emits convergence/failure, baton, and batch rows. `SWARM_SOURCE_MERGED` emits later from `aidlc-worktree.ts merge`, after the immutable reviewed application source lands in main. It correlates durable worktree provenance with the exact current Bolt, batch, stage, and run floor, then links the main checkout from the stage baseline, the prior attempt's accepted rejection fingerprint, or the previous current-attempt aggregate. Authority-path comparison canonicalizes filesystem aliases. Pre-binding fieldless convergence retains historical branch-merge behavior; modern convergence does not advance routing until its source-merge authority exists. The `check` subcommand remains advisory and emits nothing. The conductor handles `invoke-swarm` as an orthogonal directive kind beside the stage `mode` enum; it does not activate the reserved `agent-team` mode.
+
+Swarm commands use the session's active workflow. Explicit `--intent`/`--space`
+must name that workflow; a mismatch refuses before mutation or audit emission.
+Post-finalize source merge recovers the creating repository from durable
+authority, not the intent: it uses the selected workflow intent. See
+[Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for the selector refusal.
 
 | Event | Emitter | Trigger |
 |---|---|---|
@@ -751,26 +808,42 @@ Audit-of-intent semantics apply to side-effects whose outcome cannot be checked 
 | `AUDIT_FORKED`, `AUDIT_MERGED` | `tools/aidlc-audit.ts` | Audit emit, then `mkdir -p` + `copyFileSync` of main audit or `appendFileSync` of worktree-audit delta to main audit |
 | `MERGE_DISPATCH_INVOKED` | `tools/aidlc-bolt.ts` `dispatch-event` | Audit emit, then `Task(aidlc-pipeline-deploy-agent, ...)` LLM dispatch — the side-effect is the LLM call itself; success is observed via the matching `MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK` post-call emit |
 
-Discard snapshots tracked and untracked, non-ignored working-tree content with a
+Discard sets aside tracked and untracked, non-ignored working-tree content with a
 temporary Git index and `commit-tree`. Regular files with configured clean filters
-or `working-tree-encoding` retain raw bytes, bypassing those transformations. A regular file whose name is not valid
-UTF-8 and carries a `filter`, `text`, `eol`, `ident`, or `working-tree-encoding`
-attribute (neither unspecified nor unset) cannot be parked: discard refuses before removing anything, leaving the
-live attempt intact rather than parking altered bytes; rename the file or remove
-its attributes to proceed. Such names without these attributes park normally.
+or `working-tree-encoding` retain raw bytes, bypassing those transformations. A
+regular file whose name is not valid UTF-8 and carries a `filter`, `text`, `eol`,
+`ident`, or `working-tree-encoding` attribute (neither unspecified nor unset)
+cannot be parked. Discard refuses before teardown, leaving the live attempt
+intact, with this attribute-specific message:
+
+```text
+cannot park file with a non-UTF-8 name and a content-transforming attribute (<attr>=<value>): <name>; rename the file or unset its <attr> attribute
+```
+
+Such names without these attributes can be saved normally.
 All parked copies must exist before
 `WORKTREE_DISCARDED` can be emitted; if parking or audit emission fails, teardown
 does not start. The row's `Parked ref` names
-`refs/aidlc/parked/<slug>/<UTC-YYYYMMDDTHHMMSSZ[-N]>`, whose `/head` points to
+`refs/aidlc/parked/<id8>/<slug>/<UTC-YYYYMMDDTHHMMSSZ[-N]>`, whose `/head` points to
 `Parked commit` and whose `/reviewed-source/<commit>` refs preserve the reviewed
 source evidence. When only the branch remains, `/head` preserves its ordinary
 committed blobs and a matching `/branch-tip` marker is created. Snapshot parks
-instead have a `/snapshot` marker pointing to the same commit as `/head`.
-`aidlc engine worktree restore --slug <slug>` recovers the attempt in an isolated
-restored checkout. It checks the bare `--raw` flag first, then `/snapshot`, then
+have `/snapshot` pointing to the same commit as `/head` and also retain the
+original branch OID at `/branch-tip` for cleanup-only retry checks.
+Discard JSON retains `parked_ref` and `parked_commit` and adds `parked_stamp`
+(the exact stamp), `parked_mode` (`snapshot`, `branch-tip`, or `evidence-only`),
+and `parked_repo` (`null` for the project root, otherwise the sibling repository
+name). When only reviewed source refs remain, the descriptor reports
+`parked_mode: "evidence-only"`, `parked_commit: "-"`, and the retained ref,
+stamp, and repository; there is no `/head` to restore.
+`aidlc engine worktree restore --slug <slug> --parked <stamp> --repo <name|.> --intent <record-dir-name> --space <space>`
+recovers a saved head in an isolated restored checkout; omit `--parked` to select
+the latest saved head. Selecting an evidence-only attempt refuses, even with
+`--raw`, with `no restorable files were parked for <slug> <stamp>; only review evidence was kept`.
+For a saved head it checks the bare `--raw` flag first, then `/snapshot`, then
 `/branch-tip`. Legacy parks have neither marker for either shape: an unmarked
 head is a snapshot only if its commit author is exactly `AI-DLC`, its email is
-`aidlc@localhost`, and its subject starts with `aidlc: parked bolt-<slug> at `.
+`aidlc@localhost`, and its legacy subject starts with `aidlc: parked bolt-<slug> at `.
 The identity check ignores Git replacement objects; all other unmarked heads
 are branch tips. Snapshots and explicit `--raw` write parked blobs byte-exact
 without smudge/process filters or working-tree-encoding conversions; regular-file
@@ -783,11 +856,121 @@ for byte-exact materialization and `false` for ordinary Git checkout;
 `materialized` counts regular files and symlinks only in raw mode and is absent
 for ordinary checkout. Raw-restored filtered paths may show as modified
 under their own filter. Submodule gitlinks become empty directories;
-submodule checkouts are not restored. Git's eol/`text=auto` normalization during
-parking is the explicit limit: CRLF bytes normalized at park time are not
-recoverable. `worktree purge` explicitly removes all parked refs, including the
-`/snapshot` or `/branch-tip` marker. Neither command
-adds an audit event, and neither repurposes the live Bolt path or branch.
+submodule checkouts are not restored. Ignored untracked files are not backed up;
+tracked files matching ignore patterns remain included. Git's eol/`text=auto`
+normalization during parking is the other explicit exclusion: CRLF bytes
+normalized at park time are not recoverable, even with `--raw`.
+
+`aidlc engine worktree purge --slug <slug> [--parked <stamp> | --older-than <days>]`
+explicitly removes matching parked refs, including `/head`, `/snapshot` or
+`/branch-tip`, and reviewed source refs. Without a selector it removes all stamps
+for the selected intent's Bolt; `--parked` selects one exact stamp. `--older-than` accepts
+nonnegative finite days, including fractions, and selects only attempts strictly
+older than the threshold. The age comes from the UTC `YYYYMMDDTHHMMSSZ` timestamp
+in the stamp, independent of any `-N` collision suffix and of commit dates; an
+attempt exactly at the threshold is retained. A strict shared calendar parser
+rejects impossible dates and times instead of normalizing them. Age-filtered
+purge preserves unparseable stamps and lists them in `skipped_unparseable`.
+Success JSON always includes that array, empty unless `--older-than` skips
+unparseable stamps; exact-stamp or all-stamp purge can remove them.
+`--parked` and `--older-than` are mutually exclusive. Purge refuses while a
+corresponding restored checkout exists
+or is registered with Git, including moved checkouts. Restore and purge accept
+`--repo <name>` for an existing sibling Git repository or `--repo .` for the
+project root, independently of the current intent's repo list. An exact restore
+stamp found in only one repository selects it before generic slug ambiguity.
+Both `WORKTREE_CREATED` and `WORKTREE_DISCARDED` emit `Repo`: the recorded sibling
+name, or `-` for the project root. A discard row preserves this provenance even
+when its creation row is unavailable. Recovery admits valid Git repositories
+named in the same slug's creation or discard audit `Repo` fields even when those
+sibling names are symlinks: the framework may recover exactly where it recorded
+the attempt's worktree or parking. That admission is slug-scoped; records for
+other slugs never widen this slug's repository set. Membership in a current or
+historical intent's repo list alone cannot admit a symlink. Intent-list
+candidates and unrecorded discovered siblings must be real immediate child
+directories whose canonical paths stay directly under the canonical workspace
+root (`isWorkspaceRepoDir`); arbitrary paths and symlink aliases without the
+same-slug audit provenance are refused. Both commands reject unknown
+and duplicate flags before selection or mutation; `--raw` is a bare restore-only
+flag. This does not change live create/discard selectors. Neither command adds
+an audit event or repurposes the live Bolt path or branch.
+
+Successful `bolt abort` JSON retains `reason: "aborted"` and echoes the supplied
+`--reason` in the additive `abort_reason` field; its audit row still records
+`Reason: aborted`. The result always includes `parked_ref`, which is `null` when
+nothing was parked, including without `--discard`. Only a non-null `parked_ref`
+adds the saved descriptor's `parked_stamp`, `parked_mode`, and `parked_repo`.
+For a restorable attempt, `restore_operation` is an `EngineInvocation` with route
+`worktree` and args `["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]`.
+The repository selector is always present: the sibling name or `.` when
+`parked_repo` is `null`. The appended `recordDirName` and `space` selectors bind
+the operation to its owning intent, even after the active intent changes.
+`restore_hint` is optional human display text rendered
+from that operation by `renderEngineInvocation`, with the installed channel's
+native/source prefix, harness validation, and shell-safe argument quoting.
+If rendering throws, abort omits the hint and returns the reason in
+`restore_hint_error`; the typed operation remains. A missing hint is not an
+evidence-only classification.
+Snapshot mode reports
+`parked_excludes: ["ignored files", "eol/text=auto normalization"]`; branch-tip
+mode reports `["uncommitted files (no working tree existed)"]` instead.
+Evidence-only mode keeps all four descriptor fields but omits
+`restore_operation`, `restore_hint`, `restore_hint_error`, and `parked_excludes`
+because no working files could be saved.
+
+If a saved namespace is known but its discard descriptor is missing, the
+fallback retains `parked_ref` and derives `parked_stamp` from its namespace
+only when the stamp parses strictly; otherwise `parked_stamp` is `null`.
+It sets `parked_mode` and `parked_repo` to `null`: legacy output does not
+establish either. It omits `restore_operation`, `restore_hint`,
+`restore_hint_error`, and `parked_excludes`, rather than guessing a repository,
+selecting a later attempt, or offering to restore evidence-only refs.
+Instead, `recovery_hint` asks the human to run doctor to list set-aside attempts
+and their exact restore commands. The hint is plain guidance, not an executable
+operation. Unknown mode does not establish what files were saved, so the conductor
+must not make that claim or offer restoration. If no namespace was saved,
+`parked_ref` is `null`; `parked_stamp`, `parked_mode`, `parked_repo`,
+`restore_operation`, `restore_hint`, `restore_hint_error`, `parked_excludes`,
+and `recovery_hint` are absent.
+Offer restoration only when `restore_operation` is present. When the human
+asks for the attempt back, invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each listed arg exactly as a
+separate argv argument. Never join args into a shell command, execute the
+display-only hint, or reconstruct a latest-attempt selection. A rendering error
+does not withdraw the restoration offer.
+This changes no abort arguments, command admission, or human-consent
+requirement. Restoring files later never revives the aborted lifecycle or its
+review authority.
+
+Doctor lists saved `/head` entries and actual reviewed source refs
+informationally, with slug, exact stamp, age in days, mode (`snapshot`,
+`branch-tip`, `legacy`, or `evidence-only`), restored checkout ownership, and typed
+recovery operations with exact `--parked <stamp>` and explicit `--repo <name>`
+or `--repo .` args, followed by `--intent <record-dir-name> --space <space>`.
+Every entry has `purge_operation`; only restorable entries
+have `restore_operation`. Both use route `worktree` and exact argv args, never
+a shell program. Optional `restore_command` and `purge_command` are safe human
+display text. If rendering throws, the corresponding command is omitted and
+`restore_command_error` or `purge_command_error` carries the reason while the
+operation remains. Evidence-only entries have only the purge operation and its
+command-or-error fields. These entries are neither warnings nor failures.
+Doctor uses the same slug-scoped recovery repository candidate set described
+above. A checkout counts as restored only when the owning repository's
+Git worktree registration resolves to the canonical restore path and names the
+exact `restore/bolt-<id8>_<slug>-<stamp>` branch (legacy:
+`restore/bolt-<slug>-<stamp>`). `legacy` in this inventory leaves
+commit-identity classification to restore. A moved checkout may not appear as
+restored in the inventory, but purge still checks its Git registration.
+Doctor and age-filtered purge use the same strict stamp parser; impossible
+dates or times produce `age_days: null` in doctor's JSON and `unknown` in human
+output rather than a normalized age.
+
+Doctor inventories both namespaced and legacy attempts. Namespaced attempts
+resolve their owning intent through the registry UUID suffix; legacy attempts
+require the owner's exact `WORKTREE_DISCARDED` `Parked ref` provenance. Unknown
+or ambiguous owners and unattributed legacy parks are omitted, never authorized
+through the active intent. Each saved operation carries the owning intent's
+record-directory name and space.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
 
@@ -833,7 +1016,7 @@ state (`in-progress`, `awaiting-approval`, `revising`, `completed`, `pending`,
 `skipped`; for a team Unit, the Unit's own gate status). Every remedy carries a
 closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `request-review`, `start-recovery-review`, `apply-repairs-then-request`,
-`record-verdict`, `retry-pending`, `request-changes`, `redo-jump`,
+`record-verdict`, `retry-pending`, `request-changes`, `finish-revision`, `redo-jump`,
 `restore-or-jump`, `restart-stage`, `change-scope`, `restore-scope`,
 `abort-bolt`, `repair-source-boundary`, `reconfirm-summary`,
 `unset-unattended`). Routing decisions compare `op` and never the remedy
@@ -878,10 +1061,18 @@ conductor-prose-obtained consent remains the trust boundary: the Plan Approval
 hook's exact abort exception preserves source/native trusted-tool parity but
 does not authenticate consent. Direct refusal asks do not publish the selection
 marker used by the separately checked native restart continuation. A mistaken
-abort with the unchanged `--discard` argv now parks the work for
-`aidlc engine worktree restore --slug <slug>` rather than irretrievably deleting
-it. Restore recovers files separately, not the aborted lifecycle or its review
-authority. A mechanical selection receipt remains a candidate for later
+abort with the unchanged `--discard` argv now parks available files and review
+evidence rather than irretrievably deleting them. With a restorable descriptor, the
+returned `restore_operation` selects the exact saved slug, stamp, and repository,
+then appends `--intent <record-dir-name> --space <space>` to bind recovery to the
+owning intent in a separate checkout, not the aborted lifecycle or its review
+authority. On a human restore request, invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>` with each listed arg exactly as argv,
+never joined into a shell command. `restore_hint` is optional human display text
+only; rendering failure omits it and supplies `restore_hint_error` without
+removing the operation or restoration offer. Evidence-only attempts retain
+their descriptor but omit the restore operation, hint, hint error, and
+exclusions; doctor offers purge only. A mechanical selection receipt remains a candidate for later
 hardening; recoverable discard does not change command admission.
 
 Directive validation requires an exact rendering of the operation, including

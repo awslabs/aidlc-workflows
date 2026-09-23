@@ -15,6 +15,17 @@ export interface GuardOperationInvocation {
   args: string[];
 }
 
+export interface EngineInvocation {
+  route: string;
+  args: readonly string[];
+}
+
+type InvocationRenderOptions = {
+  mode?: "source" | "native";
+  harnessDir?: string;
+  shell?: "posix" | "powershell";
+};
+
 function identifier(value: unknown): value is string {
   return typeof value === "string" &&
     /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/.test(value);
@@ -56,20 +67,22 @@ function quoteArgument(value: string, shell: "posix" | "powershell"): string {
 
 export function renderGuardOperation(
   operation: GuardRecoveryOperation,
-  options: {
-    mode?: "source" | "native";
-    harnessDir?: string;
-    shell?: "posix" | "powershell";
-  } = {},
+  options: InvocationRenderOptions = {},
 ): string {
-  const invocation = guardOperationInvocation(operation);
+  return renderEngineInvocation(guardOperationInvocation(operation), options);
+}
+
+export function renderEngineInvocation(
+  invocation: EngineInvocation,
+  options: InvocationRenderOptions = {},
+): string {
   const mode = options.mode ?? (aidlcInvocation().startsWith("bun ") ? "source" : "native");
   const shell = options.shell ?? (process.platform === "win32" ? "powershell" : "posix");
   const harness = options.harnessDir ?? runtimeHarnessDir();
   if (!/^\.[A-Za-z0-9_.-]+$/.test(harness)) throw new Error("Invalid recovery harness directory");
   const prefix = mode === "native"
-    ? `aidlc engine ${invocation.route}`
-    : `bun ${harness}/tools/aidlc-${invocation.route}.ts`;
+    ? `aidlc engine ${quoteArgument(invocation.route, shell)}`
+    : `bun ${quoteArgument(`${harness}/tools/aidlc-${invocation.route}.ts`, shell)}`;
   return `${prefix} ${invocation.args.map((arg) => quoteArgument(arg, shell)).join(" ")}`;
 }
 

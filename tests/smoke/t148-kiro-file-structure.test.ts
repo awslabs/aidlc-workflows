@@ -11,7 +11,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -137,14 +138,15 @@ describe("t148 dist/kiro file structure", () => {
     for (const p of ["ideation", "inception", "construction", "operation"]) {
       expect(existsSync(mem("phases", `${p}.md`))).toBe(true);
     }
-    // The old in-harness rules dir must NOT ship (the relocation is complete).
-    expect(existsSync(join(K, "steering"))).toBe(false);
+    // Steering now carries onboarding, not copies of the workspace method.
+    expect(readdirSync(join(K, "steering"))).toEqual(["aidlc-onboarding.md"]);
   });
 
   test("authored shell files present", () => {
     for (const f of [
       "skills/aidlc/SKILL.md",
       "skills/aidlc/question-rendering.md",
+      "steering/aidlc-onboarding.md",
       "hooks/aidlc-kiro-adapter.ts",
       "agents/aidlc.json",
       "agents/aidlc-developer-agent.json",
@@ -169,6 +171,7 @@ describe("t148 dist/kiro file structure", () => {
     expect(existsSync(path)).toBe(true);
     const steering = readFileSync(path, "utf-8");
     expect(steering).toMatch(/^---\ninclusion: always\n---/);
+    expect(frontmatter(join(KI, "steering", "aidlc-onboarding.md"))).toBe("inclusion: always");
     for (const file of [
       "org.md",
       "team.md",
@@ -342,23 +345,29 @@ describe("t148 dist/kiro file structure", () => {
   });
 
   test("doctor accepts IDE shape and keeps CLI settings validation", () => {
-    const run = (projectDir: string): string => {
-      const tool = join(projectDir, ".kiro", "tools", "aidlc-utility.ts");
-      const result = spawnSync(process.execPath, [tool, "doctor", "--project-dir", projectDir, "--verbose"], {
-        encoding: "utf-8",
-        env: { ...process.env, AIDLC_HARNESS_DIR: ".kiro" },
-      });
-      return `${result.stdout ?? ""}${result.stderr ?? ""}`;
-    };
-    const ide = run(KIRO_IDE);
-    expect(ide).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
-    expect(ide).not.toContain("settings/cli.json present");
+    // This shape check must not validate the developer's global installed runtime.
+    const installRoot = mkdtempSync(join(tmpdir(), "t148-doctor-install-"));
+    try {
+      const run = (projectDir: string): string => {
+        const tool = join(projectDir, ".kiro", "tools", "aidlc-utility.ts");
+        const result = spawnSync(process.execPath, [tool, "doctor", "--project-dir", projectDir, "--verbose"], {
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".kiro", AIDLC_INSTALL_ROOT: installRoot },
+        });
+        return `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      };
+      const ide = run(KIRO_IDE);
+      expect(ide).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+      expect(ide).not.toContain("settings/cli.json present");
 
-    const cli = run(KIRO);
-    expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
-    expect(cli).toContain(
-      "ok    settings/cli.json present (workspace default-agent activation)",
-    );
+      const cli = run(KIRO);
+      expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+      expect(cli).toContain(
+        "ok    settings/cli.json present (workspace default-agent activation)",
+      );
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
   });
 
   test("conductor hooks all route through the adapter", () => {

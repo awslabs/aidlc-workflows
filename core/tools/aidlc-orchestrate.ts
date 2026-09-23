@@ -114,8 +114,11 @@ import {
   activeDirectiveStorageDir,
   advanceContinuationCursor,
   activeUnitCheckpoint,
+  approvedConstructionUnits,
+  attemptEventDefinitelyBefore,
   artifactFilename,
   auditBlockField,
+  boltSlugForUnit,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxState,
   CEREMONY_FLAGS,
@@ -129,6 +132,8 @@ import {
   clearActiveDirectiveMarker,
   codekbRepoName,
   currentUnitLifecycleMode,
+  constructionSkeletonOn,
+  constructionCheckpointGaps,
   effectivePlanAction,
   errorMessage,
   evaluateGuardRefusal,
@@ -145,7 +150,9 @@ import {
   guardRefusalStreakView,
   type GuardRemedy,
   humanAuthorityState,
+  latestMainWorkflowStageRunFloorForProject,
   isAutonomousConstructionGate,
+  isConstructionSwarmEnabled,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
   type SummaryConfirmationEvidence,
@@ -157,15 +164,18 @@ import {
   isPluginEnabled,
   isPerUnitStage,
   isReadOnlyEngineProbe,
+  isRetiredOnlyNextArgv,
   isRegularFile,
   isArchivedIntent,
   isRouteCheckProbe,
   isStopHookProbe,
   isTeamUnitOwnership,
   KNOWN_CODEKB_STAGES,
+  leadingOrchestratorVerb,
   listIntents,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   loadScopeMetadata,
+  maximalAttemptEvents,
   resolveReviewClass,
   loadScopeMapping,
   nextInScopeStage,
@@ -180,6 +190,7 @@ import {
   parsePluginCommand,
   PHASE_NUMBERS,
   PHASES,
+  parseTeamBoardArgs,
   parseWorkspaceCommand,
   READ_ONLY_FLAGS,
   readKiroIdeLegacyPlanApprovalHost,
@@ -244,6 +255,14 @@ import {
   requestChangesResetIsExecutable,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
+import {
+  checkpointPolicyEnabled,
+  loadConstructionEvidence,
+  resolveConstructionCheckpoint,
+  type ConstructionCheckpointKind,
+  type ConstructionEvidence,
+} from "./aidlc-construction-checkpoints.ts";
+import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
@@ -413,6 +432,14 @@ function engineChildEnv(
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
 // loudly rather than emitting a lie the conductor would act on.
 function prepareEmission(directive: Directive): PreparedEmission {
+  if (
+    directive.kind === "run-stage" && directive.construction_policy &&
+    directive.gate === false
+  ) {
+    // This is a work beat, not a completion checkpoint. Body-level questions
+    // remain explicit, but the metadata must not invent a completion gate.
+    directive.construction_policy.human_completion_required = false;
+  }
   const route =
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
   const publication = publicationContexts.get(directive);
@@ -563,7 +590,10 @@ function attachLegacyKiroPlanApprovalChoices(
     (
       directive.kind === "run-stage" &&
       directive.stage === "code-generation" &&
-      directive.swarm_settled !== true
+      directive.swarm_settled !== true &&
+      directive.construction_checkpoint === undefined &&
+      directive.swarm_checkpoint === undefined &&
+      directive.construction_policy?.completion_only !== true
     ) ||
     directive.kind === "invoke-swarm";
   if (!eligible) return { prepared, session };
@@ -1528,6 +1558,8 @@ interface ParsedFlags {
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
   knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
+  orchestratorVerb?: "park" | "team-board"; // leading orchestrator verb: terminal print naming that command
+  orchestratorVerbArgs?: string[]; // allowlisted trailing args for team-board (--space <s>, --intent <i>, --snapshot)
   newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
   report?: string; // --report <path>: compose from a scan report (the composer triages the file)
   claim?: string;
@@ -1536,6 +1568,8 @@ interface ParsedFlags {
   claimRhythm?: string;
   projectDir?: string;
   parseError?: string;
+  retiredFlags?: string[];
+  retiredOnly?: boolean;
 }
 
 const CONFIG_SECTIONS = [
@@ -1565,6 +1599,21 @@ function parseNextFlags(args: string[]): ParsedFlags {
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { readOnly: "--help" };
   }
+  // leadingOrchestratorVerb defines the shared routing rule. Classify BEFORE
+  // the global `--config` shortcut: `team-board --config x` is stray board argv,
+  // not a configuration request. Bare `unpark` is not public; use --resume.
+  const verb = leadingOrchestratorVerb(args);
+  if (verb === "park") return { orchestratorVerb: "park" };
+  if (args.length === 1 && args[0] === "unpark") {
+    return { parseError: "unpark is not a command: a parked workflow resumes with /aidlc --resume." };
+  }
+  if (verb === "team-board") {
+    // The verb is set even on a refused form so the engine-marker exclusion
+    // treats it as a read-only board attempt, never workflow engagement.
+    const parsed = parseTeamBoardArgs(args.slice(1));
+    if (parsed.kind === "error") return { orchestratorVerb: "team-board", parseError: parsed.message };
+    return { orchestratorVerb: "team-board", orchestratorVerbArgs: parsed.argv };
+  }
   const configIndex = args.indexOf("--config");
   if (configIndex >= 0) {
     const trailing = args.slice(configIndex + 1);
@@ -1574,7 +1623,9 @@ function parseNextFlags(args: string[]): ParsedFlags {
       (trailing.length === 1 &&
         !(CONFIG_SECTIONS as readonly string[]).includes(trailing[0]))
     ) {
+      // Classify refusals as config so routeNext's marker exclusion and both harnesses' isReadOnlyNextArgv agree a refused alias is not engagement.
       return {
+        config: true,
         parseError:
           "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
       };
@@ -1732,6 +1783,15 @@ function parseNextFlags(args: string[]): ParsedFlags {
       i++;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
+    } else if (a === "--init" || a === "--force") {
+      // RETIRED flags; see the named "Branch 3 — the legacy `--init` flag —
+      // retired in P4" note in routeNext. Record and consume them so they never
+      // become intent DESCRIPTION text (#847). When no supported command or
+      // description remains, routeNext emits replacement guidance instead of
+      // treating the invocation as bare `next`. A task that genuinely needs
+      // the token spells it via the `--` delimiter.
+      flags.retiredFlags ??= [];
+      flags.retiredFlags.push(a);
     } else {
       // Unknown flag-looking tokens are task text, not disposable noise. Use
       // the standard `--` delimiter when a task must contain a token that is
@@ -1765,6 +1825,9 @@ function parseNextFlags(args: string[]): ParsedFlags {
   }
   if (flags.release && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--release does not accept --team or --rhythm.";
+  }
+  if (flags.retiredFlags && isRetiredOnlyNextArgv(args)) {
+    flags.retiredOnly = true;
   }
   return flags;
 }
@@ -1877,7 +1940,7 @@ function composeDispatchDirective(
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `bun " +
         hd +
-        "/tools/aidlc-utility.ts recompose --skip <changes.skip> --add <changes.add>` (comma-separated) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
+        "/tools/aidlc-utility.ts recompose [--skip <changes.skip>] [--add <changes.add>]` (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
     );
   } else {
     parts.push(
@@ -2237,6 +2300,8 @@ type SteeringTokenPayload = {
   w: boolean;
   z?: boolean;
   q?: UnitGateRhythm;
+  j?: ConstructionCheckpointKind;
+  y?: { batch: number; units: string[] };
   h: string | null;
 };
 
@@ -2417,8 +2482,8 @@ function readUnitOwnership(stateContent: string | null): "team" | null {
 // rebuild-stage-graph hook repairs the cache on the next transition.
 type BoltBatchesResolution = BoltDagResolution;
 
-function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
-  const resolution = resolveBoltDag(projectDir);
+function resolveBoltBatches(projectDir: string, evidence?: ConstructionEvidence): BoltBatchesResolution {
+  const resolution = evidence?.dag ?? resolveBoltDag(projectDir);
   if (resolution.state === "ok" && resolution.healed) {
     process.stderr.write(
       `aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)\n`,
@@ -3418,6 +3483,32 @@ function buildRunStageDirective(
       : (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
+  if (
+    !singleRun && node.phase === "construction" && stateContent && codekbCtx &&
+    checkpointPolicyEnabled(stateContent) &&
+    !usesStageLevelPerUnitArtifacts(scope, stateContent)
+  ) {
+    const evidence = routingEvidenceFor(codekbCtx.projectDir, stateContent);
+    const dag = resolveBoltBatches(codekbCtx.projectDir, evidence);
+    if (dag.state === "ok" && dag.units.length > 0) {
+      const approved = approvedConstructionUnits(codekbCtx.projectDir, stateContent, evidence);
+      const mode = getField(stateContent, AUTONOMY_MODE_FIELD)?.trim();
+      const skeletonApproved = !constructionSkeletonOn(stateContent) ||
+        approved.has(dag.batches.flat()[0]);
+      const unitMajor = readConstructionIteration(stateContent) === "unit-major";
+      directive.construction_policy = {
+        iteration: unitMajor ? "unit-major" : "stage-major",
+        execution: isConstructionSwarmEnabled(stateContent) ? "swarm" : "serial",
+        autonomy: mode === "autonomous" || mode === "gated" ? mode : "unset",
+        offer_autonomy: mode !== "autonomous" && mode !== "gated" &&
+          skeletonApproved && readSkeletonStance(stateContent) !== null,
+        human_completion_required:
+          !isAutonomousConstructionGate(stateContent, node, codekbCtx.projectDir, evidence),
+        completion_only: unitMajor && isPerUnit(node) &&
+          dag.units.every((name) => approved.has(name)),
+      };
+    }
+  }
   if (node.mode === "pipeline" && codekbCtx) {
     const evidence = pipelineLinkEvidence(codekbCtx.projectDir, node, {
       singleRun,
@@ -3811,6 +3902,12 @@ function decodeSteeringToken(
       typeof p.w !== "boolean" ||
       (p.z !== undefined && typeof p.z !== "boolean") ||
       (p.q !== undefined && p.q !== "per-stage" && p.q !== "unit-end") ||
+      (p.j !== undefined && p.j !== "unit" && p.j !== "skeleton") ||
+      (p.y !== undefined && (
+        !Number.isSafeInteger(p.y.batch) || p.y.batch < 1 ||
+        !Array.isArray(p.y.units) || p.y.units.length === 0 ||
+        !p.y.units.every((unit) => typeof unit === "string")
+      )) ||
       (p.h !== null && typeof p.h !== "string")
     ) {
       return null;
@@ -3847,6 +3944,10 @@ function steeringTokenPayload(
     w: directive.wave !== undefined,
     z: directive.swarm_settled === true,
     q: directive.unit_gate,
+    j: directive.construction_checkpoint?.kind,
+    y: directive.swarm_checkpoint
+      ? { batch: directive.swarm_checkpoint.batch, units: directive.swarm_checkpoint.units }
+      : undefined,
     h: route.stateHash,
   };
 }
@@ -4064,6 +4165,31 @@ function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
 }
 
+// A read-only routing pass shares checkpoint evidence; mutation tools always
+// load fresh. Never retain this snapshot for report or steering continuation.
+let routingEvidence: ConstructionEvidence | null = null;
+let routingPassActive = false;
+
+function routingEvidenceFor(projectDir: string, stateContent: string | null): ConstructionEvidence | undefined {
+  if (!routingPassActive || stateContent === null || !checkpointPolicyEnabled(stateContent)) return undefined;
+  const path = engineStateFilePath(projectDir);
+  if (!existsSync(path)) return undefined;
+  if (routingEvidence?.state !== stateContent || routingEvidence.root !== dirname(path)) {
+    routingEvidence = loadConstructionEvidence(projectDir, stateContent);
+  }
+  return routingEvidence;
+}
+
+function handleNext(args: string[], projectDir: string | undefined): void {
+  routingPassActive = true;
+  try {
+    routeNext(args, projectDir);
+  } finally {
+    routingEvidence = null;
+    routingPassActive = false;
+  }
+}
+
 // The `next` handler reads workflow state and emits exactly one directive. A
 // normal rule-transport request may lazily mint its machine-local MAC key.
 // Internal observer modes are strictly read-only: route checks bypass transport,
@@ -4071,7 +4197,7 @@ function nodeForSlug(slug: string): GraphStage | undefined {
 // prepared directive. Ordinary routing never mutates shared workflow state;
 // `--single` adds only its synthetic audit start and cannot move the main
 // workflow pointer.
-function handleNext(args: string[], projectDir: string | undefined): void {
+function routeNext(args: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
   const flags = parseNextFlags(args);
 
@@ -4081,7 +4207,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // rather than the ledger (a conductor that ran `next` and then bailed is
   // invisible to the ledger but visible here). Read-only utility flags and the
   // workspace verbs are excluded: they carry no workflow intent, so a status
-  // query stays a conversational turn.
+  // query stays a conversational turn. Retired-only initialization flags are
+  // also terminal guidance, while the same flags combined with supported work
+  // still engage normally. So is `team-board`, a read-only board; `park` is
+  // not, because the park it names mutates workflow state.
   //
   // DELIBERATELY BEFORE Branch 0 (the roll-forward latch) below, so a `next` the
   // latch swallows as a no-op still counts as engagement. That is the correct
@@ -4090,12 +4219,28 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // latch would make the two predicates disagree about the same command. The
   // same reasoning keeps it before the flag-validation early returns: an
   // errored command still counted on the transcript path.
-  if (!flags.readOnly && !flags.config && !flags.workspaceCommand) {
+  if (
+    !flags.readOnly &&
+    !flags.config &&
+    !flags.retiredOnly &&
+    !flags.workspaceCommand &&
+    flags.orchestratorVerb !== "team-board"
+  ) {
     touchEngineMarker(projectDir);
   }
 
   if (flags.parseError) {
     emit(errorDirective(flags.parseError));
+    return;
+  }
+
+  if (flags.retiredOnly) {
+    emit(errorDirective(
+      "`--init` and `--force` are retired and no longer initialize or restart a workflow. " +
+        "Start work by invoking the AI-DLC skill with a description of what to build, or with " +
+        "`--scope <scope>`. To start separate work alongside an active intent, invoke the skill with " +
+        "`--new-intent --scope <scope> \"<description>\"`. No workflow stage was run.",
+    ));
     return;
   }
 
@@ -4108,6 +4253,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       flags.readOnly ||
       flags.config ||
       flags.workspaceCommand ||
+      flags.orchestratorVerb ||
       flags.compose ||
       flags.newScope ||
       flags.report ||
@@ -4166,7 +4312,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // swallowed. Inert on Claude/Codex: the latch files are never written there (no
   // seam) → fresh is always false → falls through. Advisory: any failure fails
   // open to the normal `next`.
-  if (!flags.readOnly && !flags.config && !flags.workspaceCommand && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
+  if (!flags.readOnly && !flags.config && !flags.workspaceCommand && !flags.orchestratorVerb && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.positionalScope && !flags.intent && !flags.resume &&
       !flags.depth && !flags.testStrategy && !flags.review &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report &&
@@ -4292,7 +4438,28 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // Branch 1c - plugin utilities are terminal commands, never freeform intent
+  // Branch 1c - the orchestrator's own public verbs (`park`, `team-board`),
+  // dispatched BEFORE state inspection like Branches 1 and 1b. Without this a
+  // typed `/aidlc park` fell through scope detection into the freeform funnel
+  // and, over an active workflow, drew the new-work offer (a second intent).
+  // The engine names the exact public command; the mutation stays in `park`.
+  if (flags.orchestratorVerb === "park") {
+    emit(printDirective(
+      `Run \`${aidlcInvocation()} park\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with /aidlc --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
+    ));
+    return;
+  }
+  if (flags.orchestratorVerb === "team-board") {
+    const extra = flags.orchestratorVerbArgs && flags.orchestratorVerbArgs.length > 0
+      ? ` ${flags.orchestratorVerbArgs.join(" ")}`
+      : "";
+    emit(printDirective(
+      `Run \`${aidlcInvocation()} team-board${extra}\`, print its output verbatim, then stop. This is a read-only board, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+    ));
+    return;
+  }
+
+  // Branch 1d - plugin utilities are terminal commands, never freeform intent
   // text. The shared parser also feeds the binary dispatcher and Kiro seam, so
   // every harness preserves the same list/sync/select argv and error grammar.
   if (flags.pluginCommand) {
@@ -4311,7 +4478,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // Branch 1d - DocumentKB verbs are terminal commands, never freeform intent
+  // Branch 1e - DocumentKB verbs are terminal commands, never freeform intent
   // text. Same shape as 1c, but the directive names aidlc-knowledge.ts: this is
   // the first public noun whose verbs live in their own tool rather than in
   // aidlc-utility.ts, so the tool name is part of what each site must agree on.
@@ -5112,7 +5279,7 @@ function eligibleAutonomousSwarmBatches(
   // authority remain the routing signal even though reviewed record artifacts
   // are copied back), even if the knob was flipped afterwards.
   if (readConstructionIteration(stateContent) === "unit-major") return null;
-  const r = resolveBoltBatches(projectDir);
+  const r = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
   if (r.state !== "ok" || r.batches.length === 0) return null;
   return r.batches;
 }
@@ -5128,8 +5295,11 @@ function isAutonomousSwarmCandidate(
   if (node.phase !== "construction") return false;
   if (node.for_each !== SWARM_FOR_EACH || node.mode !== SWARM_MODE) return false;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
-  if (isSkeletonGateStage(node, scope)) return false;
-  if (readAutonomyMode(stateContent) !== "autonomous") return false;
+  if (
+    isSkeletonGateStage(node, scope) &&
+    !(stateContent && checkpointPolicyEnabled(stateContent))
+  ) return false;
+  if (!isConstructionSwarmEnabled(stateContent)) return false;
   return true;
 }
 
@@ -5163,7 +5333,7 @@ function isSettledAutonomousSwarm(
   const units =
     obligations.state === "ready" ? [...obligations.units] : liveUnits;
   if (units.length === 0) return false;
-  const converged = swarmConvergedUnits(projectDir, node.slug);
+  const converged = swarmConvergedUnits(projectDir, node.slug, routingEvidenceFor(projectDir, stateContent));
   return units.every((unit) => converged.has(unit));
 }
 
@@ -5177,7 +5347,53 @@ function applySettledSwarmShape(
   directive.protocol_modules = ["construction", "swarm"];
   if (directive.ceremony.learnings === "on") directive.protocol_modules.push("learnings");
   directive.swarm_settled = true;
+  if (directive.construction_policy) {
+    directive.construction_policy.completion_only = true;
+    directive.construction_policy.human_completion_required = false;
+  }
   return directive;
+}
+
+function applyConstructionCheckpointShape(
+  directive: RunStageDirective,
+  checkpoint: ReturnType<typeof resolveConstructionCheckpoint>,
+): void {
+  directive.gate = true;
+  directive.unit = checkpoint.unit;
+  directive.construction_checkpoint = {
+    kind: checkpoint.kind, unit: checkpoint.unit, stages: checkpoint.stages,
+    fingerprint: checkpoint.fingerprint, ready: checkpoint.ready,
+    verified: checkpoint.verified, approved: checkpoint.approved,
+    human_required: checkpoint.human_required, errors: checkpoint.errors,
+    proof_path: checkpoint.proof_path,
+    verification_command: checkpoint.verification_command,
+    command_authorized: checkpoint.command_authorized,
+  };
+  if (directive.construction_policy) {
+    directive.construction_policy.human_completion_required = checkpoint.human_required;
+  }
+  delete directive.reviewer;
+  delete directive.review_artifact;
+  delete directive.review_class;
+  delete directive.reviewer_max_iterations;
+  directive.protocol_modules = ["construction"];
+}
+
+function applySwarmCheckpointShape(
+  directive: RunStageDirective,
+  checkpoint: ReturnType<typeof resolveSwarmCheckpoint>,
+): void {
+  directive.gate = true;
+  directive.unit = checkpoint.units[checkpoint.units.length - 1];
+  directive.swarm_checkpoint = checkpoint;
+  if (directive.construction_policy) {
+    directive.construction_policy.human_completion_required = checkpoint.human_required;
+  }
+  delete directive.reviewer;
+  delete directive.review_artifact;
+  delete directive.review_class;
+  delete directive.reviewer_max_iterations;
+  directive.protocol_modules = ["construction", "swarm"];
 }
 
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
@@ -5226,6 +5442,61 @@ function applySettledSwarmShape(
 // Scopes whose first Construction EXECUTE stage is a design stage therefore DO
 // swarm code-generation from the first Unit; scopes where code-generation is
 // itself the skeleton-gate stage still cannot, via the structural guard.
+function swarmRevisionNeedsPreparation(
+  projectDir: string, stage: string, batch: number, units: string[],
+): boolean {
+  const floor = latestMainWorkflowStageRunFloorForProject(projectDir, stage);
+  const unreadable: string[] = [];
+  const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
+  if (unreadable.length) return true;
+  const names = (row: AuditShardEvent, field: string): string[] =>
+    (auditBlockField(row.block, field) ?? "").split(",").map((unit) => unit.trim());
+  return units.some((unit) => {
+    const gates = maximalAttemptEvents(rows.filter((row) =>
+      (row.event === "GATE_REJECTED" || row.event === "GATE_APPROVED") &&
+      auditBlockField(row.block, "Checkpoint") === "swarm-batch" &&
+      auditBlockField(row.block, "Stage") === stage &&
+      auditBlockField(row.block, "Run floor") === floor &&
+      auditBlockField(row.block, "Batch number") === String(batch) &&
+      !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") &&
+      (auditBlockField(row.block, "Unit") === unit ||
+        (auditBlockField(row.block, "Unit") === null && names(row, "Units").includes(unit))),
+    ));
+    if (!gates.length) return false;
+    if (gates.length !== 1) return true;
+    const rejection = gates[0];
+    if (rejection.event !== "GATE_REJECTED") return false;
+    const starts = maximalAttemptEvents(rows.filter((row) =>
+      row.event === "BOLT_STARTED" && auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit)));
+    const swarms = maximalAttemptEvents(rows.filter((row) =>
+      row.event === "SWARM_STARTED" &&
+      auditBlockField(row.block, "Batch number") === String(batch) &&
+      names(row, "Unit names").includes(unit)));
+    if (starts.length !== 1 || swarms.length !== 1) return true;
+    const swarm = swarms[0];
+    const discards = maximalAttemptEvents(rows.filter((row) =>
+      row.event === "WORKTREE_DISCARDED" &&
+      auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit)));
+    if (discards.some((discard) =>
+      !attemptEventDefinitelyBefore(discard, starts[0]) ||
+      !attemptEventDefinitelyBefore(discard, swarm))) return true;
+    // A rejection requests preparation once. Its exact native preparation
+    // boundary then routes the preserved worker to continuation, including
+    // after a peer lands. An interrupted or newer fork still needs recovery.
+    if (auditBlockField(swarm.block, "Stage") !== stage ||
+      auditBlockField(swarm.block, "Run floor") !== floor ||
+      !attemptEventDefinitelyBefore(rejection, starts[0]) ||
+      !attemptEventDefinitelyBefore(starts[0], swarm)) return true;
+    try {
+      const revisions = JSON.parse(auditBlockField(swarm.block, "Resume revisions") ?? "{}");
+      const revision = createHash("sha256").update(rejection.block, "utf-8").digest("hex");
+      return revisions?.[unit] !== revision;
+    } catch {
+      return true;
+    }
+  });
+}
+
 function tryEmitSwarm(
   slug: string,
   scope: string,
@@ -5237,6 +5508,17 @@ function tryEmitSwarm(
 ): boolean {
   const node = nodeForSlug(slug);
   if (!node) return false;
+  // An actual walking skeleton finishes and is reviewed before parallel work.
+  if (
+    stateContent && checkpointPolicyEnabled(stateContent) &&
+    constructionSkeletonOn(stateContent)
+  ) {
+    const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
+    if (
+      dag.state === "ok" && dag.units.length > 0 &&
+      !approvedConstructionUnits(projectDir, stateContent, routingEvidenceFor(projectDir, stateContent)).has(dag.batches.flat()[0])
+    ) return false;
+  }
   const batches = eligibleAutonomousSwarmBatches(node, scope, stateContent, projectDir);
   if (batches === null) return false;
 
@@ -5244,14 +5526,35 @@ function tryEmitSwarm(
   // batch's still-owed units. Ledger signal = SWARM_UNIT_CONVERGED (see above),
   // floored at this stage's latest STAGE_STARTED so a jump-driven re-run never
   // reads a prior run's rows as coverage.
-  const converged = swarmConvergedUnits(projectDir, slug);
+  const evidence = routingEvidenceFor(projectDir, stateContent);
+  const converged = swarmConvergedUnits(projectDir, slug, evidence);
   let pendingUnits: string[] | null = null;
-  for (const batch of batches) {
+  let pendingBatch = 0;
+  const inlineApproved = stateContent
+    ? approvedConstructionUnits(projectDir, stateContent, evidence)
+    : new Set<string>();
+  for (const [index, batch] of batches.entries()) {
     if (!Array.isArray(batch) || batch.length === 0) continue;
     const owed = batch.filter((u) => !converged.has(u));
     if (owed.length > 0) {
       pendingUnits = owed;
+      pendingBatch = index + 1;
       break;
+    }
+    const builtBySwarm = batch.filter((unit) => !inlineApproved.has(unit));
+    if (stateContent && checkpointPolicyEnabled(stateContent) && builtBySwarm.length > 0) {
+      const checkpoint = resolveSwarmCheckpoint(
+        projectDir, index + 1, builtBySwarm, stateContent, evidence,
+      );
+      if (!checkpoint.approved) {
+        const directive = buildRunStageDirective(
+          node, projectType, builtBySwarm[builtBySwarm.length - 1],
+          scope, stateContent, recordPrefix, codekbCtx,
+        );
+        applySwarmCheckpointShape(directive, checkpoint);
+        emit(directive);
+        return true;
+      }
     }
   }
 
@@ -5269,6 +5572,10 @@ function tryEmitSwarm(
     const directive = buildRunStageDirective(
       node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
     );
+    if (directive.construction_policy) {
+      directive.construction_policy.completion_only = true;
+      directive.construction_policy.human_completion_required = false;
+    }
     directive.unit = lastUnit;
     // Gate-only resume surface: every Unit body and reviewer already converged
     // inside the swarm. Keep that fact explicit across fresh sessions and remove
@@ -5328,10 +5635,14 @@ function tryEmitSwarm(
     "construction",
     "swarm",
   ];
+  const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
+    swarmRevisionNeedsPreparation(projectDir, slug, pendingBatch, pendingUnits);
   if (repos.length === 1) {
     const directive: Directive = {
       kind: "invoke-swarm",
       units: pendingUnits,
+      ...(stateContent && checkpointPolicyEnabled(stateContent) ? { batch: pendingBatch } : {}),
+      ...(resumeExisting ? { resume_existing: true as const } : {}),
       ...reviewerFields,
       protocol_modules: protocolModules,
       repo: repos[0],
@@ -5345,6 +5656,8 @@ function tryEmitSwarm(
     const directive: Directive = {
       kind: "invoke-swarm",
       units: pendingUnits,
+      ...(stateContent && checkpointPolicyEnabled(stateContent) ? { batch: pendingBatch } : {}),
+      ...(resumeExisting ? { resume_existing: true as const } : {}),
       ...reviewerFields,
       protocol_modules: protocolModules,
     };
@@ -5458,15 +5771,18 @@ function unitLedgerFor(
   auditRows?: readonly AuditShardEvent[],
   stateContent?: string,
 ): UnitLedger {
+  const policyState = stateContent ?? loadStateFileIfPresent(projectDir);
+  const receiptsRequired = policyState !== null && checkpointPolicyEnabled(policyState);
   if (auditRows && stateContent) {
-    return unitLifecycleSnapshot(projectDir, slug, auditRows, stateContent);
+    const snapshot = unitLifecycleSnapshot(projectDir, slug, auditRows, stateContent);
+    return { ...snapshot, inUse: snapshot.inUse || receiptsRequired };
   }
   const receipts = unitCompletedReceipts(projectDir, slug);
   const checkpoint = activeUnitCheckpoint(projectDir, slug);
   return {
     receipts,
     checkpoint,
-    inUse: unitLifecycleReceiptsInUse(projectDir, slug),
+    inUse: receiptsRequired || unitLifecycleReceiptsInUse(projectDir, slug),
     mode: currentUnitLifecycleMode(projectDir, slug),
   };
 }
@@ -5606,6 +5922,7 @@ function summaryRefusalForRouting(
     blockedAction: "review-request",
     stage: stage.slug,
     unit,
+    projectDir,
     stateContent,
     invariant: attached.invariant,
     userMessage: attached.userMessage,
@@ -5841,6 +6158,7 @@ function activePerUnitWave(
               blockedAction: "review-request",
               stage: node.slug,
               unit,
+              projectDir,
               stateContent: stateContent ?? "",
               invariant:
                 "The stale-receipt recovery slot is single-use within an attempt.",
@@ -6828,7 +7146,18 @@ function emitUnitMajorRunStage(
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
   projectDir: string,
+  skeletonOnly = false,
 ): void {
+  if (
+    !skeletonOnly && stateContent && checkpointPolicyEnabled(stateContent) &&
+    getField(stateContent, "Construction Execution") === "swarm"
+  ) {
+    emit(errorDirective(
+      "Unit-major execution runs one Unit at a time. Select stage-major before choosing " +
+        "Construction Execution: swarm, or keep Construction Execution: serial.",
+    ));
+    return;
+  }
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
     emitPerUnitRunStage(
       node,
@@ -6845,7 +7174,7 @@ function emitUnitMajorRunStage(
   }
 
   const teamOwnership = readUnitOwnership(stateContent) === "team";
-  const resolution = resolveBoltBatches(projectDir);
+  const resolution = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
   if (
     teamOwnership &&
     (resolution.state !== "ok" || resolution.batches.flat().length === 0)
@@ -6887,9 +7216,12 @@ function emitUnitMajorRunStage(
     );
     return;
   }
-  const units = resolution.batches.flat();
+  const checkpoints = stateContent !== null &&
+    checkpointPolicyEnabled(stateContent) && !teamOwnership;
+  const allUnits = resolution.batches.flat();
+  const units = skeletonOnly ? allUnits.slice(0, 1) : allUnits;
 
-  const block = constructionUnitMajorBlock(scope, stateContent, teamOwnership);
+  const block = constructionUnitMajorBlock(scope, stateContent, teamOwnership || checkpoints);
   // Defensive: if the current node is not itself an active block stage (e.g. it
   // was completed between the read and here, or a scope with no per-unit
   // construction block routed here), fall back to the stage-major path for
@@ -6992,6 +7324,25 @@ function emitUnitMajorRunStage(
         return;
       }
     }
+    if (checkpoints && stateContent) {
+      const kind: ConstructionCheckpointKind =
+        constructionSkeletonOn(stateContent) && u === allUnits[0]
+          ? "skeleton"
+          : "unit";
+      const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
+      if (!checkpoint.approved) {
+        const gateStage = block[block.length - 1];
+        const directive = buildRunStageDirective(
+          gateStage, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
+          kinds?.get(u) ?? null,
+        );
+        // The Unit body and its reviews have already run. The checkpoint owns
+        // verification and approval; do not dispatch Code Generation again.
+        applyConstructionCheckpointShape(directive, checkpoint);
+        emit(directive);
+        return;
+      }
+    }
   }
 
   // The whole (stage x unit) grid is covered: delegate to the stage-major path
@@ -7027,6 +7378,22 @@ function emitForSlug(
 ): void {
   const node = nodeForSlug(slug);
   if (node && isPerUnit(node)) {
+    if (
+      stateContent && checkpointPolicyEnabled(stateContent) &&
+      !isTeamUnitOwnership(stateContent) && constructionSkeletonOn(stateContent) &&
+      !usesStageLevelPerUnitArtifacts(scope, stateContent)
+    ) {
+      const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
+      if (
+        dag.state === "ok" && dag.units.length > 0 &&
+        !approvedConstructionUnits(projectDir, stateContent, routingEvidenceFor(projectDir, stateContent)).has(dag.batches.flat()[0])
+      ) {
+        emitUnitMajorRunStage(
+          node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir, true,
+        );
+        return;
+      }
+    }
     // Unit-major iteration (opt-in) covers EVERY per-unit Construction stage,
     // code-generation included (the swarm never fires under unit-major - see
     // eligibleAutonomousSwarmBatches - so this branch owns the build too).
@@ -7101,7 +7468,7 @@ function ensureSingleStageStarted(
   // A query never appends a lifecycle event: an observer that opened a
   // single-stage attempt would move the run floor it came to read.
   if (isReadOnlyEngineProbe()) return null;
-  return appendSingleStageAuditEvents(projectDir, [{
+  const error = appendSingleStageAuditEvents(projectDir, [{
     eventType: "STAGE_STARTED",
     fields: {
       Stage: node.slug,
@@ -7110,6 +7477,8 @@ function ensureSingleStageStarted(
       Scope: scope,
     },
   }]);
+  routingEvidence = null;
+  return error;
 }
 
 function emitSingleRunStage(
@@ -7509,7 +7878,22 @@ interface ReportFlags {
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
   overrideBlockingSensors?: boolean;
   unit?: string; // --unit <name>: required for team-owned per-unit gates
+  parseError?: string; // an argument report cannot act on (see parseReportFlags)
 }
+
+// Every argument report accepts. Listed in the refusal below so a mistyped
+// flag points at the real one instead of vanishing.
+const REPORT_FLAGS = [
+  "--result",
+  "--stage",
+  "--unit",
+  "--user-input",
+  "--reason",
+  "--reject-finding",
+  "--skeleton-stance",
+  "--single",
+  "--override-blocking-sensors",
+] as const;
 
 // Extract report's flags. --result is the verdict; --user-input carries the
 // exact offered choice, while --reason carries rejection feedback or an early
@@ -7517,8 +7901,23 @@ interface ReportFlags {
 // --skeleton-stance carries the conductor's classified walking-skeleton stance
 // (the classify round-trip): it does NOT commit a transition — it records the
 // stance so the next `next` resolves the deferred gate.
+//
+// Anything else is refused through parseError rather than dropped. A dropped
+// argument is the worst outcome available: a report carrying a mistyped flag
+// (or a flag whose value never arrived) would otherwise commit a DIFFERENT
+// transition than the one the operator wrote, silently — a rejection reported
+// without its feedback, or a per-unit gate closed against the wrong unit.
 function parseReportFlags(args: string[]): ReportFlags {
   const flags: ReportFlags = {};
+  // Keep the FIRST problem: it is the one the operator introduced.
+  const refuse = (message: string): void => {
+    flags.parseError ??= message;
+  };
+  const missingValue = (flag: string, value: string): void =>
+    refuse(
+      `report ${flag} requires ${value}, and none followed it. ` +
+        `Re-run the same report with the value supplied.`,
+    );
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--result" && i + 1 < args.length) {
@@ -7547,6 +7946,25 @@ function parseReportFlags(args: string[]): ReportFlags {
       flags.single = true;
     } else if (a === "--override-blocking-sensors") {
       flags.overrideBlockingSensors = true;
+    } else if (a === "--result") {
+      missingValue(a, "an outcome");
+    } else if (a === "--user-input") {
+      missingValue(a, "the offered choice, exactly as it was offered");
+    } else if (a === "--reason") {
+      missingValue(a, "the reason text");
+    } else if (a === "--reject-finding") {
+      missingValue(a, "a finding id");
+    } else if (a === "--skeleton-stance") {
+      missingValue(a, "<on|off|scope-dependent>");
+    } else if (a === "--stage") {
+      missingValue(a, "a stage name");
+    } else if (a === "--unit") {
+      missingValue(a, "a unit name");
+    } else if (a !== "--") {
+      refuse(
+        `report does not accept "${a}". It accepts ${REPORT_FLAGS.join(", ")}. ` +
+          `Rejection feedback belongs in --reason.`,
+      );
     }
   }
   return flags;
@@ -8109,6 +8527,17 @@ function checkStageCompletionEvidence(
     }
   }
 
+  const gaps = constructionCheckpointGaps(pd, stateContent, node);
+  if (gaps !== null && gaps.length > 0) {
+    return {
+      ok: false,
+      message:
+        `Cannot present "${slug}" for approval because these Construction checkpoints are not approved: ` +
+        `${gaps.join(", ")}. Run \`${aidlcToolInvocation("orchestrate")} next\` and complete each checkpoint ` +
+        "through its directive; do not report the stage directly.",
+    };
+  }
+
   return checkEnsembleEvidence(
     node,
     slug,
@@ -8371,6 +8800,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // a transition), so it always disqualifies the turn from the Stop hook's
   // conversational carve-out. See touchEngineMarker.
   touchEngineMarker(projectDir);
+
+  // An argument report cannot act on stops the report here, before any branch
+  // commits a transition. Refusing costs one corrected re-run; accepting the
+  // report with the argument dropped commits the wrong transition and the
+  // operator has no way to tell.
+  if (flags.parseError) {
+    emit(errorDirective(flags.parseError));
+    return;
+  }
 
   // Runtime state-version guard (see staleStateVersionError): `report` commits a
   // lifecycle transition, so a pre-v8 state must be refused here too — before any
@@ -8635,7 +9073,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           ? undefined
           : flags.userInput?.trim();
         const rejectArgs = ["reject", slug, "--unit", unit];
-        if (feedback) rejectArgs.push("--feedback", feedback);
+        if (feedback) rejectArgs.push(`--feedback=${feedback}`);
         if (flags.userInput) {
           rejectArgs.push("--user-input", flags.userInput);
         }
@@ -8729,7 +9167,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const protectedHumanGate =
     isGated &&
     stageCheckbox.state !== "completed" &&
-    !isAutonomousConstructionGate(stateContent, node) &&
+    (
+      (flags.result === "rejected" && checkpointPolicyEnabled(stateContent)) ||
+      !isAutonomousConstructionGate(stateContent, node, pd)
+    ) &&
     resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1";
 
   if (flags.overrideBlockingSensors) {
@@ -8847,7 +9288,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ? undefined
         : flags.userInput?.trim();
       subArgs = ["reject", slug];
-      if (feedback) subArgs.push("--feedback", feedback);
+      if (feedback) subArgs.push(`--feedback=${feedback}`);
       if (flags.userInput) subArgs.push("--user-input", flags.userInput);
       for (const finding of flags.rejectFindings ?? []) {
         subArgs.push("--reject-finding", finding);
@@ -9149,29 +9590,25 @@ function handleTeamBoard(
       if (existsSync(mainPath)) pd = mainPath;
     }
   }
-  const flagValue = (name: string): string | undefined => {
-    const index = args.indexOf(name);
-    if (index < 0) return undefined;
-    const value = args[index + 1];
-    if (!value || value.startsWith("-")) {
-      throw new Error(`team-board ${name} requires a value.`);
-    }
-    return value;
-  };
-  const explicitSpace = flagValue("--space");
+  // The whole argv goes through the shared grammar, so this path refuses the
+  // same stray, duplicate, and malformed tokens the engine's print route does.
+  const parsed = parseTeamBoardArgs(args);
+  if (parsed.kind === "error") throw new Error(parsed.message);
+  const explicitSpace = parsed.space;
   const defaultSelection = resolveWorkflowSelection(pd);
   const selectedSpace = explicitSpace ?? defaultSelection.space;
-  const selectedIntent = flagValue("--intent");
+  const selectedIntent = parsed.intent;
   let stateContent: string;
   let board: TeamConstructionBoard;
   if (selectedIntent || explicitSpace) {
     const intents = listIntents(pd, selectedSpace);
+    // UUIDs match case-insensitively like resolveIntentFlag in aidlc-knowledge.ts; record dirs and slugs stay exact.
     const matches = selectedIntent
       ? intents.filter(
       (intent) =>
         intent.dirName === selectedIntent ||
         intent.slug === selectedIntent ||
-        intent.uuid === selectedIntent,
+        intent.uuid.toLowerCase() === selectedIntent.toLowerCase(),
       )
       : intents.filter((intent) => intent.active);
     if (matches.length !== 1 || !matches[0].dirName || !matches[0].uuid) {
@@ -9212,7 +9649,7 @@ function handleTeamBoard(
   process.stdout.write(
     `${renderTeamConstructionBoard(
       board,
-      args.includes("--snapshot") ? "snapshot" : "dispatcher",
+      parsed.snapshot ? "snapshot" : "dispatcher",
     )}\n`,
   );
 }
@@ -9280,6 +9717,16 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   if (payload.x) directive.single = true;
   if (payload.z === true) applySettledSwarmShape(directive);
   if (payload.q !== undefined) directive.unit_gate = payload.q;
+  if (payload.j !== undefined && payload.u !== null && liveState !== null) {
+    applyConstructionCheckpointShape(
+      directive, resolveConstructionCheckpoint(pd, payload.u, payload.j, liveState),
+    );
+  }
+  if (payload.y !== undefined && liveState !== null) {
+    applySwarmCheckpointShape(
+      directive, resolveSwarmCheckpoint(pd, payload.y.batch, payload.y.units, liveState),
+    );
+  }
   if (payload.w) {
     const resolution = resolveBoltDag(pd);
     if (resolution.state === "ok") {

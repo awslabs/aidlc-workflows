@@ -66,6 +66,7 @@ provider setup, trust prompts, project refreshes, and the first workflow.
 | [Workflow Profiles](guide/workflow-profiles.md) | Choosing Classic, Express, or a focused workflow |
 | [Install and Lifecycle](guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, or uninstalling |
 | [Harness Engineer Guide](harness-engineering/00-overview.md) | Reshaping stages, agents, scopes, rules, sensors, or knowledge |
+| [Development and Releases](../DEVELOPERS.md) | Taking a PR through AI review, preview testing, and stable publication |
 | [Developer Reference](reference/00-overview.md) | Changing the engine, hooks, packaging, or test suite |
 
 ## Development

@@ -20,6 +20,7 @@
 // in-tree generators (aidlc-graph compile); running them as children mirrors how
 // a host's SessionStart hook invokes them and isolates their temp builds.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -43,11 +44,12 @@ import {
   buildPluginProjection,
   composePluginFixture,
 } from "../harness/plugin-kit.ts";
+import { writeWindowsBunLauncher } from "../harness/windows-native-executable.ts";
 
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath; // the bun running this test — robust for hooks
 const TIMEOUT_MS = 60_000;
-setDefaultTimeout(TIMEOUT_MS);
+setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
 
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -476,7 +478,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const binDir = join(tmp, "cursor-fake-bin");
     const capturePath = join(tmp, "cursor-installed-aidlc-capture.json");
     mkdirSync(binDir, { recursive: true });
-    const aidlc = join(binDir, "aidlc");
+    // Windows PATH must resolve the native launcher, not an extensionless script.
+    const aidlc = join(binDir, process.platform === "win32" ? "aidlc fixture & (argv).js" : "aidlc");
     writeFileSync(
       aidlc,
       [
@@ -484,6 +487,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         'import { spawnSync } from "node:child_process";',
         'import { appendFileSync } from "node:fs";',
         "",
+        'if (process.argv[2] === "--fixture-argv-probe") {',
+        "  process.stdout.write(JSON.stringify(process.argv.slice(3)));",
+        "  process.exit(0);",
+        "}",
         "const capturePath = process.env.AIDLC_T188_CAPTURE_PATH;",
         'if (!capturePath) throw new Error("AIDLC_T188_CAPTURE_PATH is required");',
         `const child = spawnSync(${JSON.stringify(BUN)}, [${JSON.stringify(
@@ -514,25 +521,32 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         "",
       ].join("\n"),
     );
-    chmodSync(aidlc, 0o755);
+    let installedAidlc = aidlc;
     if (process.platform === "win32") {
-      writeFileSync(
-        join(binDir, "aidlc.cmd"),
-        [
-          "@echo off",
-          `${JSON.stringify(BUN)} ${JSON.stringify(aidlc)} %*`,
-          "exit /b %ERRORLEVEL%",
-          "",
-        ].join("\r\n"),
-      );
+      installedAidlc = writeWindowsBunLauncher(join(binDir, "aidlc.exe"), aidlc);
+      const literalArgs = ["", "two words", 'embedded"quote', "trailing\\", 'slash\\"quote', "& %PATH% (literal)"];
+      const probe = spawnSync(installedAidlc, ["--fixture-argv-probe", ...literalArgs], {
+        cwd: binDir,
+        encoding: "utf-8",
+        timeout: 5_000,
+      });
+      expect(probe.error).toBeUndefined();
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(JSON.parse(probe.stdout)).toEqual(literalArgs);
+    } else {
+      chmodSync(aidlc, 0o755);
     }
+    const fixturePath = `${binDir}${delimiter}${process.env.PATH ?? ""}`;
+    const resolvedAidlc = Bun.which("aidlc", { PATH: fixturePath });
+    expect(resolvedAidlc).not.toBeNull();
+    expect(comparablePath(realpathSync(resolvedAidlc!))).toBe(comparablePath(realpathSync(installedAidlc)));
     const composed = composePluginFixture({
       plugin: PLUGIN,
       harness: "cursor",
       projectDir: cursorProject,
       pluginBuilt: built,
       env: {
-        PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        PATH: fixturePath,
         AIDLC_T188_CAPTURE_PATH: capturePath,
       },
     });
@@ -1571,9 +1585,22 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(initialCreation.status).toBe(0);
 
     expect(acquireAuditLock(proj, 0, 1)).toBe(true);
-    const queued = [
-      Bun.spawn({
-        cmd: [
+    const stderrPaths = ["intent-create", "recompose"].map((name) =>
+      join(process.env.AIDLC_TEST_LOG_DIR ?? tmp, `t188-workspace-holder-${name}.stderr.log`)
+    );
+    // Capture directly so a failing child cannot fill an unread stderr pipe.
+    const spawnQueued = (cmd: string[], stderrPath: string) => Bun.spawn({
+      cmd,
+      cwd: proj,
+      stdout: "ignore",
+      stderr: Bun.file(stderrPath),
+      env,
+    });
+    const queued: ReturnType<typeof spawnQueued>[] = [];
+    let lockHeld = true;
+    try {
+      queued.push(spawnQueued(
+        [
           BUN,
           utility,
           "intent-create",
@@ -1584,13 +1611,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           "--project-dir",
           proj,
         ],
-        cwd: proj,
-        stdout: "ignore",
-        stderr: "pipe",
-        env,
-      }),
-      Bun.spawn({
-        cmd: [
+        stderrPaths[0],
+      ));
+      queued.push(spawnQueued(
+        [
           BUN,
           utility,
           "recompose",
@@ -1599,24 +1623,33 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           "--project-dir",
           proj,
         ],
-        cwd: proj,
-        stdout: "ignore",
-        stderr: "pipe",
-        env,
-      }),
-    ];
+        stderrPaths[1],
+      ));
 
-    let queuedPastDefault: boolean[] = [];
-    try {
-      await Bun.sleep(5_500);
-      queuedPastDefault = queued.map((child) => child.exitCode === null);
+      let queuedPastDefault: boolean[] = [];
+      try {
+        await Bun.sleep(5_500);
+        queuedPastDefault = queued.map((child) => child.exitCode === null);
+      } finally {
+        releaseAuditLock(proj);
+        lockHeld = false;
+      }
+
+      expect(queuedPastDefault).toEqual([true, true]);
+      const exits = await Promise.all(queued.map((child) => child.exited));
+      const stderr = stderrPaths.map((path) => readFileSync(path, "utf-8")).join("\n");
+      expect(exits, stderr).toEqual([0, 0]);
+      expect(existsSync(auditLockDir(proj))).toBe(false);
     } finally {
-      releaseAuditLock(proj);
+      try {
+        if (lockHeld) releaseAuditLock(proj);
+      } finally {
+        for (const child of queued) {
+          if (child.exitCode === null) child.kill("SIGKILL");
+        }
+        await Promise.allSettled(queued.map((child) => child.exited));
+      }
     }
-
-    expect(queuedPastDefault).toEqual([true, true]);
-    expect(await Promise.all(queued.map((child) => child.exited))).toEqual([0, 0]);
-    expect(existsSync(auditLockDir(proj))).toBe(false);
   }, TIMEOUT_MS);
 
   test("relative project env keeps compose and graph on the same workspace lock", () => {

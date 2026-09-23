@@ -14,39 +14,13 @@
 // pattern-matches the rendered pane.
 //
 // ---------------------------------------------------------------------------
-// Two backends, one subcommand surface (D-TUI-2).
+// Native Bun.Terminal on Linux / Windows / macOS. Select explicitly with
+// AIDLC_TUI_BACKEND=bun|tmux|node-pty (auto is the platform default).
+// Native sessions use an inline PTY, an owned supervisor and @xterm/headless.
+// Each CLI invocation talks to the persistent daemon over framed local IPC.
+// Legacy tmux and Windows Node/node-pty remain available for comparison.
 //
-//   darwin / linux → tmux backend. A detached tmux session lives in the tmux
-//                    server, so each subcommand invocation (start/send/capture/
-//                    wait/kill) is a fresh process that re-attaches to the
-//                    server-side session by name. Proven; byte-for-byte the
-//                    behaviour of the original tools/aidlc-tui-drive.ts spike.
-//
-//   win32          → node-pty backend, spawned UNDER NODE (never bun — node-pty
-//                    input wedges under bun on Windows, microsoft/node-pty #748;
-//                    so the tui tests spawn `<resolved-node> --experimental-strip-types
-//                    tui-drive.ts`, not bun — resolveWinNode() finds node even when
-//                    it is off PATH, and the strip-types flag lets node < 22.18 run
-//                    the `.ts` entrypoint). node-pty
-//                    has no server: a pty + its rendered grid cannot survive
-//                    across separate CLI invocations the way a tmux session does.
-//                    So `start` forks a long-lived DAEMON (this file re-exec'd as
-//                    `__win-daemon`) that owns the pty, pipes pty.onData into an
-//                    @xterm/headless Terminal of the same cols/rows, and snapshots
-//                    the reconstructed GRID to a file every poll. send/capture/
-//                    wait/kill are thin clients that talk to the daemon through
-//                    two on-disk channels (a command log the daemon tails, and the
-//                    grid snapshot the readers poll). Piping node-pty's raw stream
-//                    through @xterm/headless makes Windows `capture` return the
-//                    same current-screen grid tmux capture-pane does, so the test
-//                    layer needs ZERO platform branches (D-TUI-2).
-//
-//                    NOTE: the Windows backend is written faithfully to the spike
-//                    but CANNOT be validated in this session (no Windows host). Its
-//                    live validation is DEFERRED to the EC2 box. Do not assume it
-//                    is proven end-to-end — the tmux path is.
-//
-// Subcommands (identical on both backends):
+// Shared subcommands (native-only additions are labelled):
 //   start  --session <name> --cwd <dir> [--width N] [--height N] -- <cmd...>
 //          Launch <cmd> in a fresh session of a fixed size.
 //   send   --session <name> --keys "<text>" [--literal] [--no-enter]
@@ -54,6 +28,7 @@
 //          --literal sends the string verbatim for free text / slash commands;
 //          omit it for named keys (Enter, Down, C-c).
 //   wait   --session <name> --pattern <regex> [--timeout-ms N] [--stable-ms N]
+//          [--view auto|physical|logical]
 //          Poll the captured grid until <regex> appears. With --stable-ms > 0 the
 //          screen must also be unchanged for that long (use for static menus
 //          / prompts). With --stable-ms 0 it matches the instant the pattern
@@ -61,12 +36,19 @@
 //          token counter / spinner means it never goes byte-stable).
 //          Exits 0 on match, 1 on timeout.
 //   startup --session <name> --ready-pattern <regex> [--timeout-ms N]
+//          [--view auto|physical|logical]
 //          One bounded grid-driven startup loop for Claude: dismiss a visible
 //          supported trust / bypass modal, or return immediately once the
 //          caller's ready UI/statusline pattern is painted. Exits 1 on timeout.
-//   capture --session <name> [--ansi]
-//          Print the current pane (plain text; --ansi keeps colour escapes —
-//          tmux only; the node-pty grid is always plain text).
+//   capture --session <name> [--physical | --ansi | --json]
+//          Current viewport; ANSI supported by Bun/tmux, full cells by Bun.
+//          Plain text defaults to joined logical lines; --physical keeps rows.
+//          Menus always inspect physical rows. Wait/readiness patterns default
+//          to physical-first with logical fallback from the same frame.
+//   resize --session <name> --width N --height N
+//          Resize the native PTY and emulator together.
+//   paste --session <name> --text "<text>"
+//          Native paste honours bracketed-paste mode; no implicit Enter.
 //   kill   --session <name>
 //          Kill the session (idempotent).
 //   wait-dead --session <name> [--timeout-ms N]
@@ -133,7 +115,7 @@
 //
 // Exit codes: 0 success, 1 wait-timeout / assertion miss, 2 usage/spawn error.
 
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -143,6 +125,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -151,23 +134,41 @@ import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
 import { stateFilePathFor } from "./sdk-drive.ts";
+import { parseWindowsProcessChildrenReply, parseWindowsProcessDetailsReply, windowsProcessDetailsCommand } from "./tui-process-identity.ts";
+import { createBunBackend } from "./tui-bun-backend.ts";
+import { selectedTuiBackend } from "./tui-runtime.ts";
+import type { TuiSnapshot, TuiTextLayout, TuiTextViews } from "./tui-screen.ts";
+import {
+  LIVE_STARTUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS, NATIVE_PROCESS_QUERY_TIMEOUT_MS,
+  NATIVE_PROCESS_TERMINATE_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
 
 const POLL_INTERVAL_MS = 150;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STABLE_MS = 600;
-const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
-const DEFAULT_DEAD_TIMEOUT_MS = 5_000;
-const DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS = 2_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = LIVE_STARTUP_TIMEOUT_MS;
+const DEFAULT_DEAD_TIMEOUT_MS = NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
+const DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS = NATIVE_PROCESS_IDENTITY_TIMEOUT_MS;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
 const WIN_KILL_GRACE_MS = 300;
-export const WIN_KILL_TIMEOUT_MS = 8_000;
-const WIN_PROCESS_QUERY_TIMEOUT_MS = 750;
-const WIN_TASKKILL_TIMEOUT_MS = 750;
-const WIN_CONSOLE_LIST_TIMEOUT_MS = 5_000;
+export const WIN_KILL_TIMEOUT_MS = NATIVE_PROCESS_CLEANUP_TIMEOUT_MS;
+const WIN_PROCESS_QUERY_TIMEOUT_MS = NATIVE_PROCESS_QUERY_TIMEOUT_MS;
+const WIN_TASKKILL_TIMEOUT_MS = NATIVE_PROCESS_TERMINATE_TIMEOUT_MS;
+const WIN_CONSOLE_LIST_TIMEOUT_MS = NATIVE_PROCESS_QUERY_TIMEOUT_MS;
 const WINDOWS_SESSION_CLEANUP_ATTEMPTS = 20;
 const WINDOWS_SESSION_CLEANUP_WAIT_MS = 100;
 const RETRYABLE_WINDOWS_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+
+function tuiWorkTimeoutMs(requestedMs: number, phase: string): number {
+  // Zero is an immediate TUI poll, not the SDK's "unbounded" convention.
+  // Keep that exact contract while checking the shared parent work deadline.
+  return Math.min(requestedMs, remainingOperationTimeoutMs(
+    Math.max(1, Math.ceil(requestedMs)), { phase },
+  )!);
+}
 
 type Args = {
   positionals: string[];
@@ -619,6 +620,7 @@ export type WindowsProcessIdentity = {
   parentPid: number;
   creationDate: string;
   commandLine: string;
+  nativeIdentity?: string;
 };
 
 type WindowsDescendantSnapshot = {
@@ -725,52 +727,7 @@ function windowsProcessQuery(
   timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
   context = "process",
 ): WindowsProcessQuery<WindowsProcessIdentity> {
-  if (shouldInjectCimFailure(context)) {
-    return {
-      status: "error",
-      message: `injected CIM failure for ${context}`,
-    };
-  }
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"`,
-    "if ($null -eq $p) { exit 3 }",
-    "$out = [pscustomobject]@{",
-    "  pid = [int]$p.ProcessId",
-    "  parentPid = [int]$p.ParentProcessId",
-    '  creationDate = $p.CreationDate.ToUniversalTime().ToString("o")',
-    "  commandLine = [string]$p.CommandLine",
-    "}",
-    "$json = $out | ConvertTo-Json -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
-  const result = runBoundedCommand(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    timeoutMs,
-  );
-  if (result.status === 3) return { status: "absent" };
-  if (result.status !== 0) {
-    return {
-      status: "error",
-      message:
-        result.timedOut
-          ? `process identity query timed out for pid ${pid}`
-          : `process identity query failed for pid ${pid}: ` +
-            `${result.stderr || result.errorCode || `exit ${result.status}`}`,
-    };
-  }
-  try {
-    return {
-      status: "ok",
-      value: parsePowerShellBase64Json<WindowsProcessIdentity>(result.stdout),
-    };
-  } catch {
-    return {
-      status: "error",
-      message: `process identity query returned invalid JSON for pid ${pid}`,
-    };
-  }
+  return processFromSnapshot(queryWindowsProcessIdentities([pid], timeoutMs, context), pid);
 }
 
 function windowsProcessFallbackQuery(
@@ -779,46 +736,87 @@ function windowsProcessFallbackQuery(
   timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
   context = "process-fallback",
 ): WindowsProcessQuery<WindowsProcessIdentity> {
-  if (shouldInjectCimFailure(context)) {
-    return {
-      status: "error",
-      message: `injected process fallback failure for ${context}`,
-    };
+  const current = windowsProcessQuery(pid, timeoutMs, context);
+  if (current.status === "ok" && current.value.parentPid !== parentPid) {
+    return { status: "error", message: `native process identity parent mismatch for pid ${pid}` };
   }
-  const script = [
-    `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
-    "if ($null -eq $p) { exit 3 }",
-    "$out = [pscustomobject]@{",
-    "  pid = [int]$p.Id",
-    `  parentPid = ${parentPid}`,
-    '  creationDate = $p.StartTime.ToUniversalTime().ToString("o")',
-    "  commandLine = ''",
-    "}",
-    "$json = $out | ConvertTo-Json -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
-  const result = runBoundedCommand(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    timeoutMs,
-  );
-  if (result.status === 3) return { status: "absent" };
-  if (result.status !== 0) {
-    return {
-      status: "error",
-      message: `fallback process identity query failed for pid ${pid}`,
-    };
+  return current;
+}
+
+async function windowsTargetIdentityQuery(
+  pid: number,
+  timeoutMs: number,
+  context: string,
+): Promise<WindowsProcessQuery<WindowsProcessIdentity>> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return { status: "error", message: `process identity deadline exhausted for ${context}` };
   }
-  try {
-    return {
-      status: "ok",
-      value: parsePowerShellBase64Json<WindowsProcessIdentity>(result.stdout),
-    };
-  } catch {
-    return {
-      status: "error",
-      message: `fallback process identity query returned invalid JSON for pid ${pid}`,
-    };
+  if (shouldInjectCimFailure(context)) return { status: "error", message: `injected CIM failure for ${context}` };
+  const [bin, args] = windowsProcessDetailsCommand([pid]);
+  const started = Date.now();
+  return new Promise((accept) => {
+    execFile(bin, args, { encoding: "utf8", windowsHide: true, timeout: timeoutMs,
+      killSignal: "SIGKILL", maxBuffer: 256 * 1024 }, (error, stdout, stderr) => {
+      writeCimTrace(`target-identity context=${context} budget=${timeoutMs}ms elapsed=${Date.now() - started}ms error=${!!error}`);
+      if (error) {
+        accept({ status: "error", message: `native target identity query failed for ${context}: ${stderr || error.message}` });
+        return;
+      }
+      try {
+        accept(processFromSnapshot({ status: "ok", value: parseWindowsProcessDetailsReply(stdout, [pid]) }, pid));
+      } catch (error) {
+        accept({ status: "error", message: `invalid target identity reply for ${context}: ${String(error)}` });
+      }
+    });
+  });
+}
+
+/** Only the retained ChildProcess's events establish exit, never an identity-query result. */
+export async function captureWindowsTargetExit(
+  child: ChildProcess,
+  spawnAuthority: WindowsSpawnAuthority | undefined,
+  exitFile: string,
+  query: typeof windowsTargetIdentityQuery = windowsTargetIdentityQuery,
+): Promise<void> {
+  let exited = false;
+  let identity: WindowsProcessIdentity | undefined;
+  const publish = (record: Omit<WindowsTargetExit, "childPid" | "child" | "spawn">): void => {
+    if (exited) return;
+    exited = true;
+    const temporary = `${exitFile}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify({
+        ...record, childPid: child.pid, child: identity, spawn: spawnAuthority,
+      } satisfies WindowsTargetExit), { flag: "wx" });
+      renameSync(temporary, exitFile);
+    } finally { rmSync(temporary, { force: true }); }
+  };
+  child.once("error", (error) => publish({ error: error.message, exitedAt: new Date().toISOString() }));
+  child.once("exit", (code, signal) => publish({ code, signal, exitedAt: new Date().toISOString() }));
+
+  // Keep the event loop available so a fast target can publish its observed
+  // lifetime while the optional native identity bridge is still pending.
+  const deadline = Date.now() + NATIVE_PROCESS_IDENTITY_TIMEOUT_MS;
+  while (!exited && spawnAuthority && Date.now() < deadline) {
+    for (const context of ["target-start-fallback", "target-start"]) {
+      if (exited || Date.now() >= deadline) return;
+      let current: WindowsProcessQuery<WindowsProcessIdentity>;
+      try {
+        current = await query(spawnAuthority.pid,
+          Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, deadline - Date.now())), context);
+      } catch (error) {
+        current = { status: "error", message: String(error) };
+      }
+      if (exited) return; // a late/reused PID cannot rewrite the completed lifetime
+      if (current.status === "ok") {
+        const validated = validateWindowsSpawnIdentity(spawnAuthority, current.value);
+        if (validated.status === "ok") {
+          identity = validated.value;
+          return;
+        }
+      }
+    }
+    if (!exited && Date.now() < deadline) await sleep(Math.min(25, deadline - Date.now()));
   }
 }
 
@@ -827,68 +825,19 @@ function windowsDirectChildrenQuery(
   timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
   context = "descendants",
 ): WindowsProcessQuery<WindowsDescendantSnapshot> {
-  if (shouldInjectCimFailure(context)) {
-    return {
-      status: "error",
-      message: `injected CIM failure for ${context}`,
-    };
-  }
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    "$all = @(Get-CimInstance Win32_Process)",
-    "function Convert-Identity($p) {",
-    "  if ($null -eq $p) { return $null }",
-    "  return [pscustomobject]@{",
-    "    pid = [int]$p.ProcessId",
-    "    parentPid = [int]$p.ParentProcessId",
-    '    creationDate = $p.CreationDate.ToUniversalTime().ToString("o")',
-    "    commandLine = [string]$p.CommandLine",
-    "  }",
-    "}",
-    `$root = $all | Where-Object { [int]$_.ProcessId -eq ${parentPid} } | Select-Object -First 1`,
-    `$children = @($all | Where-Object { [int]$_.ParentProcessId -eq ${parentPid} } | ForEach-Object { Convert-Identity $_ })`,
-    "$out = [pscustomobject]@{",
-    "  currentRoot = Convert-Identity $root",
-    "  children = $children",
-    "}",
-    "$json = ConvertTo-Json -InputObject $out -Depth 4 -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
-  const result = runBoundedCommand(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    timeoutMs,
-  );
-  if (result.status !== 0) {
-    return {
-      status: "error",
-      message:
-        result.timedOut
-          ? `descendant identity query timed out for parent pid ${parentPid}`
-          : `descendant identity query failed for parent pid ${parentPid}: ` +
-            `${result.stderr || result.errorCode || `exit ${result.status}`}`,
-    };
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return { status: "error", message: "descendant identity deadline exhausted" };
+  if (shouldInjectCimFailure(context)) return { status: "error", message: `injected CIM failure for ${context}` };
+  const [bin, args] = windowsProcessDetailsCommand([parentPid]);
+  args[1] = "--windows-process-children";
+  const result = runBoundedCommand(bin, args, timeoutMs);
+  if (result.timedOut || result.errorCode || result.status !== 0) {
+    return { status: "error", message: `native descendant identity query failed for parent pid ${parentPid} ` +
+      `(context=${context}, budget=${timeoutMs}ms): ${result.stderr || result.errorCode || `exit ${result.status}`}` };
   }
   try {
-    const parsed = parsePowerShellBase64Json<WindowsDescendantSnapshot>(
-      result.stdout,
-    );
-    return {
-      status: "ok",
-      value: {
-        currentRoot: parsed.currentRoot ?? null,
-        children: Array.isArray(parsed.children)
-          ? parsed.children
-          : parsed.children
-            ? [parsed.children]
-            : [],
-      },
-    };
-  } catch {
-    return {
-      status: "error",
-      message: `descendant identity query returned invalid JSON for parent pid ${parentPid}`,
-    };
+    return { status: "ok", value: parseWindowsProcessChildrenReply(result.stdout, parentPid) };
+  } catch (error) {
+    return { status: "error", message: `native descendant identity query returned invalid data: ${String(error)}` };
   }
 }
 
@@ -898,7 +847,8 @@ function sameWindowsProcess(
 ): boolean {
   return (
     current.pid === recorded.pid &&
-    Date.parse(current.creationDate) === Date.parse(recorded.creationDate)
+    Date.parse(current.creationDate) === Date.parse(recorded.creationDate) &&
+    (!current.nativeIdentity || !recorded.nativeIdentity || current.nativeIdentity === recorded.nativeIdentity)
   );
 }
 
@@ -980,7 +930,7 @@ export function filterSpawnOwnedWindowsDescendants(
   };
 }
 
-function validateWindowsSpawnIdentity(
+export function validateWindowsSpawnIdentity(
   spawn: WindowsSpawnAuthority,
   current: WindowsProcessIdentity,
 ):
@@ -1147,35 +1097,146 @@ function discoverTargetExitWindowsDescendants(
   );
 }
 
-function liveOwnedWindowsProcesses(
+export function queryWindowsProcessIdentities(
+  requestedPids: number[],
+  timeoutMs: number,
+  context: string,
+  run: typeof runBoundedCommand = runBoundedCommand,
+): WindowsProcessQuery<WindowsProcessIdentity[]> {
+  if (requestedPids.length === 0) return { status: "ok", value: [] };
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return { status: "error", message: `process identity liveness query timed out for ${context}` };
+  }
+  if (shouldInjectCimFailure(context)) {
+    return { status: "error", message: `injected CIM failure for ${context}` };
+  }
+  const pids = [...new Set(requestedPids)];
+  if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff)) {
+    return { status: "error", message: `invalid recorded process identity for ${context}` };
+  }
+  // Node delegates one bounded batch to Bun's native, read-only handle API.
+  // Every PID has an explicit identity/absence reply; failures never omit rows.
+  const [bin, args] = windowsProcessDetailsCommand(pids);
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let budget = timeoutMs;
+  let result: BoundedCommandResult;
+  for (;;) {
+    const attemptStarted = Date.now();
+    result = run(bin, args, budget);
+    writeCimTrace(
+      `native-identity-snapshot context=${context} count=${pids.length} budget=${budget}ms ` +
+        `elapsed=${Date.now() - attemptStarted}ms status=${result.status} timedOut=${result.timedOut}`,
+    );
+    // Termination may invalidate metadata before the retained handle signals.
+    // Retry this native status only; it never establishes absence itself.
+    if (result.timedOut || result.errorCode || result.status === 0 ||
+      !/^NtQueryInformationProcess\([1-9]\d*, (?:0|60)\) failed: NTSTATUS 0xc000010a\s*$/m.test(result.stderr)) break;
+    if (Date.now() >= deadline) break;
+    sleepSync(Math.min(25, deadline - Date.now()));
+    budget = deadline - Date.now();
+    if (budget <= 0) break;
+  }
+  if (result.timedOut || result.errorCode || result.status !== 0) {
+    return {
+      status: "error",
+      message: `native process identity query ${result.timedOut ? "timed out" : "failed"} ` +
+        `for pid(s) ${pids.join(", ")} (context=${context}, budget=${timeoutMs}ms, ` +
+        `elapsed=${Date.now() - startedAt}ms): ${result.stderr || result.errorCode || `exit ${result.status}`}`,
+    };
+  }
+  try {
+    return { status: "ok", value: parseWindowsProcessDetailsReply(result.stdout, pids) };
+  } catch (error) {
+    return { status: "error", message: `native process identity query returned invalid data for ${context}: ${String(error)}` };
+  }
+}
+
+export function liveOwnedWindowsProcesses(
   recorded: WindowsProcessIdentity[],
   timeoutMs: number,
   context: string,
+  run: typeof runBoundedCommand = runBoundedCommand,
 ): WindowsProcessQuery<WindowsProcessIdentity[]> {
-  const deadline = Date.now() + timeoutMs;
-  const live: WindowsProcessIdentity[] = [];
-  for (const identity of recorded) {
-    const remaining = Math.max(0, deadline - Date.now());
-    if (remaining <= 0) {
-      return {
-        status: "error",
-        message: `process identity liveness query timed out for ${context}`,
-      };
-    }
-    const query = windowsProcessQuery(
-      identity.pid,
-      Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, remaining),
-      context,
-    );
-    if (query.status === "error") return query;
-    if (
-      query.status === "ok" &&
-      sameWindowsProcess(query.value, identity)
-    ) {
-      live.push(identity);
-    }
+  if (recorded.some((identity) => !Number.isFinite(Date.parse(identity.creationDate)))) {
+    return { status: "error", message: `invalid recorded process identity for ${context}` };
   }
-  return { status: "ok", value: live };
+  const snapshot = queryWindowsProcessIdentities(recorded.map((identity) => identity.pid), timeoutMs, context, run);
+  if (snapshot.status !== "ok") return snapshot;
+  return {
+    status: "ok",
+    value: recorded.filter((identity) => snapshot.value.some((row) => sameWindowsProcess(row, identity))),
+  };
+}
+
+export function liveWindowsCleanupProcesses(
+  discovered: WindowsProcessIdentity[],
+  registered: WindowsProcessIdentity[],
+  timeoutMs: number,
+  context: string,
+  run: typeof runBoundedCommand = runBoundedCommand,
+): WindowsProcessQuery<WindowsProcessIdentity[]> {
+  // Both sets have session authority. Initial absence does not remove a
+  // registered identity from the fresh verification required before a kill.
+  return liveOwnedWindowsProcesses(
+    mergeWindowsProcessIdentities([...discovered, ...registered]), timeoutMs, context, run,
+  );
+}
+
+function processFromSnapshot(
+  snapshot: WindowsProcessQuery<WindowsProcessIdentity[]>,
+  pid: number,
+): WindowsProcessQuery<WindowsProcessIdentity> {
+  if (snapshot.status !== "ok") return snapshot;
+  const value = snapshot.value.find((row) => row.pid === pid);
+  return value ? { status: "ok", value } : { status: "absent" };
+}
+
+export function createWindowsCleanupIdentityReader(
+  initialPids: number[],
+  deadline: number,
+  options: {
+    now?: () => number;
+    query?: (pids: number[], budget: number, context: string) => WindowsProcessQuery<WindowsProcessIdentity[]>;
+  } = {},
+): (pid: number, context: string, budget?: number, refresh?: boolean) => WindowsProcessQuery<WindowsProcessIdentity> {
+  const now = options.now ?? Date.now;
+  const query = options.query ?? queryWindowsProcessIdentities;
+  const pids = new Set(initialPids);
+  const readPids = new Set<number>();
+  let positives = new Map<number, WindowsProcessIdentity>();
+  return (pid, context, budget = deadline - now(), refresh = false) => {
+    const started = now();
+    const allowance = Math.min(budget, deadline - started);
+    if (!Number.isFinite(allowance) || allowance <= 0) {
+      positives.clear();
+      return { status: "error", message: `cleanup identity deadline exhausted for ${context}` };
+    }
+    const repeated = readPids.has(pid);
+    readPids.add(pid);
+    if (shouldInjectCimFailure(context)) {
+      positives.clear();
+      return { status: "error", message: `injected CIM failure for ${context}` };
+    }
+    // Only first positive observations may share a batch. Missing rows are
+    // never cached as absence; repeated reads and explicit rechecks are fresh.
+    if (refresh || repeated || !positives.has(pid)) {
+      pids.add(pid);
+      positives.clear();
+      const observed = query([...pids], allowance, context);
+      if (observed.status !== "ok") {
+        return observed.status === "error" ? observed
+          : { status: "error", message: `cleanup identity snapshot unavailable for ${context}` };
+      }
+      positives = new Map(observed.value.map((row) => [row.pid, row]));
+    }
+    if (now() >= started + allowance) {
+      positives.clear();
+      return { status: "error", message: `cleanup identity observation exceeded deadline for ${context}` };
+    }
+    const value = positives.get(pid);
+    return value ? { status: "ok", value } : { status: "absent" };
+  };
 }
 
 function mergeWindowsProcessIdentities(
@@ -1223,13 +1284,18 @@ interface Backend {
     keys: string,
     literal: boolean,
     noEnter: boolean,
-  ): void;
-  /** Current visible grid as text. ansi keeps colour escapes (tmux only). */
-  capture(session: string, ansi: boolean): string;
+  ): void | Promise<void>;
+  /** Public text defaults to logical lines; automation requests physical rows. */
+  capture(session: string, ansi: boolean, layout?: TuiTextLayout): string | Promise<string>;
+  /** Both text projections of one frame; never independent polling reads. */
+  captureViews?(session: string): TuiTextViews | Promise<TuiTextViews>;
   /** Kill the session (idempotent). */
-  kill(session: string): void;
+  kill(session: string): void | Promise<void>;
   /** Labels for live backend processes or cleanup-verification blockers. */
-  liveProcesses(session: string): string[];
+  liveProcesses(session: string): string[] | Promise<string[]>;
+  snapshot?(session: string): Promise<TuiSnapshot>;
+  resize?(session: string, width: number, height: number): Promise<void>;
+  paste?(session: string, text: string): Promise<void>;
   /** Disposable fixture recorded when this session launched Claude. */
   fixtureCwd(session: string): string | null;
 }
@@ -1255,7 +1321,11 @@ const TMUX_SOCKET = process.env.AIDLC_TUI_TMUX_SOCKET || "aidlc-tui";
 function tmux(args: string[]): { code: number; stdout: string; stderr: string } {
   // `-L <socket>` MUST precede the tmux command; it selects the private server.
   const r = spawnSync("tmux", ["-L", TMUX_SOCKET, ...args], { encoding: "utf-8" });
-  return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  return {
+    code: r.status ?? 1,
+    stdout: r.stdout ?? "",
+    stderr: r.stderr || r.error?.message || (r.signal ? `tmux terminated by ${r.signal}` : ""),
+  };
 }
 
 const tmuxBackend: Backend = {
@@ -1272,6 +1342,9 @@ const tmuxBackend: Backend = {
 
     const r = tmux([
       "new-session",
+      // Parallel fixtures use independent profiles. An existing tmux server
+      // retains its original environment, so pass this value per session.
+      ...(process.env.CLAUDE_CONFIG_DIR ? ["-e", `CLAUDE_CONFIG_DIR=${process.env.CLAUDE_CONFIG_DIR}`] : []),
       "-d",
       "-s",
       session,
@@ -1312,13 +1385,29 @@ const tmuxBackend: Backend = {
     }
   },
 
-  capture(session, ansi) {
-    // -p print to stdout, -J join wrapped lines, -e keep escapes (ansi mode).
-    const args = ["capture-pane", "-t", session, "-p", "-J"];
+  capture(session, ansi, layout = "logical") {
+    // -J is public logical capture compatibility, never automation's grid.
+    const args = ["capture-pane", "-t", session, "-p"];
+    if (layout === "logical") args.push("-J");
     if (ansi) args.push("-e");
     const r = tmux(args);
     if (r.code !== 0) fail(`capture-pane failed: ${r.stderr.trim()}`, 1);
     return r.stdout;
+  },
+
+  captureViews(session) {
+    const separator = `aidlc-frame-${randomUUID()}`;
+    // These synchronous commands drain together in one tmux server queue turn.
+    // Do not make two client calls: a repaint could fall between the views.
+    const result = tmux([
+      "capture-pane", "-t", session, "-p", ";",
+      "display-message", "-p", separator, ";",
+      "capture-pane", "-t", session, "-p", "-J",
+    ]);
+    if (result.code !== 0) fail(`capture-pane failed: ${result.stderr.trim()}`, 1);
+    const views = result.stdout.split(`${separator}\n`);
+    if (views.length !== 2) fail("tmux capture returned an ambiguous frame boundary", 1);
+    return { physical: views[0], logical: views[1] };
   },
 
   kill(session) {
@@ -1464,15 +1553,15 @@ const win32Backend: Backend = {
 
     const dir = winSessionDir(session);
     // Idempotent start: tear down any stale daemon + channel dir first.
-    win32Backend.kill(session);
+    await win32Backend.kill(session);
     const staleDeadline = Date.now() + DEFAULT_DEAD_TIMEOUT_MS;
     while (
-      win32Backend.liveProcesses(session).length > 0 &&
+      (await win32Backend.liveProcesses(session)).length > 0 &&
       Date.now() < staleDeadline
     ) {
       await sleep(POLL_INTERVAL_MS);
     }
-    const stale = win32Backend.liveProcesses(session);
+    const stale = await win32Backend.liveProcesses(session);
     if (stale.length > 0) {
       fail(
         `stale Windows session '${session}' survived cleanup: ${stale.join(", ")}`,
@@ -1615,12 +1704,21 @@ const win32Backend: Backend = {
       meta?.session === session &&
       typeof meta.ownerToken === "string";
 
+    // Share the initial ownership read, before sending any shutdown request.
+    // The liveness/force-kill loop below always obtains fresh snapshots and
+    // compares creation identities again; it never kills from this read alone.
+    const targetAtEntry = readJsonFile<WindowsSpawnAuthority>(targetSpawnPath);
+    const snapshotPids = [
+      daemonPid, childPid,
+      ...(ownership?.daemonChildren ?? []).map((entry) => entry.pid),
+      ownership?.child?.pid,
+      ...(ownership?.orphans ?? []).map((entry) => entry.pid),
+      targetAtEntry && isWindowsSpawnAuthority(targetAtEntry) ? targetAtEntry.pid : null,
+    ].filter((pid): pid is number => typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0);
+    const queryInitialIdentity = createWindowsCleanupIdentityReader(snapshotPids, deadline);
+
     if (daemonPid !== null) {
-      const query = windowsProcessQuery(
-        daemonPid,
-        Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
-        "kill-daemon",
-      );
+      const query = queryInitialIdentity(daemonPid, "kill-daemon");
       if (query.status === "error") {
         daemonStatus = "error";
       } else if (query.status === "absent") {
@@ -1656,11 +1754,7 @@ const win32Backend: Backend = {
       verificationErrors.push("ownership metadata remained unreadable");
     }
     if (daemonStatus === "error" && daemonPid !== null && remaining() > 0) {
-      const recheck = windowsProcessQuery(
-        daemonPid,
-        Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
-        "kill-daemon-recheck",
-      );
+      const recheck = queryInitialIdentity(daemonPid, "kill-daemon-recheck", remaining(), true);
       if (recheck.status === "error") {
         verificationErrors.push(recheck.message);
       } else if (recheck.status === "absent") {
@@ -1724,13 +1818,10 @@ const win32Backend: Backend = {
         message: "target liveness query did not run",
       };
       while (Date.now() < targetDeadline) {
-        current = windowsProcessQuery(
+        current = queryInitialIdentity(
           targetSpawn.pid,
-          Math.min(
-            WIN_PROCESS_QUERY_TIMEOUT_MS,
-            Math.max(1, targetDeadline - Date.now()),
-          ),
           "kill-target-live",
+          Math.max(1, targetDeadline - Date.now()),
         );
         if (current.status === "ok") {
           const validated = validateWindowsSpawnIdentity(
@@ -1877,23 +1968,17 @@ const win32Backend: Backend = {
       }
     }
 
-    if (validOwnership) {
-      for (const recorded of [
+    const recordedProcesses = validOwnership ? mergeWindowsProcessIdentities([
         ...(validOwnership.daemonChildren ?? []),
         ...(validOwnership.child ? [validOwnership.child] : []),
         ...(validOwnership.orphans ?? []),
-      ]) {
+      ]) : [];
+    if (validOwnership) {
+      for (const recorded of recordedProcesses) {
         if (remaining() <= 0) break;
         let query: WindowsProcessQuery<WindowsProcessIdentity>;
         do {
-          query = windowsProcessQuery(
-            recorded.pid,
-            Math.min(
-              WIN_PROCESS_QUERY_TIMEOUT_MS,
-              Math.max(1, remaining()),
-            ),
-            "kill-owned-process",
-          );
+          query = queryInitialIdentity(recorded.pid, "kill-owned-process");
           if (query.status !== "error") break;
           if (remaining() > 0) sleepSync(Math.min(100, remaining()));
         } while (remaining() > 0);
@@ -1957,9 +2042,13 @@ const win32Backend: Backend = {
       }
     }
     sleepSync(Math.min(WIN_KILL_GRACE_MS, remaining()));
-    let liveQuery = liveOwnedWindowsProcesses(
-      mergeWindowsProcessIdentities(ownedProcesses),
-      Math.max(1, remaining()),
+    // A registered process absent in an earlier snapshot may become visible
+    // later. Keep every authenticated recorded identity in all final probes;
+    // only a fresh matching creation identity can enter the force-kill list.
+    let liveQuery = liveWindowsCleanupProcesses(
+      ownedProcesses,
+      recordedProcesses,
+      remaining(),
       "kill-liveness",
     );
     if (liveQuery.status === "error") {
@@ -1970,9 +2059,10 @@ const win32Backend: Backend = {
     while (survivors.length > 0 && remaining() > 0) {
       forceKillWindowsProcessesWithinDeadline(survivors, deadline);
       if (remaining() > 0) sleepSync(Math.min(100, remaining()));
-      liveQuery = liveOwnedWindowsProcesses(
-        survivors,
-        Math.max(1, remaining()),
+      liveQuery = liveWindowsCleanupProcesses(
+        ownedProcesses,
+        recordedProcesses,
+        remaining(),
         "kill-liveness",
       );
       if (liveQuery.status === "error") {
@@ -2061,7 +2151,7 @@ function fileURLToPathSafe(url: string): string {
 // win32 DAEMON — owns the pty + @xterm/headless Terminal for one session.
 //
 // Runs UNDER NODE only. node-pty + @xterm/headless are imported HERE (inside the
-// daemon path) via dynamic import so the macOS/Linux tmux path — and any bun
+// daemon path) via dynamic import so the native Bun and tmux paths — and any bun
 // process that merely loads this module — never touches node-pty (the #748
 // in-process wedge can only happen if node-pty is loaded; we keep it out of
 // every path except the node daemon).
@@ -2108,76 +2198,19 @@ async function runWinChildWrapper(a: Args): Promise<void> {
   if (spawnAuthority) {
     writeFileSync(spawnFile, JSON.stringify(spawnAuthority));
   }
-  let childIdentity: WindowsProcessIdentity | undefined;
-  let identityCaptureComplete = false;
-  let pendingExit: Omit<
-    WindowsTargetExit,
-    "childPid" | "child" | "spawn"
-  > | undefined;
-  const writeTargetExit = (
-    record: Omit<WindowsTargetExit, "childPid" | "child" | "spawn">,
-  ): void => {
-    if (!identityCaptureComplete) {
-      pendingExit = record;
-      return;
-    }
-    writeFileSync(
-      exitFile,
-      JSON.stringify({
-        ...record,
-        childPid: child.pid,
-        child: childIdentity,
-        spawn: spawnAuthority,
-      } satisfies WindowsTargetExit),
-    );
-  };
-  child.on("error", (err) => {
-    writeTargetExit({
-      error: err.message,
-      exitedAt: new Date().toISOString(),
-    });
-  });
-  child.on("exit", (code, signal) => {
-    writeTargetExit({
-      code,
-      signal,
-      exitedAt: new Date().toISOString(),
-    });
-  });
-  const identityDeadline = Date.now() + 2_000;
-  while (child.pid !== undefined && Date.now() < identityDeadline) {
-    const fallback = windowsProcessFallbackQuery(
-      child.pid,
-      process.pid,
-      Math.min(
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        Math.max(1, identityDeadline - Date.now()),
-      ),
-      "target-start-fallback",
-    );
-    if (fallback.status === "ok") {
-      childIdentity = fallback.value;
-      break;
-    }
-    const query = windowsProcessQuery(
-      child.pid,
-      Math.min(
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        Math.max(1, identityDeadline - Date.now()),
-      ),
-      "target-start",
-    );
-    if (query.status === "ok") {
-      childIdentity = query.value;
-      break;
-    }
-    await sleep(25);
-  }
-  identityCaptureComplete = true;
-  if (pendingExit) writeTargetExit(pendingExit);
+  await captureWindowsTargetExit(child, spawnAuthority, exitFile);
   // Stay alive as the stable ConPTY root until the daemon has cleaned every
   // other console member and terminates this wrapper.
-  await new Promise<never>(() => {});
+  await waitForWindowsWrapperRetirement();
+}
+
+/** An unresolved promise alone lets Node exit once the target's handles close. */
+export function waitForWindowsWrapperRetirement(): Promise<never> {
+  return new Promise<never>(() => {
+    // The daemon owns termination. Keep this stable ConPTY root alive while it
+    // verifies/reaps the remaining console members, without reading their input.
+    setInterval(() => {}, 60_000);
+  });
 }
 
 async function runWinDaemon(a: Args): Promise<void> {
@@ -2263,43 +2296,33 @@ async function runWinDaemon(a: Args): Promise<void> {
     env: childEnv,
   });
   writeFileSync(join(dir, "child.pid"), String(child.pid));
-  const childIdentityDeadline = Date.now() + 2_000;
-  let childIdentityQuery: WindowsProcessQuery<WindowsProcessIdentity>;
-  do {
-    childIdentityQuery = windowsProcessQuery(
-      child.pid,
-      Math.min(
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        Math.max(1, childIdentityDeadline - Date.now()),
-      ),
-      "child-start",
-    );
-    if (childIdentityQuery.status === "ok") break;
+  const childIdentityDeadline = Date.now() + NATIVE_PROCESS_IDENTITY_TIMEOUT_MS;
+  const startupSnapshot = queryWindowsProcessIdentities(
+    [child.pid, process.pid],
+    Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, childIdentityDeadline - Date.now())),
+    "child-start",
+  );
+  let childIdentityQuery = processFromSnapshot(startupSnapshot, child.pid);
+  while (childIdentityQuery.status !== "ok" && Date.now() < childIdentityDeadline) {
     const fallback = windowsProcessFallbackQuery(
       child.pid,
       process.pid,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
+      Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, childIdentityDeadline - Date.now())),
       "child-start-fallback",
     );
     if (fallback.status === "ok") {
       childIdentityQuery = fallback;
       break;
     }
-    if (Date.now() < childIdentityDeadline) sleepSync(100);
-  } while (Date.now() < childIdentityDeadline);
-  if (childIdentityQuery.status !== "ok") {
-    childIdentityQuery = windowsProcessFallbackQuery(
-      child.pid,
-      process.pid,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
-      "child-start-fallback",
-    );
+    childIdentityQuery = fallback;
+    if (Date.now() < childIdentityDeadline) sleepSync(Math.min(100, childIdentityDeadline - Date.now()));
   }
-  const daemonIdentityQuery = windowsProcessQuery(
-    process.pid,
-    WIN_PROCESS_QUERY_TIMEOUT_MS,
-    "daemon-start",
-  );
+  const daemonIdentityQuery: WindowsProcessQuery<WindowsProcessIdentity> =
+    shouldInjectCimFailure("daemon-start")
+      ? { status: "error", message: "injected CIM failure for daemon-start" }
+      : startupSnapshot.status === "ok"
+        ? processFromSnapshot(startupSnapshot, process.pid)
+        : windowsProcessQuery(process.pid, WIN_PROCESS_QUERY_TIMEOUT_MS, "daemon-start");
   let daemonChildren: WindowsProcessIdentity[] = [];
   if (daemonIdentityQuery.status === "ok") {
     const childrenQuery = windowsDirectChildrenQuery(
@@ -2382,7 +2405,9 @@ async function runWinDaemon(a: Args): Promise<void> {
   };
   const snapTimer = setInterval(snapshot, POLL_INTERVAL_MS);
 
-  const consoleProcessList = async (): Promise<WindowsProcessQuery<number[]>> => {
+  const consoleProcessList = async (deadline: number): Promise<WindowsProcessQuery<number[]>> => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { status: "error", message: "console process discovery deadline exhausted" };
     const agent = (child as unknown as {
       _agent?: { _getConsoleProcessList?: () => Promise<number[]> };
     })._agent;
@@ -2399,7 +2424,7 @@ async function runWinDaemon(a: Args): Promise<void> {
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => reject(new Error("ConPTY console process list timed out")),
-            WIN_CONSOLE_LIST_TIMEOUT_MS,
+            Math.min(WIN_CONSOLE_LIST_TIMEOUT_MS, remaining),
           );
         }),
       ]);
@@ -2416,39 +2441,32 @@ async function runWinDaemon(a: Args): Promise<void> {
 
   const consoleIdentitySnapshot = async (
     context: string,
+    deadline: number,
   ): Promise<WindowsProcessQuery<WindowsProcessIdentity[]>> => {
-    const list = await consoleProcessList();
+    const list = await consoleProcessList(deadline);
     if (list.status !== "ok") return list;
-    const identities: WindowsProcessIdentity[] = [];
-    for (const pid of list.value) {
-      const query = windowsProcessQuery(
-        pid,
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        `${context}-identity`,
-      );
-      if (query.status === "error") return query;
-      if (
-        query.status === "ok" &&
-        !query.value.commandLine.includes("conpty_console_list_agent")
-      ) {
-        identities.push(query.value);
-      }
-    }
-    return { status: "ok", value: identities };
+    // One bounded snapshot avoids multiplying process-start overhead by PID count.
+    const query = queryWindowsProcessIdentities(
+      list.value, Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, deadline - Date.now()), `${context}-identity`,
+    );
+    if (query.status !== "ok") return query;
+    if (Date.now() >= deadline) return { status: "error", message: "console identity discovery deadline exhausted" };
+    return { status: "ok", value: query.value.filter(identity =>
+      !identity.commandLine.includes("conpty_console_list_agent")) };
   };
 
   const discoverConsoleOwnedProcesses = async (
     context: string,
+    deadline: number,
   ): Promise<WindowsProcessQuery<WindowsProcessIdentity[]>> => {
     if (shouldInjectCimFailure(context)) {
       return { status: "error", message: `injected CIM failure for ${context}` };
     }
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
     const accepted = new Map<string, WindowsProcessIdentity>();
-    let first = await consoleIdentitySnapshot(`${context}-first`);
+    let first = await consoleIdentitySnapshot(`${context}-first`, deadline);
     if (first.status !== "ok") return first;
     while (Date.now() < deadline) {
-      const second = await consoleIdentitySnapshot(`${context}-second`);
+      const second = await consoleIdentitySnapshot(`${context}-second`, deadline);
       if (second.status !== "ok") return second;
       const firstPids = first.value.map((identity) => identity.pid);
       const secondPids = second.value.map((identity) => identity.pid);
@@ -2546,7 +2564,7 @@ async function runWinDaemon(a: Args): Promise<void> {
       }
     }
     while (Date.now() < deadline) {
-      const query = await discoverConsoleOwnedProcesses(context);
+      const query = await discoverConsoleOwnedProcesses(context, deadline);
       if (query.status !== "ok") return false;
       const candidates = query.value.filter(
         (identity) => identity.pid !== child.pid,
@@ -2562,7 +2580,7 @@ async function runWinDaemon(a: Args): Promise<void> {
         );
       }
       if (Date.now() < deadline) await sleep(100);
-      const after = await consoleIdentitySnapshot(`${context}-verify`);
+      const after = await consoleIdentitySnapshot(`${context}-verify`, deadline);
       if (after.status !== "ok") return false;
       if (after.value.every((identity) => identity.pid === child.pid)) {
         ownership.orphans = [...accumulated.values()];
@@ -2580,7 +2598,9 @@ async function runWinDaemon(a: Args): Promise<void> {
   let targetExitHandled = false;
   const cleanupExitedChildDescendants = async (
     context: string,
+    deadline: number,
   ): Promise<boolean> => {
+    if (Date.now() >= deadline) return false;
     if (!ownership.childExitedAt) return true;
     if (!ownership.child) {
       writeFileSync(
@@ -2591,7 +2611,7 @@ async function runWinDaemon(a: Args): Promise<void> {
     }
     const query = discoverOwnedWindowsOrphans(
       ownership,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
+      Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, deadline - Date.now()),
       context,
     );
     if (query.status !== "ok") {
@@ -2607,7 +2627,6 @@ async function runWinDaemon(a: Args): Promise<void> {
     }
     ownership.orphans = query.value;
     writeFileSync(ownershipPath, JSON.stringify(ownership));
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
     let survivors = query.value;
     while (survivors.length > 0 && Date.now() < deadline) {
       for (const process of survivors) {
@@ -2647,12 +2666,13 @@ async function runWinDaemon(a: Args): Promise<void> {
     return true;
   };
 
-  const cleanupDaemonChildren = (context: string): boolean => {
+  const cleanupDaemonChildren = (context: string, deadline: number): boolean => {
+    if (Date.now() >= deadline) return false;
     if (process.platform !== "win32" || !ownership.daemon) return true;
     let candidates = ownership.daemonChildren ?? [];
     const query = windowsDirectChildrenQuery(
       ownership.daemon.pid,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
+      Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, deadline - Date.now()),
       context,
     );
     if (query.status === "ok") {
@@ -2665,7 +2685,6 @@ async function runWinDaemon(a: Args): Promise<void> {
       ownership.daemonChildren = candidates;
       writeFileSync(ownershipPath, JSON.stringify(ownership));
     }
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
     let survivors = candidates;
     while (survivors.length > 0 && Date.now() < deadline) {
       for (const process of survivors) {
@@ -2703,10 +2722,11 @@ async function runWinDaemon(a: Args): Promise<void> {
   };
 
   const teardown = async (): Promise<boolean> => {
+    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
     if (
       ownership.childExitedAt &&
       ownership.orphanCleanupComplete !== true &&
-      !(await cleanupExitedChildDescendants("daemon-kill-orphans"))
+      !(await cleanupExitedChildDescendants("daemon-kill-orphans", deadline))
     ) {
       return false;
     }
@@ -2720,7 +2740,7 @@ async function runWinDaemon(a: Args): Promise<void> {
       }
       const live = liveOwnedWindowsProcesses(
         [ownership.child],
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
+        Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, deadline - Date.now()),
         "daemon-kill-child",
       );
       if (live.status !== "ok") {
@@ -2742,13 +2762,14 @@ async function runWinDaemon(a: Args): Promise<void> {
             live.value[0],
           )
         ) {
-          forceKillWindowsTree(ownership.child.pid);
+          forceKillWindowsTree(ownership.child.pid,
+            Math.min(WIN_TASKKILL_TIMEOUT_MS, Math.max(1, deadline - Date.now())));
         }
       } catch {
         // "Socket is closed" / AttachConsole — expected on ConPTY teardown.
       }
     }
-    if (!cleanupDaemonChildren("daemon-kill-children")) return false;
+    if (!cleanupDaemonChildren("daemon-kill-children", deadline) || Date.now() >= deadline) return false;
     clearInterval(snapTimer);
     snapshot(); // final grid
     process.exit(0);
@@ -2756,6 +2777,7 @@ async function runWinDaemon(a: Args): Promise<void> {
   };
 
   child.onExit(async () => {
+    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
     snapshot();
     ownership.childExitedAt = new Date().toISOString();
     ownership.orphanCleanupComplete = false;
@@ -2763,8 +2785,9 @@ async function runWinDaemon(a: Args): Promise<void> {
     if (
       process.platform !== "win32" ||
       (
-        (await cleanupExitedChildDescendants("child-exit")) &&
-        cleanupDaemonChildren("child-exit-daemon-children")
+        (await cleanupExitedChildDescendants("child-exit", deadline)) &&
+        cleanupDaemonChildren("child-exit-daemon-children", deadline) &&
+        Date.now() < deadline
       )
     ) {
       clearInterval(snapTimer);
@@ -2862,13 +2885,19 @@ function encodeKeys(keys: string, literal: boolean): string {
   return keys in named ? named[keys] : keys;
 }
 
-// Write ~/.claude.json with hasCompletedOnboarding + a forward-slash project key
-// so the Windows zero-keystroke path skips the startup modals (§2.3). Best-effort
-// and additive: never clobbers an existing config beyond the two keys.
-function preseedClaudeOnboarding(projectDir: string): void {
+// Claude keeps .claude.json inside an explicit CLAUDE_CONFIG_DIR; without the
+// override it uses the legacy home-level file. Explicit inputs let synthetic
+// checks exercise the Windows preseed without changing the host environment.
+export function preseedClaudeOnboarding(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+  trustProject = true,
+): void {
   try {
-    const home = os.homedir();
-    const cfgPath = join(home, ".claude.json");
+    const configDir = env.CLAUDE_CONFIG_DIR || homeDir;
+    mkdirSync(configDir, { recursive: true });
+    const cfgPath = join(configDir, ".claude.json");
     let cfg: Record<string, unknown> = {};
     if (existsSync(cfgPath)) {
       try {
@@ -2878,13 +2907,14 @@ function preseedClaudeOnboarding(projectDir: string): void {
       }
     }
     cfg.hasCompletedOnboarding = true;
-    const projects =
-      (cfg.projects as Record<string, unknown> | undefined) ?? {};
-    // Forward-slash key — claude normalises to forward-slash; a backslash key
-    // silently misses and the trust modal reappears.
-    const key = projectDir.replaceAll("\\", "/");
-    if (!(key in projects)) projects[key] = { hasTrustDialogAccepted: true };
-    cfg.projects = projects;
+    if (trustProject) {
+      const projects =
+        (cfg.projects as Record<string, unknown> | undefined) ?? {};
+      // Forward-slash key — Claude normalises project paths this way.
+      const key = projectDir.replaceAll("\\", "/");
+      if (!(key in projects)) projects[key] = { hasTrustDialogAccepted: true };
+      cfg.projects = projects;
+    }
     writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
   } catch {
     // best-effort preseed; the interactive path still answers modals by keystroke
@@ -2897,9 +2927,23 @@ function preseedClaudeOnboarding(projectDir: string): void {
 // ---------------------------------------------------------------------------
 
 function selectBackend(): Backend {
-  const plat = os.platform();
-  if (plat === "win32") return win32Backend;
-  // darwin / linux (and any other POSIX) → tmux. The original spike's behaviour.
+  const selected = selectedTuiBackend();
+  if (selected === "bun") {
+    if (process.platform !== "linux" && process.platform !== "win32" && process.platform !== "darwin") {
+      fail(`native lifecycle is unsupported on ${process.platform}; select AIDLC_TUI_BACKEND=tmux`);
+    }
+    return createBunBackend({
+      fixtureCwd: claudeFixtureCwd,
+      windowsCommand(command) {
+        return adaptWindowsLaunch(resolveWinExecutable(command[0]), command.slice(1), process.env);
+      },
+    });
+  }
+  if (selected === "node-pty") {
+    if (process.platform !== "win32") fail("node-pty backend supports Windows only");
+    return win32Backend;
+  }
+  if (process.platform === "win32") fail("tmux backend requires POSIX");
   return tmuxBackend;
 }
 
@@ -2914,6 +2958,19 @@ async function cmdStart(backend: Backend, a: Args): Promise<void> {
   const width = Number(a.flags.width ?? "120");
   const height = Number(a.flags.height ?? "40");
   const command = normalizeTuiCommand(a.rest);
+  if (
+    process.env.AIDLC_TEST_WORKER_ROOT &&
+    process.env.CLAUDE_CONFIG_DIR &&
+    claudeFixtureCwd(cwd, command)
+  ) {
+    // A fresh worker profile otherwise stops at Claude's first-run theme
+    // chooser. Preserve the real trust dialog that these journeys already
+    // drive, while keeping first-run setup inside the disposable profile.
+    preseedClaudeOnboarding(cwd, process.env, os.homedir(), false);
+  }
+  if (process.platform === "win32" && selectedTuiBackend() === "bun" && claudeFixtureCwd(cwd, command)) {
+    preseedClaudeOnboarding(cwd);
+  }
   writeTuiTrace(session, "start", {
     cwd,
     width,
@@ -2932,36 +2989,147 @@ async function cmdSend(backend: Backend, a: Args): Promise<void> {
   if (
     keys === "1" && !a.bools.literal && !a.bools["no-enter"] &&
     backend.fixtureCwd(session) &&
-    await acceptTuiFixtureTrust(backend, session, backend.capture(session, false))
+    await acceptTuiFixtureTrust(backend, session, await backend.capture(session, false, "physical"))
+  ) return;
+  if (
+    keys === "2" && !a.bools.literal && !a.bools["no-enter"] &&
+    backend.fixtureCwd(session) &&
+    await acceptTuiFixturePermissionMode(backend, session, await backend.capture(session, false, "physical"))
   ) return;
   writeTuiTrace(session, "send", {
     keys,
     literal: a.bools.literal === true,
     noEnter: a.bools["no-enter"] === true,
   });
-  backend.send(session, keys, a.bools.literal === true, a.bools["no-enter"] === true);
+  await backend.send(session, keys, a.bools.literal === true, a.bools["no-enter"] === true);
+}
+
+/** Preserve the shipped model pin when a fresh profile shows an upgrade offer. */
+export function claudeModelUpgradeNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  if (
+    /\[AIDLC\]/.test(screen) ||
+    !/^\s*Newer .+ model available\s*$/m.test(screen) ||
+    !/Currently pinned:/.test(screen) || !/Latest available:/.test(screen) ||
+    !/Update settings to use .+\? Claude Code will restart to apply\./.test(screen)
+  ) return null;
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes|No)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], no: match[2] === "No" }] : [];
+  });
+  if (
+    options.length !== 2 || options.filter((option) => option.no).length !== 1 ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  const no = options.findIndex((option) => option.no);
+  return selected === no ? "Enter" : no > selected ? "Down" : "Up";
+}
+
+export async function declineOwnedModelUpgrade(
+  backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
+  session: string,
+  screen: string,
+): Promise<boolean> {
+  const cwd = backend.fixtureCwd(session);
+  if (!cwd || !isOwnedTuiFixture(cwd) || !claudeModelUpgradeNavigation(screen)) return false;
+  // The fixture itself is the ownership boundary. Standalone native callers do
+  // not necessarily have a parallel runner's AIDLC_TEST_WORKER_ROOT variable.
+  const marker = join(cwd, `.model-offer-${createHash("sha256").update(session).digest("hex")}`);
+  if (existsSync(marker)) return false;
+  // Require the modal to settle before navigating, just like the trust dialog.
+  const deadline = Date.now() + 5_000;
+  let previous = screen;
+  let stableSince = Date.now();
+  let navigation: ReturnType<typeof claudeModelUpgradeNavigation> = null;
+  while (Date.now() < deadline) {
+    screen = await backend.capture(session, false, "physical");
+    navigation = claudeModelUpgradeNavigation(screen);
+    if (!navigation) return false;
+    if (screen !== previous) stableSince = Date.now();
+    previous = screen;
+    if (Date.now() - stableSince >= DEFAULT_STABLE_MS) break;
+    navigation = null;
+    await sleep(POLL_INTERVAL_MS);
+  }
+  if (!navigation || backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)) return false;
+  // One attempt per session: a stale repaint cannot cause another Enter.
+  writeFileSync(marker, "attempted\n");
+  if (navigation !== "Enter") {
+    await backend.send(session, navigation, false, true);
+    await sleep(DEFAULT_STABLE_MS);
+  }
+  const selected = await backend.capture(session, false, "physical");
+  if (
+    claudeModelUpgradeNavigation(selected) !== "Enter" ||
+    backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)
+  ) fail("model upgrade offer did not settle on No; refusing Enter", 1);
+  await backend.send(session, "Enter", false, true);
+  writeTuiTrace(session, "model_upgrade_declined", { screen: selected });
+  return true;
+}
+
+type TuiPatternView = TuiTextLayout | "auto";
+
+function patternView(a: Args): TuiPatternView {
+  const view = a.flags.view ?? "auto";
+  if (a.bools.view || !["auto", "physical", "logical"].includes(view)) {
+    fail("--view requires auto, physical, or logical");
+  }
+  return view as TuiPatternView;
+}
+
+async function captureTextViews(backend: Backend, session: string): Promise<TuiTextViews> {
+  if (backend.captureViews) return await backend.captureViews(session);
+  // Legacy Windows has always exposed only physical rows, without wrap metadata.
+  const text = await backend.capture(session, false, "physical");
+  return { physical: text, logical: text };
+}
+
+export function matchTuiPattern(
+  views: TuiTextViews, pattern: RegExp, view: TuiPatternView = "auto",
+): TuiTextLayout | null {
+  if (view !== "logical" && regexMatches(pattern, views.physical)) return "physical";
+  if (view !== "physical" && regexMatches(pattern, views.logical)) return "logical";
+  return null;
 }
 
 async function cmdWait(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const pattern = requireFlag(a, "pattern");
-  const timeoutMs = Number(a.flags["timeout-ms"] ?? DEFAULT_TIMEOUT_MS);
+  const timeoutMs = tuiWorkTimeoutMs(
+    Number(a.flags["timeout-ms"] ?? DEFAULT_TIMEOUT_MS), "TUI wait",
+  );
   const stableMs = Number(a.flags["stable-ms"] ?? DEFAULT_STABLE_MS);
   const re = new RegExp(pattern);
-  writeTuiTrace(session, "wait_start", { pattern, timeoutMs, stableMs });
+  const view = patternView(a);
+  writeTuiTrace(session, "wait_start", { pattern, timeoutMs, stableMs, view });
 
   const deadline = Date.now() + timeoutMs;
   let prev = "";
   let stableSince = 0;
+  let lastViews: TuiTextViews = { physical: "", logical: "" };
 
   while (Date.now() < deadline) {
-    const screen = backend.capture(session, false);
+    const views = await captureTextViews(backend, session);
+    lastViews = views;
+    const screen = views.physical;
+    if (await declineOwnedModelUpgrade(backend, session, screen)) {
+      prev = "";
+      stableSince = 0;
+      continue;
+    }
+    const matchedView = matchTuiPattern(views, re, view);
+    const observed = matchedView === "logical" || view === "logical" ? views.logical : views.physical;
+    // Stability belongs to the matched view. Physical UI stability must not be
+    // reset by stale wrap flags, nor may a newly matching logical view inherit
+    // elapsed stability from a different physical observation.
+    const observation = `${matchedView ?? view}\0${observed}`;
     const now = Date.now();
-    if (screen === prev) {
+    if (observation === prev) {
       if (stableSince === 0) stableSince = now;
     } else {
       stableSince = 0;
-      prev = screen;
+      prev = observation;
     }
     // stableMs <= 0 means "match the instant the pattern appears" — no
     // stability requirement. This is essential when asserting against a
@@ -2971,11 +3139,13 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     // prompts that are static while awaiting input.
     const stable =
       stableMs <= 0 || (stableSince !== 0 && now - stableSince >= stableMs);
-    if (re.test(screen) && stable) {
+    if (matchedView && stable) {
       writeTuiTrace(session, "wait_match", {
         pattern,
         stableMs,
         screen,
+        matchedView,
+        ...(matchedView === "logical" ? { logicalScreen: views.logical } : {}),
       });
       process.stdout.write(`matched /${pattern}/ (stable ${stableMs}ms)\n`);
       return;
@@ -2986,11 +3156,12 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     pattern,
     timeoutMs,
     stableMs,
-    screen: prev,
+    screen: lastViews.physical,
+    ...(lastViews.logical !== lastViews.physical ? { logicalScreen: lastViews.logical } : {}),
   });
   process.stderr.write(
     `tui-drive: timed out after ${timeoutMs}ms waiting for /${pattern}/\n` +
-      `---- last pane ----\n${prev}\n-------------------\n`,
+      `---- last pane ----\n${lastViews.physical}\n-------------------\n`,
   );
   process.exit(1);
 }
@@ -3020,7 +3191,7 @@ export function claudeTrustNavigation(screen: string): "Up" | "Down" | "Enter" |
     return null;
   }
   const options = screen.split(/\r?\n/).flatMap((line) => {
-    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I trust this folder|No, exit)\s*$/.exec(line);
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I trust this folder|No, exit|No, continue without these permissions)\s*$/.exec(line);
     return match ? [{ selected: !!match[1], yes: match[2] === "Yes, I trust this folder" }] : [];
   });
   if (
@@ -3033,15 +3204,48 @@ export function claudeTrustNavigation(screen: string): "Up" | "Down" | "Enter" |
   return selected === yes ? "Enter" : yes > selected ? "Down" : "Up";
 }
 
-export async function acceptTuiFixtureTrust(
+export function claudePermissionNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  if (!CLAUDE_BYPASS_MODAL_RE.test(screen)) return null;
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I accept|No, exit)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], yes: match[2] === "Yes, I accept" }] : [];
+  });
+  if (
+    options.length !== 2 || options.filter((option) => option.yes).length !== 1 ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  const yes = options.findIndex((option) => option.yes);
+  return selected === yes ? "Enter" : yes > selected ? "Down" : "Up";
+}
+
+type FixtureMenuBackend = Pick<Backend, "fixtureCwd" | "capture" | "send">;
+type FixtureMenuTiming = { now?: () => number; sleep?: (ms: number) => Promise<void> };
+
+export function acceptTuiFixtureTrust(
+  backend: FixtureMenuBackend, session: string, screen: string, timing: FixtureMenuTiming = {},
+): Promise<boolean> {
+  return acceptTuiFixtureMenu(backend, session, screen, timing, "trust");
+}
+
+export function acceptTuiFixturePermissionMode(
+  backend: FixtureMenuBackend, session: string, screen: string, timing: FixtureMenuTiming = {},
+): Promise<boolean> {
+  return acceptTuiFixtureMenu(backend, session, screen, timing, "permission");
+}
+
+async function acceptTuiFixtureMenu(
   backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
   session: string,
   screen: string,
-  timing: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+  timing: FixtureMenuTiming,
+  kind: "trust" | "permission",
 ): Promise<boolean> {
   const cwd = backend.fixtureCwd(session);
   if (!cwd || !isOwnedTuiFixture(cwd)) return false;
-  if (!CLAUDE_TRUST_MODAL_RE.test(screen)) return false;
+  const modal = kind === "trust" ? CLAUDE_TRUST_MODAL_RE : CLAUDE_BYPASS_MODAL_RE;
+  const choose = kind === "trust" ? claudeTrustNavigation : claudePermissionNavigation;
+  if (!modal.test(screen)) return false;
   const now = timing.now ?? Date.now;
   const pause = timing.sleep ?? sleep;
   const startedAt = now();
@@ -3053,8 +3257,8 @@ export async function acceptTuiFixtureTrust(
   // to remain byte-stable, as legacy `wait --stable-ms 600` callers do, before
   // sending even one navigation key. Partial/repainting grids reset the wait.
   while (now() < readyDeadline) {
-    screen = backend.capture(session, false);
-    navigation = claudeTrustNavigation(screen);
+    screen = await backend.capture(session, false, "physical");
+    navigation = choose(screen);
     if (!navigation || screen !== previous) stableSince = now();
     previous = screen;
     if (navigation && now() - stableSince >= DEFAULT_STABLE_MS) break;
@@ -3062,36 +3266,36 @@ export async function acceptTuiFixtureTrust(
     await pause(POLL_INTERVAL_MS);
   }
   if (!navigation) {
-    throw new Error("fixture trust menu never became stable; refusing navigation");
+    throw new Error(`fixture ${kind} menu never became stable; refusing navigation`);
   }
   if (backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)) {
-    throw new Error("fixture trust context changed; refusing navigation");
+    throw new Error(`fixture ${kind} context changed; refusing navigation`);
   }
-  writeTuiTrace(session, "fixture_trust_action", {
+  writeTuiTrace(session, `fixture_${kind}_action`, {
     cwd, navigation, screen, readyAfterMs: now() - startedAt, stableMs: DEFAULT_STABLE_MS,
   });
   if (navigation !== "Enter") {
-    backend.send(session, navigation, false, true);
+    await backend.send(session, navigation, false, true);
     const deadline = now() + 5_000;
     do {
       await pause(POLL_INTERVAL_MS);
-      screen = backend.capture(session, false);
-      if (claudeTrustNavigation(screen) === "Enter") break;
+      screen = await backend.capture(session, false, "physical");
+      if (choose(screen) === "Enter") break;
     } while (now() < deadline);
-    if (claudeTrustNavigation(screen) !== "Enter") {
-      throw new Error("fixture trust selection never moved to Yes; refusing Enter");
+    if (choose(screen) !== "Enter") {
+      throw new Error(`fixture ${kind} selection never moved to Yes; refusing Enter`);
     }
   }
   // Revalidate both the fixture and visible selection immediately before Enter.
-  screen = backend.capture(session, false);
+  screen = await backend.capture(session, false, "physical");
   if (
     backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd) ||
-    claudeTrustNavigation(screen) !== "Enter"
+    choose(screen) !== "Enter"
   ) {
-    throw new Error("fixture trust context changed; refusing Enter");
+    throw new Error(`fixture ${kind} context changed; refusing Enter`);
   }
-  backend.send(session, "Enter", false, true);
-  writeTuiTrace(session, "fixture_trust_accepted", { cwd, screen });
+  await backend.send(session, "Enter", false, true);
+  writeTuiTrace(session, `fixture_${kind}_accepted`, { cwd, screen });
   return true;
 }
 
@@ -3110,6 +3314,7 @@ export function advanceTuiStartup(
   state: TuiStartupState,
   screen: string,
   readyPattern: RegExp,
+  readyText: string | null = screen,
 ): { state: TuiStartupState; action: TuiStartupAction } {
   const trustVisible = regexMatches(CLAUDE_TRUST_MODAL_RE, screen);
   const bypassVisible = regexMatches(CLAUDE_BYPASS_MODAL_RE, screen);
@@ -3129,7 +3334,7 @@ export function advanceTuiStartup(
   if (trustVisible || bypassVisible) {
     return { state, action: "wait" };
   }
-  if (regexMatches(readyPattern, screen)) {
+  if (readyText !== null && regexMatches(readyPattern, readyText)) {
     return { state, action: "ready" };
   }
   return { state, action: "wait" };
@@ -3138,10 +3343,11 @@ export function advanceTuiStartup(
 async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const readyPatternText = requireFlag(a, "ready-pattern");
-  const timeoutMs = Number(
-    a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS,
+  const timeoutMs = tuiWorkTimeoutMs(
+    Number(a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS), "TUI startup",
   );
   const readyPattern = new RegExp(readyPatternText);
+  const view = patternView(a);
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
   let state = initialTuiStartupState();
@@ -3150,11 +3356,15 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   writeTuiTrace(session, "startup_begin", {
     readyPattern: readyPatternText,
     timeoutMs,
+    view,
   });
 
   while (Date.now() < deadline) {
-    screen = backend.capture(session, false);
-    const step = advanceTuiStartup(state, screen, readyPattern);
+    const views = await captureTextViews(backend, session);
+    screen = views.physical;
+    if (await declineOwnedModelUpgrade(backend, session, screen)) continue;
+    const matchedView = matchTuiPattern(views, readyPattern, view);
+    const step = advanceTuiStartup(state, screen, readyPattern, matchedView ? views[matchedView] : null);
     state = step.state;
 
     if (step.action === "ready") {
@@ -3164,6 +3374,7 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         elapsedMs,
         state,
         screen,
+        matchedView,
       });
       process.stdout.write(
         `startup ready /${readyPatternText}/ after ${elapsedMs}ms\n`,
@@ -3184,7 +3395,9 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         action: step.action,
         screen,
       });
-      backend.send(session, "2", false, false);
+      if (!await acceptTuiFixturePermissionMode(backend, session, screen)) {
+        throw new Error("refusing automatic permission-mode acceptance outside a disposable TUI fixture");
+      }
     }
 
     await sleep(POLL_INTERVAL_MS);
@@ -3204,18 +3417,28 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   process.exit(1);
 }
 
-function cmdCapture(backend: Backend, a: Args): void {
+async function cmdCapture(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
+  if (a.bools.physical && (a.bools.ansi || a.bools.json)) {
+    fail("capture --physical selects plain text; use it without --ansi or --json");
+  }
+  if (a.bools.json) {
+    if (a.bools.ansi) fail("capture accepts either --json or --ansi");
+    if (!backend.snapshot) fail("capture --json requires AIDLC_TUI_BACKEND=bun");
+    process.stdout.write(`${JSON.stringify(await backend.snapshot(session))}\n`);
+    return;
+  }
   const ansi = a.bools.ansi === true;
-  const screen = backend.capture(session, ansi);
-  writeTuiTrace(session, "capture", { ansi, screen });
+  const layout = a.bools.physical ? "physical" : "logical";
+  const screen = await backend.capture(session, ansi, layout);
+  writeTuiTrace(session, "capture", { ansi, layout, screen });
   process.stdout.write(screen);
 }
 
-function cmdKill(backend: Backend, a: Args): void {
+async function cmdKill(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   writeTuiTrace(session, "kill", {});
-  backend.kill(session);
+  await backend.kill(session);
   process.stdout.write(`killed session '${session}'\n`);
 }
 
@@ -3226,12 +3449,12 @@ async function cmdWaitDead(backend: Backend, a: Args): Promise<void> {
   );
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
-  let live = backend.liveProcesses(session);
+  let live = await backend.liveProcesses(session);
   writeTuiTrace(session, "wait_dead_begin", { timeoutMs, live });
 
   while (live.length > 0 && Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
-    live = backend.liveProcesses(session);
+    live = await backend.liveProcesses(session);
   }
 
   const elapsedMs = Date.now() - startedAt;
@@ -3686,10 +3909,10 @@ async function chooseNumberedMenuOption(
   optionNum: number,
 ): Promise<void> {
   for (let i = 1; i < optionNum; i++) {
-    backend.send(session, "Down", false, true);
+    await backend.send(session, "Down", false, true);
     await sleep(120);
   }
-  backend.send(session, "Enter", false, true);
+  await backend.send(session, "Enter", false, true);
 }
 
 const REVISION_FEEDBACK =
@@ -3749,7 +3972,19 @@ async function handleRevisionRecovery(
   const recoveryDeadline = Date.now() + 60_000;
   while (Date.now() < recoveryDeadline) {
     await sleep(POLL_INTERVAL_MS);
-    const after = backend.capture(session, false);
+    const after = await backend.capture(session, false, "physical");
+    if (gridHasMenu(after) && gridIsMultiSelect(after)) {
+      // A structured feedback question is already ready. The outer answer-gate
+      // loop owns checkbox selection/submission; do not spend a minute waiting
+      // for this real question to turn into a recovery menu or free-text prompt.
+      writeTuiTrace(session, "answer_gate_action", {
+        answered,
+        action: "reject_structured_followup",
+        screen: after,
+      });
+      process.stdout.write("answer-gate: structured revision feedback ready for normal menu handling\n");
+      return false;
+    }
     const typeSomethingNum = pickRevisionTypeSomethingOption(after);
     if (typeSomethingNum !== null) {
       await chooseNumberedMenuOption(backend, session, typeSomethingNum);
@@ -3763,11 +3998,11 @@ async function handleRevisionRecovery(
       const promptDeadline = Date.now() + 10_000;
       while (Date.now() < promptDeadline) {
         await sleep(POLL_INTERVAL_MS);
-        const prompt = backend.capture(session, false);
+        const prompt = await backend.capture(session, false, "physical");
         if (!gridHasMenu(prompt)) {
-          backend.send(session, REVISION_FEEDBACK, true, true);
+          await backend.send(session, REVISION_FEEDBACK, true, true);
           await sleep(300);
-          backend.send(session, "Enter", false, true);
+          await backend.send(session, "Enter", false, true);
           writeTuiTrace(session, "answer_gate_action", {
             answered,
             action: "reject_free_text_feedback",
@@ -3806,9 +4041,9 @@ async function handleRevisionRecovery(
       gridLooksLikeRevisionFreeTextPrompt(after) ||
       (!gridHasMenu(after) && Date.now() > recoveryDeadline - 30_000)
     ) {
-      backend.send(session, REVISION_FEEDBACK, true, true);
+      await backend.send(session, REVISION_FEEDBACK, true, true);
       await sleep(300);
-      backend.send(session, "Enter", false, true);
+      await backend.send(session, "Enter", false, true);
       writeTuiTrace(session, "answer_gate_action", {
         answered,
         action: "reject_free_text_feedback",
@@ -3824,22 +4059,22 @@ async function handleRevisionRecovery(
   return false;
 }
 
-function teardownAnswerGate(
+async function teardownAnswerGate(
   backend: Backend,
   session: string,
   reason: string,
-): void {
+): Promise<void> {
   writeTuiTrace(session, "answer_gate_teardown", { reason });
-  backend.kill(session);
+  await backend.kill(session);
 }
 
-function failAnswerGate(
+async function failAnswerGate(
   backend: Backend,
   session: string,
   msg: string,
   code = 1,
-): never {
-  teardownAnswerGate(backend, session, "error");
+): Promise<never> {
+  await teardownAnswerGate(backend, session, "error");
   fail(msg, code);
 }
 
@@ -3847,7 +4082,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const projectDir = a.flags["project-dir"];
   if (!projectDir) {
-    failAnswerGate(backend, session, "missing required --project-dir", 2);
+    return failAnswerGate(backend, session, "missing required --project-dir", 2);
   }
   // The journey's pass condition is the ON-DISK terminator (--until-*); these
   // timeouts are pure HANG-BACKSTOPS, never budgets — a healthy run returns the
@@ -3863,7 +4098,13 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // wedge (nothing ever reaches the disk terminator), and bun's own test timeout is
   // the hard ceiling above it. An explicit --per-gate-timeout-ms still overrides for
   // the rare case that wants faster wedge-detection.
-  const overallMs = Number(a.flags["overall-timeout-ms"] ?? "600000");
+  let overallMs: number;
+  try {
+    overallMs = tuiWorkTimeoutMs(Number(a.flags["overall-timeout-ms"] ?? "600000"), "TUI answer gates");
+  } catch (error) {
+    await teardownAnswerGate(backend, session, "work-budget-exhausted");
+    throw error;
+  }
   const perGateMs = Number(a.flags["per-gate-timeout-ms"] ?? String(overallMs));
   // The on-disk signal that means STOP answering — workshop affirmation by
   // default, or a journey-specific file/state-field via --until-* (see
@@ -3871,7 +4112,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // only this terminator differs.
   const untilField = a.flags["until-state-field"];
   if (untilField && untilField.indexOf("=") <= 0) {
-    failAnswerGate(
+    await failAnswerGate(
       backend,
       session,
       `--until-state-field expects <name>=<regex>, got '${untilField}'`,
@@ -3900,7 +4141,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   try {
     term = makeTerminator(projectDir, a);
   } catch (err) {
-    teardownAnswerGate(backend, session, "invalid-terminator");
+    await teardownAnswerGate(backend, session, "invalid-terminator");
     throw err;
   }
 
@@ -3928,7 +4169,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     (assertFileAbsentAtOption === undefined) !==
       (assertFileAbsent === undefined)
   ) {
-    failAnswerGate(
+    await failAnswerGate(
       backend,
       session,
       "--assert-file-absent-at-option and --assert-file-absent must be supplied together",
@@ -3936,9 +4177,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     );
   }
   let absenceAssertionObserved = false;
-  const assertAbsenceObservationCompleted = (): void => {
+  const assertAbsenceObservationCompleted = async (): Promise<void> => {
     if (assertFileAbsentAtOption && !absenceAssertionObserved) {
-      failAnswerGate(
+      await failAnswerGate(
         backend,
         session,
         `option '${assertFileAbsentAtOption}' was never observed; ` +
@@ -3982,7 +4223,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // Disk is the terminator — check it FIRST so we exit the instant the
     // journey's completion signal lands, even if a stale menu lingers on screen.
     if (!stopAtApprovalGate && term.done()) {
-      assertAbsenceObservationCompleted();
+      await assertAbsenceObservationCompleted();
       writeTuiTrace(session, "answer_gate_done", {
         answered,
         terminator: term.describe,
@@ -3997,9 +4238,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         answered,
         terminator: term.describe,
         overallMs,
-        screen: backend.capture(session, false),
+        screen: await backend.capture(session, false, "physical"),
       });
-      failAnswerGate(
+      await failAnswerGate(
         backend,
         session,
         `answer-gate: overall timeout (${overallMs}ms) — terminator (${term.describe}) ` +
@@ -4017,7 +4258,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     let sawMenu = false;
     while (Date.now() < gateDeadline) {
       if (!stopAtApprovalGate && term.done()) {
-        assertAbsenceObservationCompleted();
+        await assertAbsenceObservationCompleted();
         writeTuiTrace(session, "answer_gate_done", {
           answered,
           terminator: term.describe,
@@ -4027,7 +4268,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         );
         return;
       }
-      const grid = backend.capture(session, false);
+      const grid = await backend.capture(session, false, "physical");
       maybeTracePoll(grid, gateDeadline);
       if (gridHasMenu(grid)) {
         sawMenu = true;
@@ -4037,14 +4278,14 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     }
 
     if (!sawMenu) {
-      const screen = backend.capture(session, false);
+      const screen = await backend.capture(session, false, "physical");
       writeTuiTrace(session, "answer_gate_menu_timeout", {
         answered,
         perGateMs,
         terminator: term.describe,
         screen,
       });
-      failAnswerGate(
+      await failAnswerGate(
         backend,
         session,
         `answer-gate: per-gate timeout (${perGateMs}ms) — no menu appeared and ` +
@@ -4075,7 +4316,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     //
     // SINGLE-SELECT question (no checkbox): Enter SELECTS the highlighted/Recommended
     // option and auto-advances to the next tab (or approves a lone-question gate).
-    const grid = backend.capture(session, false);
+    const grid = await backend.capture(session, false, "physical");
     if (
       !absenceAssertionObserved &&
       assertFileAbsentAtOption &&
@@ -4083,7 +4324,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       gridHasOption(grid, assertFileAbsentAtOption)
     ) {
       if (fileSignalMet(projectDir, assertFileAbsent, false)) {
-        failAnswerGate(
+        await failAnswerGate(
           backend,
           session,
           `'${assertFileAbsent}' already exists while option ` +
@@ -4099,7 +4340,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       });
     }
     if (stopAtApprovalGate && gridIsApprovalGate(grid)) {
-      assertAbsenceObservationCompleted();
+      await assertAbsenceObservationCompleted();
       writeTuiTrace(session, "answer_gate_stopped_at_approval", {
         answered,
         screen: grid,
@@ -4115,7 +4356,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "submit",
         screen: grid,
       });
-      backend.send(session, "Enter", false, true); // commit the whole form
+      await backend.send(session, "Enter", false, true); // commit the whole form
       if (revisionFeedbackPending) {
         revisionFeedbackPending = false;
         await handleRevisionRecovery(backend, session, answered);
@@ -4126,12 +4367,12 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: gridIsMultiTabForm(grid) ? "multi_select_next_tab" : "multi_select_commit",
         screen: grid,
       });
-      backend.send(session, "Space", false, true); // toggle the Recommended option ON
+      await backend.send(session, "Space", false, true); // toggle the Recommended option ON
       await sleep(150);
       if (gridIsMultiTabForm(grid)) {
-        backend.send(session, "Right", false, true); // advance to the next tab / Submit
+        await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
-        backend.send(session, "Enter", false, true); // lone multi-select: commit it
+        await backend.send(session, "Enter", false, true); // lone multi-select: commit it
       }
     } else if (rejectFirstGate && gridIsApprovalGate(grid)) {
       const requestChangesNeedsSubmit = gridIsMultiTabForm(grid);
@@ -4145,9 +4386,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       // than the highlighted "Approve" (option 1). Down moves the caret to option
       // 2; Enter selects it → handleReject (GATE_REJECTED + STAGE_REVISING +
       // Revision Count++). Consume the one-shot so every later gate is approved.
-      backend.send(session, "Down", false, true);
+      await backend.send(session, "Down", false, true);
       await sleep(150);
-      backend.send(session, "Enter", false, true);
+      await backend.send(session, "Enter", false, true);
       rejectFirstGate = false;
       process.stdout.write("answer-gate: rejected first approval gate (Request changes)\n");
       // What the engine does NEXT changed in v0.6.0, so we READ the screen and
@@ -4172,7 +4413,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "single_select_default",
         screen: grid,
       });
-      backend.send(session, "Enter", false, true); // select Recommended + advance
+      await backend.send(session, "Enter", false, true); // select Recommended + advance
     }
     answered++;
 
@@ -4200,6 +4441,27 @@ async function main(): Promise<void> {
     return cmdSnapshotTimeoutProbe(a);
   }
 
+  if (["start", "send", "paste", "resize"].includes(sub)) {
+    remainingOperationTimeoutMs(undefined, { phase: `TUI ${sub}` });
+  }
+  // Capture and retirement remain available during the reserved cleanup phase.
+
+  // Legacy Windows commands still run under Node. If a direct Node caller
+  // selects native Bun, hand off before loading the OS lock/identity helpers.
+  const handoff = process.env.AIDLC_TUI_BUN_HANDOFF;
+  if (process.versions.bun) delete process.env.AIDLC_TUI_BUN_HANDOFF;
+  if (selectedTuiBackend() === "bun" && !process.versions.bun) {
+    if (handoff === "1") fail("native TUI handoff requires Bun; AIDLC_BUN_BIN resolved to a non-Bun runtime");
+    const code = await new Promise<number>((accept, reject) => {
+      const child = spawn(process.env.AIDLC_BUN_BIN || "bun", [
+        fileURLToPathSafe(import.meta.url), ...process.argv.slice(2),
+      ], { env: { ...process.env, AIDLC_TUI_BUN_HANDOFF: "1" }, stdio: "inherit" });
+      child.once("error", reject);
+      child.once("exit", (status) => accept(status ?? 1));
+    });
+    process.exit(code);
+  }
+
   const backend = selectBackend();
   switch (sub) {
     case "start":
@@ -4212,6 +4474,12 @@ async function main(): Promise<void> {
       return cmdStartup(backend, a);
     case "capture":
       return cmdCapture(backend, a);
+    case "resize":
+      if (!backend.resize) fail("resize requires AIDLC_TUI_BACKEND=bun");
+      return backend.resize(requireFlag(a, "session"), Number(requireFlag(a, "width")), Number(requireFlag(a, "height")));
+    case "paste":
+      if (!backend.paste) fail("paste requires AIDLC_TUI_BACKEND=bun");
+      return backend.paste(requireFlag(a, "session"), requireFlag(a, "text"));
     case "kill":
       return cmdKill(backend, a);
     case "wait-dead":
@@ -4221,7 +4489,7 @@ async function main(): Promise<void> {
     default:
       fail(
         `unknown subcommand '${sub ?? ""}'. ` +
-          `Use: start | send | wait | startup | capture | kill | wait-dead | answer-gate`,
+          `Use: start | send | wait | startup | capture | resize | paste | kill | wait-dead | answer-gate`,
       );
   }
 }

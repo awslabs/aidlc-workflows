@@ -103,17 +103,17 @@
 // custom-stage gates) — gated behind AIDLC_TUI_LIVE=1. The sdk half also spends
 // tokens (driveAidlc runs the orchestrator on Opus/Bedrock). The compile-rule
 // test + the seeded-state statusline capture spend none. Absent
-// tmux/claude/distributable -> SKIP with a reason, never a hollow pass.
+// selected TUI substrate/claude/distributable -> SKIP with a reason, never a hollow pass.
 //
-// SPAWN, not import (D-TUI-7): tui-drive.ts runs as a subprocess (node on
-// Windows so node-pty never loads under bun #748; bun elsewhere). The
-// tui-drive.ts spawn is what DERIVES the tui mechanism; the driveAidlc() call is
-// what derives sdk — together {sdk, tui}.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import * as os from "node:os";
 import { join } from "node:path";
 import { assertAuditEvent, assertToolResultContains } from "../harness/assert.ts";
 import {
@@ -132,26 +132,55 @@ import {
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { driveAidlc, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
-import { resolveWinNode } from "../harness/tui-drive.ts";
+import { driveAidlc, recordDirFor, stateFilePathFor, type CapturedToolResult } from "../harness/sdk-drive.ts";
 import {
   cleanupTuiProject,
   cleanupTuiProjectAfterKill,
   compileTuiRuntimeGraph,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
-const IS_WIN = os.platform() === "win32";
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
+
+/** Retain command structure after raw SDK traces are sanitized, never token/key contents. */
+function steeringDiagnostics(results: CapturedToolResult[]): string {
+  const digest = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
+  const issued = new Set<string>();
+  const rows: unknown[] = [];
+  for (const result of results) {
+    if (result.toolName !== "Bash") continue;
+    const command = typeof result.input.command === "string" ? result.input.command : "";
+    const continuation = /\borchestrate(?:\.ts)?["']?\s+continue\b([\s\S]*)/.exec(command);
+    if (continuation || result.resultText.includes('"kind":"error"')) {
+      const atoms = continuation?.[1].match(/"[^"]*"|'[^']*'|[^\s]+/g) ?? [];
+      rows.push({
+        toolUseIdHash: digest(result.toolUseId),
+        commandHash: digest(command),
+        commandLength: command.length,
+        continueArgumentAtoms: atoms.length,
+        hasShellOperators: /[;&|`]/.test(continuation?.[1] ?? ""),
+        tokens: [...command.matchAll(/[A-Za-z0-9_-]{100,}/g)].slice(0, 4).map(([token]) => ({
+          length: token.length, hash: digest(token), issuedPreviously: issued.has(token),
+        })),
+        engineError: result.resultText.includes('"kind":"error"'),
+      });
+    }
+    for (const match of result.resultText.matchAll(/"continue_token"\s*:\s*"([A-Za-z0-9_-]+)"/g)) {
+      issued.add(match[1]);
+    }
+  }
+  return JSON.stringify({ issuedTokenCount: issued.size, commands: rows.slice(-12) });
+}
 
 // Wedge-ceiling, never a budget (the timer lesson): one generous cap; pass on
 // the on-disk signal, not the clock. Matches the suite convention.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 interface Run {
   rc: number;
@@ -184,15 +213,8 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live harness-engineer journey (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
   if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
     return "claude CLI not found";
   }
@@ -298,16 +320,17 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
             "--dangerously-skip-permissions",
           ]).rc,
         ).toBe(0);
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
+        // Share the original 60s trust + 15s permission + 45s readiness budget.
+        const startupDeadlineMs = Date.now() + 120_000;
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*INCEPTION", "--timeout-ms", "120000",
+        ]);
+        expect(startup.rc).toBe(0);
         // The custom stage is in INCEPTION — wait for the workflow statusline.
         // P9: the orientation prefix ("<intent-slug> · ") sits between [AIDLC] and
         // the phase, so match with .* rather than a contiguous gap.
-        const sawMarker = waitFor(session, "\\[AIDLC\\].*INCEPTION", 45000, 1000);
+        const sawMarker = waitFor(session, "\\[AIDLC\\].*INCEPTION", Math.max(0, startupDeadlineMs - Date.now()), 1000);
         const pane = drive(["capture", "--session", session]).stdout;
         if (!sawMarker) {
           throw new Error(
@@ -325,7 +348,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         );
       }
     },
-    90_000,
+    liveCaseTimeoutMs(0),
   );
 
   // -------------------------------------------------------------------------
@@ -421,7 +444,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
           .filter((tr) => tr.toolName === "Bash")
           .map((tr) => tr.resultText)
           .filter((text) => text.includes('"kind":"error"') || text.includes("Transition rejected"));
-        expect(engineErrors).toEqual([]);
+        expect(engineErrors, steeringDiagnostics(r.toolResults)).toEqual([]);
         const directiveText = r.toolResults
           .filter((tr) => tr.toolName === "Bash")
           .map((tr) => tr.resultText)
@@ -486,13 +509,14 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
             "--dangerously-skip-permissions",
           ]).rc,
         ).toBe(0);
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
-        expect(waitFor(session, "\\[AIDLC\\].*(ready|INCEPTION)", 45000, 800)).toBe(true);
+        // Share the original 60s trust + 15s permission + 45s readiness budget.
+        const startupDeadlineMs = Date.now() + 120_000;
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*(ready|INCEPTION)", "--timeout-ms", "120000",
+        ]);
+        expect(startup.rc).toBe(0);
+        expect(waitFor(session, "\\[AIDLC\\].*(ready|INCEPTION)", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
 
         // Resume the pre-initialized custom-scope workflow. answer-gate below
         // handles any custom-stage approval gates by keystroke.
@@ -526,7 +550,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
               "--until-file",
               PLAN_OUTPUT_REL,
               "--overall-timeout-ms",
-              String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+            String(Math.max(60000, LIVE_WORK_TIMEOUT_MS - 30000)),
             ],
             { stdio: "inherit" },
           );

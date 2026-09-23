@@ -1,0 +1,199 @@
+name: Deterministic tests
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Immutable source commit supplied by the caller
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      tier:
+        description: smoke, unit, integration, or e2e (isolated deterministic E2E)
+        required: true
+        type: string
+      unit-shard:
+        description: N/M selector for the unit tier only
+        default: ""
+        type: string
+      artifact-label:
+        description: Artifact prefix; the actual runner OS is appended
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.tier == 'smoke' && 15 || 60 }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: "false"
+    steps:
+      - name: Validate test selection
+        env:
+          TEST_REF: ${{ inputs.ref }}
+          TEST_TIER: ${{ inputs.tier }}
+          UNIT_SHARD: ${{ inputs.unit-shard }}
+          ARTIFACT_LABEL: ${{ inputs.artifact-label }}
+        run: |
+          set -euo pipefail
+          [[ "$TEST_REF" =~ ^[a-f0-9]{40}$ ]] || {
+            echo "::error::Deterministic tests require an immutable commit SHA"
+            exit 2
+          }
+          [[ "$ARTIFACT_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+            echo "::error::Invalid deterministic artifact label"
+            exit 2
+          }
+          case "$TEST_TIER:$UNIT_SHARD" in
+            smoke:|integration:|e2e:) ;;
+            unit:*)
+              [[ "$UNIT_SHARD" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] || {
+                echo "::error::Unit tier requires an N/M shard"
+                exit 2
+              }
+              [ "${UNIT_SHARD%/*}" -le "${UNIT_SHARD#*/}" ] || {
+                echo "::error::Unit shard index cannot exceed its total"
+                exit 2
+              }
+              ;;
+            *) echo "::error::Invalid deterministic tier or unit shard"; exit 2 ;;
+          esac
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Bind checkout to requested commit
+        env:
+          TEST_REF: ${{ inputs.ref }}
+        run: test "$(git rev-parse HEAD)" = "$TEST_REF"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build the harness projections
+        run: bun scripts/package.ts
+      - name: Prepare unit test substrates
+        if: inputs.tier == 'unit' && runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            missing=()
+            for tool in tmux zsh; do
+              command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+            done
+            if [ "${#missing[@]}" -gt 0 ]; then
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq "${missing[@]}"
+            fi
+          elif ! command -v tmux >/dev/null 2>&1; then
+            brew install tmux
+          fi
+          tmux -V
+      - name: Prepare Windows native sandbox probe
+        if: inputs.tier == 'e2e' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probeRoot = Join-Path $env:RUNNER_TEMP 'aidlc-codex-runner-probe'
+          [void][IO.Directory]::CreateDirectory($probeRoot)
+          $archive = Join-Path $probeRoot 'runner.zip'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/openai/codex/releases/download/rust-v0.151.0/codex-command-runner-x86_64-pc-windows-msvc.exe.zip' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine '57be8a93ad4be537cac12dbaa63de69968389393ab721ce47a6f0ac7e0b80c5b') {
+            throw 'Native runner archive digest mismatch.'
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($archive)
+          $runner = Join-Path $probeRoot 'codex-command-runner.exe'
+          try {
+            if ($zip.Entries.Count -ne 1 -or $zip.Entries[0].FullName -cne 'codex-command-runner-x86_64-pc-windows-msvc.exe' -or $zip.Entries[0].Length -ne 8199984) {
+              throw 'Unexpected native runner archive layout.'
+            }
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($zip.Entries[0], $runner)
+          } finally { $zip.Dispose() }
+          if ((Get-FileHash -LiteralPath $runner -Algorithm SHA256).Hash -ine '5a84820fc507e5e3c8689047434259d96197730e92d88e6a915b0da97c758da6') {
+            throw 'Native runner executable digest mismatch.'
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "AIDLC_CODEX_RUNNER_PROBE=$runner"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value 'AIDLC_CODEX_RUNNER_PROBE_ONLY=0'
+      - name: Run deterministic tier
+        # Leave time to sanitize and upload partial evidence after a timeout.
+        timeout-minutes: ${{ inputs.tier == 'smoke' && 10 || 50 }}
+        env:
+          TEST_TIER: ${{ inputs.tier }}
+          UNIT_SHARD: ${{ inputs.unit-shard }}
+        run: |
+          set -euo pipefail
+          case "$TEST_TIER" in
+            smoke) args=(--smoke) ;;
+            unit) args=(--unit --shard "$UNIT_SHARD") ;;
+            integration) args=(--integration) ;;
+            e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 900) ;;
+            *) exit 2 ;;
+          esac
+          # Finish test work before the step's hard stop so the runner can
+          # retire processes, finish its summaries, and preserve partial results.
+          if [ "$TEST_TIER" = smoke ]; then
+            args+=(--run-timeout 480)
+          else
+            args+=(--run-timeout 2700)
+          fi
+          capture="$GITHUB_WORKSPACE/tmp/ci-deterministic"
+          mkdir -p "$capture"
+          bash tests/run-tests.sh --debug -P 8 --no-llm "${args[@]}" > "$capture/run.log" 2>&1 &
+          test_pid=$!
+          realpath "$capture/run.log"
+          stamp=""
+          for ((attempt=0; attempt<50; attempt++)); do
+            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+            if [ -n "$stamp" ]; then
+              realpath "$stamp"
+              printf '%s\n' "$stamp" > "$capture/stamp.txt"
+              break
+            fi
+            if ! kill -0 "$test_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          result=0
+          wait "$test_pid" || result=$?
+          if [ -z "$stamp" ]; then
+            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+            if [ -n "$stamp" ]; then
+              realpath "$stamp"
+              printf '%s\n' "$stamp" > "$capture/stamp.txt"
+            fi
+          fi
+          if [ -z "$stamp" ] || [ ! -f "$stamp/summary.txt" ]; then
+            echo "::error::Deterministic test run did not produce a summary"
+            result=1
+          fi
+          exit "$result"
+      - name: Sanitize deterministic evidence
+        id: sanitize
+        if: ${{ always() }}
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: ${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}
+        run: |
+          bun scripts/ci-sanitize-logs.ts tests/logs
+          bun scripts/ci-sanitize-logs.ts tmp/ci-deterministic
+      - name: Upload deterministic evidence
+        if: ${{ always() && steps.sanitize.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ inputs.artifact-label }}-${{ runner.os }}
+          path: |
+            tests/logs/
+            tmp/ci-deterministic/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90

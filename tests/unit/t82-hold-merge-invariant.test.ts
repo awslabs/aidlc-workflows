@@ -5,7 +5,7 @@
 //
 // Mechanism: cli. Every assertion is a process-boundary contract:
 //   - `hold-merge` / `release-merge` mutate the per-Bolt FORKED state file at
-//     <proj>/.aidlc/worktrees/bolt-<slug>/aidlc-docs/aidlc-state.md and print a
+//     the intent-scoped worktree's mirrored record and print a
 //     JSON envelope to stdout, then return (handleHoldMerge / handleReleaseMerge,
 //     aidlc-bolt.ts:587-601).
 //   - `complete --merge` refuses with process.exit(1) + a {ok:false,
@@ -33,8 +33,7 @@
 //        (:354), so no audit row is written on refusal.
 //   :613 isMergeHeld -> getField(content, "Merge-Held") === "true".
 //
-// Forked-state-file path is worktreePath(pd,slug)/aidlc-docs/aidlc-state.md
-// where worktreePath = <pd>/.aidlc/worktrees/bolt-<slug> (aidlc-lib.ts:148).
+// Forked state lives in the per-intent record mirrored below worktreePath(pd,id8,slug).
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test):
 //   .sh T1  hold-merge sets Merge-Held: true   -> "hold-merge sets `- **Merge-Held**: true` in forked state"
@@ -57,7 +56,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -108,7 +109,7 @@ function setupForkedProject(slug: string): string {
   projects.push(proj);
   seedStateFile(proj, STATE_FIXTURE);
   seedAuditFile(proj);
-  mkdirSync(join(proj, ".aidlc", "worktrees", `bolt-${slug}`), {
+  mkdirSync(worktreePath(proj, fixtureIntentId8(proj), slug), {
     recursive: true,
   });
   const r = bolt(proj, [
@@ -133,18 +134,12 @@ function setupForkedProject(slug: string): string {
  *  worktree mirror carries the SAME relative record dir as the main checkout
  *  (aidlc/spaces/default/intents/<record>/aidlc-state.md), not flat aidlc-docs/. */
 function forkedState(proj: string, slug: string): string {
-  return join(
-    proj,
-    ".aidlc",
-    "worktrees",
-    `bolt-${slug}`,
-    "aidlc",
-    "spaces",
-    DEFAULT_SPACE,
-    "intents",
-    DEFAULT_RECORD_DIR,
-    "aidlc-state.md",
-  );
+  return join(worktreePath(proj, fixtureIntentId8(proj), slug), "aidlc",
+  "spaces",
+  DEFAULT_SPACE,
+  "intents",
+  DEFAULT_RECORD_DIR,
+  "aidlc-state.md",);
 }
 
 /** Concatenate every main audit shard (audit/*.md) — the tools write their own
