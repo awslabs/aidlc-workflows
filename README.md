@@ -123,6 +123,7 @@ for the architecture and methodology.
 | [Harness guides](docs/guide/harnesses/README.md) | Handling provider, trust, and runtime differences |
 | [Install and Lifecycle](docs/guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, or uninstalling |
 | [Harness Engineer Guide](docs/harness-engineering/00-overview.md) | Reshaping stages, agents, rules, sensors, and knowledge |
+| [Development and Releases](DEVELOPERS.md) | Taking a PR through AI review, preview testing, and stable publication |
 | [Developer Reference](docs/reference/00-overview.md) | Changing the engine, hooks, packaging, or tests |
 
 ## Repository Layout

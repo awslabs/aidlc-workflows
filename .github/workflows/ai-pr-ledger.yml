@@ -22,7 +22,7 @@ jobs:
       && github.actor != 'github-actions[bot]'
       && startsWith(github.event.comment.body, '/aida')
     concurrency:
-      group: aida-ledger-${{ github.event.issue.number }}
+      group: aida-pr-${{ github.event.issue.number }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -60,51 +60,22 @@ jobs:
           {
             echo "status=$(jq -r .status /tmp/aida-command.json)"
             echo "refresh_head=$(jq -r '.refresh.head // empty' /tmp/aida-command.json)"
-            echo "refresh_decision=$(jq -r '.refresh.decision // empty' /tmp/aida-command.json)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Refresh the published verdict without rerunning models
-        if: steps.command.outputs.status == 'applied' && steps.command.outputs.refresh_decision != ''
+        if: steps.command.outputs.status == 'applied' && steps.command.outputs.refresh_head != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           REFRESH_HEAD: ${{ steps.command.outputs.refresh_head }}
-          REFRESH_DECISION: ${{ steps.command.outputs.refresh_decision }}
         run: |
           set -euo pipefail
-          # A decision changes the effective verdict of the reviewed head. The
-          # decision itself was re-derived by the script from persisted state under
-          # the SAME invariants the review validator uses (open findings at that
-          # head, readiness, risk, the stored decision), never from a blocker count
-          # alone. Reflect it in the managed labels and, when the derived decision
-          # is merge, dismiss the bot's stale CHANGES_REQUESTED review so the head
-          # can proceed without an artificial commit. The workflow check of the
-          # original run is not rewritten; labels and review state are the surfaces
-          # a command owns. Only acts when the reviewed head is still the PR head.
-          head="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
-          if [ "$head" != "$REFRESH_HEAD" ]; then
-            echo "::notice::The PR advanced past the reviewed head; the next review applies the ledger"
-            exit 0
-          fi
-          current="$(bun .github/scripts/ai-pr-review.ts label-state \
-            --repo "$REPO" --pr "$PR_NUMBER" --expected-head "$head")"
-          if [ "$current" != "reviewed-change" ] && [ "$current" != "reviewed-merge" ]; then
-            echo "::notice::No published AIDA review for the current head; labels left unchanged"
-            exit 0
-          fi
-          if [ "$REFRESH_DECISION" = "merge" ]; then
-            outcome="reviewed-merge"
-          else
-            outcome="reviewed-change"
-          fi
-          bun .github/scripts/ai-pr-review.ts labels \
-            --repo "$REPO" --pr "$PR_NUMBER" --expected-head "$head" --outcome "$outcome"
-          if [ "$outcome" = "reviewed-merge" ]; then
-            mapfile -t blocking_reviews < <(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-              --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state == \"CHANGES_REQUESTED\" and .commit_id == \"$head\" and ((.body // \"\") | startswith(\"<!-- ai-pr-review context=\"))) | .id")
-            for review_id in "${blocking_reviews[@]}"; do
-              gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$review_id/dismissals" \
-                -f message="The re-derived decision for this head is maintainer/merge after /aida decisions; see the findings ledger." >/dev/null
-            done
-          fi
+          # Re-read the live ledger until one stable verdict is reflected in the
+          # review gate and labels. This also repairs a prior interrupted refresh.
+          refresh="$(bun .github/scripts/ai-pr-review.ts converge-verdict \
+            --repo "$REPO" \
+            --pr "$PR_NUMBER" \
+            --head "$REFRESH_HEAD" \
+            --reason "maintainer /aida command")"
+          echo "::notice::Verdict refresh: $refresh"

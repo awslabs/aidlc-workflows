@@ -14,14 +14,14 @@ classic three-layer test pyramid that balances speed vs. thoroughness:
 ```
             /\
            /  \    ACCEPTANCE — full workflows, artifact + experience verification
-          / L3 \   Level: e2e  ·  When: before releases (--release / --all)
+          / L3 \   Level: e2e  ·  When: local --release/--all; release gates
          /------\
         /        \
        /   L2     \  STAGE — individual stages with stub input, verify artifacts
-      /------------\ Level: integration  ·  When: CI push (--ci, every PR)
+      /------------\ Level: integration  ·  When: local default/--ci; release gates
      /              \
     /      L1        \  PROTOCOL — contracts, structure, cross-references
-   /------------------\ Levels: smoke + unit  ·  When: every local change
+   /------------------\ Levels: smoke + unit  ·  When: local changes and PR CI
 ```
 
 The `--ci` profile and the no-flag default both run **smoke + unit +
