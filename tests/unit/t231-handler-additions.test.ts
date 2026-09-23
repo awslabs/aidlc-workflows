@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  clearSyntheticHumanTurnHost,
+  registerSyntheticHumanTurnHost,
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -97,6 +99,7 @@ function run(cmd: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): RunR
 }
 
 function recordHumanPrompt(project: string, prompt: string): void {
+  registerSyntheticHumanTurnHost(project, FENCE_SESSION);
   const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: project,
     env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: project },
@@ -105,6 +108,7 @@ function recordHumanPrompt(project: string, prompt: string): void {
     }),
     encoding: "utf-8",
   });
+  clearSyntheticHumanTurnHost(project);
   expect(result.status, result.stderr).toBe(0);
 }
 

@@ -52,6 +52,8 @@ import {
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  clearSyntheticHumanTurnHost,
+  registerSyntheticHumanTurnHost,
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -187,10 +189,12 @@ function tool(pd: string, name: string, args: string[]) {
 }
 
 function choice(pd: string, session: string, prompt: string): void {
+  registerSyntheticHumanTurnHost(pd, session);
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
+  clearSyntheticHumanTurnHost(pd);
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
 }
 

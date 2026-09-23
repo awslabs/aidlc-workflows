@@ -27,6 +27,8 @@ import {
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
+  clearSyntheticHumanTurnHost,
+  registerSyntheticHumanTurnHost,
   AIDLC_SRC,
   cleanupTestProject,
   resetAidlcEnv,
@@ -121,9 +123,11 @@ function log(f: Fixture, action: "decision" | "answer", extra: string[] = []) {
 }
 
 function human(project: string, choice = "Approve Plans", session = SESSION): void {
+  registerSyntheticHumanTurnHost(project, session);
   const result = run(project, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: choice,
   });
+  clearSyntheticHumanTurnHost(project);
   expect(result.code, result.stderr).toBe(0);
 }
 

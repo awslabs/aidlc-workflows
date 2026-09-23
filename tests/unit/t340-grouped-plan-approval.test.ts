@@ -20,6 +20,8 @@ import {
   approveSwarmCheckpoint, resolveSwarmCheckpoint,
 } from "../../dist/claude/.claude/tools/aidlc-swarm-checkpoints.ts";
 import {
+  clearSyntheticHumanTurnHost,
+  registerSyntheticHumanTurnHost,
   AIDLC_SRC, cleanupTestProject, resetAidlcEnv, runOrchestrateNext, seedBoltDagBatches,
   seededRecordDir, seededStateFile, setupIntegrationProject,
 } from "../harness/fixtures.ts";
@@ -54,9 +56,12 @@ function recordCommand(pd: string, command: string): void {
     "decision", ...route, "--decision", "Use this command?", "--options", "Approve,Request Changes",
   ]);
   expect(decision.code, decision.err).toBe(0);
-  expect(tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
+  registerSyntheticHumanTurnHost(pd, SESSION);
+  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "Approve",
-  }).code).toBe(0);
+  });
+  clearSyntheticHumanTurnHost(pd);
+  expect(human.code).toBe(0);
   const answer = tool(pd, "tools/aidlc-log.ts", ["answer", ...route, "--details", "Approve"]);
   expect(answer.code, answer.err).toBe(0);
   const applied = tool(pd, "tools/aidlc-state.ts", ["set-construction-verification-command", command]);
@@ -107,9 +112,12 @@ function approve(pd: string, grouped = true): void {
       "decision", ...route, "--decision", "Approve reviewed plans?", "--options", `${choice},Request Changes`,
     ]);
     expect(decision.code, decision.err).toBe(0);
-    expect(tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
+    registerSyntheticHumanTurnHost(pd, SESSION);
+    const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: choice,
-    }).code).toBe(0);
+    });
+    clearSyntheticHumanTurnHost(pd);
+    expect(human.code).toBe(0);
     for (const entry of units.filter((entry) => grouped || selection.includes(entry.unit))) {
       const path = join(pd, entry.questionsFile);
       writeFileSync(path, readFileSync(path, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
@@ -394,9 +402,12 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     expect(gates(pd)).toBe(0); // PreToolUse never grants checkpoint authority.
     expect(() => approveSwarmCheckpoint(pd, 1, UNITS)).toThrow("exact");
     expect(tool(pd, "tools/aidlc-bolt.ts", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", UNITS.join(","), "--session", SESSION]).code).toBe(0);
-    expect(tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
+    registerSyntheticHumanTurnHost(pd, SESSION);
+    const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "Approve",
-    }).code).toBe(0);
+    });
+    clearSyntheticHumanTurnHost(pd);
+    expect(human.code).toBe(0);
     expect(approveSwarmCheckpoint(pd, 1, UNITS, "Approve", SESSION).approved).toBe(true);
     const completion = next(pd);
     expect(completion.kind).toBe("run-stage");

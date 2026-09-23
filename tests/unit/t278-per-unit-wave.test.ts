@@ -34,6 +34,8 @@ import {
   appendAuditEntry,
 } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  clearSyntheticHumanTurnHost,
+  registerSyntheticHumanTurnHost,
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -509,12 +511,14 @@ function approveIteration(proj: string, stage: string, value: "stage-major" | "u
     ], { encoding: "utf-8", env });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     if (action === "decision") {
+      registerSyntheticHumanTurnHost(proj, session);
       const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
         encoding: "utf-8", cwd: proj, env,
         input: JSON.stringify({
           hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve",
         }),
       });
+      clearSyntheticHumanTurnHost(proj);
       expect(human.status, `${human.stdout}${human.stderr}`).toBe(0);
     }
   }

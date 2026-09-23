@@ -24,6 +24,8 @@ import {
   resolveTestingPosture, readCodeGenerationWorktreeSourceBaseline,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
+  clearSyntheticHumanTurnHost,
+  registerSyntheticHumanTurnHost,
   fixtureIntentId8,
   AIDLC_SRC, cleanupWorktreeFixture, resetAidlcEnv, seedAidlcMemory,
   runOrchestrateNext, seedBoltDagBatches, seededAuditDir, seededStateFile, setupWorktreeFixture,
@@ -36,10 +38,15 @@ afterEach(() => {
 }, 30_000);
 const STAGE = "code-generation";
 const CHECK = "git diff --check";
+const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+};
 
 function tool(pd: string, file: string, args: string[], input?: unknown) {
   const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, file), ...args], {
-    cwd: pd, env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
   });
@@ -62,7 +69,9 @@ function swarm(pd: string, args: string[]) {
 }
 
 function git(pd: string, args: string[]): string {
-  const r = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", ...args], {
+    cwd: pd, env: ISOLATED_GIT_ENV, stdout: "pipe", stderr: "pipe",
+  });
   expect(r.exitCode, r.stderr.toString()).toBe(0);
   return r.stdout.toString().trim();
 }
@@ -113,9 +122,11 @@ function approvePlan(pd: string, unit: string, revision = "initial"): void {
     "decision", ...identity, "--decision", `Approve ${revision}?`, "--options", "Approve Plan,Request Changes",
   ]);
   expect(decision.code, decision.err).toBe(0);
+  registerSyntheticHumanTurnHost(pd, session);
   const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan",
   });
+  clearSyntheticHumanTurnHost(pd);
   expect(human.code, human.err).toBe(0);
   writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
   const answer = tool(pd, "tools/aidlc-log.ts", ["answer", ...identity, "--details", "Approve Plan"]);
@@ -132,9 +143,11 @@ function approveGroupedPlans(pd: string, units: string[], revision: string): voi
     "decision", ...identity, "--decision", "Approve these plans?", "--options", "Approve Plans,Request Changes",
   ]);
   expect(decision.code, decision.err).toBe(0);
+  registerSyntheticHumanTurnHost(pd, revision);
   const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: revision, prompt: "Approve Plans",
   });
+  clearSyntheticHumanTurnHost(pd);
   expect(human.code, human.err).toBe(0);
   for (const member of members) {
     writeFileSync(member.questionsFile, readFileSync(member.questionsFile, "utf-8")
@@ -303,9 +316,11 @@ function reviewRevisedSource(pd: string, unit = "alpha"): void {
 }
 
 function humanChoice(pd: string, choice: string, session: string): void {
+  registerSyntheticHumanTurnHost(pd, session);
   const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: choice,
   });
+  clearSyntheticHumanTurnHost(pd);
   expect(human.code, `${human.out}\n${human.err}`).toBe(0);
 }
 
@@ -1083,9 +1098,12 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       "decision", ...identity, "--decision", "Approve both plans?", "--options", "Approve Plans,Request Changes",
     ]);
     expect(decision.code, decision.err).toBe(0);
-    expect(tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
+    registerSyntheticHumanTurnHost(pd, "group");
+    const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: "group", prompt: "Approve Plans",
-    }).code).toBe(0);
+    });
+    clearSyntheticHumanTurnHost(pd);
+    expect(human.code).toBe(0);
     for (const entry of units) {
       writeFileSync(entry.questionsFile, readFileSync(entry.questionsFile, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
     }

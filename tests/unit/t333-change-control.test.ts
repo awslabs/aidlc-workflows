@@ -85,6 +85,8 @@ import {
   writeCurrentSessionId,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  clearSyntheticHumanTurnHost,
+  registerSyntheticHumanTurnHost,
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -134,6 +136,7 @@ function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv 
 }
 
 function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv = {}): string {
+  registerSyntheticHumanTurnHost(proj, FENCE_SESSION);
   const result = Bun.spawnSync({
     cmd: [BUN, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     cwd: proj,
@@ -144,6 +147,7 @@ function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv 
     stdout: "pipe",
     stderr: "pipe",
   });
+  clearSyntheticHumanTurnHost(proj);
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString();
 }
