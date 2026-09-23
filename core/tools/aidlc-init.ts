@@ -208,6 +208,8 @@ type PreparedRefreshSource = {
   root: string;
   cleanup?: string;
   regenerated: Set<string>;
+  /** Contribution sidecars whose last record the refresh retired. */
+  emptiedSidecars?: Set<string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -3564,6 +3566,31 @@ function mergeConsumes(content: string, blocks: readonly string[]): string {
     : content.replace(match[0], `${match[1]}${additions.join("\n")}\n`);
 }
 
+function listFieldItems(content: string, field: string): string[] {
+  const match = content.match(new RegExp(`^${field}:\\n((?: {2}- .+\\n)*)`, "m"));
+  if (!match) return [];
+  return [...match[1].matchAll(/^ {2}- (.+)$/gm)].map((item) =>
+    item[1].trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1")
+  );
+}
+
+function removeListItems(content: string, field: string, items: readonly string[], dropEmptyField = false): string {
+  if (items.length === 0) return content;
+  const values = new Set(items);
+  const block = new RegExp(`^${field}:\\n((?: {2}- .+\\n)*)`, "m");
+  const match = content.match(block);
+  if (!match) return content;
+  const kept = [...match[1].matchAll(/^ {2}- (.+)$/gm)]
+    .map((item) => item[1])
+    .filter((item) => !values.has(item.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1")));
+  const replacement = kept.length > 0
+    ? `${field}:\n${kept.map((item) => `  - ${item}`).join("\n")}\n`
+    : dropEmptyField
+    ? ""
+    : `${field}: []\n`;
+  return content.replace(block, replacement);
+}
+
 function stripRecordedContributions(content: string, record: StageContribRecord): string {
   let value = content;
   for (const [field, items] of [
@@ -3572,20 +3599,12 @@ function stripRecordedContributions(content: string, record: StageContribRecord)
     ["requires_stage", record.requires_stage],
     ["required_sections", record.required_sections],
   ] as const) {
-    if (!items?.length) continue;
-    const values = new Set(items);
-    const block = new RegExp(`^${field}:\\n((?: {2}- .+\\n)*)`, "m");
-    const match = value.match(block);
-    if (!match) continue;
-    const kept = [...match[1].matchAll(/^ {2}- (.+)$/gm)]
-      .map((item) => item[1])
-      .filter((item) => !values.has(item.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1")));
-    const replacement = kept.length > 0
-      ? `${field}:\n${kept.map((item) => `  - ${item}`).join("\n")}\n`
-      : field === "required_sections" && record.required_sections_created
-      ? ""
-      : `${field}: []\n`;
-    value = value.replace(block, replacement);
+    value = removeListItems(
+      value,
+      field,
+      items ?? [],
+      field === "required_sections" && record.required_sections_created === true,
+    );
   }
   if (record.consumes?.length) {
     const names = new Set(record.consumes);
@@ -3658,43 +3677,60 @@ function anchorOffset(content: string, anchor: string): number {
 }
 
 // A recorded requires_stage edge is replayed onto a FRESH runtime only if it
-// still holds there: the dependency stage exists, and it compiles before the
-// target — an earlier phase, or a lower pinned number in the same phase read
-// from the staged graph. An upgrade that removes or reorders a stage would
-// otherwise resurrect an edge the compile invariant rejects. Same-phase edges
-// need the staged graph; without a readable one they are dropped.
+// still holds there under the compiler's own rule: the dependency stage exists,
+// and its number sorts before the target's. The refresh compile seeds from the
+// staged graph, so a stage pinned there keeps its full number (prefix, then
+// index) even when its file now sits in another phase directory; a stage with
+// no row there (a retained plugin stage) takes its phase directory as prefix
+// and seeds past that prefix's max. An upgrade that removes or reorders a stage
+// would otherwise resurrect an edge the compile invariant rejects. Same-prefix
+// edges need the staged graph; without a readable one they are dropped.
 const REFRESH_PHASE_ORDER = ["initialization", "ideation", "inception", "construction", "operation"];
-function requiresEdgeHolds(stagedHarnessRoot: string, target: string, dependency: string): boolean {
-  if (target === dependency) return false;
-  const phaseOf = (slug: string): number => {
-    for (const [index, phase] of REFRESH_PHASE_ORDER.entries()) {
-      if (existsSync(join(stagedHarnessRoot, "aidlc-common", "stages", phase, `${slug}.md`))) return index;
+type RequiresEdgeHolds = (target: string, dependency: string) => boolean;
+function requiresEdgeOracle(stagedHarnessRoot: string): RequiresEdgeHolds {
+  const phaseBySlug = new Map<string, number>();
+  for (const [index, phase] of REFRESH_PHASE_ORDER.entries()) {
+    const dir = join(stagedHarnessRoot, "aidlc-common", "stages", phase);
+    if (!pathPresent(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      if (name.endsWith(".md") && !phaseBySlug.has(name.slice(0, -3))) phaseBySlug.set(name.slice(0, -3), index);
     }
-    return -1;
-  };
-  const targetPhase = phaseOf(target);
-  const dependencyPhase = phaseOf(dependency);
-  if (targetPhase < 0 || dependencyPhase < 0) return false;
-  if (dependencyPhase !== targetPhase) return dependencyPhase < targetPhase;
+  }
+  let pinned: Map<string, [number, number]> | null = null;
   try {
-    const graph = JSON.parse(
+    const rows = JSON.parse(
       readFileSync(join(stagedHarnessRoot, "tools", "data", "stage-graph.json"), "utf-8"),
     ) as Array<{ slug?: string; number?: string }>;
-    const indexOf = (slug: string): number => {
-      const raw = graph.find((row) => row.slug === slug)?.number ?? "";
-      const index = Number.parseInt(raw.split(".")[1] ?? "", 10);
-      return Number.isFinite(index) ? index : Number.NaN;
-    };
-    const dependencyIndex = indexOf(dependency);
-    const targetIndex = indexOf(target);
-    return Number.isFinite(dependencyIndex) && Number.isFinite(targetIndex) && dependencyIndex < targetIndex;
+    const numbers = new Map<string, [number, number]>();
+    for (const row of rows) {
+      const [prefix, index] = (row.number ?? "").split(".").map((part) => Number.parseInt(part, 10));
+      if (row.slug && Number.isFinite(prefix) && Number.isFinite(index)) numbers.set(row.slug, [prefix, index]);
+    }
+    pinned = numbers;
   } catch {
-    return false;
+    // Unreadable staged graph: same-prefix ordering cannot be verified.
   }
+  return (target, dependency) => {
+    if (target === dependency) return false;
+    const targetPhase = phaseBySlug.get(target);
+    const dependencyPhase = phaseBySlug.get(dependency);
+    if (targetPhase === undefined || dependencyPhase === undefined) return false;
+    const targetNumber = pinned?.get(target);
+    const dependencyNumber = pinned?.get(dependency);
+    const targetPrefix = targetNumber?.[0] ?? targetPhase;
+    const dependencyPrefix = dependencyNumber?.[0] ?? dependencyPhase;
+    if (dependencyPrefix !== targetPrefix) return dependencyPrefix < targetPrefix;
+    if (pinned === null) return false;
+    // Same prefix: an unpinned stage seeds past the prefix max, so it follows
+    // every pinned one; two unpinned stages are seeded in their own edge order.
+    if (dependencyNumber === undefined) return targetNumber === undefined;
+    if (targetNumber === undefined) return true;
+    return dependencyNumber[1] < targetNumber[1];
+  };
 }
 
 export function _requiresEdgeHoldsForTests(stagedHarnessRoot: string, target: string, dependency: string): boolean {
-  return requiresEdgeHolds(stagedHarnessRoot, target, dependency);
+  return requiresEdgeOracle(stagedHarnessRoot)(target, dependency);
 }
 
 function mergePluginFragments(
@@ -4385,6 +4421,9 @@ function prepareRefreshSource(
     regenerated.add(`${descriptor.harnessDir}/tools/data/scope-grid.json`);
   }
 
+  // Files carried over from the project rather than shipped by the runtime
+  // (plugin stages, contribution sidecars): their frontmatter is not core's.
+  const overlaid = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
     if (directory !== descriptor.harnessDir && directory !== ".agents") continue;
     const currentDir = join(projectDir, directory);
@@ -4400,6 +4439,7 @@ function prepareRefreshSource(
       mkdirSync(dirname(staged), { recursive: true });
       cpSync(join(projectDir, rel), staged, { preserveTimestamps: true });
       regenerated.add(rel);
+      overlaid.add(rel);
     }
   }
 
@@ -4426,6 +4466,12 @@ function prepareRefreshSource(
     }
   }
 
+  // A recorded edge the fresh runtime declares itself is core's from here on,
+  // and one that no longer holds is not replayed: either way the plugin stops
+  // owning it, so its sidecar stops recording it. Otherwise a disable would
+  // strip a core edge, and doctor would report a refused edge as missing.
+  const retiredEdges = new Map<string, Set<string>>();
+  const requiresEdgeHolds = requiresEdgeOracle(join(root, descriptor.harnessDir));
   const stageRoot = join(currentHarness, "aidlc-common", "stages");
   if (pathPresent(stageRoot) && lstatSync(stageRoot).isDirectory()) {
     for (const phase of readdirSync(stageRoot)) {
@@ -4438,7 +4484,8 @@ function prepareRefreshSource(
         const stagedPath = join(root, rel);
         if (!regularFile(currentPath) || !existsSync(stagedPath)) continue;
         const current = readFileSync(currentPath, "utf-8");
-        const record = records.get(file.slice(0, -3)) ?? {};
+        const slug = file.slice(0, -3);
+        const record = records.get(slug) ?? {};
         const fragments = pluginFragments(current);
         const hasRecordedContribution = Object.entries(record).some(([key, value]) =>
           key === "required_sections_created" ? value === true : Array.isArray(value) && value.length > 0
@@ -4450,20 +4497,57 @@ function prepareRefreshSource(
         const strippedHash = sha256Bytes(stripRecordedContributions(current, record));
         if (priorHash && currentHash !== priorHash && strippedHash !== priorHash) continue;
         let fresh = readFileSync(stagedPath, "utf-8");
+        // A stage carried over from the project (a plugin stage) is not core's,
+        // so its edges are not core-owned, and it already holds the recorded
+        // edges: a stale one has to be removed rather than just not re-added.
+        const coreEdges = new Set(overlaid.has(rel) ? [] : listFieldItems(fresh, "requires_stage"));
+        const pluginEdges = (record.requires_stage ?? []).filter((dependency) => !coreEdges.has(dependency));
+        const replayedEdges = pluginEdges.filter((dependency) => requiresEdgeHolds(slug, dependency));
+        const staleEdges = pluginEdges.filter((dependency) => !replayedEdges.includes(dependency));
+        const retired = (record.requires_stage ?? []).filter((dependency) => !replayedEdges.includes(dependency));
+        if (retired.length > 0) retiredEdges.set(slug, new Set(retired));
         fresh = mergeListField(fresh, "produces", record.produces ?? []);
         fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
-        fresh = mergeListField(
-          fresh,
-          "requires_stage",
-          (record.requires_stage ?? []).filter((dependency) =>
-            requiresEdgeHolds(join(root, descriptor.harnessDir), file.slice(0, -3), dependency)
-          ),
-        );
+        fresh = removeListItems(fresh, "requires_stage", staleEdges);
+        fresh = mergeListField(fresh, "requires_stage", replayedEdges);
         fresh = mergeConsumes(fresh, consumeBlocks(current, new Set(record.consumes ?? [])));
         fresh = mergeRequiredSections(fresh, record);
         fresh = mergePluginFragments(fresh, fragments);
         writeFileSync(stagedPath, fresh);
         if (prior) regenerated.add(rel);
+      }
+    }
+  }
+  const emptiedSidecars = new Set<string>();
+  if (retiredEdges.size > 0 && pathPresent(dataDir) && lstatSync(dataDir).isDirectory()) {
+    for (const file of readdirSync(dataDir).filter((name) => /^plugin-contrib-.+\.json$/.test(name))) {
+      const rel = `${descriptor.harnessDir}/tools/data/${file}`;
+      const stagedSidecar = join(root, rel);
+      if (!overlaid.has(rel) || !regularFile(stagedSidecar)) continue;
+      const sidecar = JSON.parse(readFileSync(stagedSidecar, "utf-8")) as Record<string, Record<string, unknown>>;
+      let changed = false;
+      for (const [slug, retired] of retiredEdges) {
+        const entry = sidecar[slug];
+        if (!entry || !Array.isArray(entry.requires_stage)) continue;
+        const kept = entry.requires_stage.filter((dependency) =>
+          typeof dependency !== "string" || !retired.has(dependency)
+        );
+        if (kept.length === entry.requires_stage.length) continue;
+        if (kept.length > 0) entry.requires_stage = kept;
+        else delete entry.requires_stage;
+        // A record with no contribution left is invalid for doctor and sync.
+        if (!Object.values(entry).some((value) => Array.isArray(value) && value.length > 0)) delete sidecar[slug];
+        changed = true;
+      }
+      if (!changed) continue;
+      // Compose and plugin sync refuse an empty sidecar: the planner removes
+      // the project's copy instead of installing `{}`.
+      if (Object.keys(sidecar).length === 0) {
+        rmSync(stagedSidecar);
+        regenerated.delete(rel);
+        emptiedSidecars.add(rel);
+      } else {
+        writeFileSync(stagedSidecar, `${JSON.stringify(sidecar, null, 2)}\n`);
       }
     }
   }
@@ -4572,7 +4656,7 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, entries, notes };
+  return { root, cleanup, regenerated, emptiedSidecars, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -7344,6 +7428,12 @@ export async function main(
       prepared.regenerated,
       retainBaseline,
     );
+    for (const rel of prepared.emptiedSidecars ?? []) {
+      const target = join(projectDir, rel);
+      if (!regularFile(target) || operations.some((operation) => operation.path === rel)) continue;
+      operations.push({ kind: "remove", path: rel, expected: expected(target) });
+      actions.push({ path: rel, action: "remove", detail: "plugin contribution record emptied" });
+    }
     if (!selected.projectProjection) {
       planRootIntegrations(
         projectDir,

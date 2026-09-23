@@ -75,6 +75,7 @@ function fileInventory(root: string, relative = ""): string[] {
 
 interface GraphStage {
   slug?: string;
+  number?: string;
   produces?: string[];
   requires_stage?: string[];
   consumes?: Array<{ artifact?: string; required?: boolean }>;
@@ -455,6 +456,29 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       pluginModifiedStage,
       readFileSync(pluginModifiedStage, "utf-8").replace(/^(requires_stage:\n(?: {2}- .+\n)*)/m, "$1  - syn-stale-dependency\n"),
     );
+    // A recorded edge onto an installed PLUGIN stage holds even though the
+    // incoming distribution does not ship that stage: test-pro-integration
+    // (construction) stays on disk and compiles before performance-validation
+    // (operation), so the edge must be re-created, not dropped.
+    const retainedEdgeStage = join(
+      cursorProject, ".cursor", "aidlc-common", "stages", "operation", "performance-validation.md",
+    );
+    cursorSidecar["performance-validation"].requires_stage = ["test-pro-integration"];
+    writeFileSync(cursorSidecarPath, `${JSON.stringify(cursorSidecar, null, 2)}\n`);
+    // A second plugin's sidecar whose only record is an edge the upgrade
+    // refuses: retiring it empties the sidecar, which must then be removed
+    // rather than left as `{}` (compose and plugin sync refuse an empty one).
+    const emptiedSidecarPath = join(cursorProject, ".cursor", "tools", "data", "plugin-contrib-syn-edge-only.json");
+    writeFileSync(emptiedSidecarPath, `${JSON.stringify({
+      "performance-validation": { requires_stage: ["syn-gone-stage"] },
+    }, null, 2)}\n`);
+    writeFileSync(
+      retainedEdgeStage,
+      readFileSync(retainedEdgeStage, "utf-8").replace(
+        /^(requires_stage:\n(?: {2}- .+\n)*)/m,
+        "$1  - test-pro-integration\n  - syn-gone-stage\n",
+      ),
+    );
 
     const reinstall = spawnSync(
       BUN,
@@ -476,6 +500,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(pluginModifiedAfter).toContain("- nfr-design\n");
     expect(pluginModifiedAfter).not.toContain("syn-stale-dependency");
     expect(pluginModifiedAfter).not.toBe(pluginModifiedBefore);
+    expect(readFileSync(retainedEdgeStage, "utf-8")).toContain("- test-pro-integration\n");
+    expect(readFileSync(retainedEdgeStage, "utf-8")).not.toContain("syn-gone-stage");
+    expect(existsSync(emptiedSidecarPath)).toBe(false);
+    // The refused edge leaves the sidecar with the stage file; the kept ones stay.
+    const sidecarAfter = JSON.parse(readFileSync(cursorSidecarPath, "utf-8")) as Record<string, { requires_stage?: string[] }>;
+    expect(sidecarAfter["build-and-test"].requires_stage).toEqual(["nfr-design"]);
+    expect(sidecarAfter["performance-validation"].requires_stage).toEqual(["test-pro-integration"]);
     const graphAfterReinstall = JSON.parse(
       readFileSync(
         join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"),
@@ -485,6 +516,25 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(
       graphAfterReinstall.some((item) => item.slug === "test-pro-integration"),
     ).toBe(true);
+    expect(
+      graphAfterReinstall.find((item) => item.slug === "performance-validation")?.requires_stage,
+    ).toContain("test-pro-integration");
+
+    // The upgrade leaves a reinstallable tree: the same installer run again
+    // recognises every file it wrote and changes nothing.
+    const stagesBeforeRepeat = readFileSync(pluginModifiedStage, "utf-8");
+    const repeat = spawnSync(
+      BUN,
+      [join(upgradedDist, "install.ts"), cursorProject],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+      },
+    );
+    expect(repeat.status, repeat.stderr).toBe(0);
+    expect(readFileSync(pluginModifiedStage, "utf-8")).toBe(stagesBeforeRepeat);
+    expect(readFileSync(retainedEdgeStage, "utf-8")).toContain("- test-pro-integration\n");
   });
 
   test("Cursor launcher passes its plugin root through the installed aidlc branch", () => {
@@ -1118,6 +1168,222 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       expect(sidecar["requirements-analysis"]?.requires_stage ?? []).toEqual([]);
     }
     expect(stage(proj, "syn-edge-discovery")).toBeDefined();
+  });
+
+  test("compose retires a previously merged requires_stage edge whose dependency is gone", () => {
+    // A prior compose merged build-and-test -> syn-edge-gone-discovery. Once
+    // that stage leaves the install, the next compose must take the edge back
+    // out (and out of the sidecar) instead of compiling a graph that rejects
+    // it and rolling back on every session start.
+    const newStage = [
+      "---", "slug: syn-edge-gone-discovery", "plugin: syn-edge-gone", "phase: inception",
+      "execution: ALWAYS", "condition: always",
+      "lead_agent: aidlc-product-agent", "support_agents: []", "mode: inline",
+      "produces:", "  - syn-edge-gone-catalogue", "consumes: []", "requires_stage: []",
+      "inputs: x", "outputs: y", "---", "", "# syn-edge-gone-discovery", "", "## Steps", "body", "",
+    ].join("\n");
+    const contrib = [
+      "---", "target: build-and-test", "plugin: syn-edge-gone",
+      "adds:", "  requires_stage:", "    - syn-edge-gone-discovery",
+      "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-edge-gone", {
+      "stages/inception/syn-edge-gone-discovery.md": newStage,
+      "contributions/construction/build-and-test.md": contrib,
+    });
+    expect(drops).not.toContain("compile failed");
+    const stagePath = stageSourcePath(proj, "construction", "build-and-test");
+    const edgesOf = () => readFileSync(stagePath, "utf-8").match(/^requires_stage:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    expect(edgesOf()).toContain("- syn-edge-gone-discovery\n");
+    const sidecarPath = join(proj, ".claude", "tools", "data", "plugin-contrib-syn-edge-gone.json");
+    expect(JSON.parse(readFileSync(sidecarPath, "utf-8"))["build-and-test"]?.requires_stage)
+      .toEqual(["syn-edge-gone-discovery"]);
+
+    const root = join(proj, "_plugin-syn-edge-gone");
+    rmSync(join(root, "stages"), { recursive: true });
+    rmSync(stageSourcePath(proj, "inception", "syn-edge-gone-discovery"));
+    const recompose = () => spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(recompose().status).toBe(0);
+    const after = hookDrops(proj);
+    expect(after).not.toContain("compile failed");
+    expect(after).toContain('adds.requires_stage "syn-edge-gone-discovery" names no installed stage');
+    expect(edgesOf()).not.toContain("syn-edge-gone-discovery");
+    expect(edgesOf()).toContain("- code-generation\n");
+    expect(stage(proj, "build-and-test")?.requires_stage).not.toContain("syn-edge-gone-discovery");
+    // The only record went with the edge, so the sidecar goes too: an empty
+    // one would be refused by the next compose.
+    expect(existsSync(sidecarPath)).toBe(false);
+    expect(recompose().status).toBe(0);
+    expect(hookDrops(proj)).not.toContain("unreadable or invalid");
+  });
+
+  test("compose re-checks a merged requires_stage edge whose contribution file is gone", () => {
+    // The plugin's next version drops both the stage and the contribution that
+    // made build-and-test require it. No contribution reaches build-and-test
+    // any more, yet the edge a prior compose merged there must still be taken
+    // back out before the compile.
+    const newStage = [
+      "---", "slug: syn-edge-dropped-discovery", "plugin: syn-edge-dropped", "phase: inception",
+      "execution: ALWAYS", "condition: always",
+      "lead_agent: aidlc-product-agent", "support_agents: []", "mode: inline",
+      "produces:", "  - syn-edge-dropped-catalogue", "consumes: []", "requires_stage: []",
+      "inputs: x", "outputs: y", "---", "", "# syn-edge-dropped-discovery", "", "## Steps", "body", "",
+    ].join("\n");
+    const contrib = [
+      "---", "target: build-and-test", "plugin: syn-edge-dropped",
+      "adds:", "  requires_stage:", "    - syn-edge-dropped-discovery",
+      "---", "",
+    ].join("\n");
+    const { proj } = composeSynthetic("syn-edge-dropped", {
+      "stages/inception/syn-edge-dropped-discovery.md": newStage,
+      "contributions/construction/build-and-test.md": contrib,
+    });
+    const stagePath = stageSourcePath(proj, "construction", "build-and-test");
+    expect(readFileSync(stagePath, "utf-8")).toContain("- syn-edge-dropped-discovery\n");
+
+    const root = join(proj, "_plugin-syn-edge-dropped");
+    rmSync(join(root, "stages"), { recursive: true });
+    rmSync(join(root, "contributions"), { recursive: true });
+    rmSync(stageSourcePath(proj, "inception", "syn-edge-dropped-discovery"));
+    const recompose = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(recompose.status).toBe(0);
+    const drops = hookDrops(proj);
+    expect(drops).not.toContain("compile failed");
+    expect(drops).toContain('previously merged requires_stage "syn-edge-dropped-discovery" names no installed stage');
+    expect(readFileSync(stagePath, "utf-8")).not.toContain("syn-edge-dropped-discovery");
+    expect(stage(proj, "build-and-test")?.requires_stage).not.toContain("syn-edge-dropped-discovery");
+    expect(existsSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-edge-dropped.json"))).toBe(false);
+  });
+
+  test("adds.requires_stage merges into and retires from an inline flow list", () => {
+    // syn-flow-target authors its edges inline (`requires_stage: [a]`). A
+    // contributed edge still merges, and a stale one written inline is still
+    // taken back out before the compile.
+    const newStage = (slug: string, requires: string) => [
+      "---", `slug: ${slug}`, "plugin: syn-flow", "phase: inception",
+      "execution: ALWAYS", "condition: always",
+      "lead_agent: aidlc-product-agent", "support_agents: []", "mode: inline",
+      "produces:", `  - ${slug}-output`, "consumes: []", `requires_stage: ${requires}`,
+      "inputs: x", "outputs: y", "---", "", `# ${slug}`, "", "## Steps", "body", "",
+    ].join("\n");
+    const contrib = [
+      "---", "target: syn-flow-target", "plugin: syn-flow",
+      "adds:", "  requires_stage:", "    - syn-flow-extra",
+      "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-flow", {
+      "stages/inception/syn-flow-base.md": newStage("syn-flow-base", "[]"),
+      "stages/inception/syn-flow-extra.md": newStage("syn-flow-extra", "[]"),
+      "stages/inception/syn-flow-target.md": newStage("syn-flow-target", "[syn-flow-base]"),
+      "contributions/inception/syn-flow-target.md": contrib,
+    });
+    expect(drops).not.toContain("compile failed");
+    expect(drops).not.toContain("no 'requires_stage:' field to append to");
+    expect(stage(proj, "syn-flow-target")?.requires_stage).toEqual(["syn-flow-base", "syn-flow-extra"]);
+
+    // Reformat the merged edges inline, then take the contributed dependency
+    // out of the install.
+    const targetPath = stageSourcePath(proj, "inception", "syn-flow-target");
+    writeFileSync(
+      targetPath,
+      readFileSync(targetPath, "utf-8").replace(
+        /^requires_stage:\n(?: {2}- .+\n)*/m,
+        "requires_stage: [syn-flow-base, syn-flow-extra]\n",
+      ),
+    );
+    const root = join(proj, "_plugin-syn-flow");
+    rmSync(join(root, "stages", "inception", "syn-flow-extra.md"));
+    rmSync(stageSourcePath(proj, "inception", "syn-flow-extra"));
+    const recompose = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(recompose.status).toBe(0);
+    expect(hookDrops(proj)).not.toContain("compile failed");
+    expect(readFileSync(targetPath, "utf-8")).toContain("requires_stage: [syn-flow-base]\n");
+    expect(stage(proj, "syn-flow-target")?.requires_stage).toEqual(["syn-flow-base"]);
+  });
+
+  test("adds.requires_stage refuses an edge that would close a cycle among new stages", () => {
+    // syn-cycle-a (new) already requires syn-cycle-b (new), so making
+    // syn-cycle-b require syn-cycle-a would stall the per-phase seed on a
+    // cycle and roll the whole compose back. syn-cycle-c (new, no edges) is a
+    // valid same-phase dependency and still merges.
+    const newStage = (slug: string, requires: string[]) => [
+      "---", `slug: ${slug}`, "plugin: syn-cycle", "phase: inception",
+      "execution: ALWAYS", "condition: always",
+      "lead_agent: aidlc-product-agent", "support_agents: []", "mode: inline",
+      "produces:", `  - ${slug}-output`, "consumes: []",
+      ...(requires.length > 0 ? ["requires_stage:", ...requires.map((r) => `  - ${r}`)] : ["requires_stage: []"]),
+      "inputs: x", "outputs: y", "---", "", `# ${slug}`, "", "## Steps", "body", "",
+    ].join("\n");
+    const contrib = [
+      "---", "target: syn-cycle-b", "plugin: syn-cycle",
+      "adds:", "  requires_stage:", "    - syn-cycle-a", "    - syn-cycle-c",
+      "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-cycle", {
+      "stages/inception/syn-cycle-a.md": newStage("syn-cycle-a", ["syn-cycle-b"]),
+      "stages/inception/syn-cycle-b.md": newStage("syn-cycle-b", []),
+      "stages/inception/syn-cycle-c.md": newStage("syn-cycle-c", []),
+      "contributions/inception/syn-cycle-b.md": contrib,
+    });
+    expect(drops).not.toContain("compile failed");
+    expect(drops).toContain('adds.requires_stage "syn-cycle-a" already requires syn-cycle-b');
+    const node = stage(proj, "syn-cycle-b");
+    expect(node?.requires_stage).toEqual(["syn-cycle-c"]);
+    const numberOf = (slug: string) => Number(stage(proj, slug)?.number?.split(".")[1]);
+    expect(numberOf("syn-cycle-c")).toBeLessThan(numberOf("syn-cycle-b"));
+    expect(numberOf("syn-cycle-b")).toBeLessThan(numberOf("syn-cycle-a"));
+  });
+
+  test("adds.requires_stage compares full pinned numbers when a stage moved phase", () => {
+    // The compiler keeps a pinned row's number when its stage moves phase
+    // directory: feedback-optimization moved to inception still compiles as
+    // 4.7, after build-and-test (3.6). The guard must follow the number, not
+    // the directory, so only that edge is refused and the plugin's valid edge
+    // still lands instead of the whole compose rolling back.
+    const scope = [
+      "---", "name: syn-edge-moved", "plugin: syn-edge-moved",
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope carrying the plugin identity", "skeleton: off", "---", "",
+      "# syn-edge-moved", "",
+    ].join("\n");
+    const contrib = [
+      "---", "target: build-and-test", "plugin: syn-edge-moved",
+      "adds:", "  requires_stage:", "    - feedback-optimization", "    - nfr-requirements",
+      "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-edge-moved", {
+      "scopes/syn-edge-moved.md": scope,
+      "contributions/construction/build-and-test.md": contrib,
+    }, ".claude", (_proj, harnessDir) => {
+      const stages = join(harnessDir, "aidlc-common", "stages");
+      const moved = join(stages, "inception", "feedback-optimization.md");
+      writeFileSync(
+        moved,
+        readFileSync(join(stages, "operation", "feedback-optimization.md"), "utf-8")
+          .replace(/^phase: operation$/m, "phase: inception"),
+      );
+      rmSync(join(stages, "operation", "feedback-optimization.md"));
+    });
+    expect(drops).not.toContain("compile failed");
+    expect(drops).toContain(
+      'adds.requires_stage "feedback-optimization" (4.7) is not lower-numbered than build-and-test (3.6)',
+    );
+    const node = stage(proj, "build-and-test");
+    expect(node?.requires_stage).toContain("nfr-requirements");
+    expect(node?.requires_stage).not.toContain("feedback-optimization");
+    const sidecar = JSON.parse(
+      readFileSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-edge-moved.json"), "utf-8"),
+    );
+    expect(sidecar["build-and-test"]?.requires_stage).toEqual(["nfr-requirements"]);
   });
 
   // --- Contribution seam: adds.scopes (graduated surface) ---

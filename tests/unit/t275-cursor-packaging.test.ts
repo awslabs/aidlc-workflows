@@ -945,10 +945,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(
         readFileSync(stagePath, "utf-8").match(new RegExp(`^  - ${artifact}$`, "gm")),
       ).toHaveLength(1);
-      const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as {
-        "functional-design"?: { produces?: string[] };
-      };
-      expect(sidecar["functional-design"]?.produces ?? []).not.toContain(artifact);
+      // The only record went back to core, so the sidecar is removed rather
+      // than left as `{}`, which compose and plugin sync refuse.
+      expect(existsSync(sidecarPath)).toBe(false);
 
       const pluginScopeSource = join(
         REPO_ROOT,

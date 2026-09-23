@@ -208,12 +208,17 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
   discovery stages plus core Inception onward.
 - `adds.requires_stage` — ✅ set-unions ordering edges into the target's
   `requires_stage`. The dependency must already be installed and must
-  compile before the target: an earlier phase, or a lower number in the same
-  phase. Use it for the edge the stage-definition guide asks for — "I consume
+  compile before the target: a lower stage number (a pinned stage keeps its
+  number even if it moved phase), or an earlier phase for a stage not yet
+  numbered. Use it for the edge the stage-definition guide asks for — "I consume
   X, which stage Y produces → require Y" — or for cross-phase ordering. A
   stage your plugin adds seeds past its phase max, so a core stage cannot be
   made to require it within the same phase (that is RFC #1100); such an
-  entry, an unknown slug, or a self-edge is dropped-with-log, never merged.
+  entry, an unknown slug, a self-edge, or an edge that would close a cycle
+  among your new stages is dropped-with-log, never merged.
+  Merged edges are re-checked on every compose and runtime upgrade: one that
+  no longer holds is removed, and one the new core declares itself becomes
+  core's; both leave your plugin's contribution record.
 - `fragments` — ✅ prose blocks spliced into the stage body. Each fragment's prose
   is the `## fragment: <anchor>` block in the contribution file.
 
