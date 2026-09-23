@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
@@ -691,6 +691,27 @@ export function resolveProjectDirFromHook(importMetaUrl: string): string {
 
 export function toPosix(p: string): string {
   return sep === "/" ? p : p.split(sep).join("/");
+}
+
+// Containment test for an absolute file path against an absolute root directory,
+// decided by the platform argument rather than the host so a test can exercise
+// Windows semantics anywhere. path.win32 compares case-insensitively (Windows
+// filesystems are case-insensitive and Kiro IDE reports drive letters in lower
+// case) and accepts either separator; path.posix compares exactly. Backslashes
+// are folded to "/" on both platforms first (the historical hook behaviour) and
+// a trailing separator on the root is tolerated. Returns the forward-slash
+// remainder below the root ("" for the root itself) or null when the file is
+// outside it.
+export function relativeUnderRoot(
+  root: string,
+  file: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const api = platform === "win32" ? win32 : posix;
+  const rel = api.relative(root.replace(/\\/g, "/"), file.replace(/\\/g, "/"));
+  if (rel === "") return "";
+  if (api.isAbsolute(rel) || rel === ".." || rel.startsWith(`..${api.sep}`)) return null;
+  return rel.replace(/\\/g, "/");
 }
 
 // --- Workspace selectors: space + intent ---------------------------------------

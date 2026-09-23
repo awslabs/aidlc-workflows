@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.1] - 2026-09-24
+
+Restore artifact auditing when Kiro IDE reports Windows paths with drive-letter or directory casing that differs from the project root, without allowing project environment variables to weaken host path-containment rules. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Existing workflow records require no migration.
+
+* Windows record and codekb writes use case-insensitive containment, so Kiro IDE writes continue to emit artifact audit rows and summary-authorization evidence when path casing differs.
+* POSIX hooks always retain case-sensitive containment even if a project supplies a test-platform environment variable; paths in distinct case-varied trees are not logged or authorized.
+* `aidlc version` reports `2.9.1` across all supported harnesses.
+
 ## [2.9.0] - 2026-09-15
 
 AI-DLC 2.9.0 rolls up the user-visible changes merged since 2.8.2, including the Classic scope v1 ceremony model, commit provenance, intent archiving, on-demand Construction autonomy, review-loop corrections, and the native preview release channel. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.9.0.tar.gz`. Existing in-flight Classic intents keep their recorded stage graph; the new ceremony defaults apply immediately where noted below.

@@ -163,15 +163,21 @@ describe("t318 session binding helpers", () => {
     const second = createIntent(proj, "second", "default", "feature");
     writeSessionBinding(proj, "session-a", "default", first.dirName);
     writeSessionBinding(proj, "session-b", "default", second.dirName);
-    writeSessionPidEntry(proj, process.ppid, "session-a");
-    process.env.AIDLC_SESSION_OVERRIDE = "session-b";
+    // Ancestry is simulated so the conflict is reachable on hosts without native process lookup (Windows).
+    const lookup = mockMacProcessTree();
+    try {
+      writeSessionPidEntry(proj, process.ppid, "session-a");
+      process.env.AIDLC_SESSION_OVERRIDE = "session-b";
 
-    expect(() => resolveWorkflowSelection(proj)).toThrow(
-      SessionResolutionConflictError,
-    );
-    expect(
-      resolveWorkflowSelection(proj, { sessionId: "session-b" }).intent,
-    ).toBe(second.dirName);
+      expect(() => resolveWorkflowSelection(proj)).toThrow(
+        SessionResolutionConflictError,
+      );
+      expect(
+        resolveWorkflowSelection(proj, { sessionId: "session-b" }).intent,
+      ).toBe(second.dirName);
+    } finally {
+      lookup.restore();
+    }
   });
 
   test("hook child env preserves inherited identity and marks only divergent payloads", () => {
@@ -193,14 +199,19 @@ describe("t318 session binding helpers", () => {
       hookChildEnv(proj, "payload-session").AIDLC_SESSION_OVERRIDE_SOURCE,
     ).toBeUndefined();
 
-    writeSessionPidEntry(proj, process.ppid, "payload-session");
-    const matching = hookChildEnv(proj, "payload-session");
-    expect(matching.AIDLC_SESSION_OVERRIDE).toBe("payload-session");
-    expect(matching.AIDLC_SESSION_OVERRIDE_SOURCE).toBeUndefined();
+    const lookup = mockMacProcessTree();
+    try {
+      writeSessionPidEntry(proj, process.ppid, "payload-session");
+      const matching = hookChildEnv(proj, "payload-session");
+      expect(matching.AIDLC_SESSION_OVERRIDE).toBe("payload-session");
+      expect(matching.AIDLC_SESSION_OVERRIDE_SOURCE).toBeUndefined();
 
-    const divergent = hookChildEnv(proj, "different-session");
-    expect(divergent.AIDLC_SESSION_OVERRIDE).toBe("different-session");
-    expect(divergent.AIDLC_SESSION_OVERRIDE_SOURCE).toBe("payload");
+      const divergent = hookChildEnv(proj, "different-session");
+      expect(divergent.AIDLC_SESSION_OVERRIDE).toBe("different-session");
+      expect(divergent.AIDLC_SESSION_OVERRIDE_SOURCE).toBe("payload");
+    } finally {
+      lookup.restore();
+    }
   });
 
   test("hostile session ids and invalid pids cannot escape the sessions dir", () => {
@@ -240,21 +251,27 @@ describe("t318 session binding helpers", () => {
   });
 
   test("nearest mapped ancestor wins and a start-time mismatch is rejected", () => {
-    writeSessionPidAncestry(proj, "far-session");
-    writeSessionPidEntry(proj, process.ppid, "near-session");
-    expect(resolveSessionIdFromAncestry(proj)).toBe("near-session");
+    // Two simulated levels: the parent maps to this process, which maps to pid 1, so the far entry lands one level above the near one.
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]));
+    try {
+      writeSessionPidAncestry(proj, "far-session");
+      writeSessionPidEntry(proj, process.ppid, "near-session");
+      expect(resolveSessionIdFromAncestry(proj)).toBe("near-session");
 
-    const nearest = join(sessionPidMapDir(proj), String(process.ppid));
-    const entry = JSON.parse(readFileSync(nearest, "utf-8")) as {
-      sessionId: string;
-      startTime: string | null;
-    };
-    writeFileSync(
-      nearest,
-      `${JSON.stringify({ ...entry, startTime: "definitely-not-the-real-start" })}\n`,
-      "utf-8",
-    );
-    expect(resolveSessionIdFromAncestry(proj)).not.toBe("near-session");
+      const nearest = join(sessionPidMapDir(proj), String(process.ppid));
+      const entry = JSON.parse(readFileSync(nearest, "utf-8")) as {
+        sessionId: string;
+        startTime: string | null;
+      };
+      writeFileSync(
+        nearest,
+        `${JSON.stringify({ ...entry, startTime: "definitely-not-the-real-start" })}\n`,
+        "utf-8",
+      );
+      expect(resolveSessionIdFromAncestry(proj)).not.toBe("near-session");
+    } finally {
+      lookup.restore();
+    }
   });
 
   test("GC keeps a live entry it cannot verify and still reaps dead ones without ps", () => {
