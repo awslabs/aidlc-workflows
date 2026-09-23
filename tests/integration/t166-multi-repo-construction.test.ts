@@ -35,8 +35,8 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
-  AIDLC_SRC, cleanupTestProject, clearSyntheticHumanTurnHost, createTestProject,
-  fixtureIntentId8, registerSyntheticHumanTurnHost,
+  AIDLC_SRC, cleanupTestProject, createTestProject,
+  fixtureIntentId8,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -349,17 +349,12 @@ function approvePlan(proj: string, unit: string): void {
     encoding: "utf-8", cwd: proj,
   });
   if (decision.status !== 0) throw new Error(`${decision.stdout}${decision.stderr}`);
-  registerSyntheticHumanTurnHost(proj, session);
-  try {
-    const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
-      encoding: "utf-8", cwd: proj,
-      env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
-      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan" }),
-    });
-    if (human.status !== 0) throw new Error(`${human.stdout}${human.stderr}`);
-  } finally {
-    clearSyntheticHumanTurnHost(proj);
-  }
+  const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    encoding: "utf-8", cwd: proj,
+    env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan" }),
+  });
+  if (human.status !== 0) throw new Error(`${human.stdout}${human.stderr}`);
   writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
   const answer = spawnSync(BUN, [LOG_TOOL, "answer", ...identity, "--details", "Approve Plan"], {
     encoding: "utf-8", cwd: proj,

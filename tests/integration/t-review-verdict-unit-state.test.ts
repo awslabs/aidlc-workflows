@@ -38,8 +38,6 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   cleanupTestProject,
   createTestProject,
   recordArtifactWriteViaHook,
@@ -199,18 +197,13 @@ class UnitReview {
   }
 
   human(prompt: string): void {
-    registerSyntheticHumanTurnHost(this.dir, SESSION);
-    try {
-      succeeded(this.run([
-        process.execPath, join(AIDLC_SRC, "tools", "aidlc.ts"),
-        "engine", "hook", "record-human-turn",
-      ], {
-        hook_event_name: "UserPromptSubmit", session_id: SESSION,
-        cwd: this.dir, prompt,
-      }), "Record a separate human response through its hook");
-    } finally {
-      clearSyntheticHumanTurnHost(this.dir);
-    }
+    succeeded(this.run([
+      process.execPath, join(AIDLC_SRC, "tools", "aidlc.ts"),
+      "engine", "hook", "record-human-turn",
+    ], {
+      hook_event_name: "UserPromptSubmit", session_id: SESSION,
+      cwd: this.dir, prompt,
+    }), "Record a separate human response through its hook");
   }
 
   state(): string {

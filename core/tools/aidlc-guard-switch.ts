@@ -443,6 +443,10 @@ export interface TypedGuardSwitchOutcome {
   lines: string[];
 }
 
+export function isTypedGuardSwitchPrompt(prompt: string): boolean {
+  return parseTypedGuardSwitchRequest(prompt).switches.length > 0;
+}
+
 export function applyTypedGuardSwitchPrompt(
   projectDir: string,
   sessionId: string,

@@ -107,7 +107,11 @@ appends the audit rows, and writes state.
 The outcome is `{ applied, lines }`; the hook prints
 `{"additionalContext":"AIDLC Guard Policy: ..."}` with the same result lines the
 CLI prints, and harnesses that inject hook context deliver it to the conductor.
-An unrecognized prompt or `AIDLC_UNATTENDED=1` returns `null` and applies nothing.
+An unrecognized prompt returns `null` and applies nothing. When
+`AIDLC_UNATTENDED=1` withholds authority, a recognized typed lowering switch
+applies nothing and the hook emits this `additionalContext` line:
+
+> AIDLC Guard Policy: the typed switch was not applied because AIDLC_UNATTENDED=1 withholds human authority on this driver; run it from an attended session.
 
 `parseTypedGuardSwitchRequest` returns `{switches,space,intent}`;
 `parseTypedGuardSwitches` wraps its `.switches`. Parsing trims the prompt,
@@ -155,16 +159,18 @@ Picked answers do not apply switches; a `lower-fence` remedy executes nothing
 and only tells the person the exact command to type, with no `operation` or
 `command` of its own.
 
+The human-turn hook is activated only through the dispatcher's hook route,
+`aidlc engine hook record-human-turn`. It does not authenticate who launched
+the dispatcher. Hooks and tool calls run as the same user, and no harness gives
+a hook an identity a same-user process cannot copy.
 The [state-transition guard](#pretooluse-aidlc-state-transition-guardts) uses a
 runtime-integrity check to refuse recognized direct and indirect tool-call
-routes to hooks and their records, including paths, environment assignments,
-inline and wrapper scripts, aliases, shell functions, and written content.
-A route is a concrete import, require, or execution of a hook module; a
-script, comment, string, or document that merely names one is not.
-This is defense in depth: hooks and tool calls run as the same user, so the
-harness's permission model and the person's review of what the agent runs
-remain the outer boundary.
-No in-repo check can provide stronger provenance on today's harnesses.
+routes to the hook and its records, including paths, environment assignments,
+inline and wrapper scripts, argv arrays, aliases, shell functions, and written
+content. A route is a concrete import, require, or execution of a hook module;
+a script, comment, string, or document that merely names one is not.
+This is defense in depth. The harness's permission model and the person's
+review of what the agent runs are the outer boundary.
 
 #### Kiro IDE adapter
 

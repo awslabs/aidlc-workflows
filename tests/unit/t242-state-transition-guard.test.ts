@@ -575,14 +575,15 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
-  test("runtime integrity refuses inline imports, command substitutions, aliases, functions, and heredocs", () => {
-    // These payloads exercise dynamic module loading rather than static imports.
+  test("runtime integrity refuses inline imports, dispatcher argv, command substitutions, aliases, functions, and heredocs", () => {
+    // These payloads exercise module loading and dispatcher calls inside scripts.
     // A module name assembled from fragments at run time is outside this
     // lexical check's reach; the harness's permission model is the boundary there.
     for (const command of [
       `bun -e 'import("./.claude/hooks/aidlc-record-human-turn.ts")'`,
       `bun --eval 'await import("aidlc-guard-switch")'`,
       `node -e 'require("./.claude/tools/aidlc-guard-switch.ts")'`,
+      `bun -e "Bun.spawnSync([process.execPath, '.claude/tools/aidlc.ts', 'engine', 'hook', 'record-human-turn'])"`,
       `python -c 'import subprocess; subprocess.run(["bun", ".claude/hooks/aidlc-record-human-turn.ts"])'`,
       `sh -c 'bun .claude/hooks/aidlc-record-human-turn.ts'`,
       `bash -c "$(printf '%s' 'bun .claude/hooks/aidlc-record-human-turn.ts')"`,
@@ -592,6 +593,7 @@ describe("t242 state-transition ownership guard", () => {
       `function h { bun -e 'import("aidlc-guard-switch")'; }`,
       `h() { bun -e 'import("aidlc-guard-switch")'; }`,
       `bun <<'EOF'\nawait import("./.claude/hooks/aidlc-record-human-turn.ts")\nEOF`,
+      `bun <<'EOF'\nBun.spawnSync([process.execPath, '.claude/tools/aidlc.ts', 'engine', 'hook', 'record-human-turn'])\nEOF`,
     ]) {
       const r = spawnSync(process.execPath, [HOOK], {
         input: JSON.stringify({
@@ -612,6 +614,7 @@ describe("t242 state-transition ownership guard", () => {
     projects.push(project);
     writeFileSync(join(project, "wrapper.ts"), 'import "./.claude/tools/aidlc-guard-switch.ts";\n');
     writeFileSync(join(project, "wrapper"), 'bun .claude/hooks/aidlc-record-human-turn.ts\n');
+    writeFileSync(join(project, "argv-wrapper.ts"), 'Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts",\n\t"engine"\n, `hook` ,\n\t"record-human-turn"\n]);\n');
     for (const command of [
       `bun "${join(project, "wrapper.ts")}"`,
       "node wrapper.ts",
@@ -619,6 +622,7 @@ describe("t242 state-transition ownership guard", () => {
       "tsx wrapper.ts",
       "./wrapper",
       "wrapper.ts",
+      "bun argv-wrapper.ts",
     ]) {
       const r = spawnSync(process.execPath, [HOOK], {
         cwd: project,
@@ -728,12 +732,13 @@ describe("t242 state-transition ownership guard", () => {
     expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
   });
 
-  test("runtime integrity refuses written hook imports outside the runtime and authored repository", () => {
+  test("runtime integrity refuses written hook imports and dispatcher argv outside the runtime and authored repository", () => {
     const project = createTestProject();
     projects.push(project);
     const content = 'import { applyIntentSettings } from ".claude/tools/aidlc-guard-switch.ts"';
     for (const [tool_name, tool_input] of [
       ["Write", { file_path: "scripts/x.ts", content }],
+      ["Write", { file_path: "scripts/x.ts", content: "Bun.spawnSync([process.execPath, '.claude/tools/aidlc.ts', 'engine', 'hook', 'record-human-turn'])" }],
       ["Edit", { file_path: "scripts/x.ts", new_string: content }],
       ["MultiEdit", { file_path: "scripts/x.ts", edits: [{ new_string: content }] }],
       ["MultiEdit", { edits: [{ file_path: ".claude/tools/x.ts", new_string: content }, { file_path: "scripts/x.ts", new_string: content }] }],
@@ -788,6 +793,8 @@ describe("t242 state-transition ownership guard", () => {
   });
 
   test("runtime integrity allows engine commands, conductor records, and ordinary documents", () => {
+    const project = createTestProject();
+    projects.push(project);
     for (const [tool_name, tool_input] of [
       ["Bash", { command: "bun .claude/tools/aidlc.ts engine orchestrate next" }],
       ["Bash", { command: "bun .claude/tools/aidlc-utility.ts config-change --guard-policy strict" }],
@@ -805,13 +812,17 @@ describe("t242 state-transition ownership guard", () => {
       // project content; only a concrete import or execution is a reference.
       ["Write", { file_path: "docs/notes.md", content: "The applyIntentSettings helper and the engine hook route are for hooks; see .claude/hooks/aidlc-record-human-turn.ts and aidlc-guard-switch.ts." }],
       ["Edit", { file_path: "src/notes.ts", new_string: 'const hooks = ["aidlc-record-human-turn", "aidlc-guard-switch"]; // engine hook names' }],
+      ["Write", { file_path: "scripts/x.ts", content: 'const route = "engine hook record-human-turn"; // The engine hook route records a human turn.' }],
       ["Bash", { command: "echo 'engine hook' > notes.md" }],
       ["Bash", { command: `bun -e 'console.log("aidlc-guard-switch")'` }],
+      ["Bash", { command: `bun -e 'console.log("engine hook record-human-turn")'` }],
+      ["Bash", { command: `cat <<'EOF'\nThe engine hook route uses record-human-turn.\nEOF` }],
       ["Bash", { command: `python -c 'print("aidlc-record-human-turn")'` }],
       ["Bash", { command: "alias h='echo aidlc-record-human-turn'" }],
     ] as const) {
       const r = spawnSync(process.execPath, [HOOK], {
-        input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input }),
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
         encoding: "utf-8",
         env: unownedEnv(),
       });

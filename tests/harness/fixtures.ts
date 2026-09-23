@@ -77,21 +77,6 @@ export const FIXTURE_CLONE_ID = "fixturecloneid01";
 export const AIDLC_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 export const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 
-/** Register this test process as the real host for a synthetic human-turn hook. */
-export function registerSyntheticHumanTurnHost(projectDir: string, sessionId: string): void {
-  const lib = requireHere(
-    "../../core/tools/aidlc-lib.ts",
-  ) as typeof import("../../core/tools/aidlc-lib.ts");
-  lib.writeSessionPidEntry(projectDir, process.pid, sessionId);
-}
-
-export function clearSyntheticHumanTurnHost(projectDir: string): void {
-  const lib = requireHere(
-    "../../core/tools/aidlc-lib.ts",
-  ) as typeof import("../../core/tools/aidlc-lib.ts");
-  rmSync(join(lib.sessionPidMapDir(projectDir), String(process.pid)), { force: true });
-}
-
 const RETRYABLE_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
 
 function resetSelectionSensitiveCaches(): void {

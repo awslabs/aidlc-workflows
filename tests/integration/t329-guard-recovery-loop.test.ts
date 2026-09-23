@@ -30,8 +30,6 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hookChildEnv } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   cleanupTestProject,
   resetAidlcEnv,
   seededRecordDir,
@@ -47,7 +45,6 @@ const projects: string[] = [];
 // Removing every staged project can exceed bun's 5s hook default under load.
 afterAll(() => {
   for (const project of projects) {
-    clearSyntheticHumanTurnHost(project);
     cleanupTestProject(project);
   }
 }, 120_000);
@@ -222,7 +219,6 @@ function project(): Project {
     CLAUDE_PROJECT_DIR: dir,
   };
   for (const key of RUNNER_GUARD_SKIPS) delete probeEnv[key];
-  registerSyntheticHumanTurnHost(dir, SESSION);
   return {
     dir,
     env,

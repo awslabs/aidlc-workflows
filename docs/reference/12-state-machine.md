@@ -685,6 +685,14 @@ and do not enforce that scope comparison.
 | `GUARD_DISABLED` | `hooks/aidlc-plan-approval-guard.ts`, `tools/aidlc-guard-switch.ts` | Either a tool call passed the Plan Approval guard because its deterministic off-switch environment variable was set while a workflow existed (hook rows carry `Guard` = `plan-approval-guard` and `Tool`; one row per streak, appended only when the newest row in the active shard is not already this event for the same guard), or `config-change --guard.<fence> off` lowered one fence for this piece of work (switch rows carry `Guard` = the fence, `Scope`, and `Source`) |
 | `GUARD_STOOD_ASIDE` | `tools/aidlc-lib.ts` | A fence let an action through instead of refusing it, because the policy word, a per-run switch, or an environment kill switch had lowered it. The row is the evidence that stands in for the refusal, and the human hears one line beside it. The authority fields record who was working at the time; they are not what opened the fence. Carries `Guard` (the fence), `Authority` (`grant`, `instruction`, `none`), `Grant` (`turn-marker`, `marker-sequence`, `dispatch-stamp`, `none`), `Actor` (`main`, `subagent`, `unattended`), and optional `Stage`, `Tool`, `Details`. Written by `recordGuardStoodAside`, called by the fence hooks |
 
+The human-turn hook is activated only through the dispatcher's hook route;
+it does not authenticate who launched the dispatcher. Hooks and tool calls run
+as the same user, and no harness gives a hook an identity a same-user process
+cannot copy. The runtime-integrity check refuses recognized tool-call routes
+to the hook and its records as defense in depth. The harness's permission model
+and the person's review of what the agent runs are the outer boundary. See the
+[hook reference](06-hooks-and-tools.md#hook-summary) for the recognized routes.
+
 ### Diagnostics and workspace
 
 | Event | Emitter | Notes |

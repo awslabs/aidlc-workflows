@@ -39,8 +39,6 @@ import {
   resolveTestingPosture,
 } from "../../core/tools/aidlc-testing-posture.ts";
 import {
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   cleanupTestProject,
   REPO_ROOT,
   seededAuditShard,
@@ -197,7 +195,6 @@ function approve(project: string, questions: string, session: string): void {
       "Approve Plan,Request Changes",
     ]).exitCode,
   ).toBe(0);
-  registerSyntheticHumanTurnHost(project, session);
   const human = Bun.spawnSync(
     [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
@@ -212,7 +209,6 @@ function approve(project: string, questions: string, session: string): void {
       stderr: "pipe",
     },
   );
-  clearSyntheticHumanTurnHost(project);
   expect(human.exitCode).toBe(0);
   writeFileSync(
     questions,
@@ -242,8 +238,7 @@ function humanPrompt(
   prompt: string,
   env: Record<string, string> = {},
 ): ReturnType<typeof Bun.spawnSync> {
-  registerSyntheticHumanTurnHost(project, session);
-  const result = Bun.spawnSync(
+  return Bun.spawnSync(
     [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
       cwd: project,
@@ -257,8 +252,6 @@ function humanPrompt(
       stderr: "pipe",
     },
   );
-  clearSyntheticHumanTurnHost(project);
-  return result;
 }
 
 function markAnswered(questions: string, answer = "Approve Plan"): void {
@@ -403,7 +396,6 @@ describe("t328 Plan Approval runtime authority", () => {
       resolveCodeGenerationAuthority(project, { unit: null }).directiveEpoch,
     ).toBe(epochBefore);
 
-    registerSyntheticHumanTurnHost(project, session);
     const human = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
@@ -418,7 +410,6 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    clearSyntheticHumanTurnHost(project);
   expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
@@ -498,7 +489,6 @@ describe("t328 Plan Approval runtime authority", () => {
         "Approve Plan,Request Changes",
       ]).exitCode,
     ).toBe(0);
-    registerSyntheticHumanTurnHost(project, session);
     const human = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
@@ -518,7 +508,6 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    clearSyntheticHumanTurnHost(project);
   expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
@@ -799,7 +788,6 @@ describe("t328 Plan Approval runtime authority", () => {
         "Approve Plan,Request Changes",
       ]).exitCode,
     ).toBe(0);
-    registerSyntheticHumanTurnHost(project, session);
     const human = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
@@ -814,7 +802,6 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    clearSyntheticHumanTurnHost(project);
   expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
@@ -938,7 +925,6 @@ describe("t328 Plan Approval runtime authority", () => {
         "Approve Plan,Request Changes",
       ]).exitCode,
     ).toBe(0);
-    registerSyntheticHumanTurnHost(project, session);
     const human = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
@@ -953,7 +939,6 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    clearSyntheticHumanTurnHost(project);
   expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
@@ -1026,7 +1011,6 @@ describe("t328 human-only break-glass override", () => {
     const session = "typed-phrase";
 
     // A picked option carrying the same text is not a typed instruction.
-    registerSyntheticHumanTurnHost(project, session);
     const picked = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
@@ -1042,7 +1026,6 @@ describe("t328 human-only break-glass override", () => {
         stderr: "pipe",
       },
     );
-    clearSyntheticHumanTurnHost(project);
     expect(picked.exitCode).toBe(0);
     expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
 

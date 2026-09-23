@@ -17,7 +17,6 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
   auditShardName,
-  kiroIdeLegacyPlanApprovalSessionId,
   readPlanApprovalLegacyWindows,
   stateDigest,
   writeActiveDirectiveMarker,
@@ -27,8 +26,6 @@ import {
   resolveTestingPosture,
 } from "../../core/tools/aidlc-testing-posture.ts";
 import {
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
@@ -45,9 +42,6 @@ const runtimeRoot = process.env.AIDLC_NATIVE_RECOVERY_RUNTIME ??
   join(REPO_ROOT, "dist-release");
 let binary = process.env.AIDLC_NATIVE_RECOVERY_BINARY ?? "";
 let scratch: string;
-const LEGACY_SESSION = kiroIdeLegacyPlanApprovalSessionId({
-  VSCODE_PID: "native-recovery-test",
-})!;
 
 beforeAll(() => {
   mkdirSync(scratchRoot, { recursive: true });
@@ -325,14 +319,9 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(beforeApproval.stderr).toContain(LOWER_FENCE_SWITCH);
     expect(stoodAsideRows(project)).toBe(0);
     // Only the fixture's exact offered human choice may authorize this plan.
-    registerSyntheticHumanTurnHost(project, LEGACY_SESSION);
-    try {
-      const human = run(project, ["engine", "adapter", "kiro-ide", "record-human-turn"],
-        { prompt: approveChoice }, true);
-      expect(human.code, human.stderr).toBe(0);
-    } finally {
-      clearSyntheticHumanTurnHost(project);
-    }
+    const human = run(project, ["engine", "adapter", "kiro-ide", "record-human-turn"],
+      { prompt: approveChoice }, true);
+    expect(human.code, human.stderr).toBe(0);
     writeFileSync(questions, readFileSync(questions, "utf-8")
       .replace("[Answer]:", "[Answer]: Approve Plan"));
     const answer = mediateQuestions();
@@ -361,13 +350,8 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     const pending = shell();
     expect(pending.code, pending.stderr).toBe(2);
     expect(pending.stderr).toContain("recovery requires a human response");
-    registerSyntheticHumanTurnHost(project, LEGACY_SESSION);
-    try {
-      const response = legacy("record-human-turn", { prompt: "Recover Plan Approval" });
-      expect(response.code, response.stderr).toBe(0);
-    } finally {
-      clearSyntheticHumanTurnHost(project);
-    }
+    const response = legacy("record-human-turn", { prompt: "Recover Plan Approval" });
+    expect(response.code, response.stderr).toBe(0);
     const recovered = shell();
     expect(recovered.code, recovered.stderr).toBe(2);
     expect(recovered.stderr).toContain("recovery issued a fresh directive");

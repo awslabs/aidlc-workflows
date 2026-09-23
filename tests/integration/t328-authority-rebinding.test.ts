@@ -42,8 +42,6 @@ import {
   stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   cleanupTestProject,
   resetAidlcEnv,
   seedBoltDag,
@@ -245,23 +243,17 @@ async function project(
           stop_hook_active: false,
         }),
       ),
-    humanTurn: (prompt: string) => {
-      registerSyntheticHumanTurnHost(dir, SESSION);
-      try {
-        return spawn(
-          [BUN, join(dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
-          env,
-          dir,
-          JSON.stringify({
-            hook_event_name: "UserPromptSubmit",
-            session_id: SESSION,
-            prompt,
-          }),
-        );
-      } finally {
-        clearSyntheticHumanTurnHost(dir);
-      }
-    },
+    humanTurn: (prompt: string) =>
+      spawn(
+        [BUN, join(dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+        env,
+        dir,
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: SESSION,
+          prompt,
+        }),
+      ),
   };
 }
 

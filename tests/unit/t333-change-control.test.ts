@@ -85,8 +85,6 @@ import {
   writeCurrentSessionId,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -136,7 +134,6 @@ function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv 
 }
 
 function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv = {}): string {
-  registerSyntheticHumanTurnHost(proj, FENCE_SESSION);
   const result = Bun.spawnSync({
     cmd: [BUN, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     cwd: proj,
@@ -147,7 +144,6 @@ function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv 
     stdout: "pipe",
     stderr: "pipe",
   });
-  clearSyntheticHumanTurnHost(proj);
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString();
 }
@@ -2289,7 +2285,11 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     recordSessionPresenceBypass(proj, FENCE_SESSION);
     const before = readFileSync(state, "utf-8");
     const allRows = readAuditShardEvents(proj);
-    expect(recordHumanPrompt(proj, prompt, { AIDLC_UNATTENDED: "1" })).toBe("");
+    const context = JSON.parse(recordHumanPrompt(proj, prompt, { AIDLC_UNATTENDED: "1" }));
+    expect(context.additionalContext).toContain("not applied");
+    expect(context.additionalContext).toContain("AIDLC_UNATTENDED=1");
+    expect(context.additionalContext).toContain("withholds human authority");
+    expect(context.additionalContext).toContain("attended session");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(readAuditShardEvents(proj)).toEqual(allRows);
     const ledger = mutationRows(proj);

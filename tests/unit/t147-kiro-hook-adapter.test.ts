@@ -49,7 +49,6 @@ import {
   stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import {
-  registerSyntheticHumanTurnHost,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
@@ -171,19 +170,6 @@ function runAdapter(
   extraArgs: string[] = [],
   envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
-  if (target === "record-human-turn" || target === "verb-intercept") {
-    try {
-      const record = typeof payload === "string" ? JSON.parse(payload) : payload;
-      const session = (record as { session_id?: unknown }).session_id;
-      if (typeof session === "string" && session.trim()) {
-        registerSyntheticHumanTurnHost(projectDir, session);
-      } else if (record !== null && typeof record === "object") {
-        registerSyntheticHumanTurnHost(projectDir, "t147-synthetic-session");
-      }
-    } catch {
-      // Malformed adapter payloads are exercised as fail-open cases.
-    }
-  }
   const r = spawnSync(
     "bun",
     [

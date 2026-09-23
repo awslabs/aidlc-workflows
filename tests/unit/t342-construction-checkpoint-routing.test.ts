@@ -7,8 +7,6 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
 } from "../harness/fixtures.ts";
@@ -135,13 +133,11 @@ function recordCommand(p: string): string {
     });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     if (args[0] === "decision") {
-      registerSyntheticHumanTurnHost(p, "t342-command");
       const human = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
         encoding: "utf-8", cwd: p,
         env: { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p },
         input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t342-command", prompt: "Approve" }),
       });
-      clearSyntheticHumanTurnHost(p);
       expect(human.status, `${human.stdout}${human.stderr}`).toBe(0);
     }
   }
@@ -176,7 +172,6 @@ function policyCli(p: string, tool: string, args: string[]) {
 }
 
 function policyHuman(p: string, prompt: string, session = "t342-policy") {
-  registerSyntheticHumanTurnHost(p, session);
   const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   delete env.AIDLC_UNATTENDED;
@@ -184,7 +179,6 @@ function policyHuman(p: string, prompt: string, session = "t342-policy") {
     encoding: "utf-8", cwd: p, env,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
-  clearSyntheticHumanTurnHost(p);
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
 }
 

@@ -43,8 +43,6 @@ import {
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   AIDLC_SRC,
   cleanupTestProject,
   seededRecordDir,
@@ -206,13 +204,11 @@ function decide(project: string, questions: string, session: string): Spawned {
 }
 
 function humanTurn(project: string, session: string): void {
-  registerSyntheticHumanTurnHost(project, session);
   const human = spawn(
     [BUN, HUMAN_TURN, "engine", "hook", "record-human-turn"],
     project,
     JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan" }),
   );
-  clearSyntheticHumanTurnHost(project);
   expect(human.code, human.stderr).toBe(0);
 }
 

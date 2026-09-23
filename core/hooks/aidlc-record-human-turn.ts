@@ -3,8 +3,8 @@
 // On every real human prompt, append a HUMAN_TURN event to the active intent's
 // audit shard (the state machine's own append-only ledger). The approval /
 // interview gate (handleApprove / handleAnswer) refuses unless a HUMAN_TURN was
-// recorded since the last gate resolution, so a model under autopilot cannot
-// fabricate an approval with no human having acted this turn.
+// recorded since the last gate resolution. The hook records presence and order;
+// it does not authenticate who launched the dispatcher.
 //
 // Presence remains the gate signal; the prompt payload also answers the single
 // active protected challenge (plan, verification command, policy, or checkpoint).
@@ -29,7 +29,7 @@
 //
 // UNATTENDED DRIVING (AIDLC_UNATTENDED=1). The mint is a presence ASSERTION, and
 // this hook has no evidence for it: UserPromptSubmit carries no signal about who
-// submitted, and the hook reads no stdin. That is sound while every prompt comes
+// submitted, and its payload has no uncopyable caller identity. That is sound while every prompt comes
 // from a person, but an unattended driver (an overnight runner resuming the
 // workflow on a schedule, CI, a cron) submits prompts too — so it mints a fresh,
 // spendable HUMAN_TURN on every cycle and "walking away" stops meaning "no new
@@ -56,7 +56,6 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   clearPlanApprovalChallenge,
-  authenticatedHumanTurnSession,
   planApprovalChallengeRelativePath,
   protectedQuestionRelativePath,
   withdrawProtectedQuestions,
@@ -65,10 +64,11 @@ import {
   markHumanTurn,
   resolveProjectDirFromHook,
   stateFilePath,
+  validSessionId,
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
-import { applyTypedGuardSwitchPrompt, normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
+import { applyTypedGuardSwitchPrompt, isTypedGuardSwitchPrompt, normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
@@ -166,7 +166,7 @@ try {
       tool_input?: unknown;
       toolInput?: unknown;
     };
-    if (typeof parsed.session_id === "string") sessionId = parsed.session_id.trim();
+    if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
     for (const candidate of [
       parsed.prompt,
@@ -193,9 +193,6 @@ try {
         ) ?? "";
     }
   } catch { /* presence still records without identity on legacy payloads */ }
-  const authenticatedSessionId = authenticatedHumanTurnSession(projectDir, sessionId);
-  if (authenticatedSessionId === null) return 0;
-  sessionId = authenticatedSessionId;
   // A field-only rename preserves the stored and effective value, so it carries
   // no switch authority. Kiro IDE's prompt-empty adapter performs the same
   // operation before forwarding because some builds discard core hook output.
@@ -213,9 +210,15 @@ try {
       // An unchanged retired field retains the normal migration notice.
     }
   }
+  const mintAllowed = humanTurnMintAllowed();
+  if (!mintAllowed && typedPrompt && isTypedGuardSwitchPrompt(typedPrompt)) {
+    process.stdout.write(`${JSON.stringify({
+      additionalContext: "AIDLC Guard Policy: the typed switch was not applied because AIDLC_UNATTENDED=1 withholds human authority on this driver; run it from an attended session.",
+    })}\n`);
+  }
   // Apply before the state-file gate so a first-use switch reports that the
   // person must create the piece of work, then type the switch again.
-  if (humanTurnMintAllowed() && sessionId && typedPrompt) {
+  if (mintAllowed && sessionId && typedPrompt) {
     try {
       const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt);
       if (outcome !== null) {
@@ -226,7 +229,7 @@ try {
     }
   }
   if (existsSync(stateFilePath(projectDir))) {
-    if (humanTurnMintAllowed()) {
+    if (mintAllowed) {
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);

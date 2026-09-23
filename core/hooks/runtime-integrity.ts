@@ -21,7 +21,7 @@ const HARNESS_CONTROL_ASSIGNMENT = /\b(?:AIDLC_SESSION_OVERRIDE|AIDLC_SESSION_OV
 // A concrete import, require, or execution of a hook module: a hook file path
 // or one of the two modules whose exports mint a human turn or apply intent
 // settings, in an import/require/from with a string literal, an interpreter
-// invocation of a hook file, or the engine hook command form. Applied to
+// invocation of a hook file, or the engine hook command or argv form. Applied to
 // inline scripts, heredocs, aliases, functions, wrapper files, and written
 // content alike: a comment, an inert string, or prose that merely names a
 // hook or a helper is ordinary project content and stays runnable and
@@ -29,7 +29,8 @@ const HARNESS_CONTROL_ASSIGNMENT = /\b(?:AIDLC_SESSION_OVERRIDE|AIDLC_SESSION_OV
 const PROTECTED_MODULE_USE = new RegExp(
   String.raw`(?:\bimport\b[^\n;]*?|\brequire\s*\(\s*|\bfrom\s+)["'\x60][^"'\x60\n]*(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?["'\x60]` +
   String.raw`|\b(?:bun|node|tsx|deno)\b[^\n;|&]*hooks[\\/]aidlc-[a-z-]+\.ts\b` +
-  String.raw`|\baidlc(?:\.ts)?["']?\s+engine\s+hook\b`,
+  String.raw`|\baidlc(?:\.ts)?["']?\s+engine\s+hook\b` +
+  String.raw`|(?:\[|,)\s*["'\x60]engine["'\x60]\s*,\s*["'\x60]hook["'\x60]\s*,\s*["'\x60]record-human-turn["'\x60](?=\s*(?:,|\]))`,
 );
 const SHELL_FUNCTION = /(?:^|[;\n|&])\s*(?:function\s+[\w-]+(?:\s*\(\s*\))?|[\w-]+\s*\(\s*\))\s*\{/;
 const SCRIPT_EXTENSION = /\.(?:ts|js|mjs|cjs|sh|py)$/;

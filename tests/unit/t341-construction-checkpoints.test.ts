@@ -56,8 +56,6 @@ import {
   writeUnitSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   cleanupTestProject,
   AIDLC_SRC,
   createTestProject,
@@ -192,13 +190,11 @@ function cli(project: string, tool: string, args: string[], env = process.env) {
 }
 
 function submitCommandChoice(project: string, session: string, prompt: string, env = process.env): void {
-  registerSyntheticHumanTurnHost(project, session);
   const submitted = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
     encoding: "utf-8", cwd: project,
     env: { ...env, AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project },
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
-  clearSyntheticHumanTurnHost(project);
   expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
 }
 
@@ -1480,13 +1476,11 @@ describe("t341 protected question interleaving", () => {
   test("rendered question text binds picker replies; absent text falls back to the exclusive question", () => {
     const pd = project();
     const submit = (toolInput?: unknown) => {
-      registerSyntheticHumanTurnHost(pd, session);
       const result = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
         cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
         input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: session,
           tool_input: toolInput, tool_response: { answers: { choice: "Approve" } } }),
       });
-      clearSyntheticHumanTurnHost(pd);
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     };
     const decision = ask(pd);
@@ -1516,7 +1510,6 @@ describe("t341 protected question interleaving", () => {
     const pd = project();
     const adapter = join(AIDLC_SRC, "../../codex/.codex/hooks/aidlc-codex-adapter.ts");
     ask(pd);
-    registerSyntheticHumanTurnHost(pd, session);
     for (const question of ["An unrelated question?", prompt]) {
       const submitted = childProcess.spawnSync(process.execPath, [adapter, "record-human-turn"], {
         cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
@@ -1531,7 +1524,6 @@ describe("t341 protected question interleaving", () => {
         expect(receipts(pd)).toEqual([]);
       }
     }
-    clearSyntheticHumanTurnHost(pd);
     const accepted = answer(pd);
     expect(accepted.code, accepted.out).toBe(0);
     expect(receipts(pd)).toHaveLength(1);

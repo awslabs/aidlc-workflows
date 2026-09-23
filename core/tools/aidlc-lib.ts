@@ -4941,44 +4941,6 @@ function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | nul
   return null;
 }
 
-// Resolve authority only when this process was launched by the framework
-// dispatcher or a harness adapter whose own parent is the SessionStart host.
-// A model-launched shell adds an extra process between the registered host and
-// this hook, so a dynamically assembled public dispatcher/import cannot mint a
-// HUMAN_TURN or apply a typed guard switch.
-export function authenticatedHumanTurnSession(
-  projectDir: string,
-  payloadSessionId: string,
-): string | null {
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
-  const current = processIdentity(process.pid, deadline);
-  if (!current || current.ppid !== process.ppid) return null;
-  const launcher = processIdentity(process.ppid, deadline);
-  if (!launcher || launcher.ppid <= 1) return null;
-  const host = processIdentity(launcher.ppid, deadline);
-  if (!host || !processIsAlive(launcher.ppid)) return null;
-  if (
-    sessionProcessPlatform() === "win32" &&
-    (
-      windowsParentEdge(launcher, current) !== "verified" ||
-      windowsParentEdge(host, launcher) !== "verified"
-    )
-  ) {
-    return null;
-  }
-  const entry = readSessionPidEntry(projectDir, launcher.ppid);
-  if (
-    !entry?.sessionId ||
-    (entry.startTime !== null && entry.startTime !== host.startTime)
-  ) {
-    return null;
-  }
-  const supplied = validSessionId(payloadSessionId);
-  if (payloadSessionId.trim().length > 0 && supplied === null) return null;
-  if (supplied !== null && supplied !== entry.sessionId) return null;
-  return supplied ?? entry.sessionId;
-}
-
 function processIsAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 1) return false;
   try {

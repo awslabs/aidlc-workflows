@@ -42,8 +42,6 @@ import {
 } from "../../core/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../core/tools/aidlc-testing-posture.ts";
 import {
-  clearSyntheticHumanTurnHost,
-  registerSyntheticHumanTurnHost,
   fixtureIntentId8,
   createTestProject,
   DEFAULT_SPACE,
@@ -327,14 +325,9 @@ class Fixture {
     const input = {
       cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
     };
-    if (name === "record-human-turn") registerSyntheticHumanTurnHost(this.project, input.session_id);
-    try {
-      const output = run(argv, this.cwd, this.env, input);
-      if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
-      return output;
-    } finally {
-      if (name === "record-human-turn") clearSyntheticHumanTurnHost(this.project);
-    }
+    const output = run(argv, this.cwd, this.env, input);
+    if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
+    return output;
   }
 
   guard(toolName: string, toolInput: Json): Run {
@@ -351,14 +344,9 @@ class Fixture {
     const input = {
       cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
     };
-    if (target === "record-human-turn") registerSyntheticHumanTurnHost(this.project, input.session_id);
-    try {
-      const output = run(argv, this.cwd, this.env, input);
-      if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
-      return output;
-    } finally {
-      if (target === "record-human-turn") clearSyntheticHumanTurnHost(this.project);
-    }
+    const output = run(argv, this.cwd, this.env, input);
+    if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
+    return output;
   }
 
   remedy(op: string, input: Partial<GuardRefusalInput> = {}) {
