@@ -60,6 +60,25 @@ describe("t151 neutral and native onboarding", () => {
     ]);
   });
 
+  test("user-typed skill names carry the harness's skill prefix, not the shell invocation", () => {
+    // `{{INVOKE}}` is a shell command (`bun <dir>/tools/aidlc.ts`, or `aidlc` on
+    // a native install). Gluing a skill suffix onto it renders a command that
+    // does not exist; the skill prefix each harness declares is what a person
+    // types. Any `{{INVOKE}}-<suffix>` is that mistake.
+    expect(HARNESS).not.toMatch(/\{\{INVOKE\}\}-/);
+
+    const skills = ["session-cost", "replay", "outcomes-pack", "knowledge", "init"];
+    for (const invoke of ["/aidlc", "$aidlc"]) {
+      const rendered = renderOnboarding(HARNESS, { invoke, slots: {} })
+        .replaceAll("{{HARNESS_DIR}}", ".foo")
+        .replaceAll("{{INVOKE}}", "bun .foo/tools/aidlc.ts");
+      for (const skill of skills) {
+        expect(rendered, `${invoke}-${skill}`).toContain(`${invoke}-${skill}`);
+      }
+      expect(rendered).not.toContain("aidlc.ts-");
+    }
+  });
+
   test("a new harness gets complete onboarding without editing either skeleton", () => {
     const fills: OnboardingFills = {
       invoke: "@aidlc",
