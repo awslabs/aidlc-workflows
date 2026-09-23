@@ -180,6 +180,17 @@ const TOOL_COMMAND_PATTERN_TOKEN = /\{\{TOOL_COMMAND_PATTERN\}\}/g;
 // user's own project directory, so a planted file would be in its own allowlist -
 // which is the hole the enumeration exists to close.
 const SHIPPED_TOOL_NAMES_TOKEN = /\{\{SHIPPED_TOOL_NAMES\}\}/g;
+// The same invocation, as 3.0 glob patterns instead of a 2.x regex — YAML list items,
+// already indented, because a `permissions` rule takes globs and nothing else.
+//
+// Wider than the regex it replaces, unavoidably and by design. A glob has `*` and
+// nothing else: no character class, so it cannot say "not a slash", and measurement
+// showed `*` crosses a path separator without canonicalizing `..` first. The narrowing
+// the regex did in the filename position therefore cannot survive the conversion, and it
+// moves to the adapter's shipped-tool enumeration, which compares against a real list.
+// Two patterns per invocation form because a glob must match the whole command, so a
+// no-argument call and a call with arguments are separate strings.
+const TOOL_COMMAND_GLOBS_TOKEN = /\{\{TOOL_COMMAND_GLOBS\}\}/g;
 const TRUSTED_NAMESPACE_TOKEN = /\{\{TRUSTED_NAMESPACE\}\}/g;
 // Matched by PREFIX (mirroring aidlc-init.ts's marker scan): the begin marker
 // embeds the harness-projected invocation, so its tail varies per channel.
@@ -243,10 +254,35 @@ function substituteInvocationTokens(
     : String.raw`bun (run )?["'']?${
       escapeRegExp(harnessDir)
     }/tools/[A-Za-z0-9._-]+\.ts["'']?( .*)?`;
+  // The same grant as `toolCommandPattern`, in glob form. On the native channel the
+  // dispatcher is the only entrypoint, so the route namespace is the whole grant; on the
+  // source channel the personas call the tool scripts directly, so the filename position
+  // needs a wildcard - and that wildcard is wider than the regex's character class was,
+  // which is why the adapter enforces the shipped-tool list on top of it.
+  // Anchored on `aidlc` in the filename position because every shipped tool carries that
+  // prefix: it costs nothing and removes one class of unrelated match.
+  const toolCommandGlobs = (
+    invoke === "aidlc"
+      ? [TRUSTED_COMMAND_PREFIX, `${TRUSTED_COMMAND_PREFIX} *`]
+      : [
+        `bun ${harnessDir}/tools/aidlc*.ts`,
+        `bun ${harnessDir}/tools/aidlc*.ts *`,
+        `bun run ${harnessDir}/tools/aidlc*.ts`,
+        `bun run ${harnessDir}/tools/aidlc*.ts *`,
+        `bun "${harnessDir}/tools/aidlc*.ts"`,
+        `bun "${harnessDir}/tools/aidlc*.ts" *`,
+      ]
+  )
+    // A pattern containing a double quote - the form where the model quotes the script
+    // path - has to be emitted as a single-quoted YAML scalar, or the quotes collide and
+    // the frontmatter stops parsing. No pattern here contains a single quote.
+    .map((g) => `        - ${g.includes('"') ? `'${g}'` : `"${g}"`}`)
+    .join("\n");
   return s
     .replace(INVOKE_TOKEN, invoke)
     .replace(TOOL_PREFIX_TOKEN, toolPrefix)
     .replace(TOOL_COMMAND_PATTERN_TOKEN, toolCommandPattern)
+    .replace(TOOL_COMMAND_GLOBS_TOKEN, toolCommandGlobs)
     .replace(SHIPPED_TOOL_NAMES_TOKEN, shippedToolNames())
     .replace(TRUSTED_NAMESPACE_TOKEN, TRUSTED_ROUTE_NAMESPACE);
 }

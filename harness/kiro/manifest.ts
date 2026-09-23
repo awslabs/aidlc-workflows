@@ -51,10 +51,15 @@ const FS_WRITE_AUTOAPPROVED = new Set([
 
 // The composer owns the scope grid rather than a space, so its write scope is
 // the scope tree instead of aidlc/spaces/**.
+//
+// Indented for a `permissions` rule's `match`/`exclude` list, which sits two levels
+// deeper than the 2.x `fs_write.allowedPaths` these replaced. Emitted twice per
+// reviewing persona - once as the deny's `exclude`, once as the allow's `match` - so the
+// two can never drift apart into a deny that outlaws what the allow permits.
 function personaWritePaths(agent: string): string[] {
   return agent === "aidlc-composer-agent"
-    ? [`      - '.kiro/scopes/**'`, `      - '.kiro/tools/data/scope-grid.json'`]
-    : [`      - 'aidlc/spaces/**'`];
+    ? [`        - ".kiro/scopes/**"`, `        - ".kiro/tools/data/scope-grid.json"`]
+    : [`        - "aidlc/spaces/**"`];
 }
 
 // A reviewing persona reads the record it judges and nothing agent-specific; the
@@ -74,46 +79,123 @@ function personaResources(agent: string): string[] {
   ];
 }
 
-// Persona frontmatter. Kiro treats Markdown frontmatter and a JSON agent config
-// as equivalent, so this is the same grant model the row shipped as agent JSON
-// before the two Kiro rows merged — minus the per-persona hook registrations,
-// which the workspace hooks plus the delegation ledger now supply.
+// Persona frontmatter, in the 3.0 `permissions` schema.
 //
-// `allowedCommands`/`deniedCommands` are Rust `regex` patterns anchored
-// full-string by Kiro; `deniedCommands` is evaluated first and beats any allow.
-// The allowlist is deliberately project-relative: a grant for any
-// `/…/.kiro/tools/*.ts` would pre-approve running a file from a world-writable
-// directory. See tests/unit/t252 for the behavioural contract.
+// 🔴 It used to emit the 2.x `toolsSettings` / `allowedTools` shape, on the premise
+// stated here that Kiro treats Markdown frontmatter and a JSON agent config as
+// equivalent. That premise is FALSE on the engine this row pins (`chat.agentEngine:
+// "v3"`), and the fields were inert. Two measurements, both on IDE 1.x:
+//
+//   - Kiro's own `/upgrade-agent` does NOT list a Markdown agent carrying
+//     `toolsSettings` as out of sync, while the identical content as `.json` IS listed.
+//     Markdown agents are treated as already-V3-native and receive no V2-to-V3
+//     projection, so the JSON-to-Markdown conversion in this row removed the
+//     translation that used to make these fields mean something.
+//   - A dispatched persona was PROMPTED for a command its own `deniedCommands`
+//     matched. `deny` has no approval path, so an ask where a deny was configured is
+//     proof the field was never read.
+//
+// So the fields are gone rather than kept beside the new ones: shipping a rule that
+// looks protective and enforces nothing is worse than shipping no rule, and this row
+// spent a review cycle on exactly that.
+//
+// What each 2.x field became, and why:
+//
+//   tools: fs_read/fs_write/execute_bash  ->  the 3.0 CATEGORIES read/write/shell.
+//     `thinking` and the two MCP servers stay as they are - `thinking` has no 3.0
+//     permission equivalent (Kiro's own diagnostics says so and ignores it), and an
+//     `@server` entry is a tool name in both schemas.
+//   allowedTools: [fs_read, ...]          ->  `capability: fs_read` allow on `**`.
+//     That field meant "never prompt for this tool"; in 3.0 that is an allow rule.
+//   toolsSettings.execute_bash.allowedCommands -> `capability: shell` allow globs.
+//   toolsSettings.execute_bash.deniedCommands  -> `capability: shell` deny globs.
+//   fs_write.allowedPaths                 ->  `capability: fs_write` DENY on `**` with
+//     the write paths EXCLUDED, plus an allow on those paths for the two personas that
+//     had `fs_write` in `allowedTools`. `allowedPaths` did two things at once: it
+//     scoped where a write could land AT ALL, and - combined with `allowedTools` -
+//     decided whether it prompted. In 3.0 an allow suppresses the prompt but an
+//     unmatched path defaults to `ask`, not to refusal, so the scope needs the deny.
+//     `exclude` carving an exception out of a deny was measured working on IDE 1.x: a
+//     write inside the excluded region landed silently, one outside was refused with
+//     the rule quoted, and the file was verified absent afterwards.
+//
+// No `mcp` rule, deliberately: an MCP call must keep prompting, which t281 pins.
+//
+// 🔴 The shell allow globs are WIDER than the regex they replace, in the filename
+// position only, and that is not a slip. A glob has `*` and nothing else - no character
+// class - so it cannot say "not a slash", and `*` was measured crossing a path
+// separator without `..` being canonicalized first. The containment that the regex's
+// `[A-Za-z0-9._-]+` provided therefore cannot be expressed here at all; it lives in the
+// adapter, which compares the filename against the set this build actually shipped and
+// refuses anything else. See tests/unit/t218 for that boundary and tests/unit/t252 for
+// the composition of the two layers.
+//
+// The deny globs are likewise an ENUMERATION of spellings where the 2.x regex had a
+// character class (`-[A-Za-z]*[rR][A-Za-z]*` matched any flag cluster containing r or
+// R). Any enumeration can be spelled around. That is tolerable because deny was never
+// the containment: `rm` in any form matches no allow pattern, so it prompts on the
+// strength of the allow list alone. Deny only removes the human's ability to approve
+// the two operations this framework must never perform unattended.
 function personaFrontmatter(agent: string): string[] {
+  const writePaths = personaWritePaths(agent);
   return [
     "includeMcpJson: true",
-    "tools:",
-    "  - fs_read",
-    "  - fs_write",
-    "  - execute_bash",
-    "  - thinking",
-    "  - '@context7'",
-    "  - '@aws-knowledge-mcp-server'",
-    "allowedTools:",
-    "  - fs_read",
-    ...(FS_WRITE_AUTOAPPROVED.has(agent) ? ["  - fs_write"] : []),
-    "  - thinking",
-    "toolsSettings:",
-    "  execute_bash:",
-    "    allowedCommands:",
-    // The engine invocation this channel actually uses: the copy channel runs
-    // the .ts entrypoints through bun, the native channel runs the compiled
-    // trusted command. Hardcoding the bun form allowed a command the native
-    // install cannot run while denying the one its own prose instructs.
-    `      - '{{TOOL_COMMAND_PATTERN}}'`,
-    `      - 'date -u( .*)?'`,
-    "    deniedCommands:",
-    `      - '([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?'`,
-    `      - '([^\\s]*/)?rm( [^\\s]+)* --recursive( .*)?'`,
-    `      - '([^\\s]*/)?git( -[^\\s]+( ("[^"]*"|''[^'']*''|[^\\s]+))?)* push( .*)?'`,
-    "  fs_write:",
-    "    allowedPaths:",
-    ...personaWritePaths(agent),
+    `tools: ["read", "write", "shell", "thinking", "@context7", "@aws-knowledge-mcp-server"]`,
+    "permissions:",
+    "  rules:",
+    "    - capability: shell",
+    "      effect: deny",
+    "      match:",
+    // Spelled out because a glob cannot carry the 2.x class. Both letter cases of the
+    // recursive flag, the two orderings with `-f`, the long form, and each of those
+    // reachable through an absolute or relative path prefix.
+    `        - "rm -r*"`,
+    `        - "rm -R*"`,
+    `        - "rm -fr*"`,
+    `        - "rm -fR*"`,
+    `        - "rm --recursive*"`,
+    `        - "*/rm -r*"`,
+    `        - "*/rm -R*"`,
+    `        - "*/rm -f*"`,
+    `        - "*/rm --recursive*"`,
+    `        - "git push*"`,
+    `        - "git -* push*"`,
+    `        - "*/git push*"`,
+    `        - "*/git -* push*"`,
+    "    - capability: shell",
+    "      effect: allow",
+    "      match:",
+    `{{TOOL_COMMAND_GLOBS}}`,
+    // The exact timestamp spellings the protocol instructs, not a tail wildcard: a
+    // trailing `*` matched any tail, and this engine generation gates none of the
+    // characters a tail can carry. The conductor carries the same four.
+    `        - "date -u"`,
+    `        - 'date -u +"%Y-%m-%dT%H:%M:%SZ"'`,
+    `        - "date -u +'%Y-%m-%dT%H:%M:%SZ'"`,
+    `        - "date -u +%Y-%m-%dT%H:%M:%SZ"`,
+    // `allowedTools` listed fs_read for every persona: reading never prompted.
+    "    - capability: fs_read",
+    "      effect: allow",
+    "      match:",
+    `        - "**"`,
+    // The scope half of the old `allowedPaths`. Without this an unmatched path would
+    // merely ask, where 2.x refused it outright.
+    "    - capability: fs_write",
+    "      effect: deny",
+    "      match:",
+    `        - "**"`,
+    "      exclude:",
+    ...writePaths,
+    // The prompt-suppression half, for the two personas that had fs_write in
+    // `allowedTools` because they write their verdict into the workflow record.
+    ...(FS_WRITE_AUTOAPPROVED.has(agent)
+      ? [
+        "    - capability: fs_write",
+        "      effect: allow",
+        "      match:",
+        ...writePaths,
+      ]
+      : []),
     "resources:",
     ...personaResources(agent),
   ];

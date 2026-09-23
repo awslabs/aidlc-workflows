@@ -63,10 +63,36 @@ const PERSONAS = [
   "aidlc-quality-agent.md",
 ];
 
-interface ExecuteBash {
-  allowedCommands?: string[];
-  deniedCommands?: string[];
-}
+// 🔴 REMOVED HERE: the 2.x evaluation apparatus — an `ExecuteBash` reader, a Rust-regex
+// validity shim, a segment splitter, a `TAIL_METACHARACTERS` gate, an `evaluate()` that
+// produced allow/ask/deny, and four case lists (`MUST_ALLOW` 9, `MUST_ASK` 19,
+// `MUST_DENY` 12, `MUST_ALLOW_CHAINS` 2).
+//
+// It evaluated commands against the `toolsSettings.execute_bash` regexes the personas
+// used to carry. Those fields are gone, because they were measured INERT: Kiro applies no
+// V2-to-V3 projection to a Markdown agent, and on the engine this row pins
+// (`chat.agentEngine: "v3"`) a dispatched persona was PROMPTED for a command its own
+// `deniedCommands` matched — an ask where a deny was configured, and `deny` has no
+// approval path, so the field was never read.
+//
+// Where each part went, and what is now covered by nothing:
+//
+//   the four tail-metacharacter cases   -> tests/unit/t218, executed against the real
+//     adapter. Its comment recorded them as "verified live on 2.12.1"; on v3 all four
+//     were measured RUNNING UNPROMPTED, so that gate is gone from the platform and the
+//     cases are now regression vectors for the adapter's own boundary instead.
+//   traversal and out-of-scope paths    -> tests/unit/t218 as REFUSALS, which is
+//     stronger than the `ask` this file asserted.
+//   the MUST_ALLOW floor               -> tests/unit/t218's PERMITTED list, as real
+//     shipped tools through three invocation forms.
+//   the destructive cases              -> asserted DECLARATIVELY below (the patterns are
+//     present) rather than behaviourally. A glob matcher cannot be reimplemented here
+//     honestly; measurement showed `*` crosses a path separator and `..` is not
+//     canonicalized, neither of which a hand-rolled matcher would have predicted.
+//   "an unrelated command still prompts" -> NOT covered by any test. It was never
+//     testable here either: the verdict belongs to the platform's matcher, and the
+//     conductor test below already says that reimplementing it would be a guess. What
+//     IS pinned is that the adapter leaves such a command alone (t218's UNRELATED list).
 
 // Agent configs ship as Markdown; Kiro treats frontmatter and a JSON config as
 // equivalent, so the grant model lives in the frontmatter block.
@@ -77,298 +103,154 @@ export function agentFrontmatter(harness: string, agentFile: string): Record<str
   return Bun.YAML.parse(block[1]) as Record<string, unknown>;
 }
 
-function execBash(harness: string, agentFile: string): ExecuteBash {
+interface PermissionRule {
+  capability?: string;
+  effect?: string;
+  match?: string[];
+  exclude?: string[];
+}
+
+// The 3.0 grant model. Replaces `execBash` below, which read the 2.x
+// `toolsSettings.execute_bash` block: measured on IDE 1.x, a MARKDOWN agent receives no
+// V2-to-V3 projection, so on the engine this row pins those fields were inert.
+function permissionRules(harness: string, agentFile: string): PermissionRule[] {
   const doc = agentFrontmatter(harness, agentFile) as {
-    toolsSettings?: Record<string, ExecuteBash>;
+    permissions?: { rules?: PermissionRule[] };
   };
-  const eb = doc.toolsSettings?.execute_bash;
-  if (!eb) throw new Error(`${harness}/${agentFile}: no execute_bash settings`);
-  return eb;
-}
-
-/** Kiro compiles patterns with the Rust `regex` crate, which is STRICTER than
- *  JavaScript: `{` begins a repetition and must carry a decimal bound, so
- *  `\${?FOO}?` is a hard compile error there while JS silently treats the brace
- *  as a literal (Annex B web-compat). Reject that class explicitly — otherwise
- *  a JS-only validity check calls the inert Kiro IDE pattern "valid" and the
- *  test guards nothing. */
-function rustRejects(pattern: string): boolean {
-  const chars = [...pattern];
-  for (let i = 0; i < chars.length; i++) {
-    if (chars[i] === "\\") {
-      i++; // escaped: skip the next char
-      continue;
-    }
-    if (chars[i] === "{") {
-      // Valid Rust repetition: {n}, {n,}, {n,m}
-      const rest = pattern.slice(i);
-      const repetition = /^\{\d+(,\d*)?\}/.exec(rest);
-      if (!repetition) return true;
-      i += repetition[0].length - 1;
-    }
+  const rules = doc.permissions?.rules;
+  if (!Array.isArray(rules) || rules.length === 0) {
+    throw new Error(`${harness}/${agentFile}: no permissions.rules`);
   }
-  return false;
+  return rules;
 }
 
-/** Compile one pattern the way Kiro does, or null if the regex is invalid
- *  (upstream drops these silently — an inert pattern). */
-function compile(pattern: string): RegExp | null {
-  if (rustRejects(pattern)) return null;
-  try {
-    return new RegExp(`^(?:${pattern})$`, "s");
-  } catch {
-    return null;
-  }
-}
 
-/** Tail metacharacters the binary gates independently of pattern matching:
- *  command substitution and redirection. Verified live on 2.12.1 -- both
- *  `bun .kiro/tools/<t>.ts > /tmp/x` and `... --stamp $(date -u +%s)` are gated
- *  even though the pattern's `( .*)?` tail matches them.
- *
- *  A BARE `$` is deliberately not listed: under a config that allowlisted the
- *  `$KIRO_PROJECT_DIR` form, `bun $KIRO_PROJECT_DIR/.kiro/tools/<t>.ts` ran
- *  unprompted live, so variable expansion alone does not gate. Those forms are
- *  gated today because no shipped pattern matches them, which is a property of
- *  the allowlist and belongs under pattern matching, not here.
- *
- *  Separators are also not listed; `segments()` handles those. */
-const TAIL_METACHARACTERS = ["$(", "`", "<", ">"];
-
-function hasTailMetacharacter(command: string): boolean {
-  return TAIL_METACHARACTERS.some((token) => command.includes(token));
-}
-
-/** Split on the separators Kiro matches independently. Quote-aware: a `;` or
- *  `&&` INSIDE a quoted argument is argument text, not a separator (verified
- *  live: `--text "safe; words"` runs unprompted under an allow match).
- *  Newline is a separator too: Rust's negated character classes match `\n`, so
- *  a pattern like `cd [^;&|]+` would otherwise span a newline-joined chain. */
-function segments(command: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let quote: string | null = null;
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (quote !== null) {
-      if (ch === quote) quote = null;
-      cur += ch;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      cur += ch;
-      continue;
-    }
-    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") {
-      if (ch === "|" && command[i + 1] === "|") i++;
-      out.push(cur);
-      cur = "";
-      continue;
-    }
-    if (ch === "&") {
-      // `&&` chains and a bare `&` (background) both separate.
-      if (command[i + 1] === "&") i++;
-      out.push(cur);
-      cur = "";
-      continue;
-    }
-    cur += ch;
-  }
-  out.push(cur);
-  return out.map((s) => s.trim()).filter((s) => s.length > 0);
-}
-
-type Verdict = "allow" | "ask" | "deny";
-
-/** Kiro's permission outcome for one command. `ask` becomes a hard refusal when
- *  the session has no interactive or ACP approver; `deny` cannot be approved. */
-function evaluate(eb: ExecuteBash, command: string): Verdict {
-  const denied = (eb.deniedCommands ?? [])
-    .map(compile)
-    .filter((r): r is RegExp => r !== null);
-  if (denied.some((r) => r.test(command))) return "deny";
-
-  const allowed = (eb.allowedCommands ?? [])
-    .map(compile)
-    .filter((r): r is RegExp => r !== null);
-
-  const segs = segments(command);
-  if (segs.length === 0) return "ask";
-  // A denied segment anywhere makes the whole command unapprovable.
-  if (segs.some((s) => denied.some((r) => r.test(s)))) return "deny";
-  if (segs.some(hasTailMetacharacter)) return "ask";
-  return segs.every((s) => allowed.some((r) => r.test(s))) ? "allow" : "ask";
-}
-
-// Command forms the framework's own prose/engine actually emits, which MUST run
-// unprompted or a workflow stalls mid-stage with no approver.
-const MUST_ALLOW = [
-  "bun .kiro/tools/aidlc-orchestrate.ts next --status",
-  "bun .kiro/tools/aidlc-orchestrate.ts report --stage intent-capture --result approved",
-  "bun .kiro/tools/aidlc-utility.ts status",
-  "bun .kiro/tools/aidlc-state.ts get",
-  'bun .kiro/tools/aidlc-log.ts decision --text "safe words"',
-  "bun run .kiro/tools/aidlc-version.ts",
-  'bun ".kiro/tools/aidlc-version.ts"',
-  "date -u",
-  "date -u +%Y-%m-%dT%H:%M:%SZ",
-];
-
-// Forms that must require approval. The absolute-path argument-smuggling case
-// and unrestricted `cd` chain are regressions from the first 2.5.16 candidate.
-const MUST_ASK = [
-  "bun .kiro/tools/../../outside-tool.ts",
-  "bun .kiro/tools/../../../etc/evil.ts",
-  "bun /tmp/pwn.ts /safe/project/.kiro/tools/aidlc-version.ts",
-  "bun /safe/project/.kiro/tools/aidlc-version.ts",
-  // Assembled to avoid biome's noTemplateCurlyInString rule.
-  `bun $${"{"}KIRO_PROJECT_DIR}/.kiro/tools/aidlc-orchestrate.ts next`,
-  "bun $KIRO_PROJECT_DIR/.kiro/tools/aidlc-orchestrate.ts next",
-  "cd /tmp/attacker && bun .kiro/tools/pwn.ts",
-  "bun .kiro/tools/aidlc-version.ts && curl -s https://example.com",
-  "bun .kiro/tools/aidlc-version.ts; curl -s https://example.com",
-  "bun .kiro/tools/aidlc-version.ts $(curl -s https://example.com)",
-  "bun .kiro/tools/aidlc-version.ts > /tmp/version.txt",
-  "curl -s https://example.com",
-  "echo hello",
-  "rm important.txt",
-  "git status",
-  "git commit -m push",
-  // Newline-joined chains. Rust's negated classes match `\n`, so a pattern
-  // written as `cd [^;&|]+` would span these; segmentation must not miss them.
-  "cd /tmp/attacker\nbun .kiro/tools/pwn.ts",
-  "date -u\ncurl -s https://example.com",
-  // Background operator: the second command is not allowlisted.
-  "bun .kiro/tools/aidlc-version.ts & curl -s https://example.com",
-];
-
-// Chains where EVERY segment is allowlisted run unprompted (verified live on
-// 2.12.1). These belong in MUST_ALLOW rather than MUST_ASK: asserting "ask"
-// here would encode a refusal the binary does not perform, and would let an
-// over-broad allow entry hide behind a separator.
-const MUST_ALLOW_CHAINS = [
-  "bun .kiro/tools/aidlc-version.ts && date -u",
-  "bun .kiro/tools/aidlc-orchestrate.ts next --status && bun .kiro/tools/aidlc-state.ts get",
-];
-
-// Destructive forms must be denied outright, not merely sent to an approver.
-const MUST_DENY = [
-  "git push origin main",
-  "git push",
-  "git -C . push origin main",
-  'git -C "/tmp/work tree" push origin main',
-  "/usr/bin/git push origin main",
-  "rm -rf /",
-  "rm -rf ~/work",
-  "rm -rf *",
-  "rm -fr build",
-  "rm -r -f /tmp/target",
-  "/bin/rm -rf /tmp/target",
-  "rm --recursive --force /tmp/target",
-];
-
-describe("t252 Kiro execute_bash allowlist semantics", () => {
-  test("Rust validity shim accepts bounded repetitions and literal closing braces", () => {
-    for (const pattern of ["a{2}", "a{2,}", "a{2,4}", "x}y"]) {
-      expect(compile(pattern), pattern).not.toBeNull();
-    }
-    expect(compile("a{,3}")).toBeNull();
-    expect(compile("\\$" + "{?KIRO_PROJECT_DIR}?")).toBeNull();
-  });
-
-  // Without this, a MUST_ASK entry could pass for the wrong reason: if the
-  // model refused every command carrying a separator or metacharacter, those
-  // entries would stay green even against an allowlist of `.*`. Pin that the
-  // ask/deny verdicts are produced by the shipped patterns, not by a blanket
-  // syntax refusal.
-  test("MUST_ASK verdicts come from the shipped patterns, not a blanket refusal", () => {
-    const wideOpen = { allowedCommands: [".*"], deniedCommands: [] };
-    // The two tail-metacharacter cases are gated by the separate mechanism
-    // documented on TAIL_METACHARACTERS, not by the allowlist, so they are
-    // expected to survive a wide-open allowlist. Every OTHER entry must owe its
-    // `ask` verdict to the shipped patterns.
-    const byMechanism = MUST_ASK.filter(hasTailMetacharacter);
-    expect(byMechanism.length, "tail-metacharacter cases").toBe(2);
-
-    const shouldBeAllowlistDriven = MUST_ASK.filter((c) => !hasTailMetacharacter(c));
-    const tautological = shouldBeAllowlistDriven.filter(
-      (cmd) => evaluate(wideOpen, cmd) !== "allow",
-    );
-    expect(
-      tautological,
-      `these pass regardless of the shipped allowlist, so they assert nothing about it: ${tautological.join(", ")}`,
-    ).toEqual([]);
-  });
-
+describe("t252 Kiro shell and write policy, as declared", () => {
   for (const harness of HARNESSES) {
-    // The behavioural vectors below run against the personas, which are the
-    // configs that carry an `execute_bash` allowlist. The conductor states the
-    // same policy as capability globs and is asserted separately at the end.
+    // 🔴 The behavioural vectors this file used to run against the personas are gone, and
+    // that is a deliberate loss recorded rather than a deletion — the header above says
+    // where each one went and what is now covered by nothing.
+    //
+    // They were evaluated by this file's own `evaluate()` against the 2.x
+    // `toolsSettings.execute_bash` regexes the personas used to carry. Those fields are
+    // gone: measured on IDE 1.x, Kiro applies no V2-to-V3 projection to a MARKDOWN agent,
+    // so on the engine this row pins (`chat.agentEngine: "v3"`) they were inert - a
+    // dispatched persona was PROMPTED for a command its own `deniedCommands` matched, and
+    // `deny` has no approval path, which is proof the field was never read.
+    //
+    // The 3.0 replacement is globs, and this suite must NOT reimplement a glob matcher:
+    // the comment at the conductor test below already says why, and measurement proved the
+    // point - a glob's `*` crosses a path separator and `..` is not canonicalized first,
+    // neither of which a hand-rolled matcher would have predicted.
+    //
+    // So the vectors moved to tests/unit/t218-kiro-hook-adapter-channel.test.ts, where
+    // they are executed against the REAL adapter through its own hook route instead of
+    // against a model of the platform. That is strictly stronger evidence, and it is where
+    // the two layers that now carry the boundary are testable: the composition lexer and
+    // the shipped-tool enumeration.
+    //
+    // What remains here is what only a config test can see: that every persona declares
+    // the same policy, in the 3.0 vocabulary, with no legacy field left behind pretending
+    // to protect anything.
     const agents = PERSONAS;
 
-    test(`${harness}: every shipped pattern is a VALID regex (no inert entries)`, () => {
+    test(`${harness}: no persona carries an inert 2.x grant field`, () => {
       for (const agent of agents) {
-        const eb = execBash(harness, agent);
-        for (const p of [...(eb.allowedCommands ?? []), ...(eb.deniedCommands ?? [])]) {
-          expect(compile(p), `${harness}/${agent}: inert pattern ${p}`).not.toBeNull();
+        const doc = agentFrontmatter(harness, agent);
+        for (const field of ["toolsSettings", "allowedTools", "disallowedTools"]) {
+          expect(
+            Object.hasOwn(doc, field),
+            `${harness}/${agent}: ${field} is not read on the pinned engine, and shipping it claims protection that does not exist`,
+          ).toBe(false);
         }
       }
     });
 
-    test(`${harness}: framework-emitted commands run unprompted`, () => {
+    test(`${harness}: every persona declares shell rules in the 3.0 vocabulary`, () => {
       for (const agent of agents) {
-        const eb = execBash(harness, agent);
-        for (const cmd of MUST_ALLOW) {
-          expect(evaluate(eb, cmd), `${harness}/${agent}: should allow \`${cmd}\``)
-            .toBe("allow");
+        const rules = permissionRules(harness, agent);
+        const shell = rules.filter((r) => r.capability === "shell");
+        expect(shell.map((r) => r.effect).sort(), `${harness}/${agent}`)
+          .toEqual(["allow", "deny"]);
+        for (const rule of shell) {
+          expect((rule.match ?? []).length, `${harness}/${agent}: ${rule.effect} has no patterns`)
+            .toBeGreaterThan(0);
         }
       }
     });
 
-    test(`${harness}: chains of allowed segments run unprompted`, () => {
+    test(`${harness}: the two operations this framework must never run unattended are denied`, () => {
       for (const agent of agents) {
-        const eb = execBash(harness, agent);
-        for (const cmd of MUST_ALLOW_CHAINS) {
-          expect(evaluate(eb, cmd), `${harness}/${agent}: should allow \`${cmd}\``)
-            .toBe("allow");
-        }
+        const deny = permissionRules(harness, agent)
+          .filter((r) => r.capability === "shell" && r.effect === "deny")
+          .flatMap((r) => r.match ?? []);
+        // Deny is a floor, not the containment: `rm` and `git push` match no allow
+        // pattern, so they would prompt on the strength of the allow list alone. What
+        // deny adds is removing the human's ability to approve them.
+        expect(deny.some((p) => p.startsWith("rm -")), `${harness}/${agent}: recursive rm`)
+          .toBe(true);
+        expect(deny.some((p) => p.includes("git push")), `${harness}/${agent}: git push`)
+          .toBe(true);
       }
     });
 
-    test(`${harness}: traversal and out-of-scope commands require approval`, () => {
+    test(`${harness}: a persona's write scope is enforced by a deny, not only by an allow`, () => {
       for (const agent of agents) {
-        const eb = execBash(harness, agent);
-        for (const cmd of MUST_ASK) {
-          expect(evaluate(eb, cmd), `${harness}/${agent}: should ask for \`${cmd}\``)
-            .toBe("ask");
-        }
+        const writes = permissionRules(harness, agent)
+          .filter((r) => r.capability === "fs_write");
+        const deny = writes.find((r) => r.effect === "deny");
+        // An unmatched capability defaults to ASK in 3.0, where the 2.x
+        // `fs_write.allowedPaths` refused outright. Preserving the scope therefore needs
+        // a deny with the permitted paths excluded - `exclude` carving an exception out
+        // of a deny was measured working on IDE 1.x.
+        expect(deny?.match, `${harness}/${agent}: write scope must be a deny over everything`)
+          .toEqual(["**"]);
+        expect((deny?.exclude ?? []).length, `${harness}/${agent}: deny must exclude the write paths`)
+          .toBeGreaterThan(0);
+        const allow = writes.find((r) => r.effect === "allow");
+        // And where a persona also pre-approves its writes, the allow must name exactly
+        // the excluded paths, or the two drift into a deny that outlaws what the allow
+        // permits.
+        if (allow) expect(allow.match, `${harness}/${agent}`).toEqual(deny?.exclude);
       }
     });
 
-    test(`${harness}: destructive commands are denied, not approvable`, () => {
+    test(`${harness}: an MCP call still prompts`, () => {
       for (const agent of agents) {
-        const eb = execBash(harness, agent);
-        for (const cmd of MUST_DENY) {
-          expect(evaluate(eb, cmd), `${harness}/${agent}: should deny \`${cmd}\``)
-            .toBe("deny");
-        }
+        const mcp = permissionRules(harness, agent)
+          .filter((r) => r.capability === "mcp" || r.capability === "all");
+        expect(mcp, `${harness}/${agent}: an allow here would pre-approve every MCP server`)
+          .toEqual([]);
       }
     });
 
-    test(`${harness}: no blanket shell trust via allowedTools`, () => {
+    test(`${harness}: no allow pattern ends in a wildcard except a bounded argument tail`, () => {
       for (const agent of agents) {
-        const doc = agentFrontmatter(harness, agent) as {
-          allowedTools?: string[];
-        };
-        expect(doc.allowedTools ?? []).not.toContain("execute_bash");
+        const allow = permissionRules(harness, agent)
+          .filter((r) => r.capability === "shell" && r.effect === "allow")
+          .flatMap((r) => r.match ?? []);
+        for (const pattern of allow) {
+          if (!pattern.endsWith("*")) continue;
+          // A trailing `* ` is only acceptable when a SPACE precedes it: the wildcard is
+          // then an argument tail on a fully named command, not an open extension of the
+          // command itself. `date -u*` would be the bad shape; `… aidlc*.ts *` is fine.
+          // The composition lexer refuses what such a tail could otherwise smuggle.
+          expect(
+            pattern.endsWith(" *") || pattern.endsWith(".ts"),
+            `${harness}/${agent}: ${pattern} extends the command, not its arguments`,
+          ).toBe(true);
+        }
       }
     });
 
     test(`${harness}: every persona carries the same shell policy`, () => {
-      const first = execBash(harness, PERSONAS[0]);
+      const first = permissionRules(harness, PERSONAS[0])
+        .filter((r) => r.capability === "shell");
       for (const agent of PERSONAS) {
-        expect(execBash(harness, agent), agent).toEqual(first);
+        expect(
+          permissionRules(harness, agent).filter((r) => r.capability === "shell"),
+          agent,
+        ).toEqual(first);
       }
     });
 
