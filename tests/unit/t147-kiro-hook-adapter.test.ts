@@ -2490,6 +2490,104 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
+  test("5d17: deleting the witness ALONGSIDE the bucket is not detected, and the file rules are what stop it", () => {
+    // The first of the two gaps the witness comment names. It is pinned as a KNOWN LIMIT,
+    // not as a passing defence: the assertion below is that the adapter stays SILENT,
+    // because a session whose bucket and witness are both gone is byte-for-byte a session
+    // that never dispatched, and telling them apart needs state the project cannot write.
+    // No hook on this row has that.
+    //
+    // Writing the limit down is the point. It was previously a sentence in a comment, so
+    // nothing would have noticed if a later change made the adapter start reporting tamper
+    // here - which would be a FALSE positive that refuses every fresh session's first
+    // lifecycle verb.
+    //
+    // What actually stops a delegate reaching these paths is the persona permission set,
+    // not this check: `capability: fs_write` is denied on `**` with only the persona's own
+    // write paths excluded, and `aidlc/.aidlc-sessions/` is not among them - so a delegate
+    // has no file-tool route to either path. The assertion on that rule lives in t252,
+    // where the frontmatter is read; here we pin the adapter half, which is that it does
+    // not invent a verdict it cannot support.
+    const dir = scratchProject(true);
+    try {
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+      const witnessRoot = join(dir, "aidlc", ".aidlc-sessions", "kiro-delegation-witness");
+      expect(existsSync(witnessRoot), "the open must have been witnessed first").toBe(true);
+
+      // Both removed, which is the delegate-erases-its-own-traces case.
+      rmSync(dirname(findDelegationLedger(dir)), { recursive: true, force: true });
+      rmSync(witnessRoot, { recursive: true, force: true });
+
+      // Same observable as the other window tests, for the same reason: it depends on the
+      // delegation state alone. `aidlc-state.ts approve` is refused by a separate guard
+      // whatever the window says, so it cannot tell these cases apart.
+      const after = runAdapter(dir, "state-transition-guard", {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
+      });
+      // Silent, and deliberately so: with both gone this is byte-for-byte a session that
+      // never dispatched. Compare 5d16, where the bucket alone is removed and the surviving
+      // witness makes the same call exit 2.
+      expect(after.stderr).not.toContain("The delegation ledger cannot be trusted");
+      expect(after.code, `a fresh-looking session must not be refused: ${after.stderr}`).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d18: a forged close for a witnessed group is indistinguishable from an honest one", () => {
+    // The second gap the comment names, pinned the same way. A close APPENDS a line, and
+    // the witness only records that an open happened - so a close written by whoever can
+    // write the ledger cancels the window exactly as a real one does.
+    //
+    // This test exists to make that concrete rather than leaving it as prose: it asserts
+    // the ledger has grown (the forged line landed) and that the adapter reports NO
+    // tamper. Anyone reading it can see what the witness does and does not buy, and a
+    // future change that closed this gap would fail here and have to say so.
+    const dir = scratchProject(true);
+    try {
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+      const ledger = findDelegationLedger(dir);
+      const before = readFileSync(ledger, "utf-8");
+      const open = before.split("\n").filter((l) => l.trim() !== "").at(-1);
+      expect(open, "the open record must exist to forge a close for").toBeDefined();
+      const parsed = JSON.parse(open ?? "{}") as { op?: string; key?: string };
+      expect(parsed.op, "the last record should be the open").toBe("open");
+
+      // The observable has to depend ONLY on the delegation window. `aidlc-state.ts
+      // approve` does not: a separate guard refuses it for bypassing the workflow's own
+      // checks, so it reads as 2 whether or not a delegate is believed inflight. The
+      // lifecycle call the other window tests use is `orchestrate next --resume`.
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
+      };
+      const whileOpen = runAdapter(dir, "state-transition-guard", lifecycle);
+      expect(whileOpen.code, `an open window must block: ${whileOpen.stderr}`).toBe(2);
+
+      // Forge, in the ledger's real schema. Verified against a live close: it carries the
+      // open's own key and a timestamp, and nothing else - so nothing distinguishes this
+      // line from one the harness would have written itself.
+      appendFileSync(
+        ledger,
+        `${JSON.stringify({ op: "close", key: parsed.key, ts: Date.now() })}\n`,
+        "utf-8",
+      );
+
+      const after = runAdapter(dir, "state-transition-guard", lifecycle);
+      // The forged close WORKED: the window is released and the verb passes. And no tamper
+      // is reported, because an append is what a legitimate close also does and the witness
+      // records opens rather than closes. Closing this needs a close the project cannot
+      // author - host-owned state.
+      expect(after.code, `the forged close released the window: ${after.stderr}`).toBe(0);
+      expect(after.stderr).not.toContain("The delegation ledger cannot be trusted");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("5g: reviewer-scope still enforces when another persona is inflight too", () => {
     // Regression: with two DIFFERENT personas inflight the adapter used to forward
     // an empty identity, so the core guard passed the call through - the exact gap

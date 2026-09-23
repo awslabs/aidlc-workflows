@@ -248,6 +248,31 @@ describe("t252 Kiro shell and write policy, as declared", () => {
       }
     });
 
+    test(`${harness}: the engine's own session state is outside every persona's write scope`, () => {
+      // F1's other half. The delegation ledger and its sibling WITNESS live under
+      // `aidlc/.aidlc-sessions/`, and the witness is what lets the adapter tell a tampered
+      // session from a fresh one. A delegate that could write there could erase the record
+      // that it was ever dispatched.
+      //
+      // Nothing asserted this. The write scope is a deny over `**` with only the persona's
+      // own paths excluded, so the property holds by construction — but "by construction"
+      // is exactly what a later widening of an exclude would break silently, and the two
+      // known limits are pinned in t147 (5d17, 5d18) on the assumption that the file route
+      // is closed.
+      for (const agent of agents) {
+        const excluded = permissionRules(harness, agent)
+          .filter((r) => r.capability === "fs_write" && r.effect === "deny")
+          .flatMap((r) => r.exclude ?? []);
+        expect(excluded.length, `${harness}/${agent}: nothing excluded`).toBeGreaterThan(0);
+        for (const path of excluded) {
+          expect(
+            path.startsWith("aidlc/.aidlc-sessions") || path === "**" || path.startsWith("aidlc/**"),
+            `${harness}/${agent}: ${path} would open the engine's session state to a delegate`,
+          ).toBe(false);
+        }
+      }
+    });
+
     test(`${harness}: every persona carries the same shell policy`, () => {
       const first = permissionRules(harness, PERSONAS[0])
         .filter((r) => r.capability === "shell");
