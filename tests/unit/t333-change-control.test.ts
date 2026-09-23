@@ -2008,7 +2008,6 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   test.each([
     "why was `guard.plan-approval off` suggested?",
     "/aidlc why was config set guard.plan-approval off suggested?",
-    "/aidlc build the auth service --guard-policy relaxed",
     "/aidlc config set guard.plan-approval off please",
     "do not run /aidlc config set guard.plan-approval off",
     "I read about --guard-policy relaxed in the docs",
@@ -2082,11 +2081,11 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   test.each([
     {
-      prompt: "/aidlc --guard-policy relaxed --depth impossible",
+      prompt: "/aidlc --guard-policy relaxed build auth --depth impossible",
       error: 'Unknown depth: "impossible". Valid depths: minimal, standard, comprehensive.',
     },
     {
-      prompt: "/aidlc --guard-policy relaxed --unknown value",
+      prompt: "/aidlc --guard-policy relaxed build auth --unknown value",
       error: null,
     },
     {
@@ -2100,6 +2099,10 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     {
       prompt: "/aidlc --change-control relaxed --guard-policy off",
       error: null,
+    },
+    {
+      prompt: "/aidlc --scope not-a-scope --guard-policy relaxed",
+      error: 'Unknown scope "not-a-scope".',
     },
   ])("a typed lowering command validates every companion before changing state: $prompt", ({ prompt, error }) => {
     const { proj, state } = project("enterprise");
@@ -2118,6 +2121,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   test.each([
     "/aidlc --guard-policy relaxed --depth minimal --sensors off",
+    "/aidlc --guard-policy relaxed build auth --depth minimal --sensors off",
+    "/aidlc --scope classic --guard-policy relaxed build auth --depth minimal --sensors off",
     "/aidlc config set guard-policy relaxed --depth minimal --sensors off",
   ])("a valid typed lowering command applies all companion settings atomically: %s", (prompt) => {
     const { proj, state } = project("enterprise");
@@ -2299,7 +2304,10 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     });
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
-    recordHumanPrompt(proj, "aidlc --guard-policy relaxed --guard.state-transition off");
+    recordHumanPrompt(
+      proj,
+      "aidlc --scope classic --guard-policy relaxed build auth --guard.state-transition off",
+    );
     const switched = readFileSync(state, "utf-8");
     expect(getField(switched, "Scope")).toBe("enterprise");
     expect(getField(switched, GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");

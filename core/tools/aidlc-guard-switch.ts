@@ -44,6 +44,7 @@ import {
   stateFilePath,
   SWITCHABLE_GUARD_FENCES,
   type SwitchableGuardFence,
+  validScopes,
   withAuditLock,
   writeStateFile,
   parseGuardPolicyStateLine,
@@ -450,6 +451,9 @@ export function applyTypedGuardSwitchPrompt(
   const parsed = parseTypedGuardSwitchRequest(prompt);
   if (parsed.switches.length === 0 || process.env.AIDLC_UNATTENDED === "1") return null;
   if (parsed.error !== null) return { applied: false, lines: [parsed.error] };
+  if (parsed.scope !== null && !validScopes().has(parsed.scope)) {
+    return { applied: false, lines: [`Unknown scope "${parsed.scope}".`] };
+  }
   try {
     const selection = resolveWorkflowSelection(projectDir, {
       sessionId,

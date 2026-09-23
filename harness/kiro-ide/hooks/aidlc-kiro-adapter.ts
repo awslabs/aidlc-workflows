@@ -947,7 +947,7 @@ function notePromptCapability(sessionId: string): void {
     return;
   }
   process.stdout.write(
-    "Guard settings cannot be lowered from chat in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, set guard_policy in the scope file, set Guard Policy in memory, or update Kiro IDE. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n",
+    "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n",
   );
 }
 
@@ -1117,7 +1117,7 @@ if (target === "terminal-command-guard") {
     invocation !== null ? hasLoweringGuardFlags(invocation.args, false) : lowering
   )) {
     process.stderr.write(
-      "Guard settings cannot be lowered from chat in this Kiro IDE session because this version does not provide the submitted message. Set guard_policy in the scope file, set Guard Policy in memory, or update Kiro IDE. You can still select strict or turn a fence on.\n",
+      "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n",
     );
     return 2;
   }

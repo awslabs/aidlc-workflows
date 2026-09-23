@@ -321,8 +321,8 @@ function runIdeStdin(
   };
 }
 
-const KIRO_GUARD_SWITCH_REFUSAL = "This Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat here: the framework cannot see what the person typed. Set guard_policy in the scope file, hold it in memory, or use a Kiro IDE build that delivers the prompt. Raising to strict or turning a fence on still works.";
-const KIRO_PROMPT_CAPABILITY_NOTE = "SYSTEM (AIDLC harness capability): this Kiro IDE build delivers no prompt text to the hooks, so a fence or Guard Policy cannot be lowered from chat in this session. If the person asks to relax or turn off the guards, do not name a command for them to type; say that the hooks cannot see what they type here and that the routes are guard_policy in the scope file, a memory Guard Policy line, or a Kiro IDE build that delivers the prompt. Raising to strict and turning a fence on still work. A sole retired Change Control: relaxed|off line is renamed to Guard Policy automatically without changing its value.";
+const KIRO_GUARD_SWITCH_REFUSAL = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.";
+const KIRO_PROMPT_CAPABILITY_NOTE = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.";
 const GUARD_SWITCH_ENV: NodeJS.ProcessEnv = {
   AIDLC_SESSION_OVERRIDE: undefined,
   AIDLC_SESSION_OVERRIDE_SOURCE: undefined,

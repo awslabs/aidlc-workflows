@@ -23,6 +23,7 @@ import {
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+const RECORD_HUMAN_TURN = join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts");
 const tempDirs: string[] = [];
 const CEREMONY_FIELDS = ["Sensors", "Learnings", "Summary Confirmation"];
 const SETTING_EVENTS = [
@@ -86,6 +87,23 @@ function settingRows(proj: string) {
 
 function directive(stdout: string): { kind: string; message: string } {
   return JSON.parse(stdout.trim().split("\n").pop() ?? "{}");
+}
+
+function recordHumanPrompt(proj: string, prompt: string): void {
+  const result = Bun.spawnSync({
+    cmd: [process.execPath, RECORD_HUMAN_TURN],
+    cwd: proj,
+    env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: proj },
+    stdin: Buffer.from(JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      cwd: proj,
+      session_id: "t338-human",
+      prompt,
+    })),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
 }
 
 describe("t338 atomic per-intent settings", () => {
@@ -451,11 +469,15 @@ describe("t338 atomic per-intent settings", () => {
     const command = scope.message.match(/`[^`]*\b(engine scope change [^`]+)`/);
     expect(command).not.toBeNull();
     expect(command![1]).toContain("--guard-policy relaxed");
+    recordHumanPrompt(
+      proj,
+      "/aidlc --scope feature --summary-confirmation off --guard-policy relaxed",
+    );
     const changed = run(DISPATCHER, command![1].split(/\s+/), proj);
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
     expect(getField(content, "Scope")).toBe("feature");
-    expect(getField(content, "Guard Policy")).toBe("relaxed (from scope feature)");
+    expect(getField(content, "Guard Policy")).toBe("relaxed (set by you)");
     expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
     const fresh = emptyProject();
     writeFileSync(join(fresh, "aidlc", "spaces", "default", "intents", "intents.json"), "[]\n");
