@@ -2,6 +2,7 @@
 // state-machine controls run on every OS without a Claude CLI or a live TUI.
 import { describe, expect, test } from "bun:test";
 import { nativeSnapshotReply, withNativeGeneration } from "../harness/windows-identity-fixture.ts";
+import { NATIVE_PROCESS_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   createWindowsCleanupIdentityReader,
   forceKillWindowsProcessesWithinDeadline,
@@ -167,7 +168,7 @@ describe("Windows cleanup identity state", () => {
       });
     expect(snapshot).toEqual({ status: "ok", value: identities.map(withNativeGeneration) });
     expect(queries).toBe(1);
-    expect(WIN_KILL_TIMEOUT_MS).toBe(8_000);
+    expect(WIN_KILL_TIMEOUT_MS).toBe(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
     expect(liveOwnedWindowsProcesses(identities, 2_000, "settings-reuse-control", (_file, args) =>
       snapshotReply(identities.map(row => ({
         ...row, creationDate: "2026-09-22T00:01:00.000Z",

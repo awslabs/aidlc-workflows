@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { resolveTuiRuntime, selectedTuiBackend } from "../harness/tui-runtime.ts";
 import { ensurePrivateRoot } from "../harness/tui-record-file.ts";
+import { LIVE_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import type { IsolatedProcessRetirement } from "./e2e-process.ts";
 import { retainDeferredCodexFixtures } from "./e2e-deferred-cleanup.ts";
 
@@ -26,7 +27,8 @@ export interface E2eWorkerPool {
   dispose(preserve: boolean): Promise<void>;
 }
 
-const NATIVE_CLEANUP_MS = 45_000;
+// Enclose the terminal client's cleanup deadline plus startup/confirmation I/O.
+const NATIVE_CLEANUP_MS = LIVE_CLEANUP_TIMEOUT_MS;
 const transportReceipts = new WeakMap<NodeJS.ProcessEnv, string>();
 const nativeRoots = new Map<string, string>();
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));

@@ -17,7 +17,10 @@ import {
 } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
-import { liveCaseTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
@@ -277,7 +280,7 @@ describe("Windows cleanup identity snapshots", () => {
     });
     expect(result).toEqual({ status: "ok", value: identities });
     expect(queries).toBe(1);
-    expect(WIN_KILL_TIMEOUT_MS).toBe(8000);
+    expect(WIN_KILL_TIMEOUT_MS).toBe(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
   });
 
   test("a complete snapshot excludes absent and reused PIDs but retains the same creation identity", () => {
@@ -527,7 +530,7 @@ test("identity query failure cannot synthesize target exit metadata for a live c
     await exited;
     rmSync(root, { recursive: true, force: true });
   }
-}, 10_000);
+}, NATIVE_PROCESS_IDENTITY_TIMEOUT_MS + 10_000);
 
 describe("t-tui-preflight (terminal substrate capability gate)", () => {
   test.skipIf(!IS_WIN || LEGACY_ABSENT_REASON !== null)(
@@ -772,7 +775,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 pidFiles.every(existsSync) &&
                 identityFiles.every(existsSync) &&
                 existsSync(ownershipPath),
-              20_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
 
@@ -879,7 +882,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           const requiredFiles = [...identityFiles, argsPath, ownershipPath];
           const ready = await waitUntil(
             () => requiredFiles.every(existsSync),
-            20_000,
+            NATIVE_STARTUP_TIMEOUT_MS,
           );
           let startupDiagnostic: string | undefined;
           if (!ready) {
@@ -897,7 +900,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               }
             }));
             startupDiagnostic =
-              `Windows ${kind} shim startup did not publish required files within 20000ms\n` +
+              `Windows ${kind} shim startup did not publish required files within ${NATIVE_STARTUP_TIMEOUT_MS}ms\n` +
               JSON.stringify({
                 missingFiles: requiredFiles.filter((path) => !existsSync(path)),
                 sessionDir,
@@ -1003,7 +1006,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 existsSync(join(caseDir, "target.pid")) &&
                 existsSync(join(caseDir, "grandchild.pid")) &&
                 identityFiles.every(existsSync),
-              20_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
 
@@ -1102,7 +1105,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 pidFiles.every(existsSync) &&
                 identityFiles.every(existsSync) &&
                 existsSync(ownershipPath),
-              20_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           const targetIdentity = readIdentityFile(
@@ -1221,7 +1224,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 pidFiles.every(existsSync) &&
                 identityFiles.every(existsSync) &&
                 existsSync(ownershipPath),
-              20_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           const recorded = mergeRecordedIdentities(
@@ -1299,7 +1302,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               () =>
                 pidFiles.every(existsSync) &&
                 identityFiles.every(existsSync),
-              20_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           const recorded = mergeRecordedIdentities(
@@ -1369,7 +1372,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 existsSync(ownerB) &&
                 identitiesA.every(existsSync) &&
                 identitiesB.every(existsSync),
-              20_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           const recordedA = mergeRecordedIdentities(
@@ -1448,7 +1451,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 pidFiles.every(existsSync) &&
                 identityFiles.every(existsSync) &&
                 existsSync(ownershipPath),
-              20_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           const recorded = mergeRecordedIdentities(
@@ -1525,7 +1528,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 existsSync(grandchildPidFile) &&
                 identityFiles.every(existsSync) &&
                 existsSync(ownershipPath),
-              20_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           const daemonPid = readPid(daemonPidFile);
@@ -1623,7 +1626,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             await waitUntil(
               () =>
                 ownershipMissingChildIdentity(ownershipPath),
-              20_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(identityFiles.some(existsSync)).toBe(false);
@@ -1690,7 +1693,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 () =>
                   ownershipHasPendingParentExit(ownershipPath) &&
                   identityFiles.every(existsSync),
-                20_000,
+                NATIVE_STARTUP_TIMEOUT_MS,
               ),
             ).toBe(true);
             const recorded = mergeRecordedIdentities(

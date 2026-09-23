@@ -14,7 +14,7 @@ import { publishSupervisorStop } from "../harness/tui-bun-process.ts";
 import { acquireNativeLock, getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
 import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord } from "../harness/tui-record-file.ts";
 import { physicalTuiText, type TuiSnapshot } from "../harness/tui-screen.ts";
-import { LIVE_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import { LIVE_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, liveCaseTimeoutMs } from "../harness/test-budget.ts";
 
 function nativeCaseTimeoutMs(workMs: number, starts = 1): number {
   return liveCaseTimeoutMs(workMs, { fixtureMs: 0, startupMs: starts * NATIVE_STARTUP_TIMEOUT_MS });
@@ -58,7 +58,8 @@ type Run = { code: number; stdout: string; stderr: string };
 async function drive(args: string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<Run> {
   const child = Bun.spawn([process.execPath, driver, ...args], {
     env: { ...env, ...extraEnv }, stdout: "pipe", stderr: "pipe",
-    timeout: args[0] === "start" ? NATIVE_STARTUP_TIMEOUT_MS + 15_000 : 30_000,
+    timeout: args[0] === "start" ? NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS + NATIVE_STARTUP_TIMEOUT_MS + 15_000
+      : args[0] === "kill" ? NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS + 5_000 : 30_000,
   });
   const [code, stdout, stderr] = await Promise.all([
     child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),

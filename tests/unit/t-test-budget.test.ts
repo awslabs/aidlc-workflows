@@ -11,6 +11,13 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   NATIVE_COMPILE_TIMEOUT_MS,
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+  NATIVE_PROCESS_QUERY_TIMEOUT_MS,
+  NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS,
+  NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
   TestBudgetExhaustedError,
 } from "../harness/test-budget.ts";
@@ -22,6 +29,22 @@ const fileEnv = (workAndCleanupMs: number, cleanupMs = 0): NodeJS.ProcessEnv => 
 });
 
 describe("test workload budgets", () => {
+  test("infrastructure deadlines leave room for child work, output drain and confirmation", () => {
+    expect(NATIVE_PROCESS_IDENTITY_TIMEOUT_MS).toBeGreaterThan(NATIVE_PROCESS_QUERY_TIMEOUT_MS);
+    expect(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS).toBeGreaterThan(
+      NATIVE_PROCESS_QUERY_TIMEOUT_MS + NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
+    );
+    expect(NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS).toBeGreaterThan(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
+    expect(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS).toBeGreaterThan(
+      NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS + NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+    );
+    expect(LIVE_CLEANUP_TIMEOUT_MS).toBeGreaterThan(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS);
+    // Infrastructure allowances still yield to an actual remaining parent budget.
+    expect(remainingOperationTimeoutMs(NATIVE_PROCESS_QUERY_TIMEOUT_MS, {
+      env: fileEnv(4_000, 1_000), nowMs: epoch,
+    })).toBe(3_000);
+  });
+
   test("deterministic defaults and cleanup reserve stay bounded", () => {
     expect(NATIVE_STARTUP_TIMEOUT_MS).toBe(30_000);
     expect(NATIVE_COMPILE_TIMEOUT_MS).toBe(30_000);

@@ -45,7 +45,26 @@ its maximum allowance after earlier work has consumed the file's time.
 Native process startup and native fixture compilation have separate 30-second
 profiles; multi-compiler fixture setup has a 120-second envelope. The native
 terminal starter and daemon share one absolute startup deadline. These startup
-allowances are separate from the shorter IPC and ownership-check contracts.
+allowances are separate from process discovery and shutdown.
+
+Infrastructure limits also come from the shared policy. They leave room for
+process startup, OS load and final output collection:
+
+| Operation | Default ceiling |
+| --- | --- |
+| Process identity discovery | 10 seconds |
+| One process query or termination call | 5 seconds |
+| Process-tree cleanup | 30 seconds |
+| Supervisor exit and status publication | 35 seconds |
+| Final terminal output drain | 5 seconds |
+| Terminal client shutdown, including daemon retirement | 45 seconds total |
+| Worker cleanup and confirmation | 60 seconds total |
+
+The terminal client shares one absolute shutdown deadline across its RPC and
+daemon-retirement wait. The worker encloses it with time for launch and final
+confirmation. Polling returns as soon as the required evidence is available;
+these limits do not add sleeps to successful operations. Explicit calibration
+deadlines remain small, and missing identity or retirement evidence still fails.
 
 Every dispatched file has an independent supervisor deadline, including
 ordinary integration/SDK files. `--file-timeout N` caps it in seconds (40 minutes
