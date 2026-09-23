@@ -331,10 +331,14 @@ the record:
 1. In `<harness>/scopes/`, find the existing Markdown file whose frontmatter
    `name` exactly matches the record's `name`. Use that declared identity to
    locate the file; its filename may be `<name>.md` or `aidlc-<name>.md`.
-2. Apply any projection edits you want to keep to the record's editable
+2. If recovery will use a different filename, check that
+   `<harness>/scopes/aidlc-<name>.md` is free. If another scope occupies it,
+   preserve that scope's contents and move its projection to an unused filename
+   allowed for its own declared name before continuing.
+3. Apply any projection edits you want to keep to the record's editable
    section, then delete **the projection file you found**. Keep the durable
    record at `aidlc/scopes/<name>.md`.
-3. Run `aidlc engine graph compile`. It recreates the projection at
+4. Run `aidlc engine graph compile`. It recreates the projection at
    `<harness>/scopes/aidlc-<name>.md` with the record's updated metadata.
 
 For a scope named `aidlc-x` currently in `scopes/aidlc-x.md`, delete that file;
@@ -343,9 +347,23 @@ double-prefixed path leaves the actual projection present, so compile preserves
 its old metadata. The scope name and approved stage plan survive the refresh;
 the plan always comes from the record.
 
+Compile refuses recovery if the required destination is already occupied while
+the scope being recovered has no projection. The error names the scope and path;
+the existing entry, durable records, and compiled grid are preserved. For
+example, if `aidlc-aidlc-x.md` belongs to scope `aidlc-aidlc-x`, preserve that file
+by moving it to its own canonical `aidlc-aidlc-aidlc-x.md` **if that path is
+unused**, then compile again to recover `aidlc-x`.
+
+Config refreshes also preserve existing projections for recorded composed
+scopes, including hand edits captured by an earlier install baseline. A recovery
+collision reports the installed scope path and stops the refresh before applying
+changes to the live project. After resolving it, retry the original `aidlc config`
+command with the same harness and source arguments. `aidlc update` updates the
+installed runtime; use `aidlc config` to refresh project files.
+
 #### When a record is unreadable
 
-A record missing its frontmatter, its `name`, or its generated grid region **stops** `graph compile` and `aidlc update` with the file path and the required edit named — it is committed work, so it is never silently skipped. Repair the named file, or delete it: if the harness projection is still present, the next compile back-fills a fresh record from it. `/aidlc --doctor`'s **Composed scope durability** check reports a scope file with no grid column, a record that has not been projected yet, and a runnable workflow whose scope no longer resolves.
+A record missing its frontmatter, its `name`, or its generated grid region **stops** `graph compile` and a project refresh through `aidlc config` with the file path and the required edit named — it is committed work, so it is never silently skipped. Repair the named file, or delete it: if the harness projection is still present, the next compile back-fills a fresh record from it. `/aidlc --doctor`'s **Composed scope durability** check reports a scope file with no grid column, a record that has not been projected yet, and a runnable workflow whose scope no longer resolves.
 
 ---
 

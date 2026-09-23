@@ -51,7 +51,8 @@
 import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -348,6 +349,92 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     expect(state).toContain(`${AUTHORED_EXECUTE} — EXECUTE`);
   });
 
+  test("refresh refuses a canonical path occupied by another scope until that scope is moved", () => {
+    const proj = freshProject();
+    const nameA = "aidlc-x";
+    const nameB = "aidlc-aidlc-x";
+    const scopes = join(proj, ".claude", "scopes");
+    const aliasA = join(scopes, `${nameA}.md`);
+    const occupiedPath = join(scopes, `${nameB}.md`);
+    const canonicalB = join(scopes, `aidlc-${nameB}.md`);
+    const recordA = join(proj, "aidlc", "scopes", `${nameA}.md`);
+    const recordB = join(proj, "aidlc", "scopes", `${nameB}.md`);
+    const graphPath = join(proj, ".claude", "tools", "data", "stage-graph.json");
+    const identityA = LIVE_SCOPE_MD.replaceAll(SCOPE, nameA);
+    const identityB = LIVE_SCOPE_MD.replaceAll(SCOPE, nameB);
+    const stagesB = { ...LIVE_STAGES, "feedback-optimization": "EXECUTE" };
+
+    // Both bare-name aliases are valid, but A's canonical restore path is B's
+    // existing projection. Give the scopes distinct plans to catch any mix-up.
+    expect(occupiedPath).toBe(join(scopes, `aidlc-${nameA}.md`));
+    expect(stagesB).not.toEqual(LIVE_STAGES);
+    writeFileSync(aliasA, identityA, "utf-8");
+    writeFileSync(occupiedPath, identityB, "utf-8");
+    const grid = readGrid(proj);
+    grid[nameA] = { stages: { ...LIVE_STAGES } };
+    grid[nameB] = { stages: stagesB };
+    writeFileSync(gridPath(proj), JSON.stringify(grid, null, 2), "utf-8");
+    const backfilled = compile(proj);
+    expect(backfilled.status, backfilled.out).toBe(0);
+    expect(assertComposedScopeFile(scopes, nameA)).toBe(aliasA);
+    expect(assertComposedScopeFile(scopes, nameB)).toBe(occupiedPath);
+    const originalRecordA = readFileSync(recordA, "utf-8");
+    const originalRecordB = readFileSync(recordB, "utf-8");
+    expect(originalRecordA).toContain(identityA.trimEnd());
+    expect(originalRecordB).toContain(identityB.trimEnd());
+    expect(gridInRecord(originalRecordA)).toEqual(LIVE_STAGES);
+    expect(gridInRecord(originalRecordB)).toEqual(stagesB);
+
+    const updatedIdentityA = identityA
+      .replace(/^depth: Standard$/m, "depth: Minimal")
+      .replace(/^description:.*$/m, "description: Refreshed scope A metadata");
+    expect(updatedIdentityA).toContain("\ndepth: Minimal\n");
+    expect(updatedIdentityA).toContain("\ndescription: Refreshed scope A metadata\n");
+    const updatedRecordA = originalRecordA.replace(identityA.trimEnd(), updatedIdentityA.trimEnd());
+    writeFileSync(recordA, updatedRecordA, "utf-8");
+    const manualProjectionB = `${identityB}\nLocal scope B note: keep this hand edit.\n`;
+    writeFileSync(occupiedPath, manualProjectionB, "utf-8");
+    rmSync(assertComposedScopeFile(scopes, nameA));
+    const graphBefore = readFileSync(graphPath);
+    const gridBefore = readFileSync(gridPath(proj));
+
+    // Refusal must happen before any projection, record, or compiled-artifact
+    // replacement. In particular, B's hand edit cannot be recovered from its record.
+    const refused = compile(proj);
+    expect(readFileSync(occupiedPath, "utf-8"), refused.out).toBe(manualProjectionB);
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(refused.out).toContain("Cannot restore composed scope");
+    expect(refused.out).toContain(nameA);
+    expect(refused.out).toContain(occupiedPath);
+    expect(refused.out).toContain("already exists");
+    expect(assertComposedScopeFile(scopes, nameB)).toBe(occupiedPath);
+    expect(existsSync(aliasA)).toBe(false);
+    expect(existsSync(canonicalB)).toBe(false);
+    expect(readFileSync(recordA, "utf-8")).toBe(updatedRecordA);
+    expect(readFileSync(recordB, "utf-8")).toBe(originalRecordB);
+    expect(readFileSync(graphPath)).toEqual(graphBefore);
+    expect(readFileSync(gridPath(proj))).toEqual(gridBefore);
+
+    // Move B's actual projection to its own unused canonical path. The next
+    // compile can restore A while preserving B's bytes and each scope's plan.
+    renameSync(assertComposedScopeFile(scopes, nameB), canonicalB);
+    expect(existsSync(occupiedPath)).toBe(false);
+    const recovered = compile(proj);
+    expect(recovered.status, recovered.out).toBe(0);
+    expect(assertComposedScopeFile(scopes, nameA)).toBe(occupiedPath);
+    expect(assertComposedScopeFile(scopes, nameB)).toBe(canonicalB);
+    expect(readFileSync(occupiedPath, "utf-8").trimEnd()).toBe(updatedIdentityA.trimEnd());
+    expect(readFileSync(canonicalB, "utf-8")).toBe(manualProjectionB);
+    expect(existsSync(aliasA)).toBe(false);
+    expect(readFileSync(recordA, "utf-8")).toBe(updatedRecordA);
+    expect(readFileSync(recordB, "utf-8")).toBe(originalRecordB);
+    expect(readGrid(proj)[nameA].stages).toEqual(LIVE_STAGES);
+    expect(readGrid(proj)[nameB].stages).toEqual(stagesB);
+    const row = durabilityRow(doctor(proj).out);
+    expect(row).toContain("recorded and projected");
+    expect(row).not.toContain("problem(s)");
+  });
+
   test("a phantom (identity file, no grid column) fails doctor and self-heals", () => {
     const proj = freshProject();
     const authored = authorLegacyComposedScope(proj);
@@ -481,15 +568,15 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
   });
 });
 
-// The recovery above runs through the `graph compile` CLI. `aidlc config`/`aidlc
-// update` reaches the same fold-back by a DIFFERENT route: it stages a fresh
+// The recovery above runs through the `graph compile` CLI. `aidlc config`
+// reaches the same fold-back by a DIFFERENT route: it stages a fresh
 // projection in a temp root, points the compile at the project's real records, and
 // installs the result. That path called compileStageGraph() directly, and the
 // fold-back only resurrects a grid column whose identity file exists — so a record
 // whose projection was already gone got filtered out and its column silently
 // dropped into the tree about to be installed. Which is exactly the reinstall this
 // whole change exists to survive, so the two recovery paths have to agree.
-describe("t341 the update path recovers a composed scope too", () => {
+describe("t341 config refresh recovers a composed scope too", () => {
   const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
   const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
@@ -502,6 +589,161 @@ describe("t341 the update path recovers a composed scope too", () => {
     });
     return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
   };
+
+  function recordedAliasPair() {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t341-update-collision-"));
+    projects.push(proj);
+    const installed = init(proj, [
+      "config", "--project-dir", proj, "--from", CLAUDE_RELEASE, "--harness", "claude",
+    ]);
+    expect(installed.status, installed.out).toBe(0);
+    const refresh = () => init(proj, ["config", "--project-dir", proj, "--from", CLAUDE_RELEASE]);
+    const nameA = "aidlc-x";
+    const nameB = "aidlc-aidlc-x";
+    const scopes = join(proj, ".claude", "scopes");
+    const aliasA = join(scopes, `${nameA}.md`);
+    const occupiedPath = join(scopes, `${nameB}.md`);
+    const canonicalB = join(scopes, `aidlc-${nameB}.md`);
+    const recordA = join(proj, "aidlc", "scopes", `${nameA}.md`);
+    const recordB = join(proj, "aidlc", "scopes", `${nameB}.md`);
+    const graphPath = join(proj, ".claude", "tools", "data", "stage-graph.json");
+    const baselinePath = join(proj, ".claude", "tools", "data", "aidlc-manifest.json");
+    const baselineKeyB = `.claude/scopes/${nameB}.md`;
+    const identityA = LIVE_SCOPE_MD.replaceAll(SCOPE, nameA);
+    const identityB = LIVE_SCOPE_MD.replaceAll(SCOPE, nameB);
+    const stagesB = { ...LIVE_STAGES, "feedback-optimization": "EXECUTE" };
+    expect(stagesB).not.toEqual(LIVE_STAGES);
+    expect(occupiedPath).toBe(join(scopes, `aidlc-${nameA}.md`));
+    writeFileSync(aliasA, identityA, "utf-8");
+    writeFileSync(occupiedPath, identityB, "utf-8");
+    const grid = readGrid(proj);
+    grid[nameA] = { stages: { ...LIVE_STAGES } };
+    grid[nameB] = { stages: stagesB };
+    writeFileSync(gridPath(proj), JSON.stringify(grid, null, 2), "utf-8");
+    const backfilled = compile(proj);
+    expect(backfilled.status, backfilled.out).toBe(0);
+    const originalRecordA = readFileSync(recordA, "utf-8");
+    const originalRecordB = readFileSync(recordB, "utf-8");
+    expect(gridInRecord(originalRecordA)).toEqual(LIVE_STAGES);
+    expect(gridInRecord(originalRecordB)).toEqual(stagesB);
+
+    // The hand edit is deliberately newer than B's durable record. A successful
+    // first refresh adopts the alias into its baseline without changing the note.
+    const manualProjectionB = `${identityB}\nLocal scope B note: preserve across every update.\n`;
+    writeFileSync(occupiedPath, manualProjectionB, "utf-8");
+    expect(originalRecordB).not.toContain("Local scope B note:");
+    expect(JSON.parse(readFileSync(baselinePath, "utf-8")).files[baselineKeyB]).toBeUndefined();
+    const firstRefresh = refresh();
+    expect(firstRefresh.status, firstRefresh.out).toBe(0);
+    expect(assertComposedScopeFile(scopes, nameA)).toBe(aliasA);
+    expect(assertComposedScopeFile(scopes, nameB)).toBe(occupiedPath);
+    expect(readFileSync(aliasA, "utf-8")).toBe(identityA);
+    expect(readFileSync(occupiedPath, "utf-8")).toBe(manualProjectionB);
+    expect(existsSync(canonicalB)).toBe(false);
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    expect(baseline.files[baselineKeyB]).toBe(
+      `sha256:${createHash("sha256").update(manualProjectionB).digest("hex")}`,
+    );
+    expect(readFileSync(recordA, "utf-8")).toBe(originalRecordA);
+    expect(readFileSync(recordB, "utf-8")).toBe(originalRecordB);
+    expect(readGrid(proj)[nameA].stages).toEqual(LIVE_STAGES);
+    expect(readGrid(proj)[nameB].stages).toEqual(stagesB);
+    return {
+      proj, refresh, nameA, nameB, scopes, aliasA, occupiedPath, canonicalB,
+      recordA, recordB, graphPath, baselinePath, baselineKeyB,
+      identityA, originalRecordA, originalRecordB, manualProjectionB, stagesB,
+    };
+  }
+
+  test("ordinary repeated refresh preserves a baselined scope alias and its hand edit", () => {
+    const f = recordedAliasPair();
+    const graphBefore = readFileSync(f.graphPath);
+    const gridBefore = readFileSync(gridPath(f.proj));
+    const repeated = f.refresh();
+    expect(readFileSync(f.occupiedPath, "utf-8"), repeated.out).toBe(f.manualProjectionB);
+    expect(repeated.status, repeated.out).toBe(0);
+    expect(assertComposedScopeFile(f.scopes, f.nameA)).toBe(f.aliasA);
+    expect(assertComposedScopeFile(f.scopes, f.nameB)).toBe(f.occupiedPath);
+    expect(existsSync(f.canonicalB)).toBe(false);
+    expect(readFileSync(f.aliasA, "utf-8")).toBe(f.identityA);
+    expect(readFileSync(f.recordA, "utf-8")).toBe(f.originalRecordA);
+    expect(readFileSync(f.recordB, "utf-8")).toBe(f.originalRecordB);
+    expect(readFileSync(f.graphPath)).toEqual(graphBefore);
+    expect(readFileSync(gridPath(f.proj))).toEqual(gridBefore);
+    // Successful config rebuilds the manifest; its scope entries must still
+    // describe the preserved files. Refusal below preserves the entire manifest.
+    const baseline = JSON.parse(readFileSync(f.baselinePath, "utf-8"));
+    expect(baseline.files[`.claude/scopes/${f.nameA}.md`]).toBe(
+      `sha256:${createHash("sha256").update(f.identityA).digest("hex")}`,
+    );
+    expect(baseline.files[f.baselineKeyB]).toBe(
+      `sha256:${createHash("sha256").update(f.manualProjectionB).digest("hex")}`,
+    );
+  }, 180_000);
+
+  test("staged refresh refuses a baselined alias collision and recovers after moving that alias", () => {
+    const f = recordedAliasPair();
+    const updatedIdentityA = f.identityA
+      .replace(/^depth: Standard$/m, "depth: Minimal")
+      .replace(/^description:.*$/m, "description: Refreshed scope A metadata");
+    expect(updatedIdentityA).toContain("\ndepth: Minimal\n");
+    expect(updatedIdentityA).toContain("\ndescription: Refreshed scope A metadata\n");
+    const updatedRecordA = f.originalRecordA.replace(f.identityA.trimEnd(), updatedIdentityA.trimEnd());
+    writeFileSync(f.recordA, updatedRecordA, "utf-8");
+    rmSync(assertComposedScopeFile(f.scopes, f.nameA));
+    const protectedPaths = [
+      f.occupiedPath, f.recordA, f.recordB, f.graphPath, gridPath(f.proj), f.baselinePath,
+    ];
+    const before = protectedPaths.map((path) => ({ path, bytes: readFileSync(path) }));
+
+    // A private staging tree must retain the live identity even after an earlier
+    // refresh recorded it as baseline-owned. Otherwise A silently replaces B.
+    const refused = f.refresh();
+    expect(readFileSync(f.occupiedPath, "utf-8"), refused.out).toBe(f.manualProjectionB);
+    expect(refused.status, refused.out).not.toBe(0);
+    for (const { path, bytes } of before) expect(readFileSync(path), path).toEqual(bytes);
+    expect(assertComposedScopeFile(f.scopes, f.nameB)).toBe(f.occupiedPath);
+    expect(existsSync(f.aliasA)).toBe(false);
+    expect(existsSync(f.canonicalB)).toBe(false);
+
+    // init has cleaned its private staging tree before this child returns.
+    // The collision diagnostic must identify the surviving LIVE entry and tell
+    // the user how to retry the operation that actually failed.
+    const collision = refused.out.split("\n").find((line) => line.includes("Cannot restore composed scope"));
+    expect(collision, refused.out).toBeDefined();
+    expect(collision).toContain(f.nameA);
+    expect(collision).toContain(f.occupiedPath);
+    expect(refused.out).not.toContain("aidlc-init-refresh-");
+    expect(collision).toMatch(/\b(?:retry(?:ing)?|rerun|re-run)\b/i);
+    expect(collision).toContain("original aidlc config command");
+    expect(collision).toContain("same harness and source arguments");
+
+    // Preserve B by moving its real bytes, then recover A through config refresh.
+    expect(existsSync(f.canonicalB)).toBe(false);
+    renameSync(assertComposedScopeFile(f.scopes, f.nameB), f.canonicalB);
+    expect(existsSync(f.occupiedPath)).toBe(false);
+    const recovered = f.refresh();
+    expect(recovered.status, recovered.out).toBe(0);
+    expect(assertComposedScopeFile(f.scopes, f.nameA)).toBe(f.occupiedPath);
+    expect(assertComposedScopeFile(f.scopes, f.nameB)).toBe(f.canonicalB);
+    expect(readFileSync(f.occupiedPath, "utf-8").trimEnd()).toBe(updatedIdentityA.trimEnd());
+    expect(readFileSync(f.canonicalB, "utf-8")).toBe(f.manualProjectionB);
+    expect(existsSync(f.aliasA)).toBe(false);
+    expect(readFileSync(f.recordA, "utf-8")).toBe(updatedRecordA);
+    expect(readFileSync(f.recordB, "utf-8")).toBe(f.originalRecordB);
+    expect(readGrid(f.proj)[f.nameA].stages).toEqual(LIVE_STAGES);
+    expect(readGrid(f.proj)[f.nameB].stages).toEqual(f.stagesB);
+    const baseline = JSON.parse(readFileSync(f.baselinePath, "utf-8"));
+    expect(baseline.files[f.baselineKeyB]).toBe(
+      `sha256:${createHash("sha256").update(readFileSync(f.occupiedPath)).digest("hex")}`,
+    );
+    expect(baseline.files[`.claude/scopes/aidlc-${f.nameB}.md`]).toBe(
+      `sha256:${createHash("sha256").update(f.manualProjectionB).digest("hex")}`,
+    );
+    const row = durabilityRow(doctor(f.proj).out);
+    expect(row).toContain("recorded and projected");
+    expect(row).not.toContain("problem(s)");
+  }, 180_000);
 
   test("a staged refresh restores a record whose projection is already gone", () => {
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t341-update-"));
@@ -523,8 +765,8 @@ describe("t341 the update path recovers a composed scope too", () => {
     expect(existsSync(identityPath(proj))).toBe(false);
     expect(readGrid(proj)[SCOPE]).toBeUndefined();
 
-    // Refresh from the same release. This is the `aidlc update` route, not the
-    // compile CLI: it must restore both halves on its own.
+    // Refresh from the same release through project config. That path must
+    // restore both halves without a separate compile CLI invocation.
     const refreshed = init(proj, ["config", "--project-dir", proj, "--from", CLAUDE_RELEASE]);
     expect(refreshed.status, refreshed.out).toBe(0);
 

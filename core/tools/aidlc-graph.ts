@@ -43,7 +43,7 @@
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -599,13 +599,13 @@ export function renderComposedScopeRecord(
 /** Load every composed-scope record, keyed by scope name. Absent directory → {}
  *  (the overwhelmingly common case: no scope has been composed yet). Sorted read
  *  so the derived fold-back order is platform-independent. */
-export function loadComposedScopeRecords(): Record<string, ComposedScopeRecord> {
-  const dir = composedScopesDir();
+export function loadComposedScopeRecords(dir = composedScopesDir()): Record<string, ComposedScopeRecord> {
   let files: string[];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
-  } catch {
-    return {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error(`Cannot read composed scope record directory ${dir}: ${errorMessage(error)}`);
   }
   const out: Record<string, ComposedScopeRecord> = {};
   for (const f of files) {
@@ -690,16 +690,52 @@ function harnessScopeFileFor(projectDir: string, name: string): string | null {
  *  never destroyed. The behavioral half is authoritative regardless: the grid
  *  column always comes from the record (see composedFoldBack), so a divergent
  *  identity file can only drift on descriptive frontmatter (depth, keywords,
- *  description), never on which stages the scope runs. */
-export function materializeComposedScopeIdentities(projectDir: string): string[] {
+ *  description), never on which stages the scope runs. An occupied destination
+ *  for a missing identity is a collision, not permission to replace that entry.
+ *  The compile caller holds the audit lock; install callers use a private staged
+ *  tree. Preflight every destination before restoring any identities. */
+export function materializeComposedScopeIdentities(
+  projectDir: string,
+  options: { liveScopesDir?: string } = {},
+): string[] {
   if (!composedScopeWritesEnabled()) return [];
   const records = loadComposedScopeRecords();
+  const dir = mutableScopesDir(projectDir);
+  const pending = Object.keys(records).sort()
+    .filter((name) => harnessScopeFileFor(projectDir, name) === null)
+    .map((name) => ({ name, path: join(dir, `aidlc-${name}.md`) }));
+  const requireAbsentDestination = (name: string, path: string): void => {
+    try {
+      // lstat also sees dangling symlinks, which must not be replaced.
+      lstatSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    const displayedPath = options.liveScopesDir
+      ? join(options.liveScopesDir, basename(path))
+      : path;
+    const occupied = options.liveScopesDir
+      ? "that filename already exists in the prepared install"
+      : "that path already exists";
+    const retry = options.liveScopesDir
+      ? "the original aidlc config command with the same harness and source arguments"
+      : "aidlc engine graph compile";
+    throw new Error(
+      `Cannot restore composed scope "${name}" at ${displayedPath}: ${occupied}. ` +
+        "Preserve the existing entry and move any conflicting scope to an unused filename " +
+        `matching its declared name before retrying ${retry}.`,
+    );
+  };
+  for (const { name, path } of pending) requireAbsentDestination(name, path);
+  if (pending.length === 0) return [];
+  mkdirSync(dir, { recursive: true });
   const written: string[] = [];
-  for (const name of Object.keys(records).sort()) {
-    if (harnessScopeFileFor(projectDir, name) !== null) continue;
-    const dir = mutableScopesDir(projectDir);
-    mkdirSync(dir, { recursive: true });
-    writeFileAtomic(join(dir, `aidlc-${name}.md`), records[name].identity);
+  for (const { name, path } of pending) {
+    // Recheck after earlier writes too: case-insensitive filesystems can map
+    // distinct declared names to the same destination.
+    requireAbsentDestination(name, path);
+    writeFileAtomic(path, records[name].identity);
     written.push(name);
   }
   return written;

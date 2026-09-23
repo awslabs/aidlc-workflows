@@ -152,7 +152,9 @@ The frontmatter `name` is the identity. Existing core scope files may use
 `aidlc-<name>.md` with the exact declared name. Compile preserves an existing
 projection found by that identity. Refreshing metadata from a composed record
 therefore requires deleting the actual matching projection file before compile,
-as described in the linked guide.
+as described in the linked guide. Recovery refuses an occupied destination for
+a missing identity; another scope's projection is preserved until the filename
+collision is resolved.
 
 Adding a scope is purely additive: drop `.claude/scopes/aidlc-<name>.md`, tag the member stages' `scopes:` lists, recompile, and regenerate the human-readable summary table in `SKILL.md`. No dispatch-logic edit is required, and the drift guards prevent the on-disk set from diverging.
 
