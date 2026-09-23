@@ -21,6 +21,7 @@ import {
   type GuardRecoveryInteraction,
   type GuardRecoveryOperation,
   isGuardRecoveryOperation,
+  renderEngineInvocation,
   renderGuardOperation,
 } from "./aidlc-guard-operation.ts";
 import {
@@ -10193,6 +10194,7 @@ export function checkSummaryConfirmationEvidence(
         blockedAction: "summary-confirmation",
         stage: stage.slug,
         ...(options.unit ? { unit: options.unit } : {}),
+        projectDir,
         stateContent: options.stateContent,
         invariant:
           "Generated outputs descend from a current human-backed summary confirmation.",
@@ -23245,6 +23247,7 @@ export const GUARD_REMEDY_OPS = [
   "record-verdict",
   "retry-pending",
   "request-changes",
+  "finish-revision",
   "redo-jump",
   "restore-or-jump",
   "restart-stage",
@@ -23308,6 +23311,7 @@ export interface GuardAttemptState {
     iteration: number;
     retryable: boolean;
     verdictRecordable?: boolean;
+    recordVerdict?: string;
   };
   repairReview?: {
     iteration: number;
@@ -23345,6 +23349,7 @@ export interface GuardRefusalInput {
   blockedAction: string;
   stage: string;
   unit?: string;
+  projectDir?: string;
   stateContent: string;
   invariant: string;
   userMessage: string;
@@ -23535,6 +23540,34 @@ export function planSourceDriftRefusal(input: {
   };
 }
 
+export function renderReviewVerdictCommand(input: {
+  projectDir: string;
+  stage: string;
+  reviewer: string;
+  unit?: string;
+  single?: boolean;
+  iteration: number;
+}): string {
+  return renderEngineInvocation({
+    route: "log",
+    args: [
+      "review",
+      "--stage",
+      input.stage,
+      "--reviewer",
+      input.reviewer,
+      ...(input.unit ? ["--unit", input.unit] : []),
+      ...(input.single ? ["--single"] : []),
+      "--iteration",
+      String(input.iteration),
+      "--verdict",
+      "<READY|NOT-READY>",
+      "--project-dir",
+      input.projectDir,
+    ],
+  }, { harnessDir: harnessDir() });
+}
+
 function restartStageRemedy(stage: string): GuardRemedy {
   return {
     op: "restart-stage",
@@ -23585,12 +23618,12 @@ function lifecycleResetRemedies(
   if (input.teamGate?.resolved === false) {
     return [unresolvedTeamGateRemedy(input.teamGate)];
   }
+  const reportStage =
+    input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
   if (state === "pending" || state === "skipped") {
     return [restartStageRemedy(input.stage)];
   }
   if (state === "in-progress" || state === "awaiting-approval") {
-    const reportStage =
-      input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
     const unitContext =
       input.teamGate?.resolved === true && input.unit
         ? ` for Unit "${input.unit}"`
@@ -23623,13 +23656,38 @@ function lifecycleResetRemedies(
     ];
   }
   if (state === "revising") {
+    const finishRevisionCommand = renderEngineInvocation({
+      route: "orchestrate",
+      args: [
+        "report",
+        "--stage",
+        reportStage,
+        ...(input.unit ? ["--unit", input.unit] : []),
+        "--result",
+        "revised",
+        ...(input.projectDir ? ["--project-dir", input.projectDir] : []),
+      ],
+    }, { harnessDir: harnessDir() });
     return [
+      {
+        op: "finish-revision",
+        action:
+          "Finish the current revision without restarting the stage by running " +
+          `\`${finishRevisionCommand}\`. This reopens the approval gate without ` +
+          "re-running the stage or re-asking anything.",
+        requiresHuman: false,
+        executableNow:
+          input.attempt.summaryCoverage === "current" &&
+          input.attempt.reviewCoverage === "current",
+      },
       {
         op: "redo-jump",
         action:
-          "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
-          `/aidlc --stage ${input.stage} (your recorded answers survive; you will ` +
-          "re-confirm the summary once).",
+          `Restart the stage from the top with /aidlc --stage ${input.stage}. ` +
+          "This costs more than finishing the current revision: your " +
+          "recorded answers survive, but you re-confirm the summary once and then " +
+          "save every output document again, so each one descends from the new " +
+          "confirmation.",
         ...guardOperation({ kind: "restart-stage", stage: input.stage }),
         requiresHuman: true,
         executableNow: true,
@@ -23699,9 +23757,16 @@ export function evaluateGuardRefusal(
       ) {
         remedies.push({
           op: "record-verdict",
+          // Spell the closing call out. Requesting a review and recording its
+          // verdict are the same command with --verdict added, which is not
+          // guessable from the request's own output, so "record the verdict"
+          // alone left operators looking for a command that does not exist.
           action:
             `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration} if the reviewer returned.`,
+            `${input.attempt.pendingReview.iteration} if the reviewer returned` +
+            (input.attempt.pendingReview.recordVerdict
+              ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
+              : " using the recordVerdict command returned by the review request."),
           requiresHuman: false,
           executableNow: true,
         });
@@ -23875,6 +23940,7 @@ export function guardAttemptState(
     pendingStatus?: PendingReviewRequestStatus | null;
     accounting?: ReviewAttemptAccounting | null;
     requireRequiredArtifacts?: boolean;
+    single?: boolean;
   } = {},
 ): GuardAttemptSnapshot {
   const unit = options.unit;
@@ -23970,6 +24036,14 @@ export function guardAttemptState(
         pendingStatus?.iteration === iteration
           ? pendingStatus.verdictRecordable
           : true,
+      recordVerdict: renderReviewVerdictCommand({
+        projectDir,
+        stage: stage.slug,
+        reviewer: stage.reviewer as string,
+        ...(unit ? { unit } : {}),
+        ...(options.single ? { single: true } : {}),
+        iteration,
+      }),
     },
   });
   const budget = options.reviewBudget ?? null;
@@ -24367,7 +24441,7 @@ export function guardRecoveryAskFromRefusalText(
 // A sentence for the prose refusals that still describe the way out: the first
 // executable remedy the evaluator would offer for a spent recovery.
 export function recoveryGuidance(
-  _projectDir: string,
+  projectDir: string,
   stateContent: string,
   stageSlug: string,
   options: {
@@ -24380,6 +24454,7 @@ export function recoveryGuidance(
     blockedAction: "review",
     stage: stageSlug,
     ...(options.unit ? { unit: options.unit } : {}),
+    projectDir,
     stateContent,
     invariant: "A review attempt can be reset only through a sanctioned boundary.",
     userMessage: "",

@@ -83,7 +83,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    project-relative path, under `<record>/.aidlc-engine/reviews/`, where this
    request's review is written. The request opens that slot (an earlier draft
    left there by an incomplete dispatch of the same iteration is removed), so
-   the file the reviewer leaves is this dispatch's review and no other.
+   the file the reviewer leaves is this dispatch's review and no other. It also
+   returns `recordVerdict`, the exact command step 3 runs to close this request
+   (the same request command with `--verdict <READY|NOT-READY>` added): a
+   request left open refuses the stage completion later, for a reason that does
+   not name it.
 
    `directive.review_artifact` names the one required Markdown output the
    review is about: the record is keyed to it, the gate names it as the
