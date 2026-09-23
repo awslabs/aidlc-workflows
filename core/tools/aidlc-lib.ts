@@ -840,6 +840,8 @@ export function isReadOnlyNextArgv(args: readonly string[]): boolean {
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
   if (verb === "park") return false;
+  // Mirror engine Branch 1b2: typed config commands are terminal, not workflow engagement.
+  if (args[0] === "config" && (args[1] === "set" || args[1] === "get" || args[1] === "list")) return true;
   // parseNextFlags returns on --config at any position (config print or usage refusal) before workflow inspection, without honoring the -- delimiter.
   if (args.includes("--config")) return true;
   // Leading plugin/knowledge nouns own the argv and are not in routeNext's marker exclusion, so a trailing read-only spelling is theirs, not a mode switch.

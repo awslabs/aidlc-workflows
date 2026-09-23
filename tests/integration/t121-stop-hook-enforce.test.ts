@@ -2579,6 +2579,36 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
   }, 30000);
 
+  test("(h) typed config through next allows the stop after the config result in both transcript formats", () => {
+    for (const format of ["claude", "codex"] as const) {
+      for (const entry of [
+        "bun .claude/tools/aidlc.ts engine orchestrate",
+        "bun .claude/tools/aidlc-orchestrate.ts",
+      ]) {
+        const proj = makeProject();
+        seedActive(proj);
+        const transcript = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "/aidlc config set guard.state-transition off" },
+          { kind: "bash", command: `${entry} next config set guard.state-transition off` },
+          {
+            kind: "bash",
+            id: "config-call",
+            command: "bun .claude/tools/aidlc.ts engine config set guard.state-transition off",
+          },
+          { kind: "result", id: "config-call", output: "guard.state-transition = off" },
+          { kind: "text" },
+        ]);
+        const result = runHook(
+          proj,
+          JSON.stringify({ stop_hook_active: false, transcript_path: transcript }),
+          "run-stage",
+        );
+        expect(result.rc, `${format}: ${entry}`).toBe(0);
+        expect(result.out, `${format}: ${entry}`).toBe("");
+      }
+    }
+  }, 30000);
+
   const depthNext = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
   const configSet = "bun .claude/tools/aidlc.ts engine config set depth extreme";
   const workflowNext = "bun .claude/tools/aidlc.ts engine orchestrate next";
