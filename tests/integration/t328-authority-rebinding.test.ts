@@ -21,7 +21,7 @@
 // over (the plan changed, the attempt restarted, they asked for changes), is it
 // refused, and with an instruction they can act on?
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
@@ -49,15 +49,20 @@ import {
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 resetAidlcEnv();
+
+// Each case copies a complete harness, initializes Git, and drives several
+// engine and hook processes before checking authority.
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const SESSION = "01995000-0995-7000-8000-000000000995";
 const projects: string[] = [];
 afterAll(() => {
   for (const project of projects) cleanupTestProject(project);
-}, 30000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 type Run = { code: number | null; stdout: string; stderr: string };
 
@@ -472,7 +477,7 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     const recorded = answer(p, presentation, "Approve Plan");
     expect(recorded.code, recorded.stderr).toBe(0);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
-  }, 120000);
+  });
 
   test("the consultation returns the directive already issued, not a restart", async () => {
     const p = await project("express");
@@ -483,7 +488,7 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     // part one" is what made stage rules restart on every turn end.
     expect(probe.kind).toBe("run-stage");
     expect(probe.stage).toBe("code-generation");
-  }, 120000);
+  });
 
   test("a repeat ask mid-delivery restarts at part one, never hands back a middle part", async () => {
     const p = await project("feature", (dir) => {
@@ -511,7 +516,7 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     expect(again.kind).toBe("load-steering");
     expect(again.part).toBe(1);
     expect(again.continue_token).not.toBe(second.continue_token);
-  }, 180000);
+  });
 });
 
 describe("t328 (2) every legitimate action preserves the recorded decision", () => {
@@ -601,7 +606,7 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
       expect(p.receipts().length).toBe(1);
       expect(authority(p, target).directiveEpoch).toBe(beforeEpoch);
       expect(p.marker()?.revision).toBe(beforeRevision);
-    }, 180000);
+    });
   }
 
   test("asking twice for the same state changes no project bytes at all", async () => {
@@ -614,7 +619,7 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
       modified: [],
       deleted: [],
     });
-  }, 120000);
+  });
 
   test("the raw questions digest is provenance: normalizing the answer line keeps the receipt, changing the prompt retires it", async () => {
     const { p, target, presentation } = await approvedProject();
@@ -655,7 +660,7 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
       ),
     );
     expect(approval(p, target).ok).toBe(false);
-  }, 120000);
+  });
 });
 
 describe("t328 (3) the approval does not carry where it should not", () => {
@@ -699,7 +704,7 @@ describe("t328 (3) the approval does not carry where it should not", () => {
     const reapproved = answer(p, presentPlan(p, target), "Approve Plan");
     expect(reapproved.code, reapproved.stderr).toBe(0);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
-  }, 180000);
+  });
 
   test("Request Changes withdraws the decision, and rewriting the answer cannot revive it", async () => {
     const { p, target } = await approvedProject();
@@ -717,7 +722,7 @@ describe("t328 (3) the approval does not carry where it should not", () => {
       ),
     );
     expect(approval(p, target).ok).toBe(false);
-  }, 180000);
+  });
 
   test("a changed plan reopens the gate, while the edits the stage itself orders do not", async () => {
     const { p, target, presentation } = await approvedProject();
@@ -752,7 +757,7 @@ describe("t328 (3) the approval does not carry where it should not", () => {
       ),
     );
     expect(approval(p, target).ok).toBe(false);
-  }, 180000);
+  });
 
   test("a review section appended to the instructions after approval reopens the gate and refuses generation", async () => {
     const { p, target, presentation } = await approvedProject();
@@ -786,7 +791,7 @@ describe("t328 (3) the approval does not carry where it should not", () => {
     );
     expect(brief.code).not.toBe(0);
     expect(brief.stdout).toBe("");
-  }, 180000);
+  });
 
   test("a replayed plan that still carries a legacy review appendix yields a body-only brief under a valid approval", async () => {
     const { p, target, presentation } = await approvedProject();
@@ -838,7 +843,7 @@ describe("t328 (3) the approval does not carry where it should not", () => {
     expect(fullFile.stderr).toContain("`## Review` appendix");
     // The approval itself is untouched by either handoff attempt.
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
-  }, 180000);
+  });
 });
 
 describe("t328 (4) workspace source, bound with a remedy that always works", () => {
@@ -859,7 +864,7 @@ describe("t328 (4) workspace source, bound with a remedy that always works", () 
     const again = answer(p, presentPlan(p, target), "Approve Plan");
     expect(again.code, again.stderr).toBe(0);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
-  }, 180000);
+  });
 
   test("source drift after the approval refuses generation and keeps the receipt", async () => {
     const { p, target, presentation } = await approvedProject();
@@ -882,7 +887,7 @@ describe("t328 (4) workspace source, bound with a remedy that always works", () 
       p.dir,
     );
     expect(started.code, started.stderr).toBe(0);
-  }, 180000);
+  });
 });
 
 describe("t328 (5) the per-Unit walk", () => {
@@ -977,7 +982,7 @@ describe("t328 (5) the per-Unit walk", () => {
       }),
     );
     expect(dispatch.code, dispatch.stderr).toBe(0);
-  }, 180000);
+  });
 
   test("after a Unit is paused or completed, the engine and the Stop hook agree it is not active", async () => {
     const p = await unitMajorProject();
@@ -1047,7 +1052,7 @@ describe("t328 (5) the per-Unit walk", () => {
     expect(stoppedAfterComplete.stdout).not.toContain(
       "exact delivered AIDLC run-stage",
     );
-  }, 240000);
+  });
 
   test("both engine observers are byte-pure at a per-Unit code-generation state", async () => {
     const p = await unitMajorProject();
@@ -1076,5 +1081,5 @@ describe("t328 (5) the per-Unit walk", () => {
     // turn-shape markers. Both observers are on one predicate, so assert the whole
     // snapshot with no filter at all for the route check.
     expect(snapshot(p.dir)).toEqual(beforeAll);
-  }, 180000);
+  });
 });
