@@ -51,6 +51,7 @@ import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
 export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
+const LEGACY_HOOKS_HEALTH_DIR = ".aidlc-hooks-health";
 const LEGACY_SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
 const LEGACY_REVIEW_RECORDS_DIR = ".aidlc-reviews";
 const LEGACY_SOURCE_REVIEW_DIR = ".aidlc-source-review";
@@ -788,9 +789,31 @@ const VALUED_NEXT_FLAGS: ReadonlySet<string> = new Set([
   "--rhythm",
 ]);
 
+const RETIRED_NEXT_FLAGS: ReadonlySet<string> = new Set(["--init", "--force"]);
+
+// Retired initialization flags are terminal only when they are the whole
+// invocation. A literal delimiter with no following text does not add work;
+// any supported flag, command, or description keeps normal engagement.
+export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
+  let sawRetired = false;
+  let literal = false;
+  for (const arg of args) {
+    if (literal) return false;
+    if (arg === "--") {
+      literal = true;
+    } else if (RETIRED_NEXT_FLAGS.has(arg)) {
+      sawRetired = true;
+    } else {
+      return false;
+    }
+  }
+  return sawRetired;
+}
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(args: readonly string[]): boolean {
+  if (isRetiredOnlyNextArgv(args)) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -20476,9 +20499,10 @@ export function docsRoot(projectDir: string, intent?: string, space?: string): s
 }
 
 // All record-local framework state lives here. Review audit references retain
-// their exact legacy paths; sensors and summary authorizations have read-only
-// directory fallbacks. Everything else is transient or derived and is rebuilt
-// at the new path without a fallback. These helpers never create directories.
+// their exact legacy paths; sensors, hook health, summary authorizations, and
+// source review have read-only directory fallbacks. Everything else is
+// transient or derived and is rebuilt at the new path without a fallback.
+// These helpers never create directories.
 export function engineDir(projectDir: string, intent?: string, space?: string): string {
   return engineDirFor(docsRoot(projectDir, intent, space));
 }
@@ -20519,6 +20543,22 @@ export function runtimeGraphPath(projectDir: string, intent?: string, space?: st
 // `--doctor`.
 export function hooksHealthDir(projectDir: string, intent?: string, space?: string): string {
   return join(engineDir(projectDir, intent, space), "hooks-health");
+}
+
+/**
+ * Read heartbeats from the record that predates the engine-dir move until the
+ * new directory exists; writers use hooksHealthDir. A record created before
+ * the relocation keeps its heartbeats under the legacy name until the next
+ * hook fires, and a reader without this fallback sees an absent directory -
+ * which liveness readers cannot distinguish from hooks that never ran.
+ */
+export function hooksHealthReadDir(projectDir: string, intent?: string, space?: string): string {
+  const record = docsRoot(projectDir, intent, space);
+  return engineReadDirFor(
+    record,
+    join(engineDirFor(record), "hooks-health"),
+    LEGACY_HOOKS_HEALTH_DIR,
+  );
 }
 
 // Hook heartbeats and audit rows are written in the same turn, normally
@@ -20564,7 +20604,7 @@ export function hookLiveness(
   projectDir: string,
   events: readonly AuditShardEvent[] = readAuditShardEvents(projectDir),
 ): HookLiveness {
-  const healthDir = hooksHealthDir(projectDir);
+  const healthDir = hooksHealthReadDir(projectDir);
   const heartbeatEntries: string[] = [];
   let newestHeartbeat: HookHeartbeatStamp | null = null;
   let hasHookFiredContent = false;

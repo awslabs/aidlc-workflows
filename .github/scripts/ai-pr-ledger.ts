@@ -18,9 +18,12 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 export const LEDGER_MARKER = "<!-- aida-ledger";
-export const LEDGER_VERSION = 3 as const;
+export const LEDGER_VERSION = 4 as const;
 const LEGACY_LEDGER_VERSION = 1;
 const PREVIOUS_LEDGER_VERSION = 2;
+// Version 3 added archivedDecisions; version 4 adds nextReview (/aida full) and
+// the full-requested event. Both are verified under their own canonical shape.
+const VERSION_3 = 3;
 const MAX_REASON_LENGTH = 500;
 const MAX_LEDGER_BYTES = 200_000;
 // The writer compacts to this before publishing so the reader's cap is never hit.
@@ -36,7 +39,7 @@ export type GhExecutable = string | readonly [executable: string, ...args: strin
 export type Priority = "P0" | "P1" | "P2" | "P3";
 export type DiffSide = "LEFT" | "RIGHT";
 export type LedgerStatus = "open" | "resolved" | "accepted" | "rejected";
-export type CommandKind = "accept" | "reject" | "reopen" | "status";
+export type CommandKind = "accept" | "reject" | "reopen" | "status" | "full";
 
 export interface LedgerAnchor {
   kind: "line" | "position" | "file" | "quote";
@@ -75,7 +78,8 @@ export type LedgerEventKind =
   | "accepted"
   | "rejected"
   | "reopened"
-  | "suppressed";
+  | "suppressed"
+  | "full-requested";
 
 export interface LedgerEvent {
   at: string;
@@ -107,6 +111,15 @@ export interface Ledger {
   archivedDecisions?: LedgerFinding[];
   events: LedgerEvent[];
   review?: LedgerReview;
+  // A maintainer's request (/aida full) that the next review cover the full head
+  // instead of the incremental scope. Consumed by the review that honors it.
+  nextReview?: NextReviewRequest;
+}
+
+export interface NextReviewRequest {
+  scope: "full";
+  by: string;
+  at: string;
 }
 
 export interface LoadedLedger {
@@ -146,7 +159,21 @@ export interface ReconcileResult<T extends ReviewFindingInput> {
   reopenedIds: string[];
   retained: LedgerFinding[];
   resolvedIds: string[];
+  // Subset of resolvedIds closed on the judge's explicit disposition.
+  resolvedByJudgeIds: string[];
+  // Open entries the judge neither restated nor disposed of.
+  undisposedIds: string[];
+  // Blocking entries the judge declared resolved while their cited code and
+  // files are unchanged: kept open and retained until a maintainer accepts.
+  unverifiedResolutionIds: string[];
 }
+
+export type LedgerDispositions = ReadonlyMap<string, "resolved" | "still-open">;
+
+// Files the current head changed since the last review (incremental scope), or
+// null when that set is unknown (a full review: first review, rewritten history,
+// /aida full). Unknown is never evidence of a change.
+export type ChangedFiles = ReadonlySet<string> | null;
 
 export type AnchorPresence = (anchor: LedgerAnchor) => boolean | null;
 
@@ -226,7 +253,7 @@ export function positionAnchor(path: string, line: number, side: DiffSide): Ledg
 const STATUSES: readonly LedgerStatus[] = ["open", "resolved", "accepted", "rejected"];
 const PRIORITIES: readonly Priority[] = ["P0", "P1", "P2", "P3"];
 const EVENT_KINDS: readonly LedgerEventKind[] = [
-  "opened", "seen", "resolved", "accepted", "rejected", "reopened", "suppressed",
+  "opened", "seen", "resolved", "accepted", "rejected", "reopened", "suppressed", "full-requested",
 ];
 
 function validateAnchor(value: unknown, label: string): LedgerAnchor {
@@ -361,7 +388,27 @@ export function validateLedger(value: unknown): Ledger {
     events,
   };
   if (value.review !== undefined) ledger.review = validateReview(value.review);
+  if (value.nextReview !== undefined) {
+    const next = value.nextReview;
+    if (!isRecord(next) || next.scope !== "full" || text(next.by).length === 0 || text(next.at).length === 0) {
+      throw new Error("ledger.nextReview is invalid");
+    }
+    ledger.nextReview = { scope: "full", by: text(next.by), at: text(next.at) };
+  }
   return ledger;
+}
+
+// A version-3 ledger cannot carry version-4 fields; it is verified under the
+// version-3 canonical shape and upgraded without touching any decision.
+function migrateVersion3Ledger(value: unknown): { ledger: Ledger; digest: string } {
+  if (!isRecord(value) || value.version !== VERSION_3) throw new Error("not a version-3 ledger");
+  if (value.nextReview !== undefined) throw new Error("version-3 ledger cannot contain a next-review request");
+  if (Array.isArray(value.events) && value.events.some(event => isRecord(event) && event.kind === "full-requested")) {
+    throw new Error("version-3 ledger cannot contain full-requested events");
+  }
+  const ledger = validateLedger({ ...value, version: LEDGER_VERSION });
+  const { version: _version, nextReview: _next, ...rest } = ledger;
+  return { ledger, digest: sha256(JSON.stringify({ version: VERSION_3, ...rest }, null, 2)) };
 }
 
 function migratePreviousLedger(value: unknown): { ledger: Ledger; digest: string } {
@@ -495,9 +542,10 @@ export function renderLedgerComment(input: Ledger, migrated = false): string {
   }
   lines.push(
     `Open blocking findings (P0/P1): **${openBlockingCount(ledger)}**. Accepted and rejected findings never count toward the next action.`,
+    ...(ledger.nextReview ? [`Next review: **full head**, requested by @${escapeCell(ledger.nextReview.by)}.`] : []),
     "",
     "Maintainer commands (repository write access) — put them on the first lines of a comment, one per line, several ids per line allowed:",
-    "`/aida accept F# [F#…] <reason>` · `/aida reject F# [F#…] <reason>` · `/aida reopen F# [F#…]` · `/aida status`",
+    "`/aida accept F# [F#…] <reason>` · `/aida reject F# [F#…] <reason>` · `/aida reopen F# [F#…]` · `/aida status` · `/aida full` (next review covers the whole head)",
     "P0 and P1 findings can be accepted (visible, risk owned by the maintainer) but not rejected. A comment is applied all-or-nothing.",
     "Do not edit this comment: AIDA verifies its digest and refuses to run on an edited ledger. To start over, delete it.",
     "",
@@ -544,6 +592,11 @@ export function parseLedgerComment(
     if (digest !== previous.digest) throw new Error("ledger comment was edited outside AIDA (digest mismatch)");
     return { ledger: previous.ledger, migrated: false, digest };
   }
+  if (isRecord(parsed) && parsed.version === VERSION_3) {
+    const previous = migrateVersion3Ledger(parsed);
+    if (digest !== previous.digest) throw new Error("ledger comment was edited outside AIDA (digest mismatch)");
+    return { ledger: previous.ledger, migrated: false, digest };
+  }
   const ledger = validateLedger(parsed);
   if (digest !== ledgerDigest(ledger)) throw new Error("ledger comment was edited outside AIDA (digest mismatch)");
   return { ledger, migrated: false, digest };
@@ -581,21 +634,13 @@ export function resetDecisions(ledger: Ledger, at: string, reason: string): stri
   return reset;
 }
 
-// The one decision rule shared by the review (after ledger decisions apply) and
-// by a later /aida command (without rerunning models). Mirrors the validator's
-// invariants: merge needs no open blocker and readiness >= 4, risk <= 2; a
-// stored `change` flips to merge only when no open finding remains at all.
-export function deriveDecision(
-  stored: "merge" | "change",
-  openBlocking: number,
-  openAny: number,
-  readiness: number,
-  risk: number,
-): "merge" | "change" {
-  if (openBlocking > 0) return "change";
-  const scoresPermitMerge = readiness >= 4 && risk <= 2;
-  if (stored === "merge") return scoresPermitMerge ? "merge" : "change";
-  return openAny === 0 && scoresPermitMerge ? "merge" : "change";
+// The one decision rule, shared by the validator, the review after ledger
+// decisions apply, and a later /aida command: the next action follows finding
+// severity alone. Any open P0/P1 means author/change; otherwise the PR is ready
+// for the maintainer's merge decision. Readiness and risk explain the
+// assessment; they never decide.
+export function deriveDecision(openBlocking: number): "merge" | "change" {
+  return openBlocking > 0 ? "change" : "merge";
 }
 
 export interface LedgerVerdict {
@@ -618,7 +663,7 @@ export function ledgerVerdict(ledger: Ledger): LedgerVerdict | null {
   return {
     head: review.head,
     openBlocking,
-    decision: deriveDecision(review.decision, openBlocking, open.length, review.readiness, review.risk),
+    decision: deriveDecision(openBlocking),
   };
 }
 
@@ -639,9 +684,9 @@ export function parseCommands(body: string): LedgerCommand[] {
     // Prose ends the command block. A `/aida` line that is not a valid command
     // is a usage error for the whole comment (all-or-nothing), never prose.
     if (!line.startsWith("/aida")) break;
-    const match = /^\/aida\s+(accept|reject|reopen|status)\b(.*)$/.exec(line);
+    const match = /^\/aida\s+(accept|reject|reopen|status|full)\b(.*)$/.exec(line);
     if (!match) {
-      throw new Error(`${where}unrecognized command; commands are accept, reject, reopen, status`);
+      throw new Error(`${where}unrecognized command; commands are accept, reject, reopen, status, full`);
     }
     const kind = match[1] as CommandKind;
     const rest = match[2].trim();
@@ -685,6 +730,13 @@ export function applyCommands(
     if (command.kind === "status") {
       if (command.ids.length > 0 || command.reason) throw new Error(`${where}/aida status takes no arguments`);
       messages.push("Ledger re-rendered.");
+      return;
+    }
+    if (command.kind === "full") {
+      if (command.ids.length > 0 || command.reason) throw new Error(`${where}/aida full takes no arguments`);
+      next.nextReview = { scope: "full", by: actor.login, at: actor.at };
+      event("full-requested", {});
+      messages.push(`The next review covers the full head, requested by @${actor.login}.`);
       return;
     }
     if (command.ids.length === 0) throw new Error(`${where}/aida ${command.kind} requires at least one finding id such as F1`);
@@ -792,11 +844,13 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   head: string,
   at: string,
   presentAtHead: AnchorPresence,
+  dispositions: LedgerDispositions = new Map(),
+  changedFiles: ChangedFiles = null,
 ): ReconcileResult<T> {
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("head must be a 40-character SHA");
   const ledger: Ledger = structuredClone(loaded.ledger);
   const result: ReconcileResult<T> = {
-    ledger, kept: [], restatedAccepted: [], suppressed: [], reopenedIds: [], retained: [], resolvedIds: [],
+    ledger, kept: [], restatedAccepted: [], suppressed: [], reopenedIds: [], retained: [], resolvedIds: [], resolvedByJudgeIds: [], undisposedIds: [], unverifiedResolutionIds: [],
   };
   const matchedIds = new Set<string>();
   const push = (kind: LedgerEventKind, id: string, extra: Partial<LedgerEvent> = {}): void => {
@@ -807,12 +861,24 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   // after the omitted pass, so a head that fixes old findings frees their slots
   // before capacity is enforced.
   const pendingByFingerprint = new Map<string, T>();
-  for (const finding of findings) {
+  // Explicit bindings are matched first so an implicit fingerprint match can
+  // never consume an entry another finding names by id; the published order is
+  // restored to the judge's (P0 through P3) at the end.
+  const order = new Map<T, number>(findings.map((finding, index) => [finding, index]));
+  const keptOrder: number[] = [];
+  const pendingOrder = new Map<string, number>();
+  const ordered = [...findings.filter(finding => finding.ledgerId), ...findings.filter(finding => !finding.ledgerId)];
+  for (const finding of ordered) {
     const hashes = anchorSet(finding.anchors);
     // Model output is influenced by PR content, so it can identify OPEN entries
     // only. Accepted and rejected state is never inherited from a judge-selected
     // id; those decisions persist through omission and rendering, while any
     // reported defect on the same evidence is recorded independently.
+    // An explicit id (a disposition's restatement) binds an open entry outright:
+    // after a partial fix the same defect legitimately moves to new lines and
+    // new wording, and the worst case of a wrong id is a defect that stays
+    // visible under an older id. Without an id, the fingerprint (same category
+    // and a shared exact anchor) must be unambiguous.
     const compatible = (entry: LedgerFinding): boolean =>
       entry.category === finding.category && entry.anchors.some(anchor => hashes.has(anchor.sha256));
     const compatibleOpen = ledger.findings.filter(
@@ -820,18 +886,36 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     );
     const requestedOpenId = finding.ledgerId;
     const explicit = requestedOpenId
-      ? ledger.findings.find(
-          entry =>
-            entry.id === requestedOpenId &&
-            entry.status === "open" &&
-            !matchedIds.has(entry.id) &&
-            compatible(entry),
-        )
+      ? ledger.findings.find(entry => entry.id === requestedOpenId && entry.status === "open" && !matchedIds.has(entry.id))
       : undefined;
     const match = explicit ?? (compatibleOpen.length === 1 ? compatibleOpen[0] : undefined);
+    if (!match && !finding.ledgerId) {
+      // An untagged finding whose fingerprint agrees with an entry another
+      // finding already restated by id is a duplicate restatement: fold its
+      // anchors into that entry instead of allocating a second identity.
+      const bound = ledger.findings.find(entry => entry.status === "open" && matchedIds.has(entry.id) && compatible(entry));
+      if (bound) {
+        const known = anchorSet(bound.anchors);
+        for (const anchor of finding.anchors) if (!known.has(anchor.sha256)) bound.anchors.push(anchor);
+        // A duplicate never lowers, but may raise, the entry: the highest
+        // priority reported for the defect wins, in the ledger and in the
+        // published restatement.
+        if (rank(finding.priority) < rank(bound.priority)) {
+          bound.priority = finding.priority;
+          bound.title = finding.title;
+          const published = result.kept.find(entry => entry.ledgerId === bound.id);
+          if (published) {
+            published.priority = finding.priority;
+            published.title = finding.title;
+          }
+        }
+        continue;
+      }
+    }
     if (!match) {
       const fingerprint = findingFingerprint(finding);
       const duplicate = pendingByFingerprint.get(fingerprint);
+      pendingOrder.set(fingerprint, Math.min(pendingOrder.get(fingerprint) ?? Number.MAX_SAFE_INTEGER, order.get(finding) ?? Number.MAX_SAFE_INTEGER));
       if (!duplicate) {
         pendingByFingerprint.set(fingerprint, structuredClone(finding));
       } else {
@@ -855,11 +939,54 @@ export function reconcileLedger<T extends ReviewFindingInput>(
       match.title = finding.title;
     }
     result.kept.push({ ...finding, priority: match.priority, ledgerId: match.id });
+    keptOrder.push(order.get(finding) ?? Number.MAX_SAFE_INTEGER);
   }
 
-  // Pass 2: open findings the judge did not restate.
+  // Pass 2: open findings the judge did not restate. An explicit disposition
+  // decides first: `resolved` closes the entry at this head (auditable, even if
+  // the exact cited lines are unchanged: a fix can live elsewhere); `still-open`
+  // keeps it verdict-bearing. Without a disposition, presence decides as before.
   for (const entry of ledger.findings) {
     if (entry.status !== "open" || matchedIds.has(entry.id)) continue;
+    const disposition = dispositions.get(entry.id);
+    if (disposition === "resolved") {
+      // The judge's word alone never retires a blocker whose cited code and
+      // files the author did not touch: model output is PR-influenced. A
+      // blocker resolves on a disposition only with deterministic evidence that
+      // the author acted — a cited line gone, or a cited file changed since the
+      // last review. Advisory entries follow the judge.
+      const verdicts = entry.anchors.map(anchor => presentAtHead(anchor));
+      const gone = verdicts.some(verdict => verdict === false);
+      const touched = changedFiles !== null && entry.anchors.some(anchor => anchor.path !== undefined && changedFiles.has(anchor.path));
+      if (isBlocking(entry.priority) && !gone && !touched) {
+        entry.lastSeen = { head, at };
+        push("seen", entry.id, { reason: "retained: declared corrected by the judge, but cited code and files are unchanged; a maintainer may accept" });
+        result.retained.push(structuredClone(entry));
+        result.unverifiedResolutionIds.push(entry.id);
+        continue;
+      }
+      entry.status = "resolved";
+      entry.lastSeen = { head, at };
+      push("resolved", entry.id, {
+        reason: gone
+          ? "declared corrected by the judge; a cited line is gone"
+          : touched
+            ? "declared corrected by the judge; cited files changed since the last review"
+            : "declared corrected by the judge (advisory: no change evidence required)",
+      });
+      result.resolvedIds.push(entry.id);
+      result.resolvedByJudgeIds.push(entry.id);
+      continue;
+    }
+    if (disposition === "still-open") {
+      // Retained whatever the priority: the judge said it still holds. Only
+      // blocking entries bear on the verdict.
+      entry.lastSeen = { head, at };
+      push("seen", entry.id, { reason: "retained: still open per the judge, not restated" });
+      result.retained.push(structuredClone(entry));
+      continue;
+    }
+    result.undisposedIds.push(entry.id);
     // An open finding the judge did not restate resolves only when its cited
     // condition is positively gone (every anchor false), or when none of its
     // anchors can ever be evaluated (all legacy: migrated, or written before
@@ -896,7 +1023,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   }
 
   // Pass 3: new findings, once the reconciled ledger knows what it can free.
-  for (const finding of pendingByFingerprint.values()) {
+  for (const [fingerprint, finding] of pendingByFingerprint) {
     makeRoom(ledger);
     const id = `F${ledger.nextId}`;
     ledger.nextId += 1;
@@ -907,7 +1034,14 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     push("opened", id);
     matchedIds.add(id);
     result.kept.push({ ...finding, ledgerId: id });
+    keptOrder.push(pendingOrder.get(fingerprint) ?? Number.MAX_SAFE_INTEGER);
   }
+  // Publish P0 through P3 by EFFECTIVE priority (a restatement may have been
+  // raised to the ledger's), with the judge's order as the tie-breaker.
+  result.kept = result.kept
+    .map((entry, index) => ({ entry, position: keptOrder[index] }))
+    .sort((left, right) => rank(left.entry.priority) - rank(right.entry.priority) || left.position - right.position)
+    .map(item => item.entry);
   return result;
 }
 
@@ -971,6 +1105,7 @@ export function mergeLedgers(base: Ledger, live: Ledger): Ledger {
       insertLike(merged, live, liveEntry);
     }
   }
+  if (live.nextReview && !merged.nextReview) merged.nextReview = structuredClone(live.nextReview);
   const seenEvents = new Set(merged.events.map(event => JSON.stringify(event)));
   for (const event of live.events) {
     const key = JSON.stringify(event);
@@ -1190,7 +1325,7 @@ function react(repository: string, commentId: number, content: "+1" | "-1" | "co
   }
 }
 
-const USAGE = `Usage: put commands on the first lines of a comment, one per line — \`/aida accept F# [F#…] <reason>\`, \`/aida reject F# [F#…] <reason>\`, \`/aida reopen F# [F#…]\`, \`/aida status\`. Reasons are limited to ${MAX_REASON_LENGTH} characters. Nothing was applied.`;
+const USAGE = `Usage: put commands on the first lines of a comment, one per line — \`/aida accept F# [F#…] <reason>\`, \`/aida reject F# [F#…] <reason>\`, \`/aida reopen F# [F#…]\`, \`/aida status\`, \`/aida full\`. Reasons are limited to ${MAX_REASON_LENGTH} characters. Nothing was applied.`;
 
 export interface CommandOutcome {
   status: "applied" | "denied" | "ignored" | "rejected";
@@ -1249,7 +1384,7 @@ export function runCommand(
       throw error;
     }
     react(repository, commentId, "+1", ghExecutable);
-    const changed = commands.some(command => command.kind !== "status");
+    const changed = commands.some(command => command.kind !== "status" && command.kind !== "full");
     return {
       status: "applied",
       message: applied.messages.join(" "),
