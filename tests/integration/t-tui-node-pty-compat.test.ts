@@ -19,7 +19,7 @@ import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.
 import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
 import {
   liveCaseTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
-  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -35,9 +35,9 @@ interface Run {
 
 // These cases inspect the legacy Windows ownership files and CIM recovery.
 // Pin that implementation explicitly; native lifecycle has its own calibration.
-function legacyDrive(args: string[]): Run {
+function legacyDrive(args: string[], env: NodeJS.ProcessEnv = {}): Run {
   const res = spawnSync(WIN_NODE as string, ["--experimental-strip-types", DRIVER, ...args], {
-    encoding: "utf-8", env: { ...process.env, AIDLC_TUI_BACKEND: "node-pty" },
+    encoding: "utf-8", env: { ...process.env, ...env, AIDLC_TUI_BACKEND: "node-pty" },
   });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
@@ -520,10 +520,21 @@ test("identity query failure cannot synthesize target exit metadata for a live c
     child.once("exit", accept);
     child.once("error", reject);
   });
+  let now = 0;
+  const contexts: string[] = [];
   try {
+    // Exhaust the discovery clock through failed queries, without spending the
+    // shared native backstop on a synthetic error. The child stays real/live.
     await captureWindowsTargetExit(child, { pid: child.pid!, parentPid: process.pid, startedAfter }, path,
-      async () => ({ status: "error", message: "identity query timed out" }));
+      async (_pid, _timeoutMs, context) => {
+        contexts.push(context);
+        if (context === "target-start") now = NATIVE_PROCESS_IDENTITY_TIMEOUT_MS;
+        return { status: "error", message: "identity query timed out" };
+      }, () => now);
+    expect(contexts).toEqual(["target-start-fallback", "target-start"]);
     expect(child.exitCode).toBeNull();
+    expect(child.signalCode).toBeNull();
+    expect(pidAlive(child.pid!)).toBe(true);
     expect(existsSync(path)).toBe(false);
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
@@ -1594,9 +1605,12 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
         const sessionDir = winSessionDir(session);
         sessions.push(session);
         mkdirSync(caseDir, { recursive: true });
-        const prior = process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS;
-        process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS =
-          "child-start:always,child-start-fallback:always";
+        const injectionTrace = join(caseDir, "child-identity-injections.log");
+        // This case deliberately exhausts discovery before inspecting the
+        // unreleased wrapper. Keep synthetic failure time inside the unchanged
+        // startup allowance; real identity/cleanup probes keep native budgets.
+        const discoveryTimeoutMs = 1_000;
+        const startedAt = Date.now();
         try {
           const started = legacyDrive([
             "start",
@@ -1618,18 +1632,45 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             "-CaseDir",
             caseDir,
             "-ExitAfterSpawn",
-          ]);
+          ], {
+            AIDLC_TUI_CIM_FAIL_CONTEXTS: "child-start:always,child-start-fallback:always",
+            AIDLC_TUI_CIM_CHILD_IDENTITY_TIMEOUT_MS: String(discoveryTimeoutMs),
+            AIDLC_TUI_CIM_TRACE_FILE: injectionTrace,
+          });
           expect(started.rc, started.stderr).toBe(0);
           const ownershipPath = join(sessionDir, "ownership.json");
           const identityFiles = caseIdentityFiles(caseDir);
-          expect(
-            await waitUntil(
-              () =>
-                ownershipMissingChildIdentity(ownershipPath),
-              NATIVE_STARTUP_TIMEOUT_MS,
-            ),
-          ).toBe(true);
+          const ready = await waitUntil(
+            () => ownershipMissingChildIdentity(ownershipPath),
+            NATIVE_STARTUP_TIMEOUT_MS,
+          );
+          const readDiagnostic = (path: string): string => {
+            try { return readFileSync(path, "utf8").slice(0, 16 * 1024); }
+            catch (error) { return `<unavailable: ${(error as NodeJS.ErrnoException).code ?? "read failed"}>`; }
+          };
+          const injected = readDiagnostic(injectionTrace);
+          const diagnostic = JSON.stringify({
+            discoveryTimeoutMs, elapsedMs: Date.now() - startedAt, ready,
+            wrapperReleased: existsSync(join(sessionDir, "wrapper.release")),
+            targetSpawned: existsSync(join(sessionDir, "target-spawn.json")),
+            targetIdentityFiles: identityFiles.map(existsSync),
+            daemonError: readDiagnostic(join(sessionDir, "daemon-error.txt")),
+            injected,
+          });
+          console.log(`Child identity failure evidence: ${diagnostic}`);
+          expect(ready, diagnostic).toBe(true);
+          expect(injected).toContain(`child-identity-discovery budget=${discoveryTimeoutMs}ms`);
+          expect(injected).toContain("context=child-start\n");
+          expect(injected).toContain("context=child-start-fallback\n");
+          expect(existsSync(join(sessionDir, "wrapper.release"))).toBe(false);
+          expect(existsSync(join(sessionDir, "target-spawn.json"))).toBe(false);
           expect(identityFiles.some(existsSync)).toBe(false);
+          const daemonPid = readPid(join(sessionDir, "pid"));
+          const wrapperPid = readPid(join(sessionDir, "child.pid"));
+          const live = currentProcessIdentities([daemonPid, wrapperPid]);
+          expect(live.map(identity => identity.pid).sort((a, b) => a - b))
+            .toEqual([daemonPid, wrapperPid].sort((a, b) => a - b));
+          const recorded = mergeRecordedIdentities(readOwnershipIdentities(ownershipPath), live);
           expect(legacyDrive(["kill", "--session", session]).rc).toBe(0);
           expect(
             await waitUntil(
@@ -1639,12 +1680,14 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               10_000,
             ),
           ).toBe(true);
+          expect(
+            await waitUntil(
+              () => liveRecordedIdentities(recorded).length === 0,
+              WIN_KILL_TIMEOUT_MS + 5_000,
+            ),
+          ).toBe(true);
+          expect(liveRecordedIdentities(recorded)).toEqual([]);
         } finally {
-          if (prior === undefined) {
-            delete process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS;
-          } else {
-            process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS = prior;
-          }
           recordSessionKill(session, cleanupErrors);
         }
       };
@@ -1841,6 +1884,6 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
         throw runError;
       }
     },
-    300_000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });

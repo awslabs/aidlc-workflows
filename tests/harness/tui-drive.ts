@@ -695,6 +695,21 @@ function shouldInjectCimFailure(context: string): boolean {
   return true;
 }
 
+function childIdentityDiscoveryTimeoutMs(): number {
+  const raw = process.env.AIDLC_TUI_CIM_CHILD_IDENTITY_TIMEOUT_MS;
+  if (raw === undefined) return NATIVE_PROCESS_IDENTITY_TIMEOUT_MS;
+  const failures = (process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS ?? "").split(",").map(value => value.trim());
+  const timeoutMs = Number(raw);
+  // Only the deliberately failing fixture may shorten discovery. Real native
+  // queries and subsequent ownership verification retain their shared budgets.
+  if (!["child-start:always", "child-start-fallback:always"].every(context => failures.includes(context)) ||
+    !/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(timeoutMs) || timeoutMs > NATIVE_PROCESS_IDENTITY_TIMEOUT_MS) {
+    throw new Error("AIDLC_TUI_CIM_CHILD_IDENTITY_TIMEOUT_MS requires permanent child-start failures and a positive budget no greater than the native default");
+  }
+  writeCimTrace(`child-identity-discovery budget=${timeoutMs}ms`);
+  return timeoutMs;
+}
+
 function readJsonFile<T>(path: string): T | null {
   if (!existsSync(path)) return null;
   try {
@@ -777,6 +792,7 @@ export async function captureWindowsTargetExit(
   spawnAuthority: WindowsSpawnAuthority | undefined,
   exitFile: string,
   query: typeof windowsTargetIdentityQuery = windowsTargetIdentityQuery,
+  now: () => number = Date.now,
 ): Promise<void> {
   let exited = false;
   let identity: WindowsProcessIdentity | undefined;
@@ -796,14 +812,14 @@ export async function captureWindowsTargetExit(
 
   // Keep the event loop available so a fast target can publish its observed
   // lifetime while the optional native identity bridge is still pending.
-  const deadline = Date.now() + NATIVE_PROCESS_IDENTITY_TIMEOUT_MS;
-  while (!exited && spawnAuthority && Date.now() < deadline) {
+  const deadline = now() + NATIVE_PROCESS_IDENTITY_TIMEOUT_MS;
+  while (!exited && spawnAuthority && now() < deadline) {
     for (const context of ["target-start-fallback", "target-start"]) {
-      if (exited || Date.now() >= deadline) return;
+      if (exited || now() >= deadline) return;
       let current: WindowsProcessQuery<WindowsProcessIdentity>;
       try {
         current = await query(spawnAuthority.pid,
-          Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, deadline - Date.now())), context);
+          Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, deadline - now())), context);
       } catch (error) {
         current = { status: "error", message: String(error) };
       }
@@ -816,7 +832,7 @@ export async function captureWindowsTargetExit(
         }
       }
     }
-    if (!exited && Date.now() < deadline) await sleep(Math.min(25, deadline - Date.now()));
+    if (!exited && now() < deadline) await sleep(Math.min(25, deadline - now()));
   }
 }
 
@@ -2224,6 +2240,7 @@ async function runWinDaemon(a: Args): Promise<void> {
     process.stderr.write("tui-drive __win-daemon: no command after `--`\n");
     process.exit(2);
   }
+  const childIdentityTimeoutMs = childIdentityDiscoveryTimeoutMs();
 
   const dir = winSessionDir(session);
   mkdirSync(dir, { recursive: true });
@@ -2296,7 +2313,7 @@ async function runWinDaemon(a: Args): Promise<void> {
     env: childEnv,
   });
   writeFileSync(join(dir, "child.pid"), String(child.pid));
-  const childIdentityDeadline = Date.now() + NATIVE_PROCESS_IDENTITY_TIMEOUT_MS;
+  const childIdentityDeadline = Date.now() + childIdentityTimeoutMs;
   const startupSnapshot = queryWindowsProcessIdentities(
     [child.pid, process.pid],
     Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, childIdentityDeadline - Date.now())),
