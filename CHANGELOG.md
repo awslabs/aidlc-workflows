@@ -1,12 +1,6 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.8.1] - 2026-09-08
-
-Add the `ddd` plugin: Domain-Driven Design as an installable AIDLC plugin that makes the domain model a first-class deliverable. It adds a `ddd-domain-modeling` stage in Inception (ubiquitous language, bounded contexts, aggregates, invariants, state machines, domain events, business rules), a `ddd-conformance` hard gate after Build and Test that generates and runs a domain-conformance test suite, contributions onto Units Generation, Functional Design, Code Generation, and Build and Test, an advisory `ddd-conformance` sensor, a `ddd-modeling` scope, and architect-agent modeling methodology knowledge. **Install:** copy `dist/plugins/ddd/<harness>/` into the project and run `/aidlc plugin sync`.
-
-* New stages `ddd-domain-modeling` (2.15, Inception) and `ddd-conformance` (3.9, Construction) run when the plugin is selected under the `enterprise`, `feature`, `mvp`, or `workshop` scopes. The plugin's `ddd-modeling` scope is a standalone modeling-only path (initialization, requirements analysis, domain modeling — no build, no gate) whose deliverable is the approved domain model.
-* The conformance gate adjudicates violations as either code fixes or human-approved domain-model amendments, and folds the generated domain tests into the standing suite.
 ## [2.9.0] - 2026-09-15
 
 AI-DLC 2.9.0 rolls up the user-visible changes merged since 2.8.2, including the Classic scope v1 ceremony model, commit provenance, intent archiving, on-demand Construction autonomy, review-loop corrections, and the native preview release channel. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.9.0.tar.gz`. Existing in-flight Classic intents keep their recorded stage graph; the new ceremony defaults apply immediately where noted below.
