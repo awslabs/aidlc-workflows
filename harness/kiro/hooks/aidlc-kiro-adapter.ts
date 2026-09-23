@@ -846,6 +846,19 @@ function nativePreloadError(projectDir: string, agents: string[]): string | null
   }
 }
 
+// The shell boundary's refusal. Module scope on purpose: it is written from TWO places
+// - the `shell-boundary` target itself, and the entry point's catch, which is the layer
+// that stops a rejection out of `run` from becoming exit 1 (a code the platform reads as
+// an errored hook and lets the tool call through). Declared inside `run` it typechecked
+// in the source and broke only in the packaged projection, where the entry point is
+// compiled against the same file.
+const SHELL_BOUNDARY_REFUSAL =
+  "AI-DLC refused this command: a pre-approved AI-DLC command must be one simple " +
+  "command. Chaining, backgrounding, command substitution, redirection, and " +
+  "newline-separated commands are not permitted - only a single terminal `2>&1`. " +
+  "Re-run the command on its own; if you need its output in a file, write the file " +
+  "with a file tool instead of a shell redirection.";
+
 export async function run(
   target: string,
   input: string,
@@ -1786,13 +1799,6 @@ function isAidlcPreApprovedPrefix(prefix: string[]): boolean {
   // this hook past the grants it exists to protect.
   return /^\.[\w-]+\/tools\/[\w.-]+\.ts$/.test(script);
 }
-
-const SHELL_BOUNDARY_REFUSAL =
-  "AI-DLC refused this command: a pre-approved AI-DLC command must be one simple " +
-  "command. Chaining, backgrounding, command substitution, redirection, and " +
-  "newline-separated commands are not permitted - only a single terminal `2>&1`. " +
-  "Re-run the command on its own; if you need its output in a file, write the file " +
-  "with a file tool instead of a shell redirection.";
 
 if (target === "shell-boundary") {
   // Fail closed, and do it without leaving this process. Every other shell decision

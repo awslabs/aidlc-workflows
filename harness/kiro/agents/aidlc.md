@@ -74,6 +74,21 @@ permissions:
         - "aidlc/spaces/**"
         - "{{HARNESS_DIR}}/sensors/**"
         - "aidlc/.aidlc-compose-pending"
+    # Measured on IDE 1.x: dispatching a persona PROMPTED even though it was listed in
+    # `toolsSettings.subagent.trustedAgents` below. There was no rule here for the
+    # capability at all, and an unmatched capability defaults to `ask` - so the prompt
+    # was this omission, not that list being ignored. The two are separate axes, exactly
+    # as the comment below (quoting the vendor's own docs) says: `permissions` decides
+    # whether the capability may be used without consent, `trustedAgents` decides WHICH
+    # agents may be spawned. Both are required, and only one of them was here.
+    #
+    # Every stage the engine routes to delegates to a persona, so without this the
+    # conductor stalls on an approval prompt for each dispatch - and the conductor is
+    # the one participant that cannot answer a prompt.
+    - capability: subagent
+      effect: allow
+      match:
+        - "*"
 # `permissions` gates the subagent capability as a whole; WHICH agents may be
 # spawned and which of them skip the approval prompt is a separate axis, and the
 # schema puts that in toolsSettings.subagent ("Control which agents can be spawned
