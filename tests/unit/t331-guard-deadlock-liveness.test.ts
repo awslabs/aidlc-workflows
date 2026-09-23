@@ -1033,6 +1033,30 @@ describe("open-gate resume liveness", () => {
     expect(refused).not.toHaveProperty("gate_only");
     expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
   });
+
+  test("a typed settings command over an active intent is routed to config, never offered as new work", () => {
+    const dir = project();
+    const tool = join(dir, ".claude/tools/aidlc-orchestrate.ts");
+    const env = { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir };
+    const before = readFileSync(seededStateFile(dir), "utf-8");
+    for (const [args, route] of [
+      [["config", "set", "guard.state-transition", "off"], "engine config set guard.state-transition off"],
+      [["config", "set", "guard-policy", "strict", "--intent", "x", "--space", "default"], "engine config set guard-policy strict --intent x --space default"],
+      [["config", "get", "guard-policy"], "engine config get guard-policy"],
+      [["config", "list", "--json"], "engine config list --json"],
+    ] as const) {
+      const result = runOrchestrateNext(tool, dir, [...args], { cwd: dir, env });
+      expect(result.status, result.out).toBe(0);
+      expect(result.directive, result.out).toMatchObject({ kind: "print" });
+      expect(String(result.directive?.message)).toContain(route);
+      expect(String(result.directive?.message)).toContain("do NOT run `next`");
+      expect(result.directive?.ask_type).toBeUndefined();
+    }
+    const malformed = runOrchestrateNext(tool, dir, ["config", "set", "guard.plan-approval"], { cwd: dir, env });
+    expect(malformed.directive).toMatchObject({ kind: "error" });
+    expect(String(malformed.directive?.message)).toContain("Usage: /aidlc config set <key> <value>");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+  });
 });
 
 describe("AttemptView projections and refusal streaks", () => {

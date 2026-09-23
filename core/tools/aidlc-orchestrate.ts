@@ -1746,6 +1746,7 @@ interface ParsedFlags {
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
   orchestratorVerb?: "park" | "team-board"; // leading orchestrator verb: terminal print naming that command
   orchestratorVerbArgs?: string[]; // allowlisted trailing args for team-board (--space <s>, --intent <i>, --snapshot)
+  configCommand?: string[]; // leading `config set|get|list ...`: terminal print naming the config route, never freeform intent text
   newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
   report?: string; // --report <path>: compose from a scan report (the composer triages the file)
   claim?: string;
@@ -1799,6 +1800,21 @@ function parseNextFlags(args: string[]): ParsedFlags {
     const parsed = parseTeamBoardArgs(args.slice(1));
     if (parsed.kind === "error") return { orchestratorVerb: "team-board", parseError: parsed.message };
     return { orchestratorVerb: "team-board", orchestratorVerbArgs: parsed.argv };
+  }
+  // A leading `config set|get|list` is the typed settings form (the prompt-time
+  // guard switch among them), never a task description: routing it as freeform
+  // text drew the new-work offer over an active intent. The engine names the
+  // config route; the setter itself decides what a setting does.
+  if (args[0] === "config" && ["set", "get", "list"].includes(args[1] ?? "")) {
+    const usage = "Usage: /aidlc config set <key> <value> [--key value ...] | config get <key> | config list [--json].";
+    const tail = args.slice(2);
+    const malformed =
+      (args[1] === "set" && (tail.length < 2 || tail[0].startsWith("--") || tail[1].startsWith("--"))) ||
+      (args[1] === "get" && (tail.length !== 1 || tail[0].startsWith("--"))) ||
+      (args[1] === "list" && tail.some((token) => token !== "--json"));
+    return malformed
+      ? { configCommand: args, parseError: usage }
+      : { configCommand: args };
   }
   const configIndex = args.indexOf("--config");
   if (configIndex >= 0) {
@@ -4515,6 +4531,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     !flags.readOnly &&
     !flags.config &&
     !flags.retiredOnly &&
+    !flags.configCommand &&
     !flags.workspaceCommand &&
     flags.orchestratorVerb !== "team-board"
   ) {
@@ -4604,7 +4621,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // swallowed. Inert on Claude/Codex: the latch files are never written there (no
   // seam) → fresh is always false → falls through. Advisory: any failure fails
   // open to the normal `next`.
-  if (!flags.readOnly && !flags.config && !flags.workspaceCommand && !flags.orchestratorVerb && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
+  if (!flags.readOnly && !flags.config && !flags.configCommand && !flags.workspaceCommand && !flags.orchestratorVerb && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.positionalScope && !flags.intent && !flags.resume &&
       !flags.depth && !flags.testStrategy && !flags.review &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report &&
@@ -4726,6 +4743,22 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
       `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then stop.`,
+    ));
+    return;
+  }
+
+  // Branch 1b2 - the typed settings form (`config set|get|list ...`). A person
+  // who typed `/aidlc config set guard.state-transition off` has already had
+  // the prompt-time hook apply that switch; the words are a setting, never a
+  // task description, so they must not draw the new-work offer or resume the
+  // stage. The engine names the config route; the setter reports the setting
+  // (an already-applied switch is a no-op that says so) and refuses lowering
+  // on its own.
+  if (flags.configCommand) {
+    const [, verb, ...tail] = flags.configCommand;
+    const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    emit(printDirective(
+      `Run \`${aidlcDispatcherInvocation(`config ${verb}`)}${suffix}\`, print its output verbatim, then stop. This is a setting, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
