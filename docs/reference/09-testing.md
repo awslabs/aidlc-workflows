@@ -582,10 +582,11 @@ uses apt on Linux or Homebrew on macOS only when it is missing. Linux unit jobs
 also install zsh when absent. Missing tools fail setup rather than skipping the
 compatibility cases.
 
-The shared workflow binds the checked-out commit to the caller's SHA. Full
-Suite still authorizes that SHA against `main` in its plan job before calling
-the shared workflow; PR CI can test its PR merge commit without receiving live
-credentials. Each run captures stdout/stderr in the checkout root's
+The shared workflow binds the checked-out commit to the caller's SHA.
+Release-purpose Full Suite runs authorize that SHA against `main` in the plan
+job; manual verification instead binds it to the selected workflow head.
+PR CI can test its PR merge commit without receiving live credentials.
+Each run captures stdout/stderr in the checkout root's
 `tmp/ci-deterministic/run.log`, prints that path and the actual log stamp, and
 preserves both this capture and `tests/logs/` after successful sanitization.
 Artifacts use the caller's label plus the actual runner OS and retain evidence
