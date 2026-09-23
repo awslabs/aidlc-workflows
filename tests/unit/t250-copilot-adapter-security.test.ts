@@ -322,6 +322,52 @@ export function rmSync(path, ...args) {
 `);
 }
 
+/** Model mkdir denial on either OS without changing the host's process.platform.
+ *  Only the copied adapter's platform branch and filesystem import are replaced.
+ *  The ledger, ownership checks, transaction and forwarded hook remain real. */
+function injectLedgerLockSequence(
+  s: Scratch,
+  platform: "win32" | "linux",
+  codes: Array<string | null>,
+): string {
+  const adapter = join(s.hooksDir, "aidlc-copilot-adapter.ts");
+  const source = readFileSync(adapter, "utf-8");
+  const platformCheck = 'process.platform === "win32"';
+  expect(source.split('from "node:fs";')).toHaveLength(2);
+  expect(source.split(platformCheck)).toHaveLength(2);
+  writeFileSync(adapter, source
+    .replace('from "node:fs";', 'from "./t250-lock-sequence-fs.ts";')
+    .replace(platformCheck, String(platform === "win32")));
+  const trace = join(s.captureDir, "lock-sequence.json");
+  writeFileSync(join(s.hooksDir, "t250-lock-sequence-fs.ts"), `
+import * as fs from "node:fs";
+export * from "node:fs";
+const ledger = ${JSON.stringify(s.ledgerPath)};
+const lock = ledger + ".lock";
+const owner = ${JSON.stringify(join(`${s.ledgerPath}.lock`, "owner.json"))};
+const before = fs.readFileSync(ledger, "utf8");
+const ownerBefore = fs.readFileSync(owner, "utf8");
+const codes = ${JSON.stringify(codes)};
+let attempts = 0;
+export function mkdirSync(path, ...args) {
+  if (path !== lock) return fs.mkdirSync(path, ...args);
+  attempts++;
+  // Denial must never authorize changing the existing owner or ledger.
+  if (fs.readFileSync(ledger, "utf8") !== before || fs.readFileSync(owner, "utf8") !== ownerBefore) {
+    throw new Error("lock retry changed another owner's data");
+  }
+  fs.writeFileSync(${JSON.stringify(trace)}, JSON.stringify({ attempts }));
+  const code = codes[Math.min(attempts - 1, codes.length - 1)];
+  if (code) throw Object.assign(new Error("modeled mkdir failure"), { code });
+  // Only the fixture retires its synthetic prior owner. The adapter must then
+  // acquire a new directory and stamp its own token before updating the ledger.
+  fs.rmSync(lock, { recursive: true });
+  return fs.mkdirSync(path, ...args);
+}
+`);
+  return trace;
+}
+
 function ledgerDiagnostic(result: { stderr: string }): Record<string, unknown> {
   const line = result.stderr.split("\n").find(value => value.startsWith("Copilot subagent ledger transaction failed: "));
   expect(line, result.stderr).toBeDefined();
@@ -911,6 +957,47 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       s.cleanup();
     }
   });
+
+  for (const { platform, codes, attempts, failure } of [
+    { platform: "win32", codes: ["EPERM", "EEXIST", null], attempts: 3, failure: null },
+    { platform: "win32", codes: ["EPERM"], attempts: 200, failure: "EPERM" },
+    { platform: "linux", codes: ["EPERM", null], attempts: 1, failure: "EPERM" },
+    { platform: "win32", codes: ["EACCES", null], attempts: 1, failure: "EACCES" },
+  ] as const) {
+    test(`17a: ${platform} mkdir ${JSON.stringify(codes)} preserves ownership and reports persistent denial`, () => {
+      const s = scratch();
+      const first = { session_id: "host-a", agent_id: "shared-id", agent_type: "aidlc-reviewer-a-agent" };
+      const other = { session_id: "host-b", agent_id: "shared-id", agent_type: "aidlc-reviewer-b-agent" };
+      try {
+        for (const identity of [first, other]) {
+          expect(runAdapter(s, "subagent-start", identity).code).toBe(0);
+        }
+        const before = readFileSync(s.ledgerPath, "utf-8");
+        const lockDir = `${s.ledgerPath}.lock`;
+        const ownerPath = join(lockDir, "owner.json");
+        const ownerBefore = JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: "prior-owner" });
+        mkdirSync(lockDir);
+        writeFileSync(ownerPath, ownerBefore);
+        const trace = injectLedgerLockSequence(s, platform, [...codes]);
+        const result = runAdapter(s, "log-subagent", first);
+        expect(JSON.parse(readFileSync(trace, "utf-8"))).toEqual({ attempts });
+        if (failure) {
+          expect(result.code, result.stderr).toBe(1);
+          expect(ledgerDiagnostic(result)).toEqual({ operation: "lock", code: failure, committed: false });
+          expect(readFileSync(s.ledgerPath, "utf-8")).toBe(before);
+          expect(readFileSync(ownerPath, "utf-8")).toBe(ownerBefore);
+          expect(reached(s.captureDir, "aidlc-log-subagent.ts")).toBe(0);
+        } else {
+          expect(result.code, result.stderr).toBe(0);
+          expect(ledgerEntries(s).map(entry => entry.hostSessionId)).toEqual(["host-b"]);
+          expect(existsSync(lockDir)).toBe(false);
+          expect(reached(s.captureDir, "aidlc-log-subagent.ts")).toBe(1);
+        }
+      } finally {
+        s.cleanup();
+      }
+    });
+  }
 
   test("18: ordinary VS Code session ids isolate active reviewers across host sessions", () => {
     const s = scratch();

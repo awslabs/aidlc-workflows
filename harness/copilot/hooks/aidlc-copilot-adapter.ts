@@ -783,33 +783,46 @@ export async function run(
   }
 
   function acquireLedgerLock(): string | null {
+    let permissionFailure: LedgerMutationError | undefined;
     for (let attempt = 0; attempt < 200; attempt++) {
       try {
         mkdirSync(LEDGER_LOCK);
-        const owner: LedgerLockOwner = {
-          pid: process.pid,
-          acquiredAt: Date.now(),
-          token: randomUUID(),
-        };
-        try {
-          writeFileSync(LEDGER_LOCK_OWNER, JSON.stringify(owner), "utf-8");
-          return owner.token;
-        } catch (error) {
-          // The newly created directory is ours, unless a successor has
-          // already installed a different ownership receipt.
-          const currentOwner = readLedgerLockOwner();
-          if (!currentOwner || currentOwner.token === owner.token) {
-            try { rmSync(LEDGER_LOCK, { recursive: true, force: true }); } catch { /* report the original failure */ }
-          }
-          throw ledgerFailure("owner-write", error);
-        }
       } catch (error) {
-        if (error instanceof LedgerMutationError) throw error;
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw ledgerFailure("lock", error);
-        if (reclaimStaleLedgerLock()) continue;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST") {
+          if (reclaimStaleLedgerLock()) continue;
+        } else if (process.platform === "win32" && code === "EPERM") {
+          // Windows may keep a removed directory pending until its last handle
+          // closes. Retry only mkdir within the existing contention budget;
+          // permission denial grants no ownership and must not trigger reaping.
+          permissionFailure ??= ledgerFailure("lock", error);
+        } else {
+          throw ledgerFailure("lock", error);
+        }
         Bun.sleepSync(10);
+        continue;
+      }
+      const owner: LedgerLockOwner = {
+        pid: process.pid,
+        acquiredAt: Date.now(),
+        token: randomUUID(),
+      };
+      try {
+        writeFileSync(LEDGER_LOCK_OWNER, JSON.stringify(owner), "utf-8");
+        return owner.token;
+      } catch (error) {
+        // The newly created directory is ours, unless a successor has
+        // already installed a different ownership receipt.
+        const currentOwner = readLedgerLockOwner();
+        if (!currentOwner || currentOwner.token === owner.token) {
+          try { rmSync(LEDGER_LOCK, { recursive: true, force: true }); } catch { /* report the original failure */ }
+        }
+        throw ledgerFailure("owner-write", error);
       }
     }
+    // A persistent permission failure remains EPERM, not a generic timeout or
+    // successful no-op. A successful retry still required exclusive mkdir.
+    if (permissionFailure) throw permissionFailure;
     return null;
   }
 
