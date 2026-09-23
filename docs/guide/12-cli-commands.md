@@ -2089,7 +2089,7 @@ Both verbs accept `--repo <name>` (multi-repo intents), `--space <name>`, and `-
 
 ### Session skills — report on a workflow
 
-Three read-only skills surface what `aidlc-runtime summary` reports, wrapped in readable output. Type them like commands:
+Three read-only skills surface what `aidlc engine runtime summary` reports, wrapped in readable output. Type them like commands:
 
 | Skill | What it does |
 |-------|--------------|
@@ -2097,7 +2097,7 @@ Three read-only skills surface what `aidlc-runtime summary` reports, wrapped in 
 | `/aidlc-replay` | Readable session narrative for async review. Terminal only |
 | `/aidlc-outcomes-pack` | Handover document for the team. Writes `OUTCOMES.md` |
 
-All three are read-only — no stage advance, no audit emit — and source every number from `aidlc-runtime summary --json`. See [Session Management § Session Skills](11-session-management.md#session-skills) for the full walkthrough.
+All three are read-only — no stage advance, no audit emit — and source every number from `aidlc engine runtime summary --json`. If your harness doesn't surface skills as slash commands (so `/aidlc-session-cost` is reported invalid), run that command directly — it produces the same cost view. See [Session Management § Session Skills](11-session-management.md#session-skills) for the full walkthrough.
 
 ---
 
