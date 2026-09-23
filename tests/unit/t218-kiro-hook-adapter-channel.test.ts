@@ -4324,6 +4324,35 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     }
   });
 
+  // The adapter decides which pre-dispatch directives it may publish from a RUNTIME list
+  // of kinds; core declares the same set as a TYPE, which cannot be read at runtime. If
+  // the two drift, nothing fails loudly: a kind the engine emits and the adapter omits is
+  // silently demoted to the forwarding latch, so every such dispatch costs the model an
+  // extra `next` round-trip and the pre-dispatch optimisation quietly stops applying.
+  //
+  // `load-steering` is the one deliberate omission - its rules can be truncated by the
+  // prompt budget - so it is asserted as absent rather than allowed to look like drift.
+  test("the adapter's publishable-kind list matches core's DirectiveKind union", () => {
+    const union = readFileSync(
+      join(REPO_ROOT, "core", "tools", "aidlc-directive.ts"),
+      "utf-8",
+    ).match(/export type DirectiveKind =([\s\S]*?);/);
+    expect(union, "core no longer declares DirectiveKind as a union").not.toBeNull();
+    const declared = [...(union?.[1] ?? "").matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
+    expect(declared.length, "the union should not have shrunk to nothing").toBeGreaterThan(1);
+
+    const adapter = readFileSync(
+      join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"),
+      "utf-8",
+    ).match(/PUBLISHABLE_DIRECTIVE_KINDS = new Set\(\[([\s\S]*?)\]\)/);
+    expect(adapter, "the adapter no longer carries a publishable-kind list").not.toBeNull();
+    const publishable = [...(adapter?.[1] ?? "").matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
+
+    expect(publishable, "a kind core emits but the adapter cannot publish is silent drift")
+      .toEqual(declared.filter((k) => k !== "load-steering"));
+    expect(publishable, "load-steering must not be publishable").not.toContain("load-steering");
+  });
+
   test("a non-shell tool is not this hook's business", () => {
     const dir = scratchProject(true);
     try {

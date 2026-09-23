@@ -74,8 +74,11 @@ function loadRegistry(path: string): {
 }
 
 function loadAgents(): Array<{ file: string; doc: AgentDoc }> {
-  // Agent configs ship as Markdown; frontmatter and a JSON config are equivalent
-  // to Kiro, so the grant model is read out of the frontmatter block.
+  // Agent configs ship as Markdown, so the grant model is read out of the frontmatter
+  // block. NOT because frontmatter and a JSON config are equivalent to Kiro: measured on
+  // IDE 1.x, a MARKDOWN agent receives no V2-to-V3 projection, so a 2.x field is inert
+  // there while the same field in a `.json` agent is still translated. What this file
+  // reads is the tool list, which both formats honour.
   return readdirSync(AGENTS_DIR)
     .filter((file) => file.endsWith(".md"))
     .sort()

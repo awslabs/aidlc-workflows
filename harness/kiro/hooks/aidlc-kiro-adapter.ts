@@ -1568,6 +1568,40 @@ if (target === "verb-intercept") {
         // which made the model re-run `next`; it now reaches the conductor on the
         // first pass, which is what pre-dispatch exists for. A directive that could
         // not be written falls back, because there is no path to point at.
+        // The `kind` a pre-dispatch directive may carry, as a CLOSED list.
+        //
+        // This used to accept any string that was not `load-steering`, and then told the
+        // conductor the file it pointed at was "the authoritative directive ... act on its
+        // `kind` now". So an unrecognised kind - a field the engine never emits, a value
+        // from a newer engine this harness does not understand, or one that arrived
+        // through a directive the model was talked into writing - was relayed with that
+        // authority attached and the conductor was instructed to act on it.
+        //
+        // Now the harness publishes only a kind it can name. Anything else falls through
+        // to the forwarding latch, which is the existing, tested path: the model re-runs
+        // `next` and the directive arrives through the real tool channel, where the core
+        // validator rejects it properly. That is a slower turn, not a failure, and it is
+        // the correct answer for a value this harness cannot vouch for.
+        //
+        // Mirrors `DirectiveKind` in core/tools/aidlc-directive.ts. It is a type, so it
+        // cannot be read at runtime; this list is the runtime half and t218 pins that the
+        // two agree, because a kind the engine emits and this list omits would silently
+        // demote every such dispatch to the slow path.
+        const PUBLISHABLE_DIRECTIVE_KINDS = new Set([
+          "run-stage",
+          "dispatch-subagent",
+          "invoke-swarm",
+          "present-gate",
+          "ask",
+          "print",
+          "error",
+          "done",
+          "parked",
+          "notice",
+          // `load-steering` is deliberately ABSENT rather than listed and excluded below:
+          // its rules can be truncated by the prompt budget, and moving the continuation
+          // token ahead of them so it survives truncation is exactly the wrong repair.
+        ]);
         let kind: string | null = null;
         try {
           const parsed: unknown = JSON.parse(directive);
@@ -1576,7 +1610,7 @@ if (target === "verb-intercept") {
             "kind" in parsed && typeof parsed.kind === "string"
           ) kind = parsed.kind;
         } catch { /* an unparseable directive is not publishable either */ }
-        const directivePath = kind !== null && kind !== "load-steering"
+        const directivePath = kind !== null && PUBLISHABLE_DIRECTIVE_KINDS.has(kind)
           ? writeTerminalDirective(directive)
           : null;
         const packet = directivePath === null

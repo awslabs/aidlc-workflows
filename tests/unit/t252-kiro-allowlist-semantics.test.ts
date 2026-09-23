@@ -94,8 +94,13 @@ const PERSONAS = [
 //     conductor test below already says that reimplementing it would be a guess. What
 //     IS pinned is that the adapter leaves such a command alone (t218's UNRELATED list).
 
-// Agent configs ship as Markdown; Kiro treats frontmatter and a JSON config as
-// equivalent, so the grant model lives in the frontmatter block.
+// Agent configs ship as Markdown, so the grant model lives in the frontmatter block.
+//
+// NOT because frontmatter and a JSON config are equivalent — that was this suite's old
+// premise and it is false on the engine this row pins. Measured on IDE 1.x: Kiro applies
+// no V2-to-V3 projection to a MARKDOWN agent, so a 2.x field in frontmatter is inert
+// where the same field in a `.json` agent is still translated. The rules read here are
+// 3.0 `permissions`, which both formats honour.
 export function agentFrontmatter(harness: string, agentFile: string): Record<string, unknown> {
   const p = join(REPO_ROOT, "dist", harness, ".kiro", "agents", agentFile);
   const block = /^---\n([\s\S]*?)\n---\n/.exec(readFileSync(p, "utf-8"));
