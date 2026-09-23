@@ -1483,6 +1483,10 @@ canonicalize its path, and credential reads and writes outside the workspace
 must remain denied. The sandbox identities receive directory metadata and
 traversal access on the three private containers above the fixtures, with no
 inherited permission to list their contents or read their files.
+Readiness checks the native initializer's exit status independently of its
+fixed phase diagnostics on stderr; a missing or nonzero status blocks execution.
+The native launcher allows 60 seconds for fresh-home initialization to accommodate
+hosted Windows cold-start variation, then refuses execution if that deadline expires.
 Each native CLI process is assigned to its own Windows job before being resumed.
 After the CLI exits, the launcher retires that job's descendants before draining
 stdout and stderr, so inherited pipe handles cannot hold the invocation open.

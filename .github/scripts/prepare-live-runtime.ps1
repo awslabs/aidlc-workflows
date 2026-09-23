@@ -1915,6 +1915,9 @@ public static class AidlcCodexLauncher {
     private const string PowerShell = __POWERSHELL__;
     private const string Initializer = __INITIALIZER__;
     private const string GuiProbe = __GUI_PROBE__;
+    // Hosted Windows cold initialization has completed successfully in ~45s.
+    // Keep a finite deadline with room for that startup before native execution.
+    private const int InitializerTimeoutMs = 60000;
     private const bool HostedGui = __HOSTED_GUI__;
     private const string StationOwner = __STATION_OWNER__;
     private const string ControllerSid = __CONTROLLER_SID__;
@@ -1976,7 +1979,7 @@ public static class AidlcCodexLauncher {
             if (!version) {
                 int initialized = Run(PowerShell, new string[] {
                     "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", Initializer
-                }, 30000);
+                }, InitializerTimeoutMs);
                 if (initialized != 0) return initialized;
                 // The accepted Service-station initializer runs first. Bind
                 // only this launcher and native Codex to the prepared station;
@@ -2167,10 +2170,12 @@ function Invoke-ReadinessInitializer {
         # Credential-free readiness may relay fixed stderr phase diagnostics on
         # stdout. PS5.1 must not mistake those diagnostics for a command failure.
         $ErrorActionPreference = 'Continue'
-        $LASTEXITCODE = $null
+        # Native commands update the global automatic variable. A local sentinel
+        # shadows that update and falsely rejects even an initializer that exits 0.
+        $global:LASTEXITCODE = $null
         & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $initializer 2>&1 |
             ForEach-Object { [Console]::WriteLine([string]$_) }
-        $nativeExit = $LASTEXITCODE
+        $nativeExit = $global:LASTEXITCODE
     } finally { $ErrorActionPreference = $previousPreference }
     if ($null -eq $nativeExit -or $nativeExit -ne 0) { throw 'Fresh Codex home initialization failed.' }
 }

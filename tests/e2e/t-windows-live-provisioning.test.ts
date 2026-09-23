@@ -445,7 +445,15 @@ public static class NativeOutputFixture {
   }
 }`);
       const initializer = join(root, "initialize.ps1");
-      writeFileSync(initializer, "exit 0\n");
+      writeFileSync(initializer, `
+if ($env:AIDLC_FIXTURE_INITIALIZER_DELAY_MS) {
+    [Threading.Thread]::Sleep([int]$env:AIDLC_FIXTURE_INITIALIZER_DELAY_MS)
+}
+if ($env:AIDLC_FIXTURE_INITIALIZER_EXIT_CODE) {
+    exit ([int]$env:AIDLC_FIXTURE_INITIALIZER_EXIT_CODE)
+}
+exit 0
+`);
       // Compile the actual authored bridge with inert child commands. This
       // exercises its native process boundary without creating sandbox users.
       const match = script.match(/\$launcher = @'\r?\n([\s\S]*?)\r?\n'@/);
@@ -483,6 +491,26 @@ public static class NativeOutputFixture {
       expect(result.stdout.trim()).toBe(`stdout-marker:${Buffer.from(args.join("\0")).toString("base64")}`);
       expect(result.stderr.trim()).toBe("stderr-marker");
     }, 20_000);
+    test("allows a successful initializer to finish beyond the former 30-second deadline", () => {
+      const result = spawnSync(executable, ["sandbox"], {
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 85_000,
+        env: { ...process.env, AIDLC_FIXTURE_INITIALIZER_DELAY_MS: "31000" },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(7);
+      expect(result.stdout.trim()).toBe(`stdout-marker:${Buffer.from("sandbox").toString("base64")}`);
+      expect(result.stderr.trim()).toBe("stderr-marker");
+    }, 90_000);
+    test("refuses native execution after initializer failure", () => {
+      const result = spawnSync(executable, ["sandbox"], {
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 85_000,
+        env: { ...process.env, AIDLC_FIXTURE_INITIALIZER_EXIT_CODE: "9" },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(9);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    }, 90_000);
     test("initializer phase markers diagnose a refused directory without stdout or secret contents", () => {
       const sourceText = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
       const body = sourceText.match(/function Get-CodexHomeInitializer \{[\s\S]*?\$body = @'\r?\n([\s\S]*?)\r?\n'@/);
