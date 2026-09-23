@@ -68,11 +68,11 @@ naming the fences it lowers and why an input change after approval should
 reopen it, or be recorded and continue. The value decides two things: what
 happens when an input changes after the human approved or confirmed something,
 and how far the automatic checks stand aside for the agents. `strict` lowers
-no fences and reopens that approval; `relaxed`
-records the change once, tells the human in one line, continues, and stands the
-plan-approval and review-freeze checks aside; `off` does that and stands the
-state-transition and reviewer-scope checks aside as well. No value removes a
-gate and none of them touches human presence. The conductor still asks every
+no fences and reopens that approval; `relaxed` records the change once, tells
+the human in one line, continues, and stands the reviewer-scope check aside;
+`off` does that and stands the state-transition check aside as well. Plan
+approval and terminal review freeze remain mandatory under every policy word,
+and no value touches human presence. The conductor still asks every
 approval question; the value also decides which fences stop undirected work,
 and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
@@ -92,7 +92,7 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   approving a front composition. In-flight, the row is read-only: a
   recompose lands only stage skips and adds, so the proposal names the routes
   (raise or lower by typing `/aidlc --guard-policy <value>`, with `$aidlc` on
-  Codex, or change to a scope whose `guard_policy` declares the value).
+  Codex). Changing scope alone never lowers the running policy.
   A memory layer that declares strict wins over any proposal; the
   validator and the intent-create command both refuse a relaxed or off value
   under it.

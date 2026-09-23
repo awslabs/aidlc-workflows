@@ -8291,8 +8291,8 @@ function retiredGuardPolicyNotice(projectDir: string, stateContent: string): str
   }
   if (value === "strict") return null;
   const fences = value === "relaxed"
-    ? "plan-approval and review-freeze fences"
-    : "plan-approval, review-freeze, state-transition and reviewer-scope fences";
+    ? "reviewer-scope fence"
+    : "state-transition and reviewer-scope fences";
   return `Guard Policy: ${value} was carried over from this piece of work's retired Change Control line. ` +
     `Under Guard Policy, ${value} now also lowers the ${fences} for work nobody directed, ` +
     "and every pass is recorded in the audit trail. " +

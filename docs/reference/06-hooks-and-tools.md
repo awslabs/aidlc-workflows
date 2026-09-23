@@ -169,7 +169,7 @@ No in-repo check can provide stronger provenance on today's harnesses.
 #### Kiro IDE adapter
 
 When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
-On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, and `verb-intercept` emits a once-per-session capability note directing the person to the scope-file `guard_policy`, memory Guard Policy, or a prompt-capable IDE build while raising to `strict` or turning a fence `on` remains available.
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update Kiro IDE or start new work from a lower-default scope. Raising to `strict` or turning a fence `on` remains available.
 Before forwarding an empty prompt, the adapter performs the same field-only
 normalization and prints its migration note because some builds discard core
 hook output. Its capability note also explains that automatic rename.
@@ -281,8 +281,9 @@ Each fence except `state-transition` has an environment kill switch
 for a state, in precedence order: the environment kill switch, then the per-work
 `Guards Off` state line unless memory holds strict, then the per-work `Guards On`
 state line, then the fences the policy word lowers (`fencesLoweredByPolicy`:
-nothing under `strict`, `plan-approval` and `review-freeze` under `relaxed`, those
-two plus `state-transition` and `reviewer-scope` under `off`), then on by default.
+nothing under `strict`, `reviewer-scope` under `relaxed`, and
+`state-transition` plus `reviewer-scope` under `off`), then on by default.
+Plan approval and terminal review freeze remain mandatory under every policy word.
 `humanPresenceGuardDisabled` reads only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`:
 human presence is the key holder and has no per-work switch. A persisted
 human-presence entry on either state line is ignored. `AIDLC_UNATTENDED=1`
@@ -295,7 +296,8 @@ the `Guards Off` or `Guards On` line in canonical order as
 that override in `Guards On` with `GUARD_RESTORED`. `/aidlc --status` renders all
 five through `formatFence` on its `Fences:` line: `on (default)`,
 `on (set by you)`, `off (set by you)`, `off (env <VAR>)`, or
-`off (guard policy relaxed (from scope classic))`, as appropriate.
+`off (guard policy relaxed (from scope classic))` for reviewer scope, as
+appropriate.
 
 The human-turn hook applies explicit fence and policy lowering from the person's
 typed prompt through the shared settings transaction.
@@ -424,7 +426,7 @@ decide. All four fence hooks call it before they refuse.
 `Continuing past the <fence> check because it is off for this piece of work (<source>). Recorded in the audit trail: <detail>`.
 The source is the text `formatFence` prints inside its parentheses, such as
 `set by you`, `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, or
-`guard policy relaxed (from scope classic)`. Without detail, the final sentence
+`guard policy relaxed (from scope classic)` for reviewer scope. Without detail, the final sentence
 is `Recorded in the audit trail.` It writes one `GUARD_STOOD_ASIDE` row
 (`recordGuardStoodAside`, carrying `Guard`, `Authority`, `Grant`, `Actor`, and
 optional `Stage`, `Tool`, `Details`). It never asks "are you sure": the fence is
@@ -1014,7 +1016,7 @@ This is one of the framework's flow-altering hooks and `PreToolUse` controls. Th
 
 **Guard Policy: the drift half.** The workspace-source check is a governed Guard Policy read (`/aidlc --status` shows the intent's value). Under `strict` a source that moved after the plan was fingerprinted or approved refuses in the human's words (`N files changed since this plan was approved: <paths>. Look them over and approve the plan again to continue.`) and the way forward travels beside it. From this hook the refusal's LAST stderr line is a typed `guard-recovery` ask (the same shape the review-freeze hook emits, rendered by every harness skill as a question) carrying four remedies in recommendation order: `reapprove-plan` (reset the Plan Approval `[Answer]:`, re-run the `fingerprint` command it names, record both tags, re-present), `show-plan-drift` (the `verify` command, whose output names the files that moved), `stop-here` (leave the plan unapproved and end the turn), and `lower-fence` for `guard.plan-approval`. The `decision`, `answer`, and `begin` commands refuse in the same words with the conductor's remedy beside them on stderr. Under `relaxed` and `off` the decision, the answer, the receipt certification, this hook's generation start, and the `begin` command each accept the drift once: one `CHANGE_ACCEPTED` row, one `change_notices` line, and the recorded source re-baselined (the `[Planned Source]` tag before the challenge is minted, the receipt's certified source after), so the same change is never reported twice. The content members of the approval (plan, unit test instructions, Testing Contract) reopen approval under all three values; Plan Approval itself, the autonomous-mode plan stop, and every human gate are never relaxed.
 
-**Guard Policy: the fence half.** Once the predicate above has decided to block, the hook calls `decideFence(projectDir, "plan-approval", { hookInput })` before it refuses. A `stand-aside` (the fence lowered by `relaxed`, `off`, `config set guard.plan-approval off`, or `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) prints one line naming the dispatch or write target, writes one `GUARD_STOOD_ASIDE` row, and exits 0. A generic human reply cannot lower this fence: a `hold` refuses exactly as described above and tells the person the exact command to type so the human-turn hook can apply the switch when that prompt arrives. The approval gate itself is untouched either way.
+**Guard Policy: the fence half.** Once the predicate above has decided to block, the hook calls `decideFence(projectDir, "plan-approval", { hookInput })` before it refuses. The policy word never lowers this mandatory barrier. A `stand-aside` produced by the person's explicit `config set guard.plan-approval off` switch or `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` prints one line naming the dispatch or write target, writes one `GUARD_STOOD_ASIDE` row, and exits 0. A generic human reply cannot lower this fence: a `hold` refuses exactly as described above and tells the person the exact command to type so the human-turn hook can apply the switch when that prompt arrives. The approval gate itself is untouched either way.
 
 ---
 
@@ -1059,7 +1061,7 @@ evidence rewrite is involved.
 
 **Guard Policy: the drift half.** The invalidation the shared scan performs when a reviewed output, bound question content, or reviewed source a Unit claims changes after a terminal receipt is a governed Guard Policy read. Under `strict` it works as described above: the receipt is stale and the one bounded recovery review is owed. Under `relaxed` and `off` the receipt stays valid for the gate with the reviewer's verdict exactly as recorded, `aidlc-state.ts` writes one `CHANGE_ACCEPTED` row when the gate opens or the stage completes (the engine's `report` carries the human line on its directive as `change_notices`), and the review brief at the gate says `Reviewed content differs` and lists the changed paths.
 
-**Guard Policy: the fence half.** The freeze is one of the five fences, so it is no longer unconditional. Once `verdict.block` is set, the hook calls `decideFence(projectDir, "review-freeze", { hookInput, stateContent })`. `review-freeze` is among the fences `relaxed` lowers, so on a `relaxed` or `off` intent, or after `config set guard.review-freeze off`, the hook prints one line, writes one `GUARD_STOOD_ASIDE` row naming the target, and exits 0 instead of refusing. Under `strict` it keeps refusing, whatever the human said earlier in the turn. What never changes is the receipt: its verdict, its fingerprint, and the audit rows behind it are untouched, so a stand-aside makes the change visible rather than pretending the review still covers the new bytes.
+**Guard Policy: the fence half.** Once `verdict.block` is set, the hook calls `decideFence(projectDir, "review-freeze", { hookInput, stateContent })`. The policy word never lowers this mandatory terminal barrier. Only the person's explicit `config set guard.review-freeze off` switch or the documented environment escape hatch can make the hook print one line, write one `GUARD_STOOD_ASIDE` row naming the target, and exit 0 instead of refusing. What never changes is the receipt: its verdict, its fingerprint, and the audit rows behind it are untouched, so an explicit stand-aside makes the change visible rather than pretending the review still covers the new bytes.
 
 **Fail-open everywhere.** No audit ledger (the common non-AIDLC case, decided before any state read), unreadable state or stage graph, an unknown tool, malformed stdin, or any internal error allows the call. The deterministic off-switch `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement entirely.
 

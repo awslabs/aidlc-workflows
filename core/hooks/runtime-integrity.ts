@@ -4,7 +4,7 @@
 // is the harness's permission model and the person's review of what the agent
 // runs. This check runs before fence decisions; no Guard Policy word, lowered
 // fence, or presence bypass turns it off.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ClaudeCodeHookInput } from "../tools/aidlc-lib.ts";
 import { resolveHarnessRoot, runtimeHarnessDir } from "../tools/aidlc-runtime-paths.ts";
@@ -16,7 +16,7 @@ import {
 
 const RUNTIME_RECORD_PATH = /(?:^|[\\/])\.(?:aidlc-sessions|aidlc-plan-approval)(?:[\\/]|$)/;
 const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-approval)(?=[\\/'"`\s]|$)/;
-const HARNESS_HOOK_COMMAND = /(?:^|[\\/\s"'`])hooks[\\/]aidlc-[a-z-]+\.ts\b|\baidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts\b|\baidlc(?:\.ts)?["']?\s+engine\s+hook\b/;
+const HARNESS_HOOK_COMMAND = /(?:^|[\\/\s"'`])hooks[\\/]aidlc-[a-z-]+\.ts\b|\baidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts\b|\baidlc(?:\.ts)?["']?\s+engine\s+hook\b|--internal-aidlc-record-human-turn\b/;
 const HARNESS_CONTROL_ASSIGNMENT = /\b(?:AIDLC_SESSION_OVERRIDE|AIDLC_SESSION_OVERRIDE_SOURCE|AIDLC_SKIP_HUMAN_PRESENCE_GUARD|AIDLC_UNATTENDED|AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS|AIDLC_STATE_TRANSITION_OWNER)=/;
 // A concrete import, require, or execution of a hook module: a hook file path
 // or one of the two modules whose exports mint a human turn or apply intent
@@ -50,15 +50,26 @@ function pathWithin(path: string, root: string): boolean {
   return child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
+function canonicalExistingPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 function harnessInstallRoots(cwd: string): string[] {
+  const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc"]
+    .map((dir) => resolve(cwd, dir));
   try {
     const harnessDir = runtimeHarnessDir(cwd);
-    return [
+    return [...new Set([
       resolveHarnessRoot({ projectDir: cwd, harnessDir, mutable: true }),
       resolveHarnessRoot({ projectDir: cwd, harnessDir }),
-    ];
+      ...conventional,
+    ])];
   } catch {
-    return [".claude", ".codex", ".kiro", ".cursor", ".aidlc"].map((dir) => resolve(cwd, dir));
+    return conventional;
   }
 }
 
@@ -69,7 +80,10 @@ function protectedScriptFile(path: string, cwd: string): boolean {
     if (!stat.isFile() || stat.size > MAX_SCRIPT_BYTES) return false;
     // Shipped tools legitimately import hook helpers. Inspect model-authored
     // wrappers, not the runtime installation that those tools belong to.
-    if (harnessInstallRoots(cwd).some((root) => pathWithin(absolute, root))) return false;
+    const canonical = canonicalExistingPath(absolute);
+    if (harnessInstallRoots(cwd).some((root) =>
+      pathWithin(canonical, canonicalExistingPath(root))
+    )) return false;
     return PROTECTED_MODULE_USE.test(readFileSync(absolute, "utf-8"));
   } catch {
     // An unreadable or missing script is outside this lexical check's reach.

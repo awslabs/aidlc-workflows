@@ -72,6 +72,7 @@ import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
 export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
+const LEGACY_HOOKS_HEALTH_DIR = ".aidlc-hooks-health";
 const LEGACY_SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
 const LEGACY_REVIEW_RECORDS_DIR = ".aidlc-reviews";
 const LEGACY_SOURCE_REVIEW_DIR = ".aidlc-source-review";
@@ -913,7 +914,7 @@ export type WorkspaceCommand =
   | {
       kind: "error";
       noun: WorkspaceNoun;
-      code: "missing-name";
+      code: "missing-name" | "unexpected-arguments";
       verb: "switch" | "create" | "space-create" | IntentLifecycleVerb;
       message: string;
     }
@@ -937,6 +938,22 @@ function missingWorkspaceName(
     kind: "error",
     noun,
     code: "missing-name",
+    verb,
+    message: `Usage: aidlc ${usage}`,
+  };
+}
+
+function unexpectedWorkspaceArguments(
+  noun: WorkspaceNoun,
+  verb: "switch" | "create" | "space-create",
+): WorkspaceCommand {
+  const usage = verb === "space-create"
+    ? "space-create <name>"
+    : `${noun} ${verb} <name>`;
+  return {
+    kind: "error",
+    noun,
+    code: "unexpected-arguments",
     verb,
     message: `Usage: aidlc ${usage}`,
   };
@@ -990,6 +1007,9 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (name === undefined) {
       return missingWorkspaceName("space", "space-create");
     }
+    if (tokens.length > 2) {
+      return unexpectedWorkspaceArguments("space", "space-create");
+    }
     return { kind: "create", noun: "space", name };
   }
 
@@ -1018,6 +1038,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
+      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
       return { kind: "switch", noun, name, explicit: true };
     }
     if (verbOrName === "create") {
@@ -1037,15 +1058,20 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
+      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
       return { kind: "switch", noun, name, explicit: true };
     }
     if (verbOrName === "create") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "create");
+      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "create");
       return { kind: "create", noun, name };
     }
   }
 
+  if (tokens.slice(2).some((token) => token.startsWith("--"))) {
+    return unexpectedWorkspaceArguments(noun, "switch");
+  }
   return { kind: "switch", noun, name: verbOrName, explicit: false };
 }
 
@@ -20555,9 +20581,10 @@ export function docsRoot(projectDir: string, intent?: string, space?: string): s
 }
 
 // All record-local framework state lives here. Review audit references retain
-// their exact legacy paths; sensors and summary authorizations have read-only
-// directory fallbacks. Everything else is transient or derived and is rebuilt
-// at the new path without a fallback. These helpers never create directories.
+// their exact legacy paths; sensors, hook health, summary authorizations, and
+// source review have read-only directory fallbacks. Everything else is
+// transient or derived and is rebuilt at the new path without a fallback.
+// These helpers never create directories.
 export function engineDir(projectDir: string, intent?: string, space?: string): string {
   return engineDirFor(docsRoot(projectDir, intent, space));
 }
@@ -20598,6 +20625,22 @@ export function runtimeGraphPath(projectDir: string, intent?: string, space?: st
 // `--doctor`.
 export function hooksHealthDir(projectDir: string, intent?: string, space?: string): string {
   return join(engineDir(projectDir, intent, space), "hooks-health");
+}
+
+/**
+ * Read heartbeats from the record that predates the engine-dir move until the
+ * new directory exists; writers use hooksHealthDir. A record created before
+ * the relocation keeps its heartbeats under the legacy name until the next
+ * hook fires, and a reader without this fallback sees an absent directory -
+ * which liveness readers cannot distinguish from hooks that never ran.
+ */
+export function hooksHealthReadDir(projectDir: string, intent?: string, space?: string): string {
+  const record = docsRoot(projectDir, intent, space);
+  return engineReadDirFor(
+    record,
+    join(engineDirFor(record), "hooks-health"),
+    LEGACY_HOOKS_HEALTH_DIR,
+  );
 }
 
 // Hook heartbeats and audit rows are written in the same turn, normally
@@ -20643,7 +20686,7 @@ export function hookLiveness(
   projectDir: string,
   events: readonly AuditShardEvent[] = readAuditShardEvents(projectDir),
 ): HookLiveness {
-  const healthDir = hooksHealthDir(projectDir);
+  const healthDir = hooksHealthReadDir(projectDir);
   const heartbeatEntries: string[] = [];
   let newestHeartbeat: HookHeartbeatStamp | null = null;
   let hasHookFiredContent = false;
@@ -30010,10 +30053,13 @@ export function emitError(
 // confirmed something is asked about once, naming what changed, and the
 // authority fences hold against work nobody directed. `relaxed`: a changed
 // input is recorded as a CHANGE_ACCEPTED row, told to the human in one line,
-// and the work continues; the plan-approval and review-freeze fences stand
-// aside and log. `off`: every fence stands aside and logs. No value removes a
-// gate, alters a reviewer's verdict, deletes evidence, or lets an agent answer
-// for the human (human presence is the key holder, not a fence). The value is
+// and the work continues; the reviewer-scope fence stands aside and logs.
+// `off`: state-transition and reviewer-scope stand aside and log. Plan
+// approval and terminal review freeze remain mandatory under every policy
+// word; only the person's explicit per-work switch or the documented machine
+// escape hatch can lower them. No value removes a gate, alters a reviewer's
+// verdict, deletes evidence, or lets an agent answer for the human (human
+// presence is the key holder, not a fence). The value is
 // the intent's own state line when present, else the scope default; any memory
 // layer that declares strict wins over both and cannot be flipped from chat.
 //
@@ -30558,8 +30604,8 @@ export const GUARD_FENCE_LABELS: Record<GuardFence, string> = {
 
 /** The fences the policy word lowers by itself. */
 export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[] {
-  if (policy === "off") return ["plan-approval", "review-freeze", "state-transition", "reviewer-scope"];
-  if (policy === "relaxed") return ["plan-approval", "review-freeze"];
+  if (policy === "off") return ["state-transition", "reviewer-scope"];
+  if (policy === "relaxed") return ["reviewer-scope"];
   return [];
 }
 
@@ -30613,6 +30659,12 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     };
   }
   const tokens = splitKiroCommandArgs(text.slice(command[0].length).trim());
+  // Workspace commands own the whole invocation. In particular, never apply
+  // a trailing lowering flag to the currently active selection before a
+  // switch/create command resolves its destination.
+  if (parseWorkspaceCommand(tokens).kind !== "not-workspace") {
+    return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+  }
   const configForm = tokens[0]?.toLowerCase() === "config" && tokens[1]?.toLowerCase() === "set";
   const switches = new Map<GuardSwitchKey, GuardSwitch>();
   const settings = new Map<string, string>();

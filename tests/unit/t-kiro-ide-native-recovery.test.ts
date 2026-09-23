@@ -63,8 +63,8 @@ afterAll(() => {
   }
 });
 
-// A relaxed guard policy lowers the plan-approval and review-freeze fences by
-// design; a strict one lowers nothing. Both variants share every other detail.
+// Guard Policy never lowers Plan Approval. Both variants share every other
+// detail so native recovery proves the mandatory barrier under each value.
 function fixture(policy: "relaxed" | "strict" = "relaxed"): string {
   const project = mkdtempSync(join(scratch, "project-"));
   cpSync(join(runtimeRoot, "kiro-ide", ".kiro"), join(project, ".kiro"), {
@@ -188,8 +188,6 @@ function auditRows(project: string): string {
     .map((name) => readFileSync(join(audit, name), "utf-8")).join("\n");
 }
 
-const STOOD_ASIDE_LINE =
-  "Continuing past the plan-approval check because it is off for this piece of work";
 const LOWER_FENCE_SWITCH = "config set guard.plan-approval off";
 
 // GUARD_STOOD_ASIDE rows whose Guard is plan-approval.
@@ -199,18 +197,6 @@ function stoodAsideRows(project: string): number {
     block.includes("**Event**: GUARD_STOOD_ASIDE") &&
     block.includes("**Guard**: plan-approval")
   ).length;
-}
-
-// The stand-aside contract for a fence the guard policy has lowered: the write
-// is admitted with exit 0, one spoken line names the fence, and exactly one
-// GUARD_STOOD_ASIDE row records it.
-function expectStoodAside(
-  result: { code: number | null; stdout: string; stderr: string },
-  project: string,
-): void {
-  expect(result.code, result.stderr).toBe(0);
-  expect(result.stdout).toContain(STOOD_ASIDE_LINE);
-  expect(stoodAsideRows(project)).toBe(1);
 }
 
 // Drive the stale upstream directive through `next` and every receipt-continued
@@ -247,13 +233,13 @@ function sourceWriteOf(project: string) {
 }
 
 describe("native Kiro IDE recovery from a stale upstream directive", () => {
-  test("populated shell next can publish authority and a relaxed policy stands the plan-approval fence aside", () => {
+  test("populated shell next publishes authority but relaxed still enforces plan approval", () => {
     const project = fixture();
     publishAuthority(project);
-    // The fixture's relaxed policy lowers the plan-approval fence by the policy
-    // word alone, so the pre-approval source write stands aside, spoken once
-    // and recorded once, instead of being refused.
-    expectStoodAside(sourceWriteOf(project), project);
+    const blocked = sourceWriteOf(project);
+    expect(blocked.code, blocked.stdout).toBe(2);
+    expect(blocked.stderr).toContain(LOWER_FENCE_SWITCH);
+    expect(stoodAsideRows(project)).toBe(0);
   }, 120_000);
 
   test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {
@@ -322,10 +308,10 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(rows).toContain("DECISION_RECORDED");
     expect(rows).not.toContain("PLAN_APPROVAL_RECORDED");
     const sourceWrite = () => sourceWriteOf(project);
-    // The relaxed policy lowers the fence: the pre-approval write stands aside
-    // with one recorded row rather than being refused. The approval below is
-    // still what admits generation on the strict path.
-    expectStoodAside(sourceWrite(), project);
+    const beforeApproval = sourceWrite();
+    expect(beforeApproval.code, beforeApproval.stdout).toBe(2);
+    expect(beforeApproval.stderr).toContain(LOWER_FENCE_SWITCH);
+    expect(stoodAsideRows(project)).toBe(0);
     // Only the fixture's exact offered human choice may authorize this plan.
     const human = run(project, ["engine", "adapter", "kiro-ide", "record-human-turn"],
       { prompt: approveChoice }, true);
@@ -340,6 +326,8 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(JSON.parse(verified.stdout).ok).toBe(true);
     const generation = sourceWrite();
     expect(generation.code, generation.stderr).toBe(0);
+    expect(generation.stdout).toBe("");
+    expect(stoodAsideRows(project)).toBe(0);
   }, 120_000);
 
   test("a recorded recovery choice clears an interrupted native planning write", () => {

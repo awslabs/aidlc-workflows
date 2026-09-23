@@ -1126,9 +1126,9 @@ which of the five fences hold against an action no step of the running workflow 
 with a plain sentence naming what changed and asks for the approval again.
 `relaxed` and `off` record the change once as a `CHANGE_ACCEPTED` audit row, tell
 you in one line, and continue. On the fences, `strict` leaves all five up,
-`relaxed` lowers `plan-approval` and `review-freeze`, and `off` lowers those two
-plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
-by the policy word.
+`relaxed` lowers `reviewer-scope`, and `off` lowers `state-transition` and
+`reviewer-scope`. `plan-approval` and `review-freeze` remain mandatory under
+every policy word, and `human-presence` is never lowered by the policy word.
 
 Setting `guard-policy relaxed` or `guard-policy off` from chat is the person's
 move: they type `/aidlc --guard-policy relaxed` or the confirmation words
@@ -1140,9 +1140,9 @@ does not run the lowering setter itself.
 For `guard policy strict` or another plain-words request for strict, the conductor
 runs `config-change --guard-policy <strict|relaxed|off>` with `strict` at once,
 prints its output verbatim, and stops.
-If the harness has said this Kiro IDE build delivers no prompt text, make the
-notice's choice through the scope-file `guard_policy` or memory route instead
-of the words.
+If the harness has said this Kiro IDE build delivers no prompt text, say that
+active work cannot be lowered on that build; update Kiro IDE or start new work
+from a lower-default scope instead of inviting the confirmation words.
 In either the config or flags-first form, `--intent <name>` and `--space <name>`
 select the piece of work; omitted selectors use the hook payload session's
 workflow selection.

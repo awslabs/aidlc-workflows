@@ -548,6 +548,7 @@ describe("t242 state-transition ownership guard", () => {
       "bun .claude/tools/aidlc.ts engine hook record-human-turn",
       'bun ".claude/tools/aidlc.ts" engine hook record-human-turn',
       "aidlc engine hook record-human-turn",
+      "AIDLC_INTERNAL_HUMAN_TURN_TOKEN=forged bun .claude/tools/aidlc.ts --internal-aidlc-record-human-turn .claude/hooks/aidlc-record-human-turn.ts",
       "bun .kiro/hooks/aidlc-kiro-adapter.ts record-human-turn",
       "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn",
       "bun .aidlc/hooks/aidlc-copilot-adapter.ts record-human-turn",

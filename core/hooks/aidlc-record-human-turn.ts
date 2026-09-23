@@ -136,7 +136,11 @@ function extractQuestionText(value: unknown): string | null {
   return typeof input.question === "string" ? input.question : null;
 }
 
-export async function run(input: string): Promise<number> {
+// Deliberately not exported. This hook mints human authority, so importing the
+// module from project code must not expose a callable function that accepts a
+// fabricated UserPromptSubmit payload. Harnesses and the dispatcher execute it
+// as a separate process through the host hook registration.
+async function run(input: string): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   let sessionId = "";
@@ -257,6 +261,12 @@ try {
 return 0;
 }
 
-if (import.meta.main) {
+if (
+  import.meta.main ||
+  (
+    process.argv.includes("--internal-aidlc-record-human-turn") &&
+    (process.env.AIDLC_INTERNAL_HUMAN_TURN_TOKEN ?? "") !== ""
+  )
+) {
   process.exit(await run(await Bun.stdin.text()));
 }

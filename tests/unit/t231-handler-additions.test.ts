@@ -192,8 +192,9 @@ describe("t231 config get/list/set handlers", () => {
     expect(changed.stdout).toContain("Fence state-transition is already off");
     expect(renameNotices(changed.stderr)).toBe(0);
     // The seven settings the human names plus the four per-run fence switches,
-    // in the order config list prints them. relaxed lowers two fences by
-    // itself; the switch lowered a third; the rest read their default.
+    // in the order config list prints them. relaxed lowers reviewer scope by
+    // itself; the explicit switch lowered state transition; the mandatory
+    // lifecycle barriers retain their defaults.
     const expected = {
       depth: "Minimal",
       "test-strategy": "Comprehensive",
@@ -202,10 +203,10 @@ describe("t231 config get/list/set handlers", () => {
       sensors: "off (set by you)",
       learnings: "off (set by you)",
       "summary-confirmation": "off (set by you)",
-      "guard.plan-approval": "off (guard policy relaxed (set by you))",
-      "guard.review-freeze": "off (guard policy relaxed (set by you))",
+      "guard.plan-approval": "on (default)",
+      "guard.review-freeze": "on (default)",
       "guard.state-transition": "off (set by you)",
-      "guard.reviewer-scope": "on (default)",
+      "guard.reviewer-scope": "off (guard policy relaxed (set by you))",
     };
     for (const [key, value] of Object.entries(expected)) {
       const read = utility(["config-get", key], project, FENCE_ENV_CLEAR);
@@ -225,7 +226,11 @@ describe("t231 config get/list/set handlers", () => {
     const project = stateProject();
     expect(stateField(project, "Change Control")).toBe("strict (from scope feature)");
     expect(stateField(project, "Guard Policy")).toBe("");
-    const changed = dispatcher(["engine", "config", "set", "change-control", "relaxed"], project);
+    const changed = dispatcher(
+      ["engine", "config", "set", "change-control", "relaxed"],
+      project,
+      { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    );
     expect(changed.status, changed.stderr).toBe(0);
     expect(renameNotices(changed.stderr)).toBe(1);
     expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
@@ -280,7 +285,11 @@ describe("t231 config get/list/set handlers", () => {
     ["summary-confirmation", "off", "Summary Confirmation", "off (set by you)"],
   ])("engine config set accepts %s %s as the leading setting", (key, value, field, expected) => {
     const project = stateProject();
-    const changed = dispatcher(["engine", "config", "set", key, value], project);
+    const changed = dispatcher(
+      ["engine", "config", "set", key, value],
+      project,
+      key === "guard-policy" ? { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" } : {},
+    );
     expect(changed.status, changed.stderr).toBe(0);
     expect(renameNotices(changed.stderr)).toBe(0);
     expect(stateField(project, field)).toBe(expected);

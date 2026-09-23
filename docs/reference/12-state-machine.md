@@ -530,10 +530,11 @@ Guard Policy (`strict`, `relaxed`, `off`) decides two things. First, the
 consequence of an input change after a human approval or confirmation: `strict`
 reopens the approval with the existing remedy, while `relaxed` and `off` record
 the change and continue. Second, which authority fences stand aside for this
-piece of work: `strict` lowers none, `relaxed` lowers `plan-approval` and
-`review-freeze`, and `off` lowers those two plus `state-transition` and
-`reviewer-scope`. No value removes a gate, alters a reviewer's verdict, deletes
-evidence, lets an agent answer for a human, or lowers `human-presence`. A
+piece of work: `strict` lowers none, `relaxed` lowers `reviewer-scope`, and
+`off` lowers `state-transition` and `reviewer-scope`. Plan approval, terminal
+review freeze, and human presence remain enforced under every policy word. No
+value removes a gate, alters a reviewer's verdict, deletes evidence, or lets an
+agent answer for a human. A
 governed checkpoint reads the setting only when it meets such a change.
 Configuration reads and writes, `intent-create`, and status also resolve the
 relevant policy. An invalid memory `Mode:` is a validation error naming the file

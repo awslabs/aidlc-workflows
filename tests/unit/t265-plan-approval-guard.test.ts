@@ -23,6 +23,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -1369,7 +1370,7 @@ describe("t265b hook lifecycle", () => {
           "fixture", BUN,
         ], { cwd: proj, encoding: "utf8" });
         expect(actual.status, actual.stderr).toBe(0);
-        expect(JSON.parse(actual.stdout)).toBe(other);
+        expect(realpathSync(JSON.parse(actual.stdout))).toBe(realpathSync(other));
       } finally {
         rmSync(proj, { recursive: true, force: true });
         rmSync(other, { recursive: true, force: true });
