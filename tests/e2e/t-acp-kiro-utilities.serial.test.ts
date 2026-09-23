@@ -38,6 +38,7 @@
 // SPENDS Kiro credits — gated AIDLC_KIRO_ACP_LIVE=1, skip-with-reason
 // otherwise. Serial: one live session at a time.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -47,8 +48,10 @@ import { driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(60_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {

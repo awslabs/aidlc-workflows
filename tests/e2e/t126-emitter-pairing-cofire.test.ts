@@ -58,6 +58,7 @@
 //
 // It SPENDS TOKENS: driveAidlc runs the real workflow on Opus/Bedrock.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -69,14 +70,14 @@ import {
 } from "../harness/fixtures.ts";
 import { auditFilePathFor, driveAidlc } from "../harness/sdk-drive.ts";
 
-// Timeout budget. A full `/aidlc poc` is a multi-turn workflow on
-// Opus/Bedrock. Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds). The
-// timer is a WEDGE-BACKSTOP, not a budget — the pass condition is the on-disk
-// WORKFLOW_COMPLETED pair, never the clock. The drive aborts a hair before bun
-// kills the test so a stuck run surfaces a partial DriveResult to diagnose.
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 /** Seed the workflow through the same project-local utility the slash command
  * delegates to. This keeps the live SDK run focused on the co-fire golden path

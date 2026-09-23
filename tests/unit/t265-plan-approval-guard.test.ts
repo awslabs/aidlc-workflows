@@ -14,7 +14,7 @@
 //       its dispatch surface lives, and Kiro IDE documents the prose-only
 //       absence.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -23,6 +23,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -66,7 +67,9 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
@@ -533,6 +536,7 @@ function publishRestartRecovery(
 }
 
 function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
+  const started = performance.now();
   const result = spawnSync(
     BUN,
     [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
@@ -543,7 +547,15 @@ function recordRecoverySelection(proj: string, prompt = "Restart code-generation
       encoding: "utf-8",
     },
   );
-  expect(result.status, result.stderr).toBe(0);
+  expect(result.status, JSON.stringify({
+    prompt,
+    elapsedMs: Math.ceil(performance.now() - started),
+    status: result.status,
+    signal: result.signal,
+    error: result.error?.message,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  })).toBe(0);
 }
 
 function seedUnit(
@@ -742,6 +754,8 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // Seven source CLI invocations plus Git-backed fixture setup and approval
+  // fingerprints exceed Bun's 5s default on hosted macOS.
   test("a handoff that quotes the plan's excluded review appendix is refused; the brief command hands off the body", () => {
     const proj = scratchProject();
     try {
@@ -1025,7 +1039,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test("native redo requires the issued recovery's human selection and leaves generation closed", () => {
     const proj = scratchProject();
@@ -1094,7 +1108,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test("native backward recovery must match the actual current position", () => {
     const proj = scratchProject();
@@ -1144,6 +1158,8 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
+    // This history crosses six human-turn hooks and eight dispatch hooks. The
+    // hosted Windows 15s default expired partway through that sequence.
   });
 
   test("native reset checks the effective plan and rejects a forward target even with a reset direction", () => {
@@ -1171,9 +1187,11 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   for (const published of [false, true]) {
+    // Each publication state checks 72 commands in separate source-hook
+    // processes. Budget the whole matrix, preserving every admission check.
     test(`the shipped Bun entry point permits planning ${published ? "with pending approval" : "before directive publication"}`, () => {
       const proj = scratchProject();
       try {
@@ -1212,6 +1230,15 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine testing-posture verify --stage-level`,
           `bun ${entry} engine log decision --stage code-generation --checkpoint plan-approval`,
           `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval`,
+          `bun ${entry} engine bolt checkpoint --unit todo-core`,
+          `bun ${entry} engine bolt checkpoint --action status --unit todo-core`,
+          `bun ${entry} engine bolt checkpoint --action ask --unit todo-core --kind unit --session consent`,
+          `bun ${entry} engine bolt checkpoint --action approve --unit todo-core --user-input Approve`,
+          `bun ${entry} engine bolt checkpoint --action reject --unit todo-core --user-input "Request Changes"`,
+          `bun ${entry} engine bolt swarm-checkpoint --action status --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action ask --batch 1 --units todo-core,auth --session consent`,
+          `bun ${entry} engine bolt swarm-checkpoint --action approve --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action reject --batch 1 --units todo-core,auth`,
         ]) {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
@@ -1220,6 +1247,12 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
           `bun ${entry} engine state advance`,
           `bun ${entry} engine testing-posture begin --stage-level`,
+          `bun ${entry} engine bolt checkpoint --action verify --unit todo-core --check-cmd "touch src/inline.ts"`,
+          `bun ${entry} engine bolt checkpoint --action`,
+          `bun ${entry} engine bolt checkpoint --action status --action verify --unit todo-core`,
+          `bun ${entry} engine bolt swarm-checkpoint --action verify --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action status > src/inline.ts`,
+          `bun ${entry} engine bolt swarm-checkpoint --action status; printf code > src/inline.ts`,
           `bun ${entry} engine log decision --stage code-generation --checkpoint summary-confirmation`,
           `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation`,
           `bun ${entry} system lifecycle uninstall --yes`,
@@ -1255,8 +1288,112 @@ describe("t265b hook lifecycle", () => {
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }
-    }, 30000);
+    });
   }
+
+  test("a redundant absolute cd permits recovery without changing execution context", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
+      const prefix = `cd "${proj}" && `;
+      for (const command of [
+        `${prefix}bun .claude/tools/aidlc.ts engine orchestrate next`,
+        `${prefix}bun .claude/tools/aidlc.ts engine orchestrate continue stage-rules-token`,
+        `${prefix}bun .claude/tools/aidlc-orchestrate.ts next`,
+        `cd -- "${proj}" && bun .claude/tools/aidlc.ts engine orchestrate next`,
+      ]) {
+        const result = runHook(proj, { ...BASH(command), cwd: proj });
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      mkdirSync(join(proj, "other"), { recursive: true });
+      for (const command of [
+        `${prefix}echo code > src/inline.ts`,
+        `${prefix}bun .claude/tools/aidlc.ts engine orchestrate next; echo code > src/inline.ts`,
+        `cd "${join(proj, "other")}" && bun .claude/tools/aidlc.ts engine orchestrate next`,
+        `env cd "${proj}" && bun .claude/tools/aidlc.ts engine orchestrate next`,
+        `cd "${proj}/." && bun .claude/tools/aidlc.ts engine orchestrate next`,
+        'cd "$PWD" && bun .claude/tools/aidlc.ts engine orchestrate next',
+        "cd && bun .claude/tools/aidlc.ts engine orchestrate next",
+      ]) {
+        expect(runHook(proj, { ...BASH(command), cwd: proj }).code, command).toBe(2);
+      }
+      const globCwd = join(proj, "literal[12]");
+      mkdirSync(globCwd);
+      const globCommand = `cd ${globCwd} && bun "${join(proj, ".claude", "tools", "aidlc.ts")}" engine orchestrate next`;
+      expect(runHook(proj, { ...BASH(globCommand), cwd: globCwd }).code, globCommand).toBe(2);
+      const suffixed = `${proj}\u00a0`;
+      mkdirSync(suffixed);
+      try {
+        const changedByBlank = `cd "${proj}"\u00a0 && bun .claude/tools/aidlc.ts engine orchestrate next`;
+        expect(runHook(proj, { ...BASH(changedByBlank), cwd: proj }).code).toBe(2);
+        const actual = spawnSync("bash", [
+          "-c", 'cd "$1"\u00a0 && "$2" -e \'process.stdout.write(JSON.stringify(process.cwd()))\'',
+          "fixture", proj, BUN.replaceAll("\\", "/"),
+        ], { cwd: proj, encoding: "utf8" });
+        expect(actual.status, actual.stderr).toBe(0);
+        expect(JSON.parse(actual.stdout).endsWith("\u00a0")).toBe(true);
+      } finally {
+        rmSync(suffixed, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "a removed shell continuation cannot authorize a different cwd",
+    () => {
+      const original = scratchProject();
+      const proj = `${original}\nline`;
+      const other = `${original}line`;
+      renameSync(original, proj);
+      mkdirSync(other);
+      try {
+        seedState(proj);
+        const operand = proj.replace(/[\\$`"]/g, "\\$&").replaceAll("\n", "\\\n");
+        const command = `cd "${operand}" && bun .claude/tools/aidlc.ts engine orchestrate next`;
+        expect(runHook(proj, { ...BASH(command), cwd: proj }).code).toBe(2);
+        const actual = spawnSync("bash", [
+          "-c", `cd "${operand}" && "$1" -e 'process.stdout.write(JSON.stringify(process.cwd()))'`,
+          "fixture", BUN,
+        ], { cwd: proj, encoding: "utf8" });
+        expect(actual.status, actual.stderr).toBe(0);
+        expect(JSON.parse(actual.stdout)).toBe(other);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+        rmSync(other, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows cwd casing preserves recovery without authorizing workspace changes",
+    () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const cwd = proj.toLowerCase();
+        expect(cwd).not.toBe(proj);
+        for (const command of [
+          "bun .claude/tools/aidlc.ts engine orchestrate next",
+          "bun .claude/tools/aidlc.ts engine orchestrate continue stage-rules-token",
+        ]) {
+          const result = runHook(proj, { ...BASH(command), cwd });
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+        }
+        for (const command of [
+          "echo code > src/inline.ts",
+          "bun .claude/tools/aidlc.ts engine orchestrate next; echo code > src/inline.ts",
+          "bun other/aidlc.ts engine orchestrate next",
+        ]) {
+          expect(runHook(proj, { ...BASH(command), cwd }).code, command).toBe(2);
+        }
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("planning through the Bun entry point requires a real installed file", () => {
     const proj = scratchProject();
@@ -1276,6 +1413,8 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // This transition checks 53 hook invocations against the same authority
+  // before and after approval; its deadline covers the full process sequence.
   test("zero-unit inline generation is refused before approval and allowed after approval", () => {
     const proj = scratchProject();
     try {
@@ -1339,11 +1478,23 @@ describe("t265b hook lifecycle", () => {
         "aidlc engine log answer --stage code-generation --checkpoint plan-approval",
         "aidlc engine log decision --checkpoint summary-confirmation --stage code-generation --checkpoint plan-approval",
         "aidlc.exe engine testing-posture render",
+        "aidlc engine bolt checkpoint --action status --unit todo-core",
+        "aidlc engine bolt checkpoint --action ask --unit todo-core --kind skeleton --session consent",
+        "aidlc engine bolt checkpoint --action approve --unit todo-core",
+        "aidlc engine bolt checkpoint --action reject --unit todo-core",
+        "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units todo-core,auth",
+        "aidlc engine bolt swarm-checkpoint --action ask --batch 1 --units todo-core,auth --session consent",
+        "aidlc engine bolt swarm-checkpoint --action approve --batch 1 --units todo-core,auth",
+        "aidlc engine bolt swarm-checkpoint --action reject --batch 1 --units todo-core,auth",
       ]) {
         expect(runHook(proj, BASH(command)).code, command).toBe(0);
       }
       for (const command of [
         "aidlc engine testing-posture begin --stage-level",
+        "aidlc engine bolt checkpoint --action verify --unit todo-core --check-cmd 'touch src/inline.ts'",
+        "aidlc engine bolt checkpoint --action status --action verify --unit todo-core",
+        "aidlc engine bolt start --name todo-core",
+        "aidlc engine bolt swarm-checkpoint --action status > src/inline.ts",
         "aidlc engine log decision --stage code-generation --checkpoint summary-confirmation",
         "aidlc engine log decision --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation",
         "aidlc engine log review --stage code-generation",
@@ -1404,8 +1555,10 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
+  // Keep real Git-backed authority/fingerprint checks and both hook processes;
+  // the aggregate fixture work can exceed Bun's 5s default on hosted macOS.
   test("a conductor-authored Approve Plan markdown answer has no authority receipt", () => {
     const proj = scratchProject();
     try {
@@ -1663,7 +1816,7 @@ describe("t265b hook lifecycle", () => {
       ).toBe(0);
 
       // The challenge does not require exact option labels, so "1" is an offered
-      // choice by offeredPlanApprovalChoice. The reply must survive extraction to
+      // choice by offeredCheckpointChoice. The reply must survive extraction to
       // get there: JSON-parsing it turned it into a number and reported no text.
       const numeric = spawnSync(
         BUN,
@@ -1883,7 +2036,7 @@ describe("t265b hook lifecycle", () => {
       releaseAuditLock(proj);
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 15000);
+  });
 
   test("missing and legacy directive markers fail closed instead of selecting stage-level authority", () => {
     const proj = scratchProject();

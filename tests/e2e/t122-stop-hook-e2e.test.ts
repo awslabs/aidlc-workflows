@@ -124,6 +124,7 @@
 // Bedrock. Tests 4-6 are deterministic (no model in the loop) but spawn the
 // real engine, so they get a generous-but-bounded spawn timeout.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -146,15 +147,14 @@ import {
 import { driveAidlc } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget — the .sh allotted 420s for the live turn (a completed
-// workflow + a read-only status print is a single bounded turn). The driver
-// aborts ~15s before bun's per-test cap so a stuck turn surfaces a partial
-// DriveResult rather than an opaque hang. Direct hook invocations are bounded
-// at 60s each (the hook spawns the real engine once).
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "420", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 420) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 420) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 const HOOK_SPAWN_TIMEOUT_MS = 60_000;
 
 const BUN = process.execPath;

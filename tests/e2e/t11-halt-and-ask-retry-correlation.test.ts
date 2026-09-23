@@ -35,8 +35,8 @@
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named expect):
 //   .sh test 1 (l42) first info hit returns a path
-//        -> "1: first info hit returns a path" (STRONGER: JSON .path is a
-//           non-empty string ending in .../bolt-r, not just substring `"path":`)
+//        -> "1: first info hit returns a path" (STRONGER: JSON .path equals
+//           the intent-scoped worktree path, not just substring `"path":`)
 //   .sh test 2 (l52) info returns the SAME path across retry attempts
 //        -> "2: info returns the SAME path across retry attempts" (same: PATH1
 //           === PATH2, parsed from JSON not sed)
@@ -58,9 +58,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { worktreePath } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
@@ -91,7 +93,7 @@ function run(tool: string, args: string[], cwd: string): CliResult {
 }
 
 const wtPath = (p: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${SLUG}`);
+  worktreePath(p, fixtureIntentId8(p), SLUG);
 /** Concatenate every audit shard (audit/*.md) for the seeded record. */
 const auditText = (p: string): string => {
   const dir = seededAuditDir(p);
@@ -122,10 +124,7 @@ let info2: CliResult;
 
 beforeAll(() => {
   fixture = setupWorktreeFixture();
-  // Seed a state file into the default record so the active-intent cursor
-  // resolves and the WORKTREE_CREATED/BOLT_FAILED audit lands in the per-intent
-  // record (the fixture's record is stateless; without aidlc-state.md the cursor
-  // is rejected and the audit lands at the bare space root).
+  // Put the selected intent in Construction for the retry lifecycle.
   writeFileSync(seededStateFile(fixture), "- **Current Stage**: code-generation\n", "utf-8");
 
   // --- Setup: create the worktree once (the only WORKTREE_CREATED). ---
@@ -165,9 +164,7 @@ describe("t11 halt-and-ask retry correlation (migrated from t11-halt-and-ask-ret
     // its JSON .path is a non-empty string resolving the slug's worktree.
     expect(info1.status).toBe(0);
     const p1 = infoPath(info1);
-    expect(typeof p1).toBe("string");
-    expect(p1.length).toBeGreaterThan(0);
-    expect(p1.endsWith(join(".aidlc", "worktrees", `bolt-${SLUG}`))).toBe(true);
+    expect(p1).toBe(wtPath(fixture));
   });
 
   test("2: info returns the SAME path across retry attempts [.sh test 2]", () => {
@@ -188,7 +185,7 @@ describe("t11 halt-and-ask retry correlation (migrated from t11-halt-and-ask-ret
   });
 
   test("5: worktree preserved on disk across multiple failures [.sh test 5]", () => {
-    // .sh: assert_dir_exists .aidlc/worktrees/bolt-r — preservation invariant:
+    // Preservation invariant: the original worktree survives every retry;
     // failure (halt-and-ask default) never tears the worktree down.
     expect(existsSync(wtPath(fixture))).toBe(true);
   });
@@ -197,8 +194,7 @@ describe("t11 halt-and-ask retry correlation (migrated from t11-halt-and-ask-ret
     // .sh: grep -c "Bolt slug.*r$" == 3 — every halt-and-ask-correlation emit
     // (the WORKTREE_CREATED + both BOLT_FAILED) carries `**Bolt slug**: r` for
     // doctor/AUQ correlation. STRONGER — match the exact field line, not a
-    // loose `.*r$` regex that could also match a `Worktree path` ending in
-    // `bolt-r`.
+    // loose `.*r$` regex that could also match a Worktree path ending in the slug.
     const slugLines = auditText(fixture)
       .split("\n")
       .filter((l) => l === `**Bolt slug**: ${SLUG}`).length;

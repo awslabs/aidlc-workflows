@@ -464,5 +464,8 @@ export function emitMetricForAuditEvent(
 }
 
 if (import.meta.main && process.argv[2] === METRIC_WORKER_ARG) {
-  void sendMetricFromStdin();
+  // Audit lazily requires this module, so it must remain synchronous to load.
+  // Keep the standalone worker alive until its pending stdin/fetch work settles.
+  const keepAlive = setInterval(() => {}, 1_000);
+  void sendMetricFromStdin().finally(() => clearInterval(keepAlive));
 }

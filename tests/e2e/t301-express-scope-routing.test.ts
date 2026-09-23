@@ -4,7 +4,7 @@
 // live harness variables: every assertion crosses the shipped CLI boundary and
 // reads the compiled routing result or the state written by intent-create.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -19,7 +19,9 @@ import {
   runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -39,8 +41,8 @@ const EXPRESS_STAGES = [
   "observability-setup",
 ].sort();
 
-afterAll(() => {
-  for (const project of projects) cleanupTestProject(project);
+afterEach(() => {
+  while (projects.length > 0) cleanupTestProject(projects.pop()!);
 });
 
 function project(): string {
@@ -214,12 +216,32 @@ function runThroughBuild(p: string): void {
   expect(stateField(p, "Lifecycle Phase")).toBe("OPERATION");
 }
 
-function detectedScope(p: string, input: string): {
+function detectedScope(input: string): {
   scope: string;
   source: string;
 } {
+  const fixtureStarted = performance.now();
+  const p = project();
+  const fixtureMs = Math.ceil(performance.now() - fixtureStarted);
+  console.error(`t301 detect-scope fixture: ${JSON.stringify({ input, fixtureMs })}`);
+  const childStarted = performance.now();
   const result = utility(p, ["detect-scope", "--from-text", "--input", input]);
-  expect(result.status).toBe(0);
+  const diagnostic = JSON.stringify({
+    input,
+    fixtureMs,
+    childMs: Math.ceil(performance.now() - childStarted),
+    status: result.status,
+    signal: result.signal,
+    error: result.error ? {
+      message: result.error.message,
+      code: (result.error as NodeJS.ErrnoException).code,
+    } : null,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  });
+  console.error(`t301 detect-scope child: ${diagnostic}`);
+  expect(result.error, diagnostic).toBeUndefined();
+  expect(result.status, diagnostic).toBe(0);
   return JSON.parse(result.stdout.trim()) as {
     scope: string;
     source: string;
@@ -228,7 +250,7 @@ function detectedScope(p: string, input: string): {
 
 describe("t301 express scope routing (deterministic CLI journey)", () => {
   test('keyword "express" routes to express', () => {
-    expect(detectedScope(project(), "express")).toMatchObject({
+    expect(detectedScope("express")).toMatchObject({
       scope: "express",
       source: "keyword",
     });
@@ -261,7 +283,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
   });
 
   test("freeform text with no scope keyword falls back to the classic default", () => {
-    expect(detectedScope(project(), "build a simple task tracker")).toMatchObject(
+    expect(detectedScope("build a simple task tracker")).toMatchObject(
       {
         scope: "classic",
         source: "freeform",
@@ -289,7 +311,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
     expect(readFileSync(activeStatePath(p), "utf-8")).toContain(
       "- **Status**: Completed",
     );
-  }, 30000);
+  }); // Seven next/continue handshakes plus six reports across the full journey.
 
   test("engine completes the Express deploy tail using explicit workspace fallbacks", () => {
     const p = project();
@@ -330,5 +352,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
     expect(readFileSync(activeStatePath(p), "utf-8")).toContain(
       "- **Status**: Completed",
     );
-  }, 30000);
+    // Includes three Operation approvals and their artifacts. Windows reached
+    // observability approval when the previous 60s case deadline killed report.
+  });
 });

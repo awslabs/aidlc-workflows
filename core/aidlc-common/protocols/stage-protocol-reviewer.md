@@ -83,7 +83,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    project-relative path, under `<record>/.aidlc-engine/reviews/`, where this
    request's review is written. The request opens that slot (an earlier draft
    left there by an incomplete dispatch of the same iteration is removed), so
-   the file the reviewer leaves is this dispatch's review and no other.
+   the file the reviewer leaves is this dispatch's review and no other. It also
+   returns `recordVerdict`, the exact command step 3 runs to close this request
+   (the same request command with `--verdict <READY|NOT-READY>` added): a
+   request left open refuses the stage completion later, for a reason that does
+   not name it.
 
    `directive.review_artifact` names the one required Markdown output the
    review is about: the record is keyed to it, the gate names it as the
@@ -126,14 +130,14 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
    **Reviewer read scope.** The reviewer's scope is the current unit's artifacts plus the passed contract paths. On a per-unit stage the reviewer MUST NOT read other units' `construction/<other-unit>/` content through any tool - not by opening files, and not via grep, glob, or shell patterns that span sibling unit paths (a `construction/*/` glob is a sibling read, not a search) - except to spot-check an integration point the current unit's design explicitly names, and only the owning file, resolved via the shared contracts rather than by browsing or searching the sibling's directory. Cross-unit contract verification runs against the shared inception artifacts passed above, not against a sweep of sibling units' design prose.
 
-   **Dispatch record (per-unit stages; enforcement-capable harnesses only).** This record is required only when the current harness registers reviewer-scope PreToolUse enforcement (Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, and GitHub Copilot today). Immediately before invoking a per-unit reviewer (`directive.unit` present) on one of those harnesses, write `<record>/.aidlc-engine/reviewer-dispatch.json`:
+   **Dispatch record (per-unit reviews; enforcement-capable harnesses only).** This record is required only when the current harness registers reviewer-scope PreToolUse enforcement (Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, and GitHub Copilot today). Immediately before invoking a per-unit reviewer - `directive.unit` present, or one unit of an `invoke-swarm` reviewed under the swarm module's autonomous reviewer boundary - on one of those harnesses, write `<record>/.aidlc-engine/reviewer-dispatch.json`:
 
    ```json
-   {"reviewer": "<directive.reviewer>", "stage": "<stage slug>", "unit": "<directive.unit>",
+   {"reviewer": "<directive.reviewer>", "stage": "<stage slug>", "unit": "<directive.unit, or the swarm unit under review>",
     "exempt": ["<each resolved directive.consumes path>", "<stage file path>", "<Q&A file path>"]}
    ```
 
-   When the current unit's design explicitly names an integration point in a sibling unit's file, resolve that single owning file via the shared contracts and append its path to `exempt` - the record is where the spot-check carve-out is granted. The `stage` field appears verbatim in any `REVIEWER_SCOPE_BLOCKED` audit row; use the current stage slug. The reviewer-scope PreToolUse hook reads this record to enforce the read-scope bound deterministically while the review is in flight; on a NOT-READY re-invoke (step 3 back to step 1), write a fresh record. Single-stage reviews (no `directive.unit`) write no record. On a harness without reviewer-scope enforcement (Kiro IDE today), do not write the record; the reviewer read-scope bound remains mandatory prose in the delegated task and reviewer persona.
+   When the current unit's design explicitly names an integration point in a sibling unit's file, resolve that single owning file via the shared contracts and append its path to `exempt` - the record is where the spot-check carve-out is granted. The `stage` field appears verbatim in any `REVIEWER_SCOPE_BLOCKED` audit row; use the current stage slug. The reviewer-scope PreToolUse hook reads this record to enforce the read-scope bound deterministically while the review is in flight; on a NOT-READY re-invoke (step 3 back to step 1), write a fresh record. Single-stage and other no-unit reviews write no record; under a swarm the record is per unit - written before that unit's reviewer and deleted at its step 3 before the next unit's review begins. The record always lives in the main workspace's intent record - the path the conductor's reviewer-scope hook resolves - never in the unit's worktree, even though `--project-dir` targets the worktree for the review request and receipt; the reviewer's tool calls run under the conductor's hooks, and the hook judges `construction/<unit>/` tokens in worktree paths the same way. On a harness without reviewer-scope enforcement (Kiro IDE today), do not write the record; the reviewer read-scope bound remains mandatory prose in the delegated task and reviewer persona.
 
    If that dispatch fails, times out, or ends without a recorded verdict - the
    session died, or the reviewer returned an incomplete attempt (step 3: no
@@ -349,10 +353,42 @@ re-checked.`).
 > `aidlc-swarm.ts prepare` step for that Unit with the original batch/base/repo
 > arguments. The fresh worktree and `BOLT_STARTED` boundary reset review
 > accounting without claiming convergence. Never synthesize `GATE_REJECTED`.
-> The discard parks tracked files, non-ignored untracked files, and reviewed
-> source refs before removing the live checkout and branch. Recover the parked
-> work with `{{INVOKE}} engine worktree restore --slug <slug>`; restoration uses
-> a separate checkout and does not reinstate the old review authority.
+> The discard parks tracked files and non-ignored untracked files (or the
+> remaining branch tip when the checkout is gone) plus reviewed source refs
+> before removing the live checkout and branch. When present, the returned
+> `restore_operation` recovers the parked work in a separate checkout without
+> reinstating the old review authority. If only review evidence remained, there
+> are no saved working files to restore, so neither `restore_operation` nor
+> `restore_hint` is returned.
+>
+> **After a successful retry discard.** After the `--discard` abort succeeds and
+> confirms the old attempt was parked, but before rerunning `prepare`, use this
+> SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+> use `I`, never implying a human remedy choice that did not happen. Do not
+> announce a saved snapshot if the abort failed or did not park an attempt.
+>
+> Select `[saved-files text]` from the returned `parked_mode`:
+>
+> - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+> - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+> - `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+> - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+>
+> **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+>
+> When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+>
+> If the human later asks for that attempt back, use the saved abort result's
+> `restore_operation`: invoke its `worktree` route through
+> `{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+> as a separate argv argument. Never join those arguments into a shell command or
+> rebuild a slug-only selection. `restore_hint` is human display text only, never
+> an execution input. If safe rendering fails (for example, an invalid harness
+> directory), the hint is omitted and `restore_hint_error` explains why; the
+> operation remains available and the restoration offer still applies.
+> After restoration succeeds, announce the returned restored path plainly:
+> **SAY:** "I restored the previous attempt at [returned restored path]."
+> Restoration does not resume the old attempt or make its review current.
 
 ### What the reviewer does NOT do
 

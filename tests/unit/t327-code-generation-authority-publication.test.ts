@@ -1,6 +1,6 @@
 // covers: function:advanceContinuationCursor, function:writeActiveDirectiveMarker, function:writePlanApprovalLegacyOffer, function:readKiroIdeLegacyPlanApprovalHost, function:writePlanApprovalLegacyRecoveryChallenge, function:readPlanApprovalLegacyRecoveryChallenge, function:writePlanApprovalLegacyRecoveryResponse, function:readPlanApprovalLegacyRecoveryResponse, function:clearPlanApprovalLegacyRecovery, subcommand:aidlc-orchestrate:continue
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   cpSync,
   readdirSync,
@@ -15,6 +15,8 @@ import {
   markKiroIdeLegacyPlanApprovalHost,
   readPlanApprovalChallenge,
   readPlanApprovalLegacyOffer,
+  workspaceSourceFingerprint,
+  workspaceSourceState,
   writePlanApprovalChallenge,
 } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -43,12 +45,16 @@ interface Directive {
 }
 
 function initGitBaseline(dir: string): void {
+  const sourceBefore = workspaceSourceState(dir);
+  expect(sourceBefore).not.toBeNull();
+  // This fixture contains only framework files until the test mutates source.
+  // An empty baseline avoids indexing two complete harness distributions.
+  expect([...sourceBefore!.listing.keys()]).toEqual([]);
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"],
-    ["add", "-A"],
-    ["commit", "-qm", "baseline"],
+    ["commit", "--allow-empty", "-qm", "baseline"],
   ]) {
     const result = Bun.spawnSync(["git", ...args], {
       cwd: dir,
@@ -57,6 +63,7 @@ function initGitBaseline(dir: string): void {
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   }
+  expect(workspaceSourceFingerprint(dir)).toBe(sourceBefore!.fingerprint);
 }
 
 function project(harness: "claude" | "kiro-ide" = "claude"): {
@@ -241,8 +248,8 @@ function recoverLegacyCapability(
   return runToCodeGeneration(installed, env);
 }
 
-afterAll(() => {
-  for (const dir of projects) cleanupTestProject(dir);
+afterEach(() => {
+  while (projects.length) cleanupTestProject(projects.pop()!);
 }, 30000);
 
 describe("t327 Code Generation authority publication", () => {
@@ -385,7 +392,7 @@ describe("t327 Code Generation authority publication", () => {
     expect(
       readPlanApprovalChallenge(installed.dir, sessionA ?? ""),
     ).toBeNull();
-  }, 30000);
+  }, 60_000); // Three real IDE hosts plus continuation/recovery calls exceeded 30s on Windows.
 
   test("IPC-only legacy ownership blocks while live and permits human recovery after endpoint removal", () => {
     const installed = project("kiro-ide");

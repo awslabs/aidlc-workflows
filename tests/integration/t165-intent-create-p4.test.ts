@@ -14,6 +14,7 @@
 // updateIntentStatus) is asserted in-process against the dist lib (pure reads/
 // transforms), then cross-checked against the spawned `intent`/`space --json`.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
@@ -22,6 +23,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,7 +57,7 @@ const BUN = process.execPath;
 // run that comfortably exceeds bun's 5 s default, so pin the file-wide budget
 // the way t188/t224 do.
 const TIMEOUT_MS = 60_000;
-setDefaultTimeout(TIMEOUT_MS);
+setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
@@ -790,6 +792,21 @@ describe("t165 P7 intent repo set captured at creation", () => {
     const r = util(["intent-create", "--scope", "feature"]);
     expect(r.status).toBe(0);
     expect(readIntentRegistry(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
+  });
+
+  test("sibling auto-discovery follows a symlinked immediate child Git repository", () => {
+    const external = mkdtempSync(join(tmpdir(), "aidlc-linked-repo-"));
+    try {
+      expect(Bun.spawnSync(["git", "init", "-q", external]).exitCode).toBe(0);
+      makeRepo(proj, "svc-api");
+      symlinkSync(external, join(proj, "svc-web"), process.platform === "win32" ? "junction" : "dir");
+      const r = util(["intent-create", "--scope", "feature"]);
+      expect(r.status, r.out).toBe(0);
+      expect(readIntentRegistry(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
+      expect(listIntents(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
   });
 
   test("no --repos and no sibling repos → no repos row (legacy single-repo inference)", () => {

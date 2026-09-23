@@ -46,6 +46,7 @@
 // hard fail). LIVE-SDK tier: runs on the integration tier behind the claude
 // gate, NOT the fast deterministic tier.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import {
   cleanupTestProject,
@@ -56,8 +57,10 @@ import {
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1200", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1200) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1200) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 // The single remaining stage in state-final-stage.md (feedback-optimization at
 // [-]). The row literal carries a U+2014 em dash COPIED VERBATIM from the

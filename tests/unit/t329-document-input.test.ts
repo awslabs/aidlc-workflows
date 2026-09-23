@@ -253,8 +253,11 @@ describe("t329 project-description and document-input boundaries", () => {
 
   test("metacharacters remain filename data and never reach shell evaluation", () => {
     const dir = project();
-    const filename =
-      "brief ' \" $(touch shell-expanded) `touch backtick-expanded`.md";
+    // Windows forbids a double quote in filenames. Exercise its legal shell
+    // metacharacters too, while retaining the original POSIX filename intact.
+    const filename = process.platform === "win32"
+      ? "brief ' $(touch shell-expanded) `touch backtick-expanded` & echo %PATH% !literal!.md"
+      : "brief ' \" $(touch shell-expanded) `touch backtick-expanded`.md";
     writeFileSync(join(dir, filename), "# Literal filename\n");
     writeRequest(dir, filename);
 

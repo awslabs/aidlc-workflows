@@ -1423,8 +1423,10 @@ describe("t230 dispatcher global flag translation", () => {
     const updated = readFileSync(profile, "utf-8");
     expect(updated.match(/^# BEGIN AI-DLC:PATH$/gm)).toHaveLength(1);
     expect(updated.match(/^# END AI-DLC:PATH$/gm)).toHaveLength(1);
-    expect(updated).toContain(`export PATH="${replacementBin}:$PATH"`);
-    expect(updated).not.toContain(`export PATH="${bin}:$PATH"`);
+    // The profile is shell source: literal Windows backslashes are escaped
+    // inside its double-quoted PATH assignment.
+    expect(updated).toContain(`export PATH="${replacementBin.replaceAll("\\", "\\\\")}:$PATH"`);
+    expect(updated).not.toContain(`export PATH="${bin.replaceAll("\\", "\\\\")}:$PATH"`);
   });
 
   test("install-profile cannot overwrite machine control files", () => {

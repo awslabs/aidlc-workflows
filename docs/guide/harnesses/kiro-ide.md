@@ -6,6 +6,11 @@ the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules —
 is byte-shared across every harness; only the shell (skills, agent surfaces,
 hook wiring, activation) differs.
 
+Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
+whose `inclusion: always` frontmatter loads it automatically. The root
+`AGENTS.md` block is harness-neutral and shared with other installed harnesses;
+engine directories must still differ (Kiro CLI and Kiro IDE cannot share `.kiro/`).
+
 > [!IMPORTANT]
 > **Run AI-DLC on Kiro IDE with Claude Opus 4.8.** The conductor drives a
 > multi-step ritual per stage — clarifying questions, artifact generation, a
@@ -135,6 +140,7 @@ Open `your-project/` in Kiro IDE. The install ships:
 - `.kiro/steering/aidlc-active-memory.md` — always-included IDE steering whose
   live file references preload the active-space memory files for both the
   conductor and delegated agents.
+- `.kiro/steering/aidlc-onboarding.md` — always-included harness setup and commands.
 - `.kiro/hooks/aidlc-*.json` — the framework hooks registered in the IDE's
   native v2 hook format. They appear in the IDE's Agent Hooks panel. (Kiro IDE
   1.x no longer executes the legacy `.kiro.hook` format the harness shipped

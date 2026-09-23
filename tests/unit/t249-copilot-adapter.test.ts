@@ -33,7 +33,7 @@
 // (Same idiom as codex's t149.)
 
 import { createHash } from "node:crypto";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -65,7 +65,9 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const COPILOT_TREE = join(REPO_ROOT, "dist", "copilot", ".aidlc");
 const FIXTURES = JSON.parse(
@@ -176,7 +178,16 @@ function orchestrationProject(): string {
   return dir;
 }
 
+const COMPILED_COVERAGE_REQUIRED =
+  process.env.AIDLC_REQUIRE_COMPILED_COVERAGE === "1";
 function compiledBinary(): string | null {
+  const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
+  if (compiledDir) {
+    const artifact = join(compiledDir, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    return existsSync(artifact) ? realpathSync(artifact) : null;
+  }
+  // A shard must exercise this run's verified build, never a stale local one.
+  if (COMPILED_COVERAGE_REQUIRED) return null;
   const explicit = process.env.AIDLC_TEST_COMPILED_EXECUTABLE;
   if (explicit && existsSync(explicit)) return realpathSync(explicit);
   const results = join(REPO_ROOT, "build", "binaries", "build-results-native.json");
@@ -186,8 +197,6 @@ function compiledBinary(): string | null {
   return artifact && existsSync(artifact) ? realpathSync(artifact) : null;
 }
 const COMPILED_BINARY = compiledBinary();
-const COMPILED_COVERAGE_REQUIRED =
-  process.env.AIDLC_REQUIRE_COMPILED_COVERAGE === "1";
 
 function readAudit(dir: string): string {
   const auditDir = seededAuditDir(dir);
@@ -737,16 +746,22 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(r.stdout.trim()).toBe("");
   });
 
-  test.skipIf(process.platform === "win32")(
+  test.skipIf(process.platform === "win32" && !COMPILED_BINARY)(
     "11a: compiled executable delegation runs core hooks through the engine route",
     () => {
       const dir = scratchProject(true);
-      const executable = join(dir, "aidlc-native-stub");
-      writeFileSync(
-        executable,
-        `#!/bin/sh\nexec bun ${JSON.stringify(join(dir, ".aidlc", "tools", "aidlc.ts"))} "$@"\n`,
-        { mode: 0o755 },
-      );
+      // Windows cannot execute the POSIX shebang stub. Use the same native
+      // dispatcher already required by the compiled lifecycle cases below.
+      const executable = process.platform === "win32"
+        ? COMPILED_BINARY!
+        : join(dir, "aidlc-native-stub");
+      if (process.platform !== "win32") {
+        writeFileSync(
+          executable,
+          `#!/bin/sh\nexec bun ${JSON.stringify(join(dir, ".aidlc", "tools", "aidlc.ts"))} "$@"\n`,
+          { mode: 0o755 },
+        );
+      }
 
       const r = runAdapter(
         dir,
@@ -755,7 +770,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         { AIDLC_COMPILED_EXECUTABLE: executable },
       );
 
-      expect(r.code).toBe(0);
+      expect(r.code, r.stderr).toBe(0);
       expect(
         existsSync(
           join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "validate-state.last"),
@@ -1144,7 +1159,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       conductorOutput.hookSpecificOutput?.updatedInput?.command,
     );
     expect(conductorOutput.modifiedArgs?.command).toContain("--aidlc-attempt-id");
-  }, 30000);
+  });
 
   test("20: parallel Copilot workers remain lifecycle-blocked when exact attribution is ambiguous", () => {
     const dir = scratchProject(true);
@@ -1354,7 +1369,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(repeated).owner_epoch).toBe(sameEpoch);
     expect(runAdapter(repeated, "continue-workflow", { ...FIXTURES.stop, cwd: repeated, session_id: "same-owner", stop_hook_active: true }).stdout).toBe("");
     expect(marker(repeated).stop_count).toBe(2);
-  }, 60000);
+  });
 
   test("21a: terminal notice output is captured, retained, and allows Copilot Stop", () => {
     const dir = orchestrationProject();
@@ -1401,7 +1416,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(first.directive.kind).toBe("load-steering");
     const continued = runLifecycle(routedDir, session, "compiled", ["continue", String(first.directive.continue_token)], "compiled-continue");
     expect(["load-steering", "run-stage"]).toContain(String(continued.directive.kind));
-  }, 30000);
+  });
 
   test("21c: exact claim ownership failures deny while pre-claim correlation absence stays untracked", () => {
     const foreignSession = orchestrationProject();
@@ -1450,7 +1465,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     ));
     expect(deniedProject.stdout).toContain('"permissionDecision":"deny"');
     expect(deniedProject.stdout).toContain("could not match");
-  }, 30000);
+  });
 
   test("21d: stale tracked fresh-next execution cannot replace a newer owner's cursor in either order", () => {
     for (const order of ["stale-before-owner", "stale-after-owner"] as const) {
@@ -1573,7 +1588,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         active_attempt: { id: continueAttempt, status: "settled" },
       });
     }
-  }, 60000);
+  });
 
   test("21e: untracked fresh next fails a stale pending candidate and stays undelivered", () => {
     const dir = orchestrationProject();
@@ -1604,7 +1619,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     runAdapter(dir, "post-tool", commandPayload(dir, "tracked-owner", spec.text, undefined, true, untracked.stdout));
     expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(issuedBytes);
     expect(marker(dir).delivery).toBe("issued");
-  }, 30000);
+  });
 
   test("21f: conflicting host-correlated duplicate continue is denied without replacing the first candidate", () => {
     for (const firstAttempt of ["host-attempt-a", "host-attempt-b"] as const) {
@@ -1641,7 +1656,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(deliveredBytes);
       expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { id: firstAttempt, status: "settled" } });
     }
-  }, 60000);
+  });
 
   test("21g: reusable duplicate continue has one engine winner and one deliverable result in both operation orders", () => {
     const scenarios = [
@@ -1741,7 +1756,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       });
       expect(retained.continue_token_sha256).toBe(retainedToken);
     }
-  }, 60000);
+  });
 
   test("21h: failed duplicate Post cannot cancel the candidate that later wins", () => {
     const dir = orchestrationProject();
@@ -1763,7 +1778,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       delivery: "delivered",
       active_attempt: { id: first.attemptId, status: "settled" },
     });
-  }, 30000);
+  });
 
   test("22: Post settles only its active attempt across duplicate, reorder, compaction, and malformed result", () => {
     const dir = orchestrationProject();
@@ -1814,7 +1829,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       '{"kind":"run-stage","stage":"requirements-analysis"}\n{"kind":"done"}',
     ));
     expect(marker(dir)).toMatchObject({ delivery: "superseded", needs_rehydrate: true });
-  }, 30000);
+  });
 
   test("22b: adapter-carried no-ID attempt supports normal, duplicate, stale-old, compaction, recovery, and new epoch", () => {
     const dir = orchestrationProject();
@@ -1854,7 +1869,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const afterRecovery = noIdClaim(dir, session, spec, "vscode");
     executeNoId(dir, session, spec, afterRecovery);
     expect(marker(dir).active_attempt).toMatchObject({ id: afterRecovery.attemptId, status: "settled" });
-  }, 30000);
+  });
 
   test("22b-envelope: each explicit dialect fails toward recovery when its rewritten command is missing or wrong", () => {
     const wrongAttempt = "ffffffff-ffff-4fff-8fff-ffffffffffff";
@@ -1887,7 +1902,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text)).stdout).not.toContain('"permissionDecision":"deny"');
       }
     }
-  }, 30000);
+  });
 
   test("22c: VS Code tool_response settles the same bounded directive envelope", () => {
     const dir = orchestrationProject();
@@ -1900,7 +1915,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       toolName: "runTerminalCommand", toolInput: { command: rewritten }, tool_response: executed.stdout,
     });
     expect(marker(dir)).toMatchObject({ kind: "load-steering", delivery: "delivered" });
-  }, 30000);
+  });
 
   test("22d: canonical script identity includes symlink aliases and still rejects replay", () => {
     const dir = orchestrationProject();
@@ -1927,7 +1942,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(replayed.stdout).toContain("no longer current");
     expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, "bun .aidlc/tools/aidlc.ts-missing next", "lookalike")).stdout)
       .toBe("");
-  }, 30000);
+  });
 
   test("23: explicit Resume continues directly and does not arm a resume marker", () => {
     const dir = orchestrationProject();
@@ -1935,7 +1950,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(resumed.directive.kind).toBe("load-steering");
     expect(resumed.directive.stage).toBe("requirements-analysis");
     expect(marker(dir).resume).toBeUndefined();
-  }, 30000);
+  });
 
   test("23a: bare next remains allowed after explicit Resume continuation", () => {
     const dir = orchestrationProject();
@@ -1945,7 +1960,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(["load-steering", "run-stage"]).toContain(String(followup.directive.kind));
     expect(followup.directive.stage).toBe("requirements-analysis");
     expect(marker(dir).resume).toBeUndefined();
-  }, 30000);
+  });
 
   test("23b: session-menu Resume reports are plain reports and return per-choice prints", () => {
     const cases = [
@@ -1969,7 +1984,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(String(reported.directive.message)).toContain(expected);
       expect(marker(dir).resume).toBeUndefined();
     }
-  }, 60000);
+  });
 
   test("23c: explicit Resume supersedes legacy waiting and selected markers", () => {
     for (const status of ["waiting", "selected"] as const) {
@@ -2003,7 +2018,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(resumed.directive.stage).toBe("requirements-analysis");
       expect(marker(dir).resume).toMatchObject({ status: "superseded" });
     }
-  }, 60000);
+  });
 
   test("24: Copilot conversational ordering, concurrent Stop count, unit fingerprint, and marker recovery are bounded", async () => {
     const dir = orchestrationProject();
@@ -2060,7 +2075,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     rmSync(join(seededRecordDir(activeRecovery), ".aidlc-engine/active-directive.json"));
     expect(runAdapter(activeRecovery, "continue-workflow", { ...FIXTURES.stop, cwd: activeRecovery, session_id: "active-recovery", stop_hook_active: true }).stdout).toBe("");
     expect(marker(activeRecovery).stop_count).toBe(2);
-  }, 60000);
+  });
 
   test("24b: a no-tool human prompt is consume-once conversational without prior valid v2 coordination", () => {
     for (const shape of ["missing", "malformed", "v1"] as const) {
@@ -2100,7 +2115,90 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const second = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
       expect((JSON.parse(second.stdout) as { decision?: string }).decision, shape).toBe("block");
     }
-  }, 30000);
+  });
+
+  test("24c: read-only next forms are not claimed as coordination and stay conversational at Stop", () => {
+    const dir = orchestrationProject();
+    const session = "read-only-next-owner";
+    driveToRunStage(dir, session);
+    for (const args of [
+      ["next", "--status"],
+      ["next", "intent", "list"],
+      ["next", "team-board"],
+      ["next", "team-board", "--status"],
+      ["next", "--config", "bogus"],
+      ["next", "--config", "trust", "extra"],
+    ]) {
+      for (const form of ["direct", "source"] as const) {
+        const spec = commandSpec(dir, form, args);
+        const attempt = `${session}-${form}-${args.slice(1).join("-")}`;
+        const human = runAdapter(dir, "record-human-turn", {
+          ...FIXTURES.userPromptSubmit,
+          cwd: dir,
+          session_id: session,
+          prompt: `/aidlc ${args.slice(1).join(" ")}`,
+        });
+        expect(human.code, spec.text).toBe(0);
+        const engineSequence = marker(dir).engine_sequence;
+        const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
+        expect(pre.code, spec.text).toBe(0);
+        expect(pre.stdout, spec.text).toBe("");
+        const executed = runShell(dir, spec.text);
+        expect(executed.status, executed.stderr).toBe(0);
+        expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
+          kind: (args[1] === "team-board" && args.length > 2) || (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ? "error" : "print",
+        });
+        const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
+        expect(post.code, spec.text).toBe(0);
+        expect(marker(dir).engine_sequence, spec.text).toBe(engineSequence);
+        const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+        expect(stopped.code, spec.text).toBe(0);
+        expect(stopped.stdout, spec.text).toBe("");
+      }
+    }
+    const negative = commandSpec(dir, "direct", ["next", "--report", "--status"]);
+    const human = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit,
+      cwd: dir,
+      session_id: session,
+      prompt: "/aidlc --report --status",
+    });
+    expect(human.code, negative.text).toBe(0);
+    const before = marker(dir);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, negative.text, `${session}-valued`));
+    expect(pre.code, negative.text).toBe(0);
+    expect(rewrittenCommand(pre), negative.text).toContain("--aidlc-attempt-id");
+    expect(marker(dir).engine_sequence, negative.text).toBe(Number(before.event_sequence) + 1);
+    expect(Number(marker(dir).engine_sequence), negative.text).toBeGreaterThan(Number(before.engine_sequence));
+    // Claim only: --status is the report path, not a read-only mode switch.
+    const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect(stopped.code, negative.text).toBe(0);
+    expect(JSON.parse(stopped.stdout)).toMatchObject({ decision: "block" });
+    // A fresh workflow keeps the prior Stop's no-progress cap out of this claim check.
+    const pluginDir = orchestrationProject();
+    driveToRunStage(pluginDir, session);
+    const pluginNegative = commandSpec(pluginDir, "direct", ["next", "plugin", "list", "--status"]);
+    const pluginHuman = runAdapter(pluginDir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit,
+      cwd: pluginDir,
+      session_id: session,
+      prompt: "/aidlc plugin list --status",
+    });
+    expect(pluginHuman.code, pluginNegative.text).toBe(0);
+    const pluginBefore = marker(pluginDir);
+    const pluginPre = runAdapter(pluginDir, "guard-tool-call", commandPayload(pluginDir, session, pluginNegative.text, `${session}-plugin`));
+    expect(pluginPre.code, pluginNegative.text).toBe(0);
+    expect(rewrittenCommand(pluginPre), pluginNegative.text).toContain("--aidlc-attempt-id");
+    expect(marker(pluginDir).engine_sequence, pluginNegative.text).toBe(Number(pluginBefore.event_sequence) + 1);
+    expect(Number(marker(pluginDir).engine_sequence), pluginNegative.text).toBeGreaterThan(Number(pluginBefore.engine_sequence));
+    // Claim only: --status belongs to the plugin argv, not a read-only mode switch.
+    const pluginStopped = runAdapter(pluginDir, "continue-workflow", { ...FIXTURES.stop, cwd: pluginDir, session_id: session });
+    expect(pluginStopped.code, pluginNegative.text).toBe(0);
+    expect(JSON.parse(pluginStopped.stdout)).toMatchObject({ decision: "block" });
+    runLifecycle(dir, session, "direct", ["next"], `${session}-control`);
+    const control = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect(JSON.parse(control.stdout)).toMatchObject({ decision: "block" });
+  });
 
   test("25: execution-shaped classification allows inspection, wrappers, and one terminal redirect", () => {
     const dir = orchestrationProject();
@@ -2179,9 +2277,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir, AIDLC_COPILOT_SESSION_ID: undefined } as NodeJS.ProcessEnv,
     });
     expect((JSON.parse(directCore.stdout) as { decision?: string }).decision).toBe("block");
-  }, 30000);
+  });
 
   test("25b: claim lock contention tells the caller to retry the exact command", () => {
+    // Include the real active-directive retry loop, fixture copying, and hook startup.
     const dir = orchestrationProject();
     const lockDir = join(
       seededRecordDir(dir),
@@ -2204,11 +2303,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "guard-tool-call",
       commandPayload(dir, "contention-owner", "aidlc next", "contention-attempt"),
     );
-    expect(blocked.stdout).toContain('"permissionDecision":"deny"');
+    expect(blocked.code, blocked.stderr).toBe(0);
+    expect(blocked.stdout, blocked.stderr).toContain('"permissionDecision":"deny"');
     expect(blocked.stdout).toContain("Retry this exact command");
     expect(blocked.stdout).not.toContain("Run a fresh");
     expect(blocked.stdout).not.toContain("do not reuse");
-  });
+  }); // Fixture setup plus the real contention loop took 20.8s on Windows.
 
   test("26: direct and source foreign projects are denied before claim or Post can mutate either marker", () => {
     const current = orchestrationProject();
@@ -2233,7 +2333,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(readFileSync(currentMarkerPath, "utf-8"), `${form} current Post`).toBe(currentBefore);
       expect(readFileSync(foreignMarkerPath, "utf-8"), `${form} foreign Post`).toBe(foreignBefore);
     }
-  }, 30000);
+  });
 
   test.skipIf(COMPILED_BINARY === null)("26b: the real compiled foreign-project branch cannot claim or settle either marker", () => {
     const current = orchestrationProject();
@@ -2254,5 +2354,5 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     runAdapter(foreign, "post-tool", commandPayload(foreign, session, spec.text, "compiled-foreign", true, '{"kind":"done"}'));
     expect(readFileSync(currentMarkerPath, "utf-8")).toBe(currentBefore);
     expect(readFileSync(foreignMarkerPath, "utf-8")).toBe(foreignBefore);
-  }, 30000);
+  });
 });

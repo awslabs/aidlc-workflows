@@ -18,6 +18,7 @@ import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
+  BoltIdentityError,
   claimAttemptFields,
   cloneIdPath,
   errorMessage,
@@ -32,13 +33,14 @@ import {
   refuseEngineObserverWrite,
   releaseAuditLock,
   requireLiveClaimForTeamUnit,
+  resolveBoltIdentity,
   resolveProjectDir,
+  resolveWorkflowSelection,
   validateBoltSlug,
   validateLiveUnitScope,
   worktreeClaimBoundaryMatches,
   worktreeAuditFilePath,
   worktreeDocsDir,
-  worktreePath,
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
 
@@ -84,6 +86,9 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   // Break-glass: the human typed the override phrase and the conductor ran
   // `answer --override`; the receipt binds to content and attempt only.
@@ -254,6 +259,9 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
+  VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
+  CONSTRUCTION_POLICY_RECORDED: "Construction Policy Recorded",
+  CHECKPOINT_VERIFICATION_RECORDED: "Checkpoint Verification Recorded",
   PLAN_APPROVAL_RECORDED: "Plan Approval Recorded",
   PLAN_APPROVAL_OVERRIDDEN: "Plan Approval Overridden",
   REVIEW_REQUESTED: "Review Requested",
@@ -340,6 +348,9 @@ function jsonError(message: string): never {
 const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
   "ARTIFACT_CREATED",
@@ -469,6 +480,9 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
   "AUTONOMY_MODE_SET",
@@ -1230,7 +1244,14 @@ function handleAuditFork(args: string[], projectDir: string): void {
   // fork used). recordPrefix is the worktree mirror's relative record dir
   // (null -> flat-legacy mirror, today's behaviour).
   const { intent, space } = parseSelectorFlags(args);
-  const wtPath = worktreePath(projectDir, slug);
+  const selection = resolveWorkflowSelection(projectDir, { intent, space });
+  let wtPath: string;
+  try {
+    wtPath = resolveBoltIdentity(projectDir, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) jsonError(e.message);
+    throw e;
+  }
   const priorForkVerification = existsSync(wtPath)
     ? worktreeClaimBoundaryMatches(projectDir, wtPath, slug)
     : null;
@@ -1506,7 +1527,14 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
 
   const mainAuditPath = auditFilePath(projectDir, intent, space);
-  const wtPath = worktreePath(projectDir, slug);
+  const selection = resolveWorkflowSelection(projectDir, { intent, space });
+  let wtPath: string;
+  try {
+    wtPath = resolveBoltIdentity(projectDir, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) jsonError(e.message);
+    throw e;
+  }
   const scopeStamp = requireLiveClaimForTeamUnit(projectDir, slug, {
     intent,
     space,

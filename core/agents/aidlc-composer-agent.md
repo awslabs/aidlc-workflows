@@ -579,7 +579,9 @@ action byte-for-byte and return only the validated pending changes as exact
 `ars.nearestScopes` and `validate-grid.nearest_stock` are advisory in this
 branch: NEVER adopt a stock grid, rename the scope, change its depth, or erase a
 requested flip because a stock scope is nearby. Approval lands only through
-`recompose --skip <changes.skip> --add <changes.add>`.
+`recompose [--skip <changes.skip>] [--add <changes.add>]`. Join each nonempty
+array with commas and omit the flag when its array is empty; never emit a bare
+`--skip` or `--add`.
 
 **Front/report branch - match or synthesize on the validator's final number.**
 The `ars` tool's `nearestScopes` describes the MECHANICAL screen before folds;

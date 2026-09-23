@@ -20,7 +20,7 @@
 // Source under test:
 //   - dist/claude/.claude/tools/aidlc-worktree.ts handleCreate (:156) — runs a
 //     REAL `git worktree add` after an audit-first WORKTREE_CREATED emit
-//     (:186), so the worktree dir lands at .aidlc/worktrees/bolt-<slug>.
+//     (:186), so the worktree dir lands at its intent-scoped worktreePath.
 //   - dist/claude/.claude/tools/aidlc-bolt.ts handleFail (:457) — emits
 //     BOLT_FAILED with `Failed Bolt`, `Error summary`, and (when --slug given)
 //     a `Bolt slug` field (:467-469). It does NOT spawn aidlc-worktree, NEVER
@@ -41,14 +41,14 @@
 // then rm -rf's the parent. Nothing is written under tests/fixtures/**.
 //
 // Old TAP -> new test parity (1:1, every .sh `ok` line maps to an expect()):
-//   .sh A1 assert_dir_exists bolt-x "worktree created on disk"          -> Test "setup": dir exists after create
+//   .sh A1 assert_dir_exists "worktree created on disk"                 -> Test "setup": dir exists after create
 //   .sh A2 assert_grep audit "Event.*WORKTREE_CREATED"                  -> Test "setup": WORKTREE_CREATED in audit
 //   .sh A3 assert_grep audit "Event.*BOLT_FAILED"                       -> Test "fail emits": BOLT_FAILED in audit
 //   .sh A4 assert_grep audit "Bolt slug.*x$"                            -> Test "fail emits": **Bolt slug**: x row present
-//   .sh A5 assert_dir_exists bolt-x "preserved after BOLT_FAILED"       -> Test "preservation": dir still on disk
+//   .sh A5 assert_dir_exists "preserved after BOLT_FAILED"              -> Test "preservation": dir still on disk
 //   .sh A6 assert_worktree_at (git worktree list includes the path)     -> Test "preservation": git still registers the worktree
 //   .sh A7 assert_eq DISCARD_COUNT 0 "zero WORKTREE_DISCARDED events"   -> Test "preservation": exactly zero WORKTREE_DISCARDED rows
-//   .sh A8 assert_contains INFO_OUT '"path":' "info resolves path"      -> Test "info": info exits 0 and prints "path":<bolt-x dir>
+//   .sh A8 assert_contains INFO_OUT '"path":' "info resolves path"      -> Test "info": info exits 0 and prints the Bolt path
 //
 // 8 .sh asserts -> 8 expect()-bearing assertions across 4 test() cases (grouped
 // where the .sh shared the single failure-flow fixture). STRONGER than the .sh:
@@ -62,15 +62,17 @@
 //     NOT have fired — §6-E negative-invariant check, asserted on the real
 //     post-fail audit, not a happy path).
 //   - A8: the .sh only checked the `"path":` substring; here we ALSO assert
-//     info exits 0 and the resolved path equals the live bolt-x worktree dir.
+//     info exits 0 and the resolved path equals the live Bolt worktree dir.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { worktreePath } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
@@ -85,11 +87,7 @@ afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
-/** Fresh git-repo fixture on `main` with the per-intent workspace shell. Seed a
- *  state file into the default record so the active-intent cursor resolves and
- *  the WORKTREE_CREATED/BOLT_FAILED audit lands in the record (the fixture's
- *  record is stateless; without aidlc-state.md the cursor is rejected and the
- *  audit lands at the bare space root). Registered for cleanup. */
+/** Fresh git-repo fixture with the default intent in Construction, registered for cleanup. */
 function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
@@ -114,7 +112,7 @@ function run(p: string, tool: string, args: string[]): CliResult {
 }
 
 const wtDir = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(p, fixtureIntentId8(p), slug);
 
 /** Concatenate every audit shard (audit/*.md) for the seeded record. */
 function auditBody(p: string): string {
@@ -205,7 +203,7 @@ describe("t09 halt-and-ask preserves the worktree on Bolt failure (migrated from
   test("info: aidlc-worktree info --slug x resolves the live path even after the failure [.sh A8]", () => {
     const i = run(p, WT_TOOL, ["info", "--slug", "x"]);
     // The .sh only checked the `"path":` substring; assert exit 0 too, and that
-    // the resolved path is the live bolt-x worktree dir (the create block is
+    // the resolved path is the live Bolt worktree dir (the create block is
     // still the latest WORKTREE_CREATED — fail() left it intact).
     expect(i.status).toBe(0);
     expect(i.stdout).toContain('"path":');

@@ -19,10 +19,13 @@ const UPGRADE = [
   "  Enter to confirm · Esc to cancel",
 ].join("\n");
 const TRUST = "Do you trust this folder?\n❯ 1. Yes\n2. No";
-const PERMISSIONS = "Bypass Permissions mode\n❯ 1. No\n2. Yes, I accept";
+const PERMISSIONS = "Bypass Permissions mode\n❯ 1. No, exit\n2. Yes, I accept";
+const PERMISSIONS_SELECTED = "Bypass Permissions mode\n1. No, exit\n❯ 2. Yes, I accept";
+const UNNUMBERED = "Bypass Permissions mode\n❯ No, exit\n  Yes, I accept\nEnter to confirm · Esc to cancel";
+const UNNUMBERED_SELECTED = "Bypass Permissions mode\n  No, exit\n❯ Yes, I accept\nEnter to confirm · Esc to cancel";
 
 function fixture(panes: readonly string[]) {
-  const sent: { keys: string; pane: string }[] = [];
+  const sent: { keys: string; pane: string; noEnter?: boolean }[] = [];
   let index = -1;
   let time = 0;
   let captures = 0;
@@ -37,16 +40,18 @@ function fixture(panes: readonly string[]) {
       captures++;
       return panes[index];
     },
-    send: (keys: string) => sent.push({ keys, pane: panes[index] }),
+    send: (keys: string, noEnter?: boolean) => sent.push({
+      keys, pane: panes[index], ...(noEnter === undefined ? {} : { noEnter }),
+    }),
   };
   return { ui, sent, captures: () => captures };
 }
 
 describe("owned Claude fixture startup", () => {
   test.each([
-    { panes: [UPGRADE, TRUST, PERMISSIONS, READY] },
-    { panes: [TRUST, UPGRADE, PERMISSIONS, READY] },
-    { panes: [TRUST, PERMISSIONS, UPGRADE, READY] },
+    { panes: [UPGRADE, TRUST, PERMISSIONS, PERMISSIONS_SELECTED, READY] },
+    { panes: [TRUST, UPGRADE, PERMISSIONS, PERMISSIONS_SELECTED, READY] },
+    { panes: [TRUST, PERMISSIONS, PERMISSIONS_SELECTED, UPGRADE, READY] },
     { panes: [UPGRADE, READY] },
     { panes: [READY] },
   ])("handles known startup screens in order: %j", ({ panes }) => {
@@ -55,10 +60,33 @@ describe("owned Claude fixture startup", () => {
     expect(f.captures()).toBe(panes.length);
     expect(f.sent).toEqual(
       panes.filter((pane) => pane !== READY).map((pane) => ({
-        keys: pane === TRUST ? "1" : "2",
+        keys: pane === TRUST ? "1" : pane === PERMISSIONS ? "Down" : pane === PERMISSIONS_SELECTED ? "Enter" : "2",
         pane,
+        ...(pane === PERMISSIONS || pane === PERMISSIONS_SELECTED ? { noEnter: true } : {}),
       })),
     );
+  });
+
+  test("navigates the observed unnumbered menu once and confirms only the painted Yes selection", () => {
+    const f = fixture([UNNUMBERED, UNNUMBERED, UNNUMBERED_SELECTED, UNNUMBERED_SELECTED, READY]);
+    clearOwnedClaudeFixtureStartup(OWNED_HOME, ENV, f.ui);
+    expect(f.sent).toEqual([
+      { keys: "Down", noEnter: true, pane: UNNUMBERED },
+      { keys: "Enter", noEnter: true, pane: UNNUMBERED_SELECTED },
+    ]);
+  });
+
+  test("confirms an already selected Yes without moving the selection", () => {
+    const f = fixture([UNNUMBERED_SELECTED, READY]);
+    clearOwnedClaudeFixtureStartup(OWNED_HOME, ENV, f.ui);
+    expect(f.sent).toEqual([{ keys: "Enter", noEnter: true, pane: UNNUMBERED_SELECTED }]);
+  });
+
+  test("does not confirm when the requested menu navigation never repaints", () => {
+    const f = fixture([UNNUMBERED]);
+    expect(() => clearOwnedClaudeFixtureStartup(OWNED_HOME, ENV, f.ui))
+      .toThrow("never reached a startup state");
+    expect(f.sent).toEqual([{ keys: "Down", noEnter: true, pane: UNNUMBERED }]);
   });
 
   test("chooses No once despite a stale upgrade repaint over the ready footer", () => {
@@ -82,6 +110,8 @@ describe("owned Claude fixture startup", () => {
     UPGRADE.replace("Update settings to use Opus 5?", "Update settings to use Opus 6?"),
     UPGRADE.replace("  Currently pinned: Opus 4.8\n", ""),
     `Newer Opus model available\n${READY}`,
+    `Bypass Permissions mode\nYes, I accept\n${READY}`,
+    `Bypass Permissions mode\n❯ No, exit\nYes, I accept\nYes, I accept\n${READY}`,
   ])("leaves an unidentified or incomplete dialog unanswered: %j", (pane) => {
     const f = fixture([pane]);
     expect(() => clearOwnedClaudeFixtureStartup(OWNED_HOME, ENV, f.ui))

@@ -352,6 +352,7 @@ export async function run(input: string): Promise<number> {
     blockedAction: `artifact-write:${verdict.target ?? ""}`,
     stage: stage.slug,
     ...(verdict.unit ? { unit: verdict.unit } : {}),
+    projectDir,
     stateContent,
     invariant: "A terminal review continues to cover the bytes it certified.",
     userMessage: "",

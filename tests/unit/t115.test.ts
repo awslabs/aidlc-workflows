@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint, function:pendingReviewRequestStatus
+// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint, function:pendingReviewRequestStatus, function:renderReviewVerdictCommand
 //
 // CLI-contract port of tests/unit/t115-orchestrate-report.sh (TAP plan 22),
 // mechanism = cli. The .sh drives `aidlc-orchestrate.ts report` — the
@@ -89,6 +89,7 @@ import {
   auditLockDir,
   readAllAuditShards,
   reviewArtifactFingerprint,
+  renderReviewVerdictCommand,
   resolveStage,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -280,6 +281,86 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
     tempDirs.push(p);
     const r = orchestrate(["report", "--result", "approved"], p);
     expect(r.out).toContain('"kind":"error"');
+  });
+});
+
+// ============================================================
+// ARGUMENT REFUSALS — report used to parse its flags with an if/else-if chain
+// that had no final else, so anything it did not recognise vanished without a
+// word and the report committed a DIFFERENT transition than the one that was
+// typed: a rejection with its feedback silently dropped, or a per-unit gate
+// closed against no unit at all. Every argument report cannot act on is now an
+// error directive, before anything commits.
+// ============================================================
+
+describe("t115 report refuses arguments it cannot act on", () => {
+  test("a mistyped flag is named in the refusal and points at the real one", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const stateBefore = readFileSync(statePath(p), "utf-8");
+    const eventsBefore = totalEvents(p);
+    const r = orchestrate(
+      ["report", "--result", "rejected", "--feedback", "the API section is thin"],
+      p,
+    );
+    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain('report does not accept \\"--feedback\\"');
+    expect(r.out).toContain("--reason");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    expect(totalEvents(p)).toBe(eventsBefore);
+  });
+
+  test("a recognised flag whose value never arrived is refused, not dropped", () => {
+    const cases: Array<[string[], string]> = [
+      [["report", "--result"], "report --result requires an outcome"],
+      [
+        ["report", "--result", "rejected", "--reason"],
+        "report --reason requires the reason text",
+      ],
+      [
+        ["report", "--result", "approved", "--user-input"],
+        "report --user-input requires the offered choice",
+      ],
+      [
+        ["report", "--result", "approved", "--stage"],
+        "report --stage requires a stage name",
+      ],
+      [
+        ["report", "--result", "approved", "--unit"],
+        "report --unit requires a unit name",
+      ],
+    ];
+    for (const [args, message] of cases) {
+      const p = projWithState("state-mid-ideation.md");
+      const stateBefore = readFileSync(statePath(p), "utf-8");
+      const r = orchestrate(args, p);
+      expect(r.out, args.join(" ")).toContain('"kind":"error"');
+      expect(r.out, args.join(" ")).toContain(message);
+      expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    }
+  });
+
+  test("a value that looks like a flag is still a value", () => {
+    // --reason "--feedback ..." is a legitimate rejection reason: only an
+    // ABSENT value is refused, otherwise quoting a flag name in feedback would
+    // become unreportable.
+    const p = projWithState("state-mid-ideation.md");
+    const r = orchestrate(
+      ["report", "--result", "rejected", "--reason", "--feedback was ignored"],
+      p,
+      { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    );
+    expect(r.status).toBe(0);
+    expect(r.out).not.toContain("report does not accept");
+    expect(r.out).not.toContain("requires the reason text");
+    expect(r.out).toContain('"kind":"print"');
+    expect(readFileSync(statePath(p), "utf-8")).toContain(
+      "- [R] feasibility — EXECUTE",
+    );
+    expect(countEvent(p, "GATE_REJECTED")).toBe(1);
+    expect(countEvent(p, "STAGE_REVISING")).toBe(1);
+    expect(auditBlocksFor(p, "GATE_REJECTED")[0]).toContain(
+      "**Feedback**: --feedback was ignored",
+    );
   });
 });
 
@@ -1086,9 +1167,14 @@ describe("t115 report-path gate backfill carries Recovered", () => {
 
 const LOG_TOOL = join(TOOLS_DIR, "aidlc-log.ts");
 
-function log(args: string[], p: string): CliResult {
+function log(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [LOG_TOOL, ...args, "--project-dir", p], {
     encoding: "utf-8",
+    env: { ...process.env, ...extraEnv },
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
@@ -1177,6 +1263,61 @@ function appendAudit(event: string, fields: Record<string, string>, p: string): 
 }
 
 describe("t115 reviewer precondition (report refuses approve without a recorded review)", () => {
+  // Requesting a review and recording its verdict are the same command with
+  // --verdict added. Nothing the conductor sees between the two used to say so,
+  // and an unclosed request only surfaces much later, as a refused stage
+  // completion that reads as unrelated. So the request returns the exact
+  // command that closes it.
+  test("R0a: the review request returns the command that records its verdict", () => {
+    const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
+    writeFileSync(
+      join(artifact, "..", "requirements-analysis-questions.md"),
+      "# Requirements Questions\n",
+      "utf-8",
+    );
+    const req = log(
+      [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(req.status).toBe(0);
+    const emitted = JSON.parse(req.stdout.trim().split("\n").pop()!);
+    expect(emitted.emitted).toBe("REVIEW_REQUESTED");
+    expect(emitted.recordVerdict).toBe(
+      "bun .claude/tools/aidlc-log.ts review --stage requirements-analysis " +
+        "--reviewer aidlc-product-lead-agent --iteration 1 " +
+        `--verdict '<READY|NOT-READY>' --project-dir ${p}`,
+    );
+    expect(renderReviewVerdictCommand({
+      projectDir: p,
+      stage: "code-generation",
+      reviewer: "aidlc-architecture-reviewer-agent",
+      unit: "alpha",
+      single: true,
+      iteration: 2,
+    })).toBe(
+      "bun .claude/tools/aidlc-log.ts review --stage code-generation " +
+        "--reviewer aidlc-architecture-reviewer-agent --unit alpha --single " +
+        `--iteration 2 --verdict '<READY|NOT-READY>' --project-dir ${p}`,
+    );
+  }, 30000);
+
   test("R0: report preflights missing review into one ask without opening the gate", () => {
     const p = projWithState("state-mid-inception.md");
     const artifact = join(

@@ -228,7 +228,7 @@ export const ROUTES: readonly Route[] = [
       "continue <token>",
       "report [args]",
       "park [args]",
-      "team-board [--snapshot]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
   {
@@ -380,7 +380,7 @@ export const ROUTES: readonly Route[] = [
       "config models [--show [--json]|--check|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
       "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> --effort <e> [--model <raw-id>]] [--local|--project|--global] [--dry-run] [--yes]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes]",
-      "config providers [--show [--json]|--check|--reset|--provider <amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes]",
+      "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes]",
       "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes]",
       "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes]",
@@ -546,6 +546,9 @@ export const ROUTES: readonly Route[] = [
       "set",
       "set-skeleton-stance",
       "set-construction-iteration",
+      "set-construction-checkpoints",
+      "set-construction-execution",
+      "set-construction-verification-command",
       "checkbox",
       "count",
       "advance",
@@ -579,6 +582,9 @@ export const ROUTES: readonly Route[] = [
           "set-status",
           "set-skeleton-stance",
           "set-construction-iteration",
+          "set-construction-checkpoints",
+          "set-construction-execution",
+          "set-construction-verification-command",
           "checkbox",
           "count",
           "lookup",
@@ -727,7 +733,7 @@ export const ROUTES: readonly Route[] = [
     group: "bolt",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["start", "complete", "fail", "abort", "set-autonomy", "dispatch-event", "hold-merge", "release-merge"],
+    verbs: ["start", "complete", "fail", "abort", "set-autonomy", "checkpoint", "swarm-checkpoint", "dispatch-event", "hold-merge", "release-merge"],
     tool: TOOLS.bolt,
     ...HIDDEN_ENGINE,
   },
@@ -1027,7 +1033,7 @@ export const ROUTES: readonly Route[] = [
     group: "orchestrate",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["next", "continue", "report", "park", "wait"],
+    verbs: ["next", "continue", "report", "park", "wait", "team-board"],
     tool: TOOLS.orchestrate,
     ...HIDDEN_ENGINE,
     all: [
@@ -1036,6 +1042,7 @@ export const ROUTES: readonly Route[] = [
       "report [args]",
       "park [args]",
       "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--timeout <seconds>]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
   {
@@ -2976,11 +2983,14 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2)).catch((error) => {
+  // Keep pending stdin and async dispatch alive, while leaving this module
+  // synchronous to import (completions imports its route table during dispatch).
+  const keepAlive = setInterval(() => {}, 1_000);
+  void main(process.argv.slice(2)).catch((error) => {
     process.exitCode = renderDispatcherFailure(
       process.argv.slice(2),
       1,
       errorMessage(error),
     );
-  });
+  }).finally(() => clearInterval(keepAlive));
 }

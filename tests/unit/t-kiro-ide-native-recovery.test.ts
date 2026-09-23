@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import {
   readPlanApprovalLegacyWindows,
   stateDigest,
@@ -32,7 +33,9 @@ import {
 } from "../harness/fixtures.ts";
 
 const scratchRoot = process.env.AIDLC_NATIVE_RECOVERY_SCRATCH ??
-  join(REPO_ROOT, "tmp", "kiro-native-recovery");
+  (process.platform === "win32"
+    ? join(process.env.SystemRoot || "C:\\Windows", "Temp")
+    : tmpdir());
 const runtimeRoot = process.env.AIDLC_NATIVE_RECOVERY_RUNTIME ??
   join(REPO_ROOT, "dist-release");
 let binary = process.env.AIDLC_NATIVE_RECOVERY_BINARY ?? "";
@@ -40,7 +43,9 @@ let scratch: string;
 
 beforeAll(() => {
   mkdirSync(scratchRoot, { recursive: true });
-  scratch = mkdtempSync(join(scratchRoot, "run-"));
+  // Keep nested intent/lock paths below Windows tool path limits even when
+  // the source checkout or inherited TEMP directory is deeply nested.
+  scratch = mkdtempSync(join(scratchRoot, "aidlc-nr-"));
   if (binary) return;
   binary = join(scratch, process.platform === "win32" ? "aidlc.exe" : "aidlc");
   const result = spawnSync(process.execPath, [

@@ -510,6 +510,7 @@ describe("t283 engine-owned continuation cursor", () => {
   }, 30000);
 
   test("fresh next emits no work directive when cursor reset publication contends", () => {
+    // Include initial publication, then the unchanged production lock retry loop.
     const installed = project(HARNESSES[0]);
     invoke(installed, "next");
     // Removing the marker makes publication genuinely necessary, which is the
@@ -540,7 +541,7 @@ describe("t283 engine-owned continuation cursor", () => {
     expect(blocked.message).not.toContain("Retry `next`");
     expect(existsSync(markerPath(installed))).toBe(false);
     expect(existsSync(lockDir)).toBe(true);
-  });
+  }, 15_000);
 
   test("a repeated next answers from the issued directive without taking the coordination lock", () => {
     const installed = project(HARNESSES[0]);
@@ -611,7 +612,11 @@ describe("t283 engine-owned continuation cursor", () => {
       const first = invoke(installed, "next").directive;
       const token = first.continue_token ?? "";
       const before = readFileSync(markerPath(installed), "utf-8");
-      const roFd = openSync(markerPath(installed), "r");
+      // Fail stdout after publication without pinning the marker itself.
+      // Windows refuses replacing a file held as the child's stdout handle.
+      const stdoutSink = join(installed.dir, ".readonly-stdout-sink");
+      writeFileSync(stdoutSink, "read-only output fixture");
+      const roFd = openSync(stdoutSink, "r");
       const failed = (() => {
         try {
           return Bun.spawnSync(command(installed, "continue", token), {
@@ -621,11 +626,14 @@ describe("t283 engine-owned continuation cursor", () => {
           });
         } finally {
           closeSync(roFd);
+          rmSync(stdoutSink, { force: true });
         }
       })();
 
-      expect(failed.exitCode).not.toBe(0);
-      expect(readFileSync(markerPath(installed), "utf-8")).not.toBe(before);
+      const failureDetail = `exit=${failed.exitCode}; signal=${failed.signalCode}\n${failed.stderr.toString()}`;
+      expect(failed.exitCode, failureDetail).not.toBeNull();
+      expect(failed.exitCode, failureDetail).not.toBe(0);
+      expect(readFileSync(markerPath(installed), "utf-8"), failureDetail).not.toBe(before);
       expect(isStale(invoke(installed, "continue", token).directive)).toBe(true);
       expect(invoke(installed, "next").directive.kind).toBe("load-steering");
     }

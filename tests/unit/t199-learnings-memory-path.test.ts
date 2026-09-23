@@ -24,6 +24,15 @@
 // The legacy flat path `aidlc-docs/<phase>/<slug>/memory.md` shares that tail, so
 // the read-side fix degrades correctly there too - the third case pins it.
 //
+// A THIRD DEFECT PINNED - surface hard-failed when runtime-graph.json did not
+// exist at all. Only the rebuild-stage-graph hook writes that (gitignored,
+// machine-local) file, and only on a transition-class command; §13 runs BEFORE
+// the `orchestrate report --result awaiting-approval` that is the first such
+// command in a workflow, so the FIRST gated stage always found it absent and the
+// mandatory ritual was stranded behind a bare "not found". surface now recomputes
+// memory_path exactly as compile derives it, and warns. The absence cases below
+// therefore deliberately skip compile; a malformed graph must still fail.
+//
 // Source under test (dist/claude/.claude/tools/):
 //   aidlc-runtime.ts compile      - the runtime-graph row's memory_path.
 //   aidlc-learnings.ts surface    - the phase extraction + diary read.
@@ -279,6 +288,110 @@ describe("t199 per-intent memory path (write + read)", () => {
     const out = JSON.parse(s.stdout);
     expect(out.phase).toBe("inception");
     expect(out.candidates.length).toBe(1);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // NEVER-COMPILED GRAPH - the §13 ritual runs BEFORE the first command that
+  // compiles runtime-graph.json, so on the first gated stage of a workflow the
+  // graph does not exist yet. surface must recompute the diary path instead of
+  // stranding the mandatory ritual. Deliberately does NOT run compile.
+  // ===========================================================================
+  test("surface recomputes the diary path when runtime-graph.json was never compiled", () => {
+    const pd = mkWorkspaceProject();
+    expect(existsSync(join(seededRecordDir(pd), "runtime-graph.json"))).toBe(false);
+    // Seed the diary at the path compile WOULD have recorded, so a wrong
+    // recomputation surfaces zero candidates rather than passing by accident.
+    const diaryDir = join(seededRecordDir(pd), "inception", "user-stories");
+    mkdirSync(diaryDir, { recursive: true });
+    writeFileSync(join(diaryDir, "memory.md"), memoryDiary());
+
+    const s = spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
+      { encoding: "utf-8" },
+    );
+    expect(s.status, s.stderr).toBe(0);
+    const out = JSON.parse(s.stdout);
+    expect(out.phase).toBe("inception");
+    expect(out.candidates.length).toBe(1);
+    // The fallback is announced, and the message names the command that rebuilds
+    // the graph - a silent recompute would hide a dropped hook compile.
+    expect(s.stderr).toContain("no compiled memory_path");
+    expect(s.stderr).toContain("compile");
+    // Read-only: surface must not have written the graph it did without.
+    expect(existsSync(join(seededRecordDir(pd), "runtime-graph.json"))).toBe(false);
+  }, TIMEOUT);
+
+  // The recomputed path is not an approximation - it is the same string compile
+  // records, so the ritual reads the same diary either side of the first compile.
+  test("the recomputed diary path is byte-identical to the compiled memory_path", () => {
+    const pd = mkWorkspaceProject();
+    const s = spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
+      { encoding: "utf-8" },
+    );
+    expect(s.status, s.stderr).toBe(0);
+    const recomputed = `${RP}/inception/user-stories/memory.md`;
+    expect(s.stderr).toContain(recomputed);
+
+    expect(
+      spawnSync(BUN, [RUNTIME_TS, "--project-dir", pd, "compile"], {
+        encoding: "utf-8",
+      }).status,
+    ).toBe(0);
+    const graph = JSON.parse(
+      readFileSync(join(seededRecordDir(pd), "runtime-graph.json"), "utf-8"),
+    );
+    const row = graph.stages.find(
+      (st: { stage_slug: string }) => st.stage_slug === "user-stories",
+    );
+    expect(row.memory_path).toBe(recomputed);
+
+    // With the row on disk it wins outright, and the fallback stays quiet.
+    const after = spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
+      { encoding: "utf-8" },
+    );
+    expect(after.status, after.stderr).toBe(0);
+    expect(after.stderr).toBe("");
+  }, TIMEOUT);
+
+  // A malformed graph is corruption, not absence: it must still fail loudly
+  // rather than being quietly papered over by the recompute path.
+  test("a malformed runtime-graph.json still fails instead of falling back", () => {
+    const pd = mkWorkspaceProject();
+    writeFileSync(join(seededRecordDir(pd), "runtime-graph.json"), "{ not json");
+    const s = spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
+      { encoding: "utf-8" },
+    );
+    expect(s.status).toBe(1);
+    expect(s.stderr).toContain("runtime-graph.json is malformed");
+  }, TIMEOUT);
+
+  // A recorded row without memory_path is corruption too, not an absent row
+  // that surface can replace with a recomputed path.
+  test("a recorded row without memory_path still fails instead of falling back", () => {
+    const pd = mkWorkspaceProject();
+    writeFileSync(
+      join(seededRecordDir(pd), "runtime-graph.json"),
+      JSON.stringify({
+        workflow_id: "w1",
+        scope: "feature",
+        started_at: "2026-05-28T08:00:00Z",
+        stages: [{ stage_slug: "user-stories" }],
+      }),
+    );
+    const s = spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
+      { encoding: "utf-8" },
+    );
+    expect(s.status).toBe(1);
+    expect(s.stderr).toContain("has no memory_path in runtime-graph.json");
   }, TIMEOUT);
 
   // A guard-rail: the runtime-graph.json must exist where surface reads it (the
