@@ -128,6 +128,18 @@ stateDiagram-v2
 
 `[?]` and `[R]` disambiguate two situations that would otherwise both look like `[-]`. On resume, `[R]` tells the conductor to present the prior artifact and feedback before re-entering the gate, instead of re-executing the stage from scratch.
 
+At `[?]`, `orchestrate next` first runs the `present-approval-gate` guard
+preflight. A refusal still wins. Otherwise it re-presents the current gate as
+`run-stage` with `gate_only: true` and `gate: true`, not another execution of
+the stage body or reviewer. Reviewer fields and body/reviewer protocol modules
+are absent; a Construction policy, when present, is marked `completion_only`.
+`gate_only` takes precedence over generic completion-only bookkeeping and does
+not grant human approval. Team-owned gates retain `unit` and `unit_gate`;
+autonomous swarm settlement retains `swarm_settled` and its completion policy.
+The same gate-only shape survives rule-delivery `continue` calls. Repeating
+`next` leaves the stage unchanged and follows the normal directive republication
+rules.
+
 | Transition | Trigger | Emitter |
 |---|---|---|
 | `Pending → Active` | Engine routes after the previous reported outcome | `tools/aidlc-state.ts` (internal emitter) |

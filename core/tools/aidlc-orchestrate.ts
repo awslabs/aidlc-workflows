@@ -647,6 +647,7 @@ function attachLegacyKiroPlanApprovalChoices(
       directive.kind === "run-stage" &&
       directive.stage === "code-generation" &&
       directive.swarm_settled !== true &&
+      directive.gate_only !== true &&
       directive.construction_checkpoint === undefined &&
       directive.swarm_checkpoint === undefined &&
       directive.construction_policy?.completion_only !== true
@@ -2485,6 +2486,7 @@ type SteeringTokenPayload = {
   p: boolean;
   w: boolean;
   z?: boolean;
+  o?: boolean;
   q?: UnitGateRhythm;
   j?: ConstructionCheckpointKind;
   y?: { batch: number; units: string[] };
@@ -4146,6 +4148,7 @@ function markerSteeringPayload(
     typeof p.p !== "boolean" ||
     typeof p.w !== "boolean" ||
     (p.z !== undefined && typeof p.z !== "boolean") ||
+    (p.o !== undefined && typeof p.o !== "boolean") ||
     (p.q !== undefined && p.q !== "per-stage" && p.q !== "unit-end") ||
     (p.j !== undefined && p.j !== "unit" && p.j !== "skeleton") ||
     (p.y !== undefined && (
@@ -4185,6 +4188,7 @@ function steeringTokenPayload(
     p: directive.unit !== undefined,
     w: directive.wave !== undefined,
     z: directive.swarm_settled === true,
+    o: directive.gate_only === true,
     q: directive.unit_gate,
     j: directive.construction_checkpoint?.kind,
     y: directive.swarm_checkpoint
@@ -5488,6 +5492,31 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           emit(preflight);
           return;
         }
+        // Team ownership selects its due Unit from the existing gate ledger.
+        // A stage-level open gate must not re-enter the body or swarm routers.
+        if (!isTeamUnitOwnership(stateContent) || !isPerUnit(currentNode)) {
+          const dag = isPerUnit(currentNode) &&
+              !usesStageLevelPerUnitArtifacts(scope, stateContent)
+            ? resolveBoltBatches(pd, routingEvidenceFor(pd, stateContent))
+            : null;
+          if (dag?.state === "malformed") {
+            emit(errorDirective(
+              `Cannot resolve the gate Unit for stage "${currentSlug}": ${dag.reason} (${dag.detail}).`,
+            ));
+            return;
+          }
+          const unit = dag?.state === "ok" ? dag.batches.flat().at(-1) ?? null : null;
+          const directive = buildRunStageDirective(
+            currentNode, projectType, unit, scope, stateContent, recordPrefix, codekbCtx,
+            dag?.state === "ok" && unit ? dag.unitKinds?.get(unit) ?? null : null,
+          );
+          if (unit !== null) directive.unit = unit;
+          if (isSettledAutonomousSwarm(currentNode, scope, stateContent, pd)) {
+            applySettledSwarmShape(directive);
+          }
+          emit(applyGateOnlyShape(directive));
+          return;
+        }
       }
     }
     // Under an autonomy grant, an eligible per-unit build stage fans out as a
@@ -5624,6 +5653,25 @@ function isSettledAutonomousSwarm(
   if (units.length === 0) return false;
   const converged = swarmConvergedUnits(projectDir, node.slug, routingEvidenceFor(projectDir, stateContent));
   return units.every((unit) => converged.has(unit));
+}
+
+// Reuse the settled run-stage surface without re-entering body or review work.
+// Unlike autonomous swarm bookkeeping, an open human gate keeps its approval.
+function applyGateOnlyShape(directive: RunStageDirective): RunStageDirective {
+  directive.gate_only = true;
+  directive.gate = true;
+  delete directive.reviewer;
+  delete directive.review_artifact;
+  delete directive.review_class;
+  delete directive.reviewer_max_iterations;
+  delete directive.narration;
+  directive.protocol_modules = (directive.protocol_modules ?? []).filter(
+    (module) => module !== "reviewer" && module !== "ensemble",
+  );
+  if (directive.construction_policy) {
+    directive.construction_policy.completion_only = true;
+  }
+  return directive;
 }
 
 function applySettledSwarmShape(
@@ -7328,7 +7376,7 @@ function emitTeamUnitMajorRunStage(
           emit(preflight);
           return;
         }
-        emit(directive);
+        emit(applyGateOnlyShape(directive));
         return;
       }
     }
@@ -7367,7 +7415,7 @@ function emitTeamUnitMajorRunStage(
         emit(preflight);
         return;
       }
-      emit(directive);
+      emit(applyGateOnlyShape(directive));
       return;
     }
   }
@@ -10042,6 +10090,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   if (payload.x) directive.single = true;
   if (payload.z === true) applySettledSwarmShape(directive);
   if (payload.q !== undefined) directive.unit_gate = payload.q;
+  if (payload.o === true) applyGateOnlyShape(directive);
   if (payload.j !== undefined && payload.u !== null && liveState !== null) {
     applyConstructionCheckpointShape(
       directive, resolveConstructionCheckpoint(pd, payload.u, payload.j, liveState),
@@ -10090,15 +10139,24 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     return;
   }
   try {
-    const advanced = advanceContinuationCursor(
-      cursor,
-      receipt,
-      prepared.marker,
-      prepared.resultSha256,
-      engineInvocation?.attemptId,
-      withLegacyOffer.offer,
-      withLegacyOffer.session,
-    );
+    let advanced: ReturnType<typeof advanceContinuationCursor>;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        advanced = advanceContinuationCursor(
+          cursor,
+          receipt,
+          prepared.marker,
+          prepared.resultSha256,
+          engineInvocation?.attemptId,
+          withLegacyOffer.offer,
+          withLegacyOffer.session,
+        );
+        break;
+      } catch (error) {
+        if (!(error instanceof ActiveDirectiveLockContendedError) || attempt === 3) throw error;
+        Bun.sleepSync(500);
+      }
+    }
     if (advanced === "advanced") {
       // The marker moved and is the cursor again, so drop any fallback file left
       // over from a legacy window that has since closed.

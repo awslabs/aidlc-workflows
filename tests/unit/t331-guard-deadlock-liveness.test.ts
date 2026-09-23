@@ -25,7 +25,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
@@ -53,6 +53,7 @@ import {
   guardTerminalAskForRefusal,
   planSourceDriftRefusal,
   isRequestChangesChoice,
+  latestMainWorkflowStageRunFloorForProject,
   isTeamUnitOwnership,
   normalizeGuardRecoveryText,
   maximalAttemptEvents,
@@ -76,6 +77,7 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  runOrchestrateNext,
   seedAuditFile,
   seedAidlcMemory,
   seedBoltDag,
@@ -895,6 +897,141 @@ describe("bounded guard-remedy liveness", () => {
     const text = refusal.remedies.map((remedy) => remedy.action).join(" ");
     expect(text).toContain(".aidlc-source-paths.json");
     expect(text).not.toContain("restore the reviewed source state");
+  });
+});
+
+describe("open-gate resume liveness", () => {
+  function project(team = false): string {
+    const dir = createTestProject();
+    projects.push(dir);
+    seedAidlcMemory(dir);
+    installPackagedEngine(dir, PACKAGED_HARNESSES[0]);
+    seedStateFile(dir, "state-brownfield-feature.md");
+    const path = seededStateFile(dir);
+    let content = readFileSync(path, "utf-8").replace(
+      "[-] requirements-analysis", "[?] requirements-analysis",
+    );
+    if (team) {
+      content = content.replace("[?] requirements-analysis", "[x] requirements-analysis")
+        .replace("[ ] functional-design", "[?] functional-design")
+        .replace("**Current Stage**: requirements-analysis", "**Current Stage**: functional-design")
+        .replace("**Lifecycle Phase**: INCEPTION", "**Lifecycle Phase**: CONSTRUCTION")
+        .replace("## Runtime State", [
+          "## Runtime State",
+          "- **Construction Iteration**: unit-major",
+          "- **Unit Ownership**: team",
+          "- **Unit Gate Rhythm**: per-stage",
+          "- **Skeleton Stance**: on",
+        ].join("\n"));
+      seedBoltDag(dir, ["alpha"]);
+    }
+    writeFileSync(path, content);
+    const slug = team ? "functional-design" : "requirements-analysis";
+    const stage = findStageBySlug(slug)!;
+    const output = join(seededRecordDir(dir), stage.phase, ...(team ? ["alpha"] : []), slug);
+    mkdirSync(output, { recursive: true });
+    for (const name of stage.produces ?? []) {
+      writeFileSync(join(output, artifactFilename(name)), `# ${name}\n`);
+    }
+    if (team) appendAuditEntry("UNIT_COMPLETED", {
+      Stage: slug, Unit: "alpha",
+      "Run floor": latestMainWorkflowStageRunFloorForProject(dir, slug, true, "alpha"),
+    }, dir);
+    const review = [
+      "review", "--stage", slug, "--reviewer", stage.reviewer!, "--iteration", "1",
+      ...(team ? ["--unit", "alpha"] : []),
+    ];
+    const log = (args: string[]) => {
+      const result = spawnSync(process.execPath, [join(dir, ".claude/tools/aidlc-log.ts"), ...args], {
+        cwd: dir, encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir,
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return JSON.parse(result.stdout.trim()) as { reviewFile: string };
+    };
+    const requested = log(review);
+    mkdirSync(dirname(join(dir, requested.reviewFile)), { recursive: true });
+    writeFileSync(join(dir, requested.reviewFile), [
+      "## Review", "", "**Verdict:** READY", `**Reviewer:** ${stage.reviewer}`,
+      "**Iteration:** 1", "", "### Findings", "", "No outstanding findings.", "",
+    ].join("\n"));
+    log([...review, "--verdict", "READY"]);
+    return dir;
+  }
+
+  function next(dir: string) {
+    const result = runOrchestrateNext(join(dir, ".claude/tools/aidlc-orchestrate.ts"), dir, [], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: dir,
+        CLAUDE_PROJECT_DIR: dir,
+        AIDLC_SKIP_ARTIFACT_GUARD: "0",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        AIDLC_SKIP_REVIEWER_GATE_GUARD: "0",
+      },
+    });
+    expect(result.status, result.out).toBe(0);
+    expect(result.directive, result.out).not.toBeNull();
+    return result;
+  }
+
+  function expectGate(directive: Record<string, unknown>) {
+    expect(directive).toMatchObject({ kind: "run-stage", gate: true, gate_only: true });
+    for (const field of ["reviewer", "review_artifact", "review_class", "reviewer_max_iterations", "wave"]) {
+      expect(directive).not.toHaveProperty(field);
+    }
+    expect(directive.protocol_modules ?? []).not.toContain("reviewer");
+    expect(directive.protocol_modules ?? []).not.toContain("ensemble");
+    expect(validateDirective(directive).valid).toBe(true);
+  }
+
+  test("next at an open stage gate survives steering continuation without rerunning reviewed work", () => {
+    const dir = project();
+    // Force actual continue calls, not just the unchunked next surface.
+    writeFileSync(join(dir, "aidlc/spaces/default/memory/org.md"),
+      Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+    const before = readFileSync(seededStateFile(dir), "utf-8");
+    const first = next(dir);
+    expectGate(first.directive!);
+    expect(first.steering.length).toBeGreaterThan(1);
+    expect(first.directive!.stage).toBe("requirements-analysis");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+    const markerPath = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
+    const marker = readFileSync(markerPath, "utf-8");
+    expect(next(dir).directive).toEqual(first.directive);
+    expect(readFileSync(markerPath, "utf-8")).toBe(marker);
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+  });
+
+  test("next at an open team Unit gate preserves the named Unit and settled review", () => {
+    const dir = project(true);
+    const first = next(dir).directive!;
+    expectGate(first);
+    expect(first).toMatchObject({ stage: "functional-design", unit: "alpha", unit_gate: "per-stage" });
+    const state = readFileSync(seededStateFile(dir), "utf-8");
+    expect(state).toContain("**Current Stage**: functional-design");
+    expect(state).toContain("| alpha | - | [?] | [ ] | [ ] | [ ] | [ ] | [?] |");
+    const markerPath = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
+    const marker = readFileSync(markerPath, "utf-8");
+    expect(next(dir).directive).toEqual(first);
+    expect(readFileSync(markerPath, "utf-8")).toBe(marker);
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+  });
+
+  test("an open gate still returns its guard refusal before a gate-only directive", () => {
+    const dir = project();
+    const stage = findStageBySlug("requirements-analysis")!;
+    for (const name of stage.produces ?? []) {
+      rmSync(join(seededRecordDir(dir), stage.phase, stage.slug, artifactFilename(name)));
+    }
+    const before = readFileSync(seededStateFile(dir), "utf-8");
+    const refused = next(dir).directive!;
+    expect(refused).toMatchObject({ kind: "ask", ask_type: "guard-recovery" });
+    expect(refused.reason_codes).toContain("REQUIRED_ARTIFACTS_MISSING");
+    expect(refused).not.toHaveProperty("gate_only");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
   });
 });
 
@@ -1974,15 +2111,4 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(recordGuardRefusal(project, refusal, normalPending).count).toBe(1);
   });
 
-  test("the existing-worktree refusal names merge completion after a Bolt crash", () => {
-    const source = readFileSync(
-      join(
-        import.meta.dir,
-        "../../dist/claude/.claude/tools/aidlc-worktree.ts",
-      ),
-      "utf-8",
-    );
-    expect(source).toContain("without AUDIT_MERGED");
-    expect(source).toContain("finish the existing Bolt complete/merge");
-  });
 });

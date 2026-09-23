@@ -1425,6 +1425,11 @@ describe("t341 protected question interleaving", () => {
       writeFileSync(seededStateFile(pd), readFileSync(seededStateFile(pd), "utf-8").replace(
         "## Stage Progress", "## Stage Progress\n### INCEPTION PHASE\n- [-] delivery-planning — EXECUTE",
       ));
+      const output = join(seededRecordDir(pd), "inception", "delivery-planning");
+      mkdirSync(output, { recursive: true });
+      for (const name of findStageBySlug("delivery-planning")!.produces ?? []) {
+        writeFileSync(join(output, artifactFilename(name)), `# ${name}\n`);
+      }
     }
     ask(pd);
     // An unrelated session's consent is retained only when the new question has
@@ -1434,6 +1439,7 @@ describe("t341 protected question interleaving", () => {
     if (interleaving === "lifecycle-gate") {
       const gate = cli(pd, "state", ["gate-start", "delivery-planning"], {
         ...env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       });
       expect(gate.code, gate.out).toBe(0);
       expect(readAuditShardEvents(pd).some((row) => row.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(row.block, "Stage") === "delivery-planning")).toBe(true);

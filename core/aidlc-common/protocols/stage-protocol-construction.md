@@ -22,6 +22,11 @@ prose. Follow the metadata on the current directive.
 Before ordinary body, questions, reviewer, learnings, or `gate: true` handling,
 load this module and apply these branches in order:
 
+An open stage gate with `gate_only: true` follows the Stage Protocol's
+open-gate re-entry before completion-only bookkeeping below. Its body and
+review are settled, not permission to approve the gate automatically. Preserve
+the team `unit_gate` and settled-swarm policies when those fields are present.
+
 1. **`directive.unit_gate`** uses the existing team-owned gate procedure below.
 2. **`directive.swarm_checkpoint`** uses the swarm module's **Batch checkpoint**
    procedure before ordinary body or settled-swarm handling. Approve or reject

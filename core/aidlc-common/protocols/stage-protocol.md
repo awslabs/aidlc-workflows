@@ -140,6 +140,17 @@ Before and during EVERY stage, verify:
 
 Every stage (except the 3 stages in the Initialization phase: workspace-scaffold, workspace-detection, state-init) requires explicit user approval before proceeding.
 
+**Open-gate re-entry (`directive.gate_only === true`).** Present this gate now.
+The stage body and its review are settled. Do not run the stage, dispatch its
+agents or reviewer, repeat its questions, or edit its outputs. Read the stage
+file only for its completion message and approval procedure. The delivered rules
+still apply. Run learnings only when `protocol_modules` lists `learnings`, then
+present the gate and report the human's exact choice through the existing
+approval procedure. A `unit_gate` follows the team-owned gate procedure with
+the emitted Unit; `swarm_settled` retains the settled-swarm completion policy.
+This branch takes precedence over ordinary stage execution and over generic
+Construction completion-only bookkeeping. It grants no approval itself.
+
 ### HARD STOP RULE (non-negotiable)
 
 When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped.

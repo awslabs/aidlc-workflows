@@ -279,6 +279,9 @@ export interface RunStageDirective {
   // protocol files the conductor reads before the stage body. The prose
   // triggers remain the compatibility fallback when this field is absent.
   protocol_modules?: ProtocolModule[];
+  // Re-present an open approval gate. Body and review are settled; do not rerun
+  // the stage or edit its outputs. Team gates retain their unit_gate routing.
+  gate_only?: true;
   // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
   // converged. Present only as literal true; the conductor must not rerun the
   // stage body or reviewer.
@@ -645,6 +648,7 @@ const RUN_STAGE_FIELDS = [
   "review_class",
   "protocol_modules",
   "swarm_settled",
+  "gate_only",
   "conductor_persona",
   "next_stage",
   "unit",
@@ -673,6 +677,7 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "wave" &&
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
+      field !== "gate_only" &&
       field !== "legacy_plan_approval_choices",
   ),
   "worker",
@@ -1111,6 +1116,7 @@ function checkRunStageShared(
   if (kind === "run-stage") {
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
+    checkOptionalTrue(o, "gate_only", kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
