@@ -122,6 +122,12 @@ model gates, checks out the immutable source and retains sanitized logs under
 `ci-deterministic-probe-<OS>`. These diagnostics do not qualify a full suite or
 a release. Existing CI and Full Suite callers cannot pass this filter.
 
+For the legacy Windows terminal lifecycle, add
+`-f diagnostic_backend=node-pty` with `-f runner=windows-latest`,
+`-f tier=integration` and
+`-f 'diagnostic_filter=^t-tui-node-pty-compat$'`. The backend override is
+manual-only; its default `auto` keeps the normal runtime selection.
+
 ## 3. Let the nightly preview run
 
 [Preview Release](.github/workflows/preview-release.yml) runs daily at

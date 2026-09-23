@@ -570,6 +570,13 @@ The default artifact is
 `ci-deterministic-probe-<OS>`. These targeted diagnostics do not qualify a full
 suite or release.
 
+To reproduce the legacy Windows terminal lifecycle, select
+`-f runner=windows-latest -f tier=integration -f diagnostic_backend=node-pty`
+and `-f 'diagnostic_filter=^t-tui-node-pty-compat$'`. The manual-only backend
+input defaults to `auto` and is unavailable to reusable CI callers. Verify
+that the selected lifecycle case executed with no skips before treating the
+diagnostic as coverage.
+
 POSIX unit jobs require tmux: the shared setup first checks `command -v`, then
 uses apt on Linux or Homebrew on macOS only when it is missing. Linux unit jobs
 also install zsh when absent. Missing tools fail setup rather than skipping the

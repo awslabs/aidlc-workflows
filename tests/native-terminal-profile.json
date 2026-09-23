@@ -602,6 +602,10 @@
             },
             {
               "classname": "TUI driver runtime resolution",
+              "name": "expired work budgets do not prevent runtime selection for cleanup"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
               "name": "explicit legacy Windows selection uses its Node override and type stripping"
             },
             {
@@ -1438,6 +1442,10 @@
             {
               "classname": "TUI driver runtime resolution",
               "name": "Bun and tmux use the current Bun executable without probing Node"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "expired work budgets do not prevent runtime selection for cleanup"
             },
             {
               "classname": "TUI driver runtime resolution",
@@ -2293,6 +2301,10 @@
             {
               "classname": "TUI driver runtime resolution",
               "name": "Bun and tmux use the current Bun executable without probing Node"
+            },
+            {
+              "classname": "TUI driver runtime resolution",
+              "name": "expired work budgets do not prevent runtime selection for cleanup"
             },
             {
               "classname": "TUI driver runtime resolution",

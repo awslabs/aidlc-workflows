@@ -203,6 +203,12 @@ only for manual dispatch, not reusable CI callers.
 One fresh runner produces `ci-deterministic-probe-<OS>` diagnostics with all
 model gates closed; it cannot qualify full-suite or release coverage.
 
+Legacy Windows lifecycle diagnostics also set `diagnostic_backend=node-pty`
+with `runner=windows-latest`, `tier=integration` and
+`diagnostic_filter=^t-tui-node-pty-compat$`. This backend override is
+manual-only and defaults to `auto`; require an executed lifecycle case with
+no skips when assessing the result.
+
 Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
 even when the source already has a published preview: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,

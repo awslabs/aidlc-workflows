@@ -63,6 +63,14 @@ on:
         required: false
         type: string
         default: ""
+      diagnostic_backend:
+        description: Automatic TUI runtime or legacy Windows node-pty for manual diagnostics
+        required: false
+        type: choice
+        default: auto
+        options:
+          - auto
+          - node-pty
 
 permissions:
   contents: read
@@ -75,6 +83,7 @@ jobs:
       run:
         shell: bash
     env:
+      AIDLC_TUI_BACKEND: ${{ inputs.diagnostic_backend || 'auto' }}
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: core.autocrlf
       GIT_CONFIG_VALUE_0: "false"

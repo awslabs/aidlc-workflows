@@ -207,10 +207,11 @@ describe("t345 complete nightly coverage", () => {
       "artifact-label": { type: "string", required: true },
     });
     expect(callable.inputs.diagnostic_filter).toBeUndefined();
+    expect(callable.inputs.diagnostic_backend).toBeUndefined();
     expect(callable.secrets).toBeUndefined();
     expect(callable.outputs).toBeUndefined();
     const manual = deterministic.on.workflow_dispatch.inputs;
-    expect(Object.keys(manual).sort()).toEqual(["artifact-label", "diagnostic_filter", "ref", "runner", "tier", "unit-shard"]);
+    expect(Object.keys(manual).sort()).toEqual(["artifact-label", "diagnostic_backend", "diagnostic_filter", "ref", "runner", "tier", "unit-shard"]);
     expect(manual.ref).toMatchObject({ type: "string", required: true });
     expect(manual.ref.default).toBeUndefined();
     expect(manual.runner).toMatchObject({
@@ -225,6 +226,16 @@ describe("t345 complete nightly coverage", () => {
     expect(manual["unit-shard"].description).toContain("omit for other tiers");
     expect(manual["artifact-label"]).toMatchObject({ type: "string", required: true, default: "ci-deterministic-probe" });
     expect(manual.diagnostic_filter).toMatchObject({ type: "string", required: false, default: "" });
+    expect(manual.diagnostic_backend).toMatchObject({
+      type: "choice", required: false, default: "auto", options: ["auto", "node-pty"],
+    });
+    const backend = deterministic.jobs.test.env!.AIDLC_TUI_BACKEND;
+    expect(backend).toBe(`\${{ inputs.diagnostic_backend || 'auto' }}`);
+    const backendExpression = backend.match(/^\$\{\{([\s\S]+)\}\}$/)![1];
+    const evaluateBackend = new Function("inputs", `return (${backendExpression});`);
+    expect(evaluateBackend({})).toBe("auto");
+    expect(evaluateBackend({ diagnostic_backend: "" })).toBe("auto");
+    expect(evaluateBackend({ diagnostic_backend: "node-pty" })).toBe("node-pty");
     const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
     expect(step.env?.TEST_FILTER).toBe(`\${{ inputs.diagnostic_filter || '' }}`);
     // Exercise the checked-in expression for callers that have no filter input.
@@ -310,6 +321,8 @@ describe("t345 complete nightly coverage", () => {
     }
     expect(ci.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
     expect(workflow.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
+    expect(ci.jobs.deterministic.with?.diagnostic_backend).toBeUndefined();
+    expect(workflow.jobs.deterministic.with?.diagnostic_backend).toBeUndefined();
     const manual = steps(ci.jobs.test_native_terminal).find((step) => step.name === "Run Windows node-pty compatibility on manual dispatch")!;
     expect(manual.if).toBe("github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'");
     expect(manual.env).toEqual({ AIDLC_TUI_BACKEND: "node-pty" });
