@@ -20435,9 +20435,10 @@ export function docsRoot(projectDir: string, intent?: string, space?: string): s
 }
 
 // All record-local framework state lives here. Review audit references retain
-// their exact legacy paths; sensors and summary authorizations have read-only
-// directory fallbacks. Everything else is transient or derived and is rebuilt
-// at the new path without a fallback. These helpers never create directories.
+// their exact legacy paths; sensors, hook health, summary authorizations, and
+// source review have read-only directory fallbacks. Everything else is
+// transient or derived and is rebuilt at the new path without a fallback.
+// These helpers never create directories.
 export function engineDir(projectDir: string, intent?: string, space?: string): string {
   return engineDirFor(docsRoot(projectDir, intent, space));
 }

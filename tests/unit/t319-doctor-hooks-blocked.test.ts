@@ -193,9 +193,16 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
 
     // The new location wins as soon as it exists: the legacy path is a read
     // fallback, not a merge.
-    writeHeartbeat(project, isoSecond(newestStageOrGateTimestamp(project)));
+    const currentHealth = activeHealthDir(project);
+    mkdirSync(currentHealth, { recursive: true });
+    writeFileSync(
+      join(currentHealth, "session-start.last"),
+      isoSecond(newestStageOrGateTimestamp(project)),
+      "utf-8",
+    );
     const afterMove = runUtility(project, ["doctor", "--verbose"]);
-    expect(output(afterMove)).toMatch(/ok {4}Hooks last fired: write-audit-log /);
+    expect(output(afterMove)).toMatch(/ok {4}Hooks last fired: session-start /);
+    expect(output(afterMove)).not.toMatch(/Hooks last fired:[^\n]*write-audit-log/);
     expect(output(afterMove)).not.toContain("Hooks have never executed");
   }, 30_000);
 
