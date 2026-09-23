@@ -4325,21 +4325,27 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
   });
 
   // The adapter decides which pre-dispatch directives it may publish from a RUNTIME list
-  // of kinds; core declares the same set as a TYPE, which cannot be read at runtime. If
-  // the two drift, nothing fails loudly: a kind the engine emits and the adapter omits is
-  // silently demoted to the forwarding latch, so every such dispatch costs the model an
-  // extra `next` round-trip and the pre-dispatch optimisation quietly stops applying.
+  // of kinds. Core's own runtime discriminator is the exported `VALID_KINDS` — the array
+  // `validateDirective` actually tests membership against — so that is what this compares
+  // with. An earlier version parsed the text of the `DirectiveKind` TYPE declaration
+  // instead; the two agree today, but the type is not what rejects a directive at runtime,
+  // and a list can only be pinned against the thing that enforces it.
   //
-  // `load-steering` is the one deliberate omission - its rules can be truncated by the
-  // prompt budget - so it is asserted as absent rather than allowed to look like drift.
-  test("the adapter's publishable-kind list matches core's DirectiveKind union", () => {
-    const union = readFileSync(
-      join(REPO_ROOT, "core", "tools", "aidlc-directive.ts"),
-      "utf-8",
-    ).match(/export type DirectiveKind =([\s\S]*?);/);
-    expect(union, "core no longer declares DirectiveKind as a union").not.toBeNull();
-    const declared = [...(union?.[1] ?? "").matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
-    expect(declared.length, "the union should not have shrunk to nothing").toBeGreaterThan(1);
+  // Drift here does not fail loudly, and it is worse than a slow path: the fallback is NOT
+  // equivalent to publishing. Core validates before it writes stdout, so an unknown kind
+  // cannot come from the current core at all, and by the time the adapter inspects the
+  // kind the first call has already run — including, for `invoke-swarm`, publishing an
+  // active-directive marker that has no retry-retention path. So a kind core emits and
+  // this list omits can stop a workflow rather than merely cost a turn.
+  //
+  // `load-steering` is the one deliberate omission — its rules can be truncated by the
+  // prompt budget — so it is asserted as absent rather than allowed to look like drift.
+  test("the adapter's publishable-kind list matches core's runtime VALID_KINDS", async () => {
+    const { VALID_KINDS } = await import(
+      join(REPO_ROOT, "core", "tools", "aidlc-directive.ts")
+    ) as { VALID_KINDS: readonly string[] };
+    expect(VALID_KINDS.length, "core no longer exports a non-empty VALID_KINDS")
+      .toBeGreaterThan(1);
 
     const adapter = readFileSync(
       join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"),
@@ -4349,7 +4355,7 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     const publishable = [...(adapter?.[1] ?? "").matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
 
     expect(publishable, "a kind core emits but the adapter cannot publish is silent drift")
-      .toEqual(declared.filter((k) => k !== "load-steering"));
+      .toEqual(VALID_KINDS.filter((k) => k !== "load-steering"));
     expect(publishable, "load-steering must not be publishable").not.toContain("load-steering");
   });
 
@@ -4417,6 +4423,13 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
       // actually exercised, so a green result cannot mean "the branch was never reached".
       const relayed = terminalRelay(dir, "sess_hostile_relay");
       expect(relayed, "the relay file must carry the output").toContain(lines[0]);
+
+      // And the PACKET must have been produced. Without these three the test would also
+      // pass if the file were written but the refusal packet dropped entirely — the file
+      // proves `writeTerminalOutput` ran, not that the model was handed a path.
+      expect(r.code, "the interception refuses with exit 2").toBe(2);
+      expect(r.stdout, "the refusal travels on stderr, not stdout").toBe("");
+      expect(r.stderr, "the packet must name the file it points at").toContain("last-output.txt");
 
       // And neither channel the model reads may carry them. Line by line, so a partial
       // leak cannot hide inside a long packet.

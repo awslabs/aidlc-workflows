@@ -1577,11 +1577,36 @@ if (target === "verb-intercept") {
         // through a directive the model was talked into writing - was relayed with that
         // authority attached and the conductor was instructed to act on it.
         //
-        // Now the harness publishes only a kind it can name. Anything else falls through
-        // to the forwarding latch, which is the existing, tested path: the model re-runs
-        // `next` and the directive arrives through the real tool channel, where the core
-        // validator rejects it properly. That is a slower turn, not a failure, and it is
-        // the correct answer for a value this harness cannot vouch for.
+        // Now only a kind the harness can name is published. Anything else publishes
+        // nothing and falls through to the forwarding latch.
+        //
+        // 🔴 That fallback is NOT equivalent to the published path, and an earlier version
+        // of this comment claimed it was ("costs a turn rather than failing, because core's
+        // own validator rejects it"). Both halves of that are wrong, and a second reader
+        // traced why:
+        //
+        //   - Core validates BEFORE it writes stdout (`prepareEmission` ->
+        //     `validateDirective` -> `writePrepared` in core/tools/aidlc-orchestrate.ts),
+        //     so an unknown kind cannot come from the current core at all. Replay does not
+        //     introduce a validator the first call skipped: a newer engine that recognises
+        //     the kind recognises it again, and a project-local orchestrator is the one
+        //     used both times.
+        //   - The first call has already mutated state by the time this parse runs. Two
+        //     turn counters are incremented above, and core can publish an
+        //     active-directive marker before writing stdout - including for
+        //     `invoke-swarm`, which unlike `load-steering` and `run-stage` has no
+        //     retry-retention path, so a replay can publish again and bump the marker
+        //     revision.
+        //
+        // The set is therefore a LIST THAT MUST NOT FALL BEHIND the engine, not a safe
+        // default with a cheap fallback. The t218 case below exists for that reason, and it
+        // compares against core's exported `VALID_KINDS` - the actual runtime
+        // discriminator - rather than the text of the type declaration.
+        //
+        // What the closed list still buys is the thing it was added for: a kind this
+        // harness cannot name is no longer relayed with "act on its `kind` now" attached.
+        // Stopping is a worse outcome than a re-run, and a better one than acting on a
+        // directive whose shape nothing here has checked.
         //
         // Mirrors `DirectiveKind` in core/tools/aidlc-directive.ts. It is a type, so it
         // cannot be read at runtime; this list is the runtime half and t218 pins that the
