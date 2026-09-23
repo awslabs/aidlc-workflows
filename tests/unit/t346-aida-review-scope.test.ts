@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -96,6 +96,9 @@ function git(cwd: string, ...args: string[]): string {
 function repository(): { root: string; base: string; since: string; head: string; rewritten: string } {
   const root = mkdtempSync(join(tmpdir(), "aida-scope-repo-"));
   git(root, "init", "-q", "-b", "main");
+  // Pin tree modes through the index on every OS. Windows chmod cannot set
+  // executable bits, and fixture checkouts must ignore host filesystem modes.
+  git(root, "config", "core.filemode", "false");
   mkdirSync(join(root, "core"), { recursive: true });
   mkdirSync(join(root, "docs"), { recursive: true });
   const write = (name: string, lines: string[]) => writeFileSync(join(root, name), `${lines.join("\n")}\n`);
@@ -107,6 +110,7 @@ function repository(): { root: string; base: string; since: string; head: string
   write("core/hunky.ts", numbered(5, "hunky"));
   write("docs/readme.md", ["intro"]);
   git(root, "add", "-A");
+  git(root, "update-index", "--chmod=-x", "core/hunky.ts");
   git(root, "commit", "-q", "-m", "base");
   const base = git(root, "rev-parse", "HEAD");
 
@@ -147,10 +151,12 @@ function repository(): { root: string; base: string; since: string; head: string
   renamed[4] = "renamed 5 changed at head";
   write("core/renamed-dst.ts", renamed);
   git(root, "rm", "-q", "core/chain-b.ts");
-  chmodSync(join(root, "core", "hunky.ts"), 0o755);
   git(root, "add", "-A");
+  git(root, "update-index", "--chmod=+x", "core/hunky.ts");
   git(root, "commit", "-q", "-m", "head");
   const head = git(root, "rev-parse", "HEAD");
+  expect(git(root, "ls-tree", since, "core/hunky.ts")).toContain("100644 blob");
+  expect(git(root, "ls-tree", head, "core/hunky.ts")).toContain("100755 blob");
 
   // A force-push: the same content on a branch that does not descend from `since`.
   git(root, "checkout", "-q", "-b", "rewritten", base);
