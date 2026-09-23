@@ -42,7 +42,10 @@ hooks via `/hooks` — per the official
 [hooks reference](https://docs.devin.ai/cli/extensibility/hooks/overview),
 `/hooks` lists the currently loaded hooks and their source files — approve the
 AI-DLC hooks if prompted, then **fully restart Devin CLI** (`/clear` is not
-enough for this setup procedure). The SessionStart adapter records
+enough for this setup procedure). In **Devin Desktop** the `/hooks` command
+does not exist in the Devin Local session UI; use the **Open customizations**
+surface (new-tab menu or the session's context menu), which lists loaded
+rules, skills, hooks, MCP servers, and plugins. The SessionStart adapter records
 each successful run in `.devin/.aidlc-session-start.local.json` (gitignored,
 machine-local); `/aidlc --doctor` fails when that evidence is absent or
 invalid. A valid marker is historical execution evidence only — it does not
@@ -205,9 +208,11 @@ files (`hooks.v1.json`, `config.json`, `mcp_config.json`, and `rules/aidlc.md`),
 checks the Devin CLI version, and verifies hook execution evidence: the
 SessionStart adapter writes `.devin/.aidlc-session-start.local.json` after a
 successful run, and doctor fails when that marker is absent or invalid —
-inspect `/hooks`, approve the AI-DLC hooks if prompted, fully restart Devin
-CLI, then rerun doctor (if evidence is still missing, check
-`.devin/hooks.v1.json`, the hook runtime, and `.devin` write permissions). A
+inspect `/hooks` (CLI only; in Devin Desktop use the session's **Open
+customizations** surface instead), approve the AI-DLC hooks if prompted,
+fully restart Devin CLI, then rerun doctor (if evidence is still missing,
+check `.devin/hooks.v1.json`, the hook runtime, and `.devin` write
+permissions). A
 valid marker is historical execution evidence only; it does not verify current
 hook approval. The marker path is ignored by the shipped `.gitignore`;
 existing installs must update the adapter and doctor together, merge the new
