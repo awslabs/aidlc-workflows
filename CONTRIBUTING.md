@@ -132,8 +132,11 @@ PRs produced by AI coding agents are welcome and follow the same process. Start 
 AIDA's PR review ends with an advisory next decision. `author/change` means the
 author should address the reported gaps. `maintainer/merge` means the review
 found no blocking issue and considers the PR ready for a maintainer's merge
-decision; AIDA does not approve or merge the PR. The merge decision requires no
-P0 or P1 finding, readiness of at least 4/5, and risk of at most 2/5.
+decision; AIDA does not approve or merge the PR. The next action follows
+finding severity alone: any open P0 or P1 finding means `author/change`; only
+P2/P3 findings, or none, means `maintainer/merge`. Readiness and risk scores
+explain the assessment to the maintainer and never change the action, so a P3
+can never block a PR.
 
 AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
 id (`F1`, `F2`, …) anchored to the exact content of the lines it cites, so a
@@ -169,8 +172,9 @@ nothing is applied and AIDA replies naming the line. The workflow verifies the c
 permission through GitHub's collaborators API before applying anything and
 reacts 👍 (applied), 👎 (no write access), or 😕 (usage error, with a reply).
 After a command changes the ledger, AIDA re-derives the decision for the
-reviewed head from persisted state under the same rules the review uses (every
-open finding, readiness, risk) and refreshes the managed labels. When that
+reviewed head from persisted state under the same rule the review uses (only
+open P0/P1 findings decide; readiness and risk stay informational) and
+refreshes the managed labels. When that
 decision is `maintainer/merge`, it dismisses its own `CHANGES_REQUESTED`
 review so the head can proceed without an artificial commit; when a `reopen`
 turns it back into `author/change`, it posts a blocking review for the head.

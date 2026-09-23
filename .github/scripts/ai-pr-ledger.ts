@@ -631,21 +631,13 @@ export function resetDecisions(ledger: Ledger, at: string, reason: string): stri
   return reset;
 }
 
-// The one decision rule shared by the review (after ledger decisions apply) and
-// by a later /aida command (without rerunning models). Mirrors the validator's
-// invariants: merge needs no open blocker and readiness >= 4, risk <= 2; a
-// stored `change` flips to merge only when no open finding remains at all.
-export function deriveDecision(
-  stored: "merge" | "change",
-  openBlocking: number,
-  openAny: number,
-  readiness: number,
-  risk: number,
-): "merge" | "change" {
-  if (openBlocking > 0) return "change";
-  const scoresPermitMerge = readiness >= 4 && risk <= 2;
-  if (stored === "merge") return scoresPermitMerge ? "merge" : "change";
-  return openAny === 0 && scoresPermitMerge ? "merge" : "change";
+// The one decision rule, shared by the validator, the review after ledger
+// decisions apply, and a later /aida command: the next action follows finding
+// severity alone. Any open P0/P1 means author/change; otherwise the PR is ready
+// for the maintainer's merge decision. Readiness and risk explain the
+// assessment; they never decide.
+export function deriveDecision(openBlocking: number): "merge" | "change" {
+  return openBlocking > 0 ? "change" : "merge";
 }
 
 export interface LedgerVerdict {
@@ -668,7 +660,7 @@ export function ledgerVerdict(ledger: Ledger): LedgerVerdict | null {
   return {
     head: review.head,
     openBlocking,
-    decision: deriveDecision(review.decision, openBlocking, open.length, review.readiness, review.risk),
+    decision: deriveDecision(openBlocking),
   };
 }
 
@@ -902,6 +894,18 @@ export function reconcileLedger<T extends ReviewFindingInput>(
       if (bound) {
         const known = anchorSet(bound.anchors);
         for (const anchor of finding.anchors) if (!known.has(anchor.sha256)) bound.anchors.push(anchor);
+        // A duplicate never lowers, but may raise, the entry: the highest
+        // priority reported for the defect wins, in the ledger and in the
+        // published restatement.
+        if (rank(finding.priority) < rank(bound.priority)) {
+          bound.priority = finding.priority;
+          bound.title = finding.title;
+          const published = result.kept.find(entry => entry.ledgerId === bound.id);
+          if (published) {
+            published.priority = finding.priority;
+            published.title = finding.title;
+          }
+        }
         continue;
       }
     }

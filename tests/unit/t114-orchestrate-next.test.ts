@@ -96,6 +96,14 @@ const NATIVE_TOOL = join(
   "tools",
   "aidlc-orchestrate.ts",
 );
+const CODEX_TOOL = join(
+  REPO_ROOT,
+  "dist",
+  "codex",
+  ".codex",
+  "tools",
+  "aidlc-orchestrate.ts",
+);
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SKILL_MD = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 
@@ -862,5 +870,115 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("intent create");
+  });
+});
+
+// ===========================================================================
+// Retired flags (--init / --force) are consumed, never intent text
+// ===========================================================================
+// Branch 3 (`--init`) retired in P4; #847 later made unknown flag-looking
+// tokens lossless task text. Together they leaked retired flags into the
+// created intent's DESCRIPTION (`--arguments=--init`). These pin the repair:
+// retired flags vanish, genuinely-unknown tokens still ride as task text,
+// the `--` delimiter still passes a literal `--init` through, and an invocation
+// containing only retired flags stops with current replacement guidance.
+describe("t114 retired flags are consumed, not description text", () => {
+  test("--init with --new-intent + prose creates without leaking the flag", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--init",
+      "--new-intent",
+      "--scope",
+      "bugfix",
+      "fix the login flow",
+    ]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("intent create --scope bugfix");
+    expect(out).not.toContain("--init");
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(true);
+  });
+
+  test("--force is likewise consumed", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--force",
+      "--new-intent",
+      "--scope",
+      "poc",
+      "a standalone dashboard",
+    ]).out;
+    expect(out).toContain("intent create");
+    expect(out).not.toContain("--force");
+  });
+
+  test("genuinely unknown flag-looking tokens remain lossless task text (#847)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "a dashboard with",
+      "--dark-mode",
+    ]).out;
+    expect(out).toContain("intent create");
+    expect(out).toContain("--dark-mode");
+  });
+
+  test("the -- delimiter still passes a literal --init through as text", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "document the retired",
+      "--",
+      "--init",
+    ]).out;
+    expect(out).toContain("intent create");
+    expect(out).toContain("--init");
+  });
+
+  test("retired flags alone do not advance an active workflow", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--init", "--force"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("are retired");
+    expect(out).toContain("--new-intent");
+    expect(out).toContain("No workflow stage was run");
+    expect(out).not.toContain('"kind":"run-stage"');
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
+  });
+
+  test("retired flags alone do not create or advance a fresh workspace", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["--force", "--init"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("are retired");
+    expect(out).toContain("--scope <scope>");
+    expect(out).toContain("No workflow stage was run");
+    expect(out).not.toContain('"kind":"run-stage"');
+    expect(out).not.toContain("intent create");
+  });
+
+  test("Codex projection keeps retired-only guidance command-neutral", () => {
+    proj = createOrchestrationTestProject();
+    const result = runOrchestrateNext(
+      CODEX_TOOL,
+      proj,
+      ["--init", "--force"],
+      { cwd: proj, env: process.env },
+    );
+    expect(result.status).toBe(0);
+    expect(result.out).toContain("invoking the AI-DLC skill");
+    expect(result.out).toContain("--scope <scope>");
+    expect(result.out).toContain("--new-intent --scope <scope>");
+    expect(result.out).not.toContain("/aidlc");
+    expect(result.out).not.toContain("bun .codex");
+    expect(result.out).not.toContain('"kind":"run-stage"');
   });
 });

@@ -1,5 +1,5 @@
 // covers: hook:aidlc-continue-workflow, hook:aidlc-rebuild-stage-graph
-// covers: function:parseLiteralShellInvocation
+// covers: function:parseLiteralShellInvocation, function:isRetiredOnlyNextArgv
 //
 // Pins the both-shape detector contract for the stop hook and runtime-compile
 // hook. The legacy tool-file shape is a permanent input: plugin manifests and
@@ -1121,6 +1121,25 @@ describe("detector corpus", () => {
       "aidlc next --depth minimal --stage intent-capture",
       "aidlc next --depth minimal --new-intent",
       "aidlc next --config project && aidlc report --result approved",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("retired-only next is terminal while retired flags combined with work still engage", () => {
+    for (const command of [
+      "aidlc next --init",
+      "aidlc engine orchestrate next --init --force",
+      "bun .claude/tools/aidlc-orchestrate.ts next --force --init",
+      "bun .claude/tools/aidlc-orchestrate.ts next --init --",
+    ]) {
+      expect(d1(command), command).toBe(false);
+    }
+    for (const command of [
+      'aidlc next --init --new-intent --scope bugfix "fix login"',
+      "aidlc engine orchestrate next --force --stage intent-capture",
+      "bun .claude/tools/aidlc-orchestrate.ts next --init --depth minimal",
+      "bun .claude/tools/aidlc-orchestrate.ts next -- --init",
     ]) {
       expect(d1(command), command).toBe(true);
     }

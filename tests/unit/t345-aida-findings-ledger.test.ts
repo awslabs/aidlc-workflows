@@ -666,14 +666,9 @@ describe("t345 AIDA findings ledger", () => {
   });
 
   test("the verdict is re-derived from persisted state under the review's own rules", () => {
-    // merge needs no open blocker and readiness >= 4, risk <= 2; a stored change flips only when nothing is open.
-    expect(deriveDecision("change", 1, 1, 5, 1)).toBe("change");
-    expect(deriveDecision("change", 0, 1, 5, 1)).toBe("change");
-    expect(deriveDecision("change", 0, 0, 5, 1)).toBe("merge");
-    expect(deriveDecision("change", 0, 0, 3, 1)).toBe("change");
-    expect(deriveDecision("merge", 0, 2, 4, 2)).toBe("merge");
-    expect(deriveDecision("merge", 0, 0, 4, 3)).toBe("change");
-    expect(deriveDecision("merge", 1, 1, 5, 1)).toBe("change");
+    // Severity-only: any open blocker means author/change; otherwise the maintainer decides.
+    expect(deriveDecision(1)).toBe("change");
+    expect(deriveDecision(0)).toBe("merge");
 
     const ledger = ledgerWith(
       { ...entry("F1", "P1", "open", [A42]), lastSeen: seen(HEAD) },
@@ -684,12 +679,13 @@ describe("t345 AIDA findings ledger", () => {
     ledger.review = { head: HEAD, readiness: 4, risk: 2, decision: "change" };
     expect(ledgerVerdict(ledger)).toEqual({ head: HEAD, decision: "change", openBlocking: 1 });
     const accepted = applyCommands(ledger, parseCommands("/aida accept F1 owned"), { login: "maint", at: LATER }).ledger;
-    // F2 (P2) is still open at the head: the stored change stands even though no blocker remains.
-    expect(ledgerVerdict(accepted)).toEqual({ head: HEAD, decision: "change", openBlocking: 0 });
+    // F2 (P2) is still open at the head: advisory findings never block, so the action is merge.
+    expect(ledgerVerdict(accepted)).toEqual({ head: HEAD, decision: "merge", openBlocking: 0 });
     const cleared = applyCommands(accepted, parseCommands("/aida reject F2 documented"), { login: "maint", at: LATER }).ledger;
     expect(ledgerVerdict(cleared)).toEqual({ head: HEAD, decision: "merge", openBlocking: 0 });
+    // Stored scores never change the action either.
     cleared.review = { head: HEAD, readiness: 2, risk: 4, decision: "change" };
-    expect(ledgerVerdict(cleared)?.decision).toBe("change");
+    expect(ledgerVerdict(cleared)?.decision).toBe("merge");
 
     // Reopening an accepted blocker the judge was told not to restate (so it was last seen at an
     // older head) puts it straight back into the verdict.
@@ -804,10 +800,10 @@ describe("t345 AIDA findings ledger", () => {
       expect(omitted.review.ledger?.accepted.map(item => item.id)).toEqual(["F1"]);
       expect(renderReview(omitted.review, CONTEXT_ID).body).toContain("## Accepted risks");
 
-      // Restating an accepted P1 while saying merge stays invalid after the
-      // ledger creates an independent open finding.
+      // Restating an accepted P1 while saying merge: the publisher derives author/change from the
+      // surviving P1 regardless of the judge's pair, and the ledger records an independent finding.
       const mergeRaw = review([{ priority: "P1", lines: [42], ledgerId: "F1" }], { readiness: 4, risk: 2 }, MERGE);
-      expect(() => validateStructuredReview(JSON.stringify(mergeRaw), BASE, HEAD, MANIFEST, METADATA)).toThrow("invalid while P0 or P1 findings remain");
+      expect(validateStructuredReview(JSON.stringify(mergeRaw), BASE, HEAD, MANIFEST, METADATA).decision.action).toBe("change");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -850,14 +846,15 @@ describe("t345 AIDA findings ledger", () => {
     }
   });
 
-  test("a restated rejected finding is independent; low scores keep author/change", () => {
+  test("a restated rejected finding is independent; scores never decide the action", () => {
     const root = contextDir();
     try {
       const loaded: LoadedLedger = { ledger: ledgerWith(entry("F1", "P2", "rejected", [A42], "documented behavior")), commentId: 900, digest: null, migrated: false };
       const restated = apply(review([{ priority: "P2", lines: [42], ledgerId: "F1" }], { readiness: 2, risk: 4 }, CHANGE), loaded, root);
       expect(restated.review.findings.map(item => item.ledgerId)).toEqual(["F2"]);
       expect(restated.review.ledger?.suppressed).toBe(0);
-      expect(restated.review.decision).toEqual(CHANGE);
+      // A P2-only review is the maintainer's decision whatever the scores say.
+      expect(restated.review.decision.action).toBe("merge");
       expect(restated.ledger.findings[0].status).toBe("rejected");
 
       const escalated = apply(review([{ priority: "P1", lines: [42], ledgerId: "F1" }], { readiness: 2, risk: 4 }, CHANGE), loaded, root);

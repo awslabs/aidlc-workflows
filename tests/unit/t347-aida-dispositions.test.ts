@@ -200,6 +200,30 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       expect(body).toContain("**P1 [F3]: Finding F3** — first reported at");
       expect(body).not.toContain("[F4]");
 
+      // An open P1 restated as P2 keeps the ledger's P1 and the action follows the EFFECTIVE priority:
+      // the judge's merge becomes author/change instead of aborting validation.
+      const softened = applyLedgerToReview(
+        parseStructuredReview(review([{ priority: "P2", line: 44 }], [{ id: "F2", disposition: "still-open", findingIndex: 0 }, { id: "F1", disposition: "still-open", findingIndex: null }, { id: "F3", disposition: "still-open", findingIndex: null }], { actor: "maintainer", action: "merge", rationale: "Only advisory work remains." }), BASE, HEAD, MANIFEST, METADATA),
+        loaded, root, root, AT,
+      );
+      expect(softened.review.findings.map(item => `${item.priority}:${item.ledgerId}`)).toEqual(["P1:F2"]);
+      expect(softened.review.decision.action).toBe("change");
+      expect(softened.review.decision.rationale).toBe("Re-derived from the ledger: 2 open blocking findings (F1, F3) were not restated this run and the cited code is unchanged; F2 keeps the ledger's blocking priority, so the author still needs to act. Judge's note, superseded by finding severity: Only advisory work remains.");
+      expect(softened.review.ledger?.decisionAdjusted).toBe(true);
+      expect(renderReview(softened.review, CONTEXT_ID).event).toBe("REQUEST_CHANGES");
+
+      // An untagged P1 that folds into an explicitly restated P2 raises the entry and the published
+      // finding to P1, so the action is the author's, not the maintainer's.
+      const advisoryOpen = ledgerWith({ ...entry("F1", "P2", [A42]), title: "Advisory as recorded" });
+      const foldedUp = applyLedgerToReview(
+        parseStructuredReview(review([{ priority: "P1", line: 42 }, { priority: "P2", line: 43 }], [{ id: "F1", disposition: "still-open", findingIndex: 1 }], { actor: "maintainer", action: "merge", rationale: "Only advisory work remains." }), BASE, HEAD, MANIFEST, METADATA),
+        advisoryOpen, root, root, AT,
+      );
+      expect(foldedUp.review.findings.map(item => `${item.priority}:${item.ledgerId}:${item.title}`)).toEqual(["P1:F1:Restated as number 1"]);
+      expect(foldedUp.ledger.findings[0]).toMatchObject({ id: "F1", priority: "P1", title: "Restated as number 1" });
+      expect(foldedUp.review.decision.action).toBe("change");
+      expect(renderReview(foldedUp.review, CONTEXT_ID).event).toBe("REQUEST_CHANGES");
+
       // In an incremental review whose change set includes F1's file, the same disposition resolves it.
       const incremental = parseStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA, { mode: "incremental", since: OLD_HEAD, reason: "r", files: [{ path: PATH, added: [{ start: 44, end: 44 }], deleted: [], deletedFile: false }] });
       const resolvedNow = applyLedgerToReview(incremental, loaded, root, root, AT);
@@ -223,8 +247,9 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       const advisory = ledgerWith(entry("F1", "P2", [A42]));
       const kept = applyLedgerToReview(parseStructuredReview(review([], [{ id: "F1", disposition: "still-open", findingIndex: null }]), BASE, HEAD, MANIFEST, METADATA), advisory, root, root, AT);
       expect(kept.review.ledger?.retained.map(item => item.id)).toEqual(["F1"]);
-      // Not blocking: the decision is untouched and the blocking event is not raised.
-      expect(kept.review.decision.rationale).toBe("The finding must be corrected.");
+      // Not blocking: the action is the maintainer's merge decision and no blocking event is raised.
+      expect(kept.review.decision.action).toBe("merge");
+      expect(kept.review.decision.rationale).toContain("No P0 or P1 finding survives, so the next action is the maintainer's merge decision");
       expect(renderReview(kept.review, CONTEXT_ID).event).toBe("COMMENT");
       const advisoryBody = renderReview(kept.review, CONTEXT_ID).body;
       expect(advisoryBody).toContain("## Retained advisory findings");

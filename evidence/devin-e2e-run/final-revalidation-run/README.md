@@ -18,7 +18,7 @@ verdicts V0–V8 and findings.
 | Devin CLI | `3000.11.1 (cc4e349ca55e)`; support floor `3000.10.21` |
 | Runtime | bun `1.3.14`; Linux WSL2 `5.15.167.4-microsoft-standard-WSL2` x86_64 |
 | Live gate | `AIDLC_DEVIN_EXEC_LIVE=1` only for captures 07–09; closed for 05 |
-| Redaction | `<home>` → `<home>` in every file |
+| Redaction | `/home/<user>` → `<home>` in every file |
 
 ## Commands (run from the source checkout, in this order)
 

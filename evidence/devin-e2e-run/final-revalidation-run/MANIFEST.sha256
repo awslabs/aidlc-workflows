@@ -9,7 +9,7 @@ f37f95900a36ead182dd9386551a38e39663ee937762249a0eedff7c2a7779e5  ./07-live-devi
 2d4e561115329c5adee2e6bd9cbed52d2827b3fa6b5970aa3209aec8ac14fe1e  ./08-live-devin-mcp-headers.txt
 e60e6061c918d6518db4413445dafffa45df522a5365a2ddca4dbf9e8ee36d15  ./09-live-devin-config-imports.txt
 8b94b60bf98d9976f1623f3cf60ffcd7bbe6ecbc80c97cc1fb89d2c74132864b  ./10-github-state.txt
-b872c54268de10bbb6f55f7de4d5728f55ae91d98eca4141a6480118e6616166  ./README.md
+410af593e9ed38d114d710b2656175be79e2c11d6305edc022fdd83dab0a388d  ./README.md
 452c6fd8fd464cb5a43cd03852be88034bc29e9b51a77a2e9418c0bf0f4b16c1  ./SUMMARY.md
 01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b  ./live-traces/t-exec-devin-config-imports/failures.txt
 e52359d82f2a3fc2ff0c14c4afa065bf197e87f69ce182c5dffe842a7ad7876b  ./live-traces/t-exec-devin-config-imports/summary.txt

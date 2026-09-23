@@ -1185,6 +1185,9 @@ export function decisionInvariantError(
   decision: PullRequestDecision,
   retainedBlocking = 0,
 ): string | null {
+  // Severity-only contract: the next action follows open P0/P1 findings and
+  // nothing else. Readiness and risk (`assessment`) inform the maintainer.
+  void assessment;
   const blocking = findings.some(
     finding => finding.priority === "P0" || finding.priority === "P1",
   );
@@ -1194,20 +1197,8 @@ export function decisionInvariantError(
   if (decision.action === "merge" && retainedBlocking > 0) {
     return "decision maintainer/merge is invalid while retained open blocking findings remain";
   }
-  if (decision.action === "change" && retainedBlocking > 0) return null;
-  if (
-    decision.action === "merge" &&
-    (assessment.readiness.score < 4 || assessment.risk.score > 2)
-  ) {
-    return "decision maintainer/merge requires readiness at least 4 and risk at most 2";
-  }
-  if (
-    decision.action === "change" &&
-    findings.length === 0 &&
-    assessment.readiness.score >= 4 &&
-    assessment.risk.score <= 2
-  ) {
-    return "decision author/change requires a finding, readiness below 4, or risk above 2";
+  if (decision.action === "change" && !blocking && retainedBlocking === 0) {
+    return "decision author/change requires an open P0 or P1 finding";
   }
   return null;
 }
@@ -1231,6 +1222,13 @@ export function validateStructuredReview(
   metadata: ReviewMetadata,
 ): StructuredReview {
   return enforceDecision(parseStructuredReview(raw, expectedBase, expectedHead, manifest, metadata));
+}
+
+// The published rationale must agree with the published action. When a
+// derivation overrides the judge, its explanation leads and the judge's text is
+// kept only as an explicitly superseded note.
+function supersededRationale(explanation: string, judge: string): string {
+  return `${explanation} Judge's note, superseded by finding severity: ${judge}`;
 }
 
 export function parseStructuredReview(
@@ -1458,17 +1456,34 @@ export function parseStructuredReview(
 
   const decisionCandidate = record(candidate.decision, "decision");
   const rationale = requiredText(decisionCandidate.rationale, "decision.rationale", 1000);
-  let decision: PullRequestDecision;
-  if (decisionCandidate.actor === "author" && decisionCandidate.action === "change") {
-    decision = { actor: "author", action: "change", rationale };
-  } else if (
-    decisionCandidate.actor === "maintainer" &&
-    decisionCandidate.action === "merge"
-  ) {
-    decision = { actor: "maintainer", action: "merge", rationale };
-  } else {
-    throw new Error("decision must be author/change or maintainer/merge");
-  }
+  const validPair =
+    (decisionCandidate.actor === "author" && decisionCandidate.action === "change") ||
+    (decisionCandidate.actor === "maintainer" && decisionCandidate.action === "merge");
+  if (!validPair) throw new Error("decision must be author/change or maintainer/merge");
+  // The publisher derives the next action from finding severity; the judge's
+  // rationale is kept, its actor/action pair is not trusted to decide.
+  const derivedAction = deriveDecision(findings.filter(finding => finding.priority === "P0" || finding.priority === "P1").length);
+  // When severity overrides the judge's pair, the judge's action-bearing text is
+  // superseded, not merely annotated, so the published rationale never argues
+  // against the published action.
+  const decision: PullRequestDecision =
+    derivedAction === "change"
+      ? {
+          actor: "author",
+          action: "change",
+          rationale:
+            decisionCandidate.action === "merge"
+              ? supersededRationale("A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above.", rationale)
+              : rationale,
+        }
+      : {
+          actor: "maintainer",
+          action: "merge",
+          rationale:
+            decisionCandidate.action === "change"
+              ? supersededRationale("No P0 or P1 finding survives, so the next action is the maintainer's merge decision; readiness and risk above inform it.", rationale)
+              : rationale,
+        };
 
   // Dispositions of open ledger entries. A still-open disposition with an index
   // binds that finding to the ledger id (the judge does not have to carry ids
@@ -1551,13 +1566,7 @@ export function parseStructuredReview(
   if (deferred.length > 0) {
     review.findings = kept;
     if (decisionInvariantError(kept, assessment, decision) !== null) {
-      const derived = deriveDecision(
-        decision.action,
-        kept.filter(finding => finding.priority === "P0" || finding.priority === "P1").length,
-        kept.length,
-        assessment.readiness.score,
-        assessment.risk.score,
-      );
+      const derived = deriveDecision(kept.filter(finding => finding.priority === "P0" || finding.priority === "P1").length);
       const plural = deferred.length === 1 ? "" : "s";
       review.decision =
         derived === "merge"
@@ -1657,7 +1666,9 @@ export function applyLedgerToReview(
   const result = reconcileLedger(loaded, inputs, review.head, at, presence, dispositions, changedFiles);
   // The ledger's effective priority wins: a restatement never lowers an open
   // finding's priority.
-  const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, ledgerId: entry.ledgerId }));
+  // The ledger's effective priority (and the title that came with it, when a
+  // duplicate raised the entry) wins over the restatement's own.
+  const kept = result.kept.map(entry => ({ ...entry.finding, priority: entry.priority, title: entry.title, ledgerId: entry.ledgerId }));
   // Every retained entry is rendered; only blocking ones bear on the verdict.
   const retained = result.retained;
   const retainedBlocking = retained.filter(entry => isBlocking(entry.priority));
@@ -1665,36 +1676,43 @@ export function applyLedgerToReview(
   const removed = result.restatedAccepted.length + result.suppressed.length;
   let decision = review.decision;
   let decisionAdjusted = false;
-  if (retainedBlocking.length > 0 || removed > 0) {
-    // Same rule a later /aida command applies from persisted state (deriveDecision).
-    const openBlocking = retainedBlocking.length + kept.filter(finding => isBlocking(finding.priority)).length;
-    const derived = deriveDecision(
-      review.decision.action,
-      openBlocking,
-      retained.length + kept.length,
-      review.assessment.readiness.score,
-      review.assessment.risk.score,
-    );
-    if (derived !== review.decision.action) {
-      decisionAdjusted = true;
-      decision =
-        derived === "change"
-          ? {
-              actor: "author",
-              action: "change",
-              rationale: `${review.decision.rationale} Re-derived from the ledger: ${retainedBlocking.length} open blocking finding${
-                retainedBlocking.length === 1 ? "" : "s"
-              } (${retainedBlocking.map(entry => entry.id).join(", ")}) ${
-                retainedBlocking.length === 1 ? "was" : "were"
-              } not restated this run and the cited code is unchanged, so the author still needs to act.`,
-            }
-          : {
-              actor: "maintainer",
-              action: "merge",
-              rationale: `${review.decision.rationale} Re-derived after applying ${removed} maintainer ledger decision${
-                removed === 1 ? "" : "s"
-              }: no blocking finding remains and the assessment permits a merge decision.`,
-            };
+  // The action is always re-derived from EFFECTIVE state after reconciliation:
+  // kept findings at the ledger's priority (a P1 restated as P2 is still a P1)
+  // plus retained blockers. Same one-line rule a later /aida command applies.
+  const keptBlocking = kept.filter(finding => isBlocking(finding.priority));
+  const derived = deriveDecision(retainedBlocking.length + keptBlocking.length);
+  if (derived !== review.decision.action) {
+    decisionAdjusted = true;
+    if (derived === "change") {
+      const causes: string[] = [];
+      if (retainedBlocking.length > 0) {
+        causes.push(
+          `${retainedBlocking.length} open blocking finding${retainedBlocking.length === 1 ? "" : "s"} (${retainedBlocking.map(entry => entry.id).join(", ")}) ${
+            retainedBlocking.length === 1 ? "was" : "were"
+          } not restated this run and the cited code is unchanged`,
+        );
+      }
+      const raised = keptBlocking.filter(finding => finding.ledgerId && review.findings.every(original => original.title !== finding.title || !isBlocking(original.priority)));
+      if (raised.length > 0) {
+        causes.push(`${raised.map(finding => finding.ledgerId).join(", ")} ${raised.length === 1 ? "keeps" : "keep"} the ledger's blocking priority`);
+      }
+      decision = {
+        actor: "author",
+        action: "change",
+        rationale: supersededRationale(
+          `Re-derived from the ledger: ${causes.length > 0 ? causes.join("; ") : "an open blocking finding remains"}, so the author still needs to act.`,
+          review.decision.rationale,
+        ),
+      };
+    } else {
+      decision = {
+        actor: "maintainer",
+        action: "merge",
+        rationale: supersededRationale(
+          `Re-derived after applying ${removed} maintainer ledger decision${removed === 1 ? "" : "s"}: no blocking finding remains.`,
+          review.decision.rationale,
+        ),
+      };
     }
   }
   // A full review requested with /aida full is consumed by the review that used it.
@@ -1815,7 +1833,7 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     "## Final Assessment",
     "",
-    "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores do not approve or merge the PR.",
+    "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores inform the maintainer; the next action below follows finding severity (any open P0/P1 → author/change) and does not approve or merge the PR.",
     "",
     `Readiness: **${review.assessment.readiness.score}/5** — ${
       markdownText(review.assessment.readiness.rationale)
