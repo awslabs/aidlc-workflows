@@ -62,6 +62,7 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   { file: "aidlc-reviewer-scope.json", trigger: "PreToolUse", matcher: "^(write|fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|read|fs_read|read_file|read_files|list_directory|file_search|grep_search|grep|execute_bash|execute_pwsh|shell)$", adapterTarget: "reviewer-scope" },
   { file: "aidlc-session-start.json", trigger: "SessionStart", matcher: null, adapterTarget: "session-start" },
   { file: "aidlc-session-start.json", trigger: "AgentSpawn", matcher: null, adapterTarget: "session-start" },
+  { file: "aidlc-shell-boundary.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "shell-boundary" },
   { file: "aidlc-state-transition-guard.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "state-transition-guard" },
   { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: "^(execute_bash|execute_pwsh|shell|todo_list)$", adapterTarget: "sync-workflow-state" },
   { file: "aidlc-terminal-command-guard.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "terminal-command-guard" },

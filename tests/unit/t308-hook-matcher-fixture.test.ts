@@ -164,6 +164,7 @@ describe("t308 hook registration matchers select captured fixture tool names", (
     "aidlc-rebuild-stage-graph.json",
     "aidlc-review-freeze.json",
     "aidlc-reviewer-scope.json",
+    "aidlc-shell-boundary.json",
     "aidlc-state-transition-guard.json",
     "aidlc-sync-workflow-state.json",
     "aidlc-terminal-command-guard.json",

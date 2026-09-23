@@ -256,6 +256,7 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
     { src: "hooks/aidlc-terminal-command.json", dst: "hooks/aidlc-terminal-command.json" },
     { src: "hooks/aidlc-terminal-command-guard.json", dst: "hooks/aidlc-terminal-command-guard.json" },
+    { src: "hooks/aidlc-shell-boundary.json", dst: "hooks/aidlc-shell-boundary.json" },
     { src: "hooks/aidlc-enforce-approval-gate.json", dst: "hooks/aidlc-enforce-approval-gate.json" },
     { src: "hooks/aidlc-plan-approval-guard.json", dst: "hooks/aidlc-plan-approval-guard.json" },
     { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },

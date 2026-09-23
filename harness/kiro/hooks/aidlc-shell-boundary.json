@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-shell-boundary",
+      "trigger": "PreToolUse",
+      "matcher": "^(execute_bash|execute_pwsh|shell)$",
+      "description": "Refuses composed shell syntax - chaining, backgrounding, substitution, redirection, newlines - on a command AI-DLC pre-approves, permitting only a single terminal 2>&1.",
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro shell-boundary" }
+    }
+  ]
+}

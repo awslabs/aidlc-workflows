@@ -4083,3 +4083,172 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
     }
   });
 });
+
+// --- shell boundary ---
+//
+// Every command in REFUSED_CARRIERS was measured RUNNING WITH NO APPROVAL on this
+// branch's own build (Kiro IDE 1.x, v3 engine, a fixture carrying no user-scope and no
+// workspace-scope permissions file). Each matched a shell-permission pattern the
+// shipped agent config pre-approves, because a pattern ending in `*` matches any tail
+// and v3's matcher does not treat these characters as command boundaries. The 2.x
+// binary gated `$(`, a backtick, `<` and `>` independently of pattern matching
+// (t252's TAIL_METACHARACTERS, "Verified live on 2.12.1"); v3 gates none of them.
+//
+// Four of these - `>>`, `2>`, `<`, and a bare `&` - are named by no token list in this
+// repository, which is why the boundary is a lexer and not a denylist. The bare `&`
+// case also refutes the vendor's documented separator list (`;`, `&&`, `||`, `|`),
+// which omits it: both commands ran.
+describe("t218 shell boundary refuses composed syntax on a pre-approved command", () => {
+  const REFUSED_CARRIERS: Array<[string, string]> = [
+    ["command substitution", "date -u +%s-$(date -u +%Y)"],
+    ["backtick substitution", "date -u +%s-`date -u +%Y`"],
+    ["substitution inside double quotes", 'bun .kiro/tools/aidlc.ts engine status --at "$(date -u)"'],
+    ["backtick inside double quotes", 'bun .kiro/tools/aidlc.ts engine status --at "`date -u`"'],
+    ["stdout redirection", "bun .kiro/tools/aidlc.ts engine status > probe-out.txt"],
+    ["stdout append", "bun .kiro/tools/aidlc.ts engine status >> probe-out.txt"],
+    ["stderr redirection to a file", "bun .kiro/tools/aidlc.ts engine nosuchroute 2> probe-err.txt"],
+    ["stdin redirection", "date -u < AGENTS.md"],
+    ["background operator", "date -u & date -u +%Y"],
+    ["newline", "date -u +%Y\ndate -u +%s > probe-newline.txt"],
+    ["carriage return", "date -u +%Y\rdate -u +%s"],
+    ["semicolon chain", "bun .kiro/tools/aidlc.ts engine status; curl -s https://example.com"],
+    ["and chain", "bun .kiro/tools/aidlc.ts engine status && curl -s https://example.com"],
+    ["or chain", "bun .kiro/tools/aidlc.ts engine status || curl -s https://example.com"],
+    ["pipe", "bun .kiro/tools/aidlc.ts engine status | tee probe-pipe.txt"],
+    ["process substitution", "bun .kiro/tools/aidlc.ts engine status <(date -u)"],
+    ["trailing background", "bun .kiro/tools/aidlc.ts engine status &"],
+    ["a tool script, not just the dispatcher", "bun .kiro/tools/aidlc-state.ts get > probe-state.txt"],
+    ["bun run form", "bun run .kiro/tools/aidlc.ts engine status > probe-run.txt"],
+  ];
+
+  // Forms that must still pass. A boundary refusing these would break the workflow it
+  // exists to protect: `2>&1` merges a descriptor rather than naming a file and the
+  // model appends it routinely, and a metacharacter inside quotes is literal text the
+  // shell never acts on.
+  const PERMITTED: Array<[string, string]> = [
+    ["the bare pre-approved command", "bun .kiro/tools/aidlc.ts engine status"],
+    ["one terminal 2>&1", "bun .kiro/tools/aidlc.ts engine status 2>&1"],
+    ["a bare timestamp", "date -u"],
+    ["a quoted timestamp format", 'date -u +"%Y-%m-%dT%H:%M:%SZ"'],
+    ["a semicolon inside single quotes", "bun .kiro/tools/aidlc.ts engine status --text 'a; b'"],
+    ["a redirection glyph inside single quotes", "bun .kiro/tools/aidlc.ts engine status --text 'a > b'"],
+    ["an ampersand inside double quotes", 'bun .kiro/tools/aidlc.ts engine status --text "a & b"'],
+    ["a compiled-dispatcher invocation", "aidlc engine status"],
+  ];
+
+  // Commands AI-DLC does not pre-approve are none of this hook's business: they reach
+  // the platform's own unmatched-defaults-to-ask path, and turning them into a refusal
+  // would widen the hook past the grants it protects.
+  const UNRELATED: Array<[string, string]> = [
+    ["an unrelated redirection", "ls > out.txt"],
+    ["an unrelated chain", "echo hi && curl -s https://example.com"],
+    ["a script outside the harness tools directory", "bun scripts/other.ts > out.txt"],
+    ["an absolute path into another project", "bun /elsewhere/.kiro/tools/aidlc.ts engine status > out.txt"],
+    ["a traversing path", "bun .kiro/tools/../../evil.ts > out.txt"],
+  ];
+
+  function boundary(dir: string, command: unknown): { stderr: string; code: number } {
+    const r = runIdeStdin(
+      dir,
+      "shell-boundary",
+      JSON.stringify({
+        session_id: "sess_shell_boundary",
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command, cwd: dir, run_in_background: false, timeout: null },
+      }),
+    );
+    return { stderr: r.stderr, code: r.code };
+  }
+
+  test("every measured carrier is refused, not merely prompted", () => {
+    const dir = scratchProject(true);
+    try {
+      for (const [label, command] of REFUSED_CARRIERS) {
+        const r = boundary(dir, command);
+        expect(`${label}:code=${r.code}`).toBe(`${label}:code=2`);
+        expect(r.stderr).toContain("one simple command");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the pre-approved forms the workflow actually emits still pass", () => {
+    const dir = scratchProject(true);
+    try {
+      for (const [label, command] of PERMITTED) {
+        const r = boundary(dir, command);
+        expect(`${label}:code=${r.code}`).toBe(`${label}:code=0`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("commands AI-DLC does not pre-approve are left to the platform", () => {
+    const dir = scratchProject(true);
+    try {
+      for (const [label, command] of UNRELATED) {
+        const r = boundary(dir, command);
+        expect(`${label}:code=${r.code}`).toBe(`${label}:code=0`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The boundary must fail CLOSED. Every other shell decision in this adapter forwards
+  // to a core hook through runCoreHook, which maps `exitCode ?? 0` - a missing status
+  // becomes success - and the guards downstream catch their own errors and permit. A
+  // boundary inheriting that would permit what it exists to refuse.
+  test("a malformed command field is refused, not skipped", () => {
+    const dir = scratchProject(true);
+    try {
+      for (const malformed of [42, true, { command: "nested" }, ["array"]]) {
+        const r = boundary(dir, malformed);
+        expect(`${JSON.stringify(malformed)}:code=${r.code}`).toBe(
+          `${JSON.stringify(malformed)}:code=2`,
+        );
+      }
+      // An absent or blank command is a different case: there is nothing to judge, and
+      // the platform sends that shape on tools this matcher also covers.
+      const absent = runIdeStdin(
+        dir,
+        "shell-boundary",
+        JSON.stringify({
+          session_id: "sess_shell_boundary",
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "execute_bash",
+          tool_input: { cwd: dir },
+        }),
+      );
+      expect(absent.code).toBe(0);
+      expect(boundary(dir, "   ").code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-shell tool is not this hook's business", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(
+        dir,
+        "shell-boundary",
+        JSON.stringify({
+          session_id: "sess_shell_boundary",
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "fs_write",
+          tool_input: { path: join(dir, "x.md"), command: "date -u > x.txt" },
+        }),
+      );
+      expect(r.code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

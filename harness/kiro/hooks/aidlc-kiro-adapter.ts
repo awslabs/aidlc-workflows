@@ -346,6 +346,10 @@ const INPUT_TARGETS = new Set([
   "verb-intercept",
   "reviewer-scope",
   "guard-tool-call",
+  // Reads `toolArgs.command`. Registered here deliberately rather than in
+  // PAYLOAD_TARGETS: a malformed payload must reach the boundary as a refusal, not be
+  // dropped, so the target does its own validation instead of being filtered out.
+  "shell-boundary",
   // Not in PAYLOAD_TARGETS on purpose: a malformed payload here must fall back to
   // the audit-tail reconciliation, not drop the event.
   "sync-workflow-state",
@@ -1581,6 +1585,250 @@ if (target === "verb-intercept") {
   writeTerminalLatch(sessionId, sessionTurn, invocation, result);
   process.stdout.write(terminalContext(result));
   return 0;
+}
+
+// --- shell boundary: refuse composed shell syntax on a pre-approved command ---
+//
+// Why this exists, measured on this branch's own build (Kiro IDE 1.x, v3 engine, a
+// fixture with no user-scope and no workspace-scope permissions file):
+//
+//   command                                      approval asked   effect
+//   date -u +%s-$(date -u +%Y)                   none             substitution ran
+//   date -u +%s-`date -u +%Y`                    none             substitution ran
+//   {{dispatcher}} engine status > out.txt       none             file written
+//   {{dispatcher}} engine status >> out.txt      none             file appended
+//   {{dispatcher}} engine nosuchroute 2> err.txt none             file written
+//   date -u < AGENTS.md                          none             ran
+//   date -u & date -u +%Y                        none             BOTH ran
+//   date -u +%Y <newline> date -u +%s > f.txt    none             BOTH ran
+//
+// Every one of those matched a pattern the agent config pre-approves, because a
+// pattern ending in `*` matches any tail and the platform's glob matcher does not
+// treat these characters as command boundaries - the vendor's own separator list is
+// `;`, `&&`, `||`, `|` and omits a bare `&` entirely, which the eighth row refutes.
+// The 2.x binary gated `$(`, a backtick, `<` and `>` independently of pattern
+// matching (recorded at tests/unit/t252-kiro-allowlist-semantics.test.ts:136,
+// verified live on 2.12.1); v3 gates none of them.
+//
+// Two consequences a declarative rule cannot reach. The redirected writes landed at
+// the project root, which the same agent's `capability: filesystem` allow list does
+// not cover - an unmatched path defaults to `ask`, and nothing asked, because a write
+// delivered as shell text never presents as a filesystem operation.
+// docs/reference/06-hooks-and-tools.md says the same thing in the product's own
+// words, which is why the review freeze parses redirection targets out of the command
+// rather than trusting the Write/Edit hook path. And the tails cannot be enumerated
+// away: nine probes surfaced four carriers (`>>`, `2>`, `<`, bare `&`) that the most
+// careful token list in this repository does not name.
+//
+// So the boundary is structural, not a denylist: a pre-approved command must be ONE
+// simple command. Anything that composes - chaining, backgrounding, substitution,
+// redirection, a newline - is refused here rather than silently pre-approved.
+//
+// This deliberately turns what the platform would have prompted for into a refusal
+// with no human override. That is the cost of the grant: a command the user has
+// pre-approved must stay the command they pre-approved. A shell form that is NOT
+// pre-approved by AIDLC is left entirely alone (`ls > out.txt` stays an ordinary
+// platform prompt), which is what the prefix scoping below is for.
+//
+// Modelled on harness/copilot/hooks/aidlc-copilot-adapter.ts:314 (`shellWords`) and
+// harness/opencode/plugin/aidlc-opencode-adapter.ts:130 (`directShellWords`). Kiro was
+// the only row in this tree without such a boundary.
+
+// Characters that end a simple command. `\n` and `\r` are in here because a real
+// newline inside one tool call ran two commands (probe 9), and a lone `\r` is a line
+// terminator to some shells.
+const SHELL_BOUNDARY_METACHARACTERS = ";&|<>`\n\r";
+
+function shellBoundaryMetacharacterAt(command: string, i: number): boolean {
+  const ch = command[i];
+  return (
+    SHELL_BOUNDARY_METACHARACTERS.includes(ch) ||
+    (ch === "$" && command[i + 1] === "(")
+  );
+}
+
+// Quote-aware argv split. Returns null when the command is not a single simple
+// command: any boundary metacharacter outside quotes, an unterminated quote, a
+// trailing backslash, or a substitution that a double quote does NOT neutralize
+// (inside `"…"` a backtick and `$(` still execute, which is why they are rejected
+// there while `;` and `>` are kept as literal text).
+function shellBoundaryWords(command: string): string[] | null {
+  const words: string[] = [];
+  let word = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let started = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) { word += ch; escaped = false; started = true; continue; }
+    if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+    if (quote) {
+      if (ch === quote) { quote = null; continue; }
+      if (
+        quote === '"' &&
+        (ch === "`" || (ch === "$" && command[i + 1] === "("))
+      ) return null;
+      word += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; started = true; continue; }
+    if (shellBoundaryMetacharacterAt(command, i)) return null;
+    if (/\s/.test(ch)) {
+      if (started) { words.push(word); word = ""; started = false; }
+      continue;
+    }
+    word += ch;
+    started = true;
+  }
+  if (escaped || quote !== null) return null;
+  if (started) words.push(word);
+  return words;
+}
+
+// The argv of everything BEFORE the first boundary metacharacter. This is what
+// decides whether the command is one AIDLC pre-approves, and it must be computed
+// separately from the form check: a command carrying a carrier still has an
+// AIDLC execution prefix, and deciding recognition on the whole string would let
+// exactly the composed forms above escape the boundary unrecognised.
+//
+// 🔴 This tokenizer is deliberately LENIENT where shellBoundaryWords is strict: it
+// only splits words, and rejects nothing. Sharing the strict lexer here was measured
+// wrong - `… engine status --at "$(date -u)"` hides its substitution inside double
+// quotes, so the strict lexer returned null, the prefix came back empty, the command
+// read as unrelated and the hook permitted the one thing it exists to refuse. What a
+// word CONTAINS is the form check's business; identifying which command is being run
+// is this function's, and the two must not be able to disable each other.
+function shellBoundaryPrefix(command: string): string[] {
+  const words: string[] = [];
+  let word = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let started = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) { word += ch; escaped = false; started = true; continue; }
+    if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+    if (quote) {
+      if (ch === quote) { quote = null; continue; }
+      word += ch;
+      started = true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; started = true; continue; }
+    if (shellBoundaryMetacharacterAt(command, i)) break;
+    if (/\s/.test(ch)) {
+      if (started) { words.push(word); word = ""; started = false; }
+      continue;
+    }
+    word += ch;
+    started = true;
+  }
+  if (started) words.push(word);
+  return words;
+}
+
+// One terminal `2>&1` is permitted, and nothing else is. The model routinely appends
+// it to see a tool's diagnostics, it merges a descriptor rather than naming a file,
+// and the Copilot row already permits exactly this one form
+// (harness/copilot/hooks/aidlc-copilot-adapter.ts:383). `2>` followed by a path is a
+// file write - measured, probe 6 - and stays refused.
+function stripTerminalStderrMerge(command: string): string | null {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (
+      ch === "2" &&
+      (i === 0 || /\s/.test(command[i - 1])) &&
+      command.slice(i, i + 4) === "2>&1" &&
+      command.slice(i + 4).trim().length === 0
+    ) {
+      return command.slice(0, i).trimEnd();
+    }
+  }
+  return null;
+}
+
+// Is this a command AIDLC pre-approves, and therefore one whose form we own?
+//
+// Three shapes, all of them grants this row ships: the dispatcher or a tool script
+// run through `bun` from inside the harness tools directory (which also covers the
+// per-persona tool grants), the compiled executable, and the timestamp command.
+// `date` is included because the conductor pre-approves it and because this
+// repository cannot reveal whether the platform matches raw command text or a
+// re-quoted argv - if it normalizes, a redirection tail could match an exact
+// `date -u` pattern, so the boundary must hold either way.
+//
+// A prefix that is none of these returns false and the hook does nothing at all:
+// an unrelated `ls > out.txt` keeps whatever the platform would have done with it.
+function isAidlcPreApprovedPrefix(prefix: string[]): boolean {
+  let cursor = 0;
+  const first = prefix[cursor++] ?? "";
+  if (first.length === 0) return false;
+  const leaf = first.replace(/\\/g, "/").split("/").pop() ?? first;
+  if (/^date(\.exe)?$/i.test(leaf)) return true;
+  if (/^aidlc(\.exe)?$/i.test(leaf)) return true;
+  if (!/^bun(\.exe)?$/i.test(leaf)) return false;
+  if (prefix[cursor] === "run") cursor++;
+  const script = (prefix[cursor] ?? "").replace(/\\/g, "/");
+  if (script.length === 0) return false;
+  // The grants are project-relative, so a bare relative path into the harness tools
+  // directory is the shape to recognise. An absolute or traversing path is NOT
+  // recognised here on purpose: it does not match the shipped patterns either, so it
+  // is already an ordinary platform prompt and turning it into a refusal would widen
+  // this hook past the grants it exists to protect.
+  return /^\.[\w-]+\/tools\/[\w.-]+\.ts$/.test(script);
+}
+
+const SHELL_BOUNDARY_REFUSAL =
+  "AI-DLC refused this command: a pre-approved AI-DLC command must be one simple " +
+  "command. Chaining, backgrounding, command substitution, redirection, and " +
+  "newline-separated commands are not permitted - only a single terminal `2>&1`. " +
+  "Re-run the command on its own; if you need its output in a file, write the file " +
+  "with a file tool instead of a shell redirection.";
+
+if (target === "shell-boundary") {
+  // Fail closed, and do it without leaving this process. Every other shell decision
+  // in this adapter forwards to a core hook through runCoreHook, which maps
+  // `exitCode ?? 0` - a missing status becomes success - and the guards downstream of
+  // it catch their own errors and permit. A boundary inheriting any of that would
+  // permit exactly the commands it exists to refuse, so this target runs entirely
+  // in-process and treats its own failure as a violation.
+  try {
+    const tool = ide.toolName ?? "";
+    if (!isKiroShellTool(tool)) return 0;
+    const raw = ide.toolArgs?.command;
+    if (raw === undefined || raw === null) return 0;
+    if (typeof raw !== "string") {
+      // A shell tool call whose command is not a string is not a shape this adapter
+      // can reason about. It is also not a shape the platform sends, so treat it as
+      // hostile rather than as an absent field.
+      process.stderr.write(SHELL_BOUNDARY_REFUSAL);
+      return 2;
+    }
+    if (raw.trim().length === 0) return 0;
+    if (Buffer.byteLength(raw) > 64 * 1024) {
+      process.stderr.write(SHELL_BOUNDARY_REFUSAL);
+      return 2;
+    }
+    if (!isAidlcPreApprovedPrefix(shellBoundaryPrefix(raw))) return 0;
+    const body = stripTerminalStderrMerge(raw) ?? raw;
+    if (shellBoundaryWords(body) === null) {
+      process.stderr.write(SHELL_BOUNDARY_REFUSAL);
+      return 2;
+    }
+    return 0;
+  } catch {
+    process.stderr.write(SHELL_BOUNDARY_REFUSAL);
+    return 2;
+  }
 }
 
 if (target === "terminal-command-guard") {
