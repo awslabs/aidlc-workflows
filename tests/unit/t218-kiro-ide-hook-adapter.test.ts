@@ -45,6 +45,7 @@ import {
   stateDigest,
   workspaceSourceFingerprint,
   readActiveDirectiveMarker,
+  writeSessionPidEntry,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -213,6 +214,20 @@ function runIde(
   userPrompt: string | null,
   envOverrides: Record<string, string | undefined> = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "record-human-turn") {
+    let session = legacySessionId(projectDir);
+    try {
+      const parsed = JSON.parse(userPrompt ?? "") as {
+        session_id?: unknown;
+        sessionId?: unknown;
+      };
+      const supplied = parsed.session_id ?? parsed.sessionId;
+      if (typeof supplied === "string" && supplied.trim()) session = supplied;
+    } catch {
+      // Legacy prompt-less fixtures use the measured IDE host identity.
+    }
+    writeSessionPidEntry(projectDir, process.pid, session);
+  }
   const env: Record<string, string | undefined> = {
     ...process.env,
     CLAUDE_PROJECT_DIR: projectDir,
@@ -296,6 +311,18 @@ function runIdeStdin(
   stdinPayload: string,
   envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "record-human-turn") {
+    let session = legacySessionId(projectDir);
+    try {
+      const parsed = JSON.parse(stdinPayload) as { session_id?: unknown };
+      if (typeof parsed.session_id === "string" && parsed.session_id.trim()) {
+        session = parsed.session_id;
+      }
+    } catch {
+      // Broken-channel fixtures retain the measured IDE host identity.
+    }
+    writeSessionPidEntry(projectDir, process.pid, session);
+  }
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_UNATTENDED: undefined,

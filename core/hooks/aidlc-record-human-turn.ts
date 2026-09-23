@@ -56,6 +56,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   clearPlanApprovalChallenge,
+  authenticatedHumanTurnSession,
   planApprovalChallengeRelativePath,
   protectedQuestionRelativePath,
   withdrawProtectedQuestions,
@@ -192,6 +193,9 @@ try {
         ) ?? "";
     }
   } catch { /* presence still records without identity on legacy payloads */ }
+  const authenticatedSessionId = authenticatedHumanTurnSession(projectDir, sessionId);
+  if (authenticatedSessionId === null) return 0;
+  sessionId = authenticatedSessionId;
   // A field-only rename preserves the stored and effective value, so it carries
   // no switch authority. Kiro IDE's prompt-empty adapter performs the same
   // operation before forwarding because some builds discard core hook output.

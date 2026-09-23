@@ -57,9 +57,9 @@ one advisory pass and disables walking-skeleton ceremony, while explicit autonom
 keeps the single pre-merge review.
 
 Express turns sensors, learnings, and summary confirmation off; override them
-per intent with [`/aidlc --sensors on|off`](../guide/12-cli-commands.md#aidlc---sensors---learnings---summary-confirmation--ceremony-controls),
-[`/aidlc --learnings on|off`](../guide/12-cli-commands.md#aidlc---sensors---learnings---summary-confirmation--ceremony-controls),
-or [`/aidlc --summary-confirmation on|off`](../guide/12-cli-commands.md#aidlc---sensors---learnings---summary-confirmation--ceremony-controls).
+per intent with [`/aidlc --sensors on|off`](../guide/12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls),
+[`/aidlc --learnings on|off`](../guide/12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls),
+or [`/aidlc --summary-confirmation on|off`](../guide/12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls).
 
 ### Freeform default
 

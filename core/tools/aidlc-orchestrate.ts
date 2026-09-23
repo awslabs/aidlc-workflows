@@ -5699,7 +5699,10 @@ function applyGateOnlyShape(directive: RunStageDirective): RunStageDirective {
   delete directive.reviewer_max_iterations;
   delete directive.narration;
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
-    (module) => module !== "reviewer" && module !== "ensemble",
+    (module) =>
+      module !== "reviewer" &&
+      module !== "ensemble" &&
+      module !== "learnings",
   );
   if (directive.construction_policy) {
     directive.construction_policy.completion_only = true;

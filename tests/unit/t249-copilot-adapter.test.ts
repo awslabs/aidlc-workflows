@@ -55,6 +55,7 @@ import {
   markSubagentInflight,
   subagentInflightMarkerPath,
   stateDigest,
+  writeSessionPidEntry,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -248,6 +249,11 @@ function runAdapter(
   payload: unknown,
   envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "record-human-turn" && payload !== null && typeof payload === "object") {
+    const record = payload as { session_id?: unknown; sessionId?: unknown };
+    const session = record.session_id ?? record.sessionId;
+    if (typeof session === "string") writeSessionPidEntry(projectDir, process.pid, session);
+  }
   const r = spawnSync(
     "bun",
     [join(projectDir, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), target],
@@ -270,6 +276,11 @@ function runAdapter(
 }
 
 async function runAdapterAsync(projectDir: string, target: string, payload: unknown) {
+  if (target === "record-human-turn" && payload !== null && typeof payload === "object") {
+    const record = payload as { session_id?: unknown; sessionId?: unknown };
+    const session = record.session_id ?? record.sessionId;
+    if (typeof session === "string") writeSessionPidEntry(projectDir, process.pid, session);
+  }
   const proc = Bun.spawn([process.execPath, join(projectDir, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), target], {
     cwd: projectDir,
     stdin: Buffer.from(JSON.stringify(payload)),

@@ -61,6 +61,7 @@ import {
   findStageBySlug,
   readAllAuditShards,
   readAuditShardEvents,
+  writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
@@ -513,6 +514,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // contract under test, and the flag is set by a parent for the whole child.
   describe("unattended prompt submit (AIDLC_UNATTENDED)", () => {
     function fireMintHook(p: string, unattended: boolean): number {
+      writeSessionPidEntry(p, process.pid, "01995000-0188-7000-8000-000000000001");
       const env = { ...process.env };
       // The hook derives the project from its OWN path (it ships inside the
       // project), so point the dist copy at the fixture explicitly — the same
@@ -520,7 +522,14 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       env.AIDLC_PROJECT_DIR = p;
       if (unattended) env.AIDLC_UNATTENDED = "1";
       else delete env.AIDLC_UNATTENDED;
-      const r = spawnSync(BUN, [MINT_HOOK, "engine", "hook", "record-human-turn"], { encoding: "utf-8", env, input: "{}" });
+      const r = spawnSync(BUN, [MINT_HOOK, "engine", "hook", "record-human-turn"], {
+        encoding: "utf-8",
+        env,
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "01995000-0188-7000-8000-000000000001",
+        }),
+      });
       return r.status ?? -1;
     }
 

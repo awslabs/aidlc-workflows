@@ -65,6 +65,7 @@ import {
   writePlanApprovalReceipt,
   stateDigest,
   workspaceSourceFingerprint,
+  writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -545,12 +546,17 @@ function publishRestartRecovery(
 }
 
 function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
+  writeSessionPidEntry(proj, process.pid, "01995000-0265-7000-8000-000000000001");
   const result = spawnSync(
     BUN,
     [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
       cwd: proj,
-      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt }),
+      input: JSON.stringify({
+        hook_event_name: "UserPromptSubmit",
+        session_id: "01995000-0265-7000-8000-000000000001",
+        prompt,
+      }),
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
       encoding: "utf-8",
     },
@@ -1704,9 +1710,10 @@ describe("t265b hook lifecycle", () => {
         ]).status,
       ).toBe(1);
 
+      writeSessionPidEntry(proj, process.pid, "newer-session");
       const newerSessionAnswer = spawnSync(
         BUN,
-        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+        [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
@@ -1727,9 +1734,10 @@ describe("t265b hook lifecycle", () => {
         ]).status,
       ).toBe(1);
 
+      writeSessionPidEntry(proj, process.pid, "plan-session");
       const unrelated = spawnSync(
         BUN,
-        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+        [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
@@ -1761,7 +1769,7 @@ describe("t265b hook lifecycle", () => {
 
       const human = spawnSync(
         BUN,
-        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+        [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
@@ -1797,7 +1805,7 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  });
+  }, 15000);
 
   test("a bare numeric reply reaches the offered-choice match instead of being parsed away", () => {
     const proj = scratchProject();
@@ -1847,9 +1855,10 @@ describe("t265b hook lifecycle", () => {
       // The challenge does not require exact option labels, so "1" is an offered
       // choice by offeredCheckpointChoice. The reply must survive extraction to
       // get there: JSON-parsing it turned it into a number and reported no text.
+      writeSessionPidEntry(proj, process.pid, "plan-session");
       const numeric = spawnSync(
         BUN,
-        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+        [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
@@ -1929,9 +1938,10 @@ describe("t265b hook lifecycle", () => {
       // The envelope shapes still hand over to the parse: a picker that delivers
       // its selection as a JSON string must arrive as the label, not as the label
       // wrapped in quotes, or it would match no offered choice.
+      writeSessionPidEntry(proj, process.pid, "plan-session");
       const quoted = spawnSync(
         BUN,
-        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+        [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",

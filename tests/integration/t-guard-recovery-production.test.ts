@@ -228,6 +228,22 @@ class Journey {
   }
 
   hook(name: string, payload: Json): Run {
+    if (name === "record-human-turn") {
+      return this.run(
+        [
+          BUN,
+          join(this.dir, ".claude", "tools", "aidlc.ts"),
+          "engine",
+          "hook",
+          "record-human-turn",
+        ],
+        {
+          cwd: this.dir,
+          session_id: SESSION,
+          ...payload,
+        },
+      );
+    }
     return this.run([BUN, join(this.dir, ".claude", "hooks", `aidlc-${name}.ts`)], {
       cwd: this.dir,
       session_id: SESSION,

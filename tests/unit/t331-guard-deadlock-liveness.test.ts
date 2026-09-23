@@ -984,6 +984,7 @@ describe("open-gate resume liveness", () => {
     }
     expect(directive.protocol_modules ?? []).not.toContain("reviewer");
     expect(directive.protocol_modules ?? []).not.toContain("ensemble");
+    expect(directive.protocol_modules ?? []).not.toContain("learnings");
     expect(validateDirective(directive).valid).toBe(true);
   }
 
