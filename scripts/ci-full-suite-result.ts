@@ -10,7 +10,11 @@ export const FULL_SUITE_COVERAGE_POLICY = "required-hosted-live-v1";
 export const LIVE_VERIFICATION_OMITTED_JOBS = [
   "native_terminal", "native_reconcile", "deterministic", "production_guards",
 ] as const;
-export type SuitePurpose = "release" | "live-verification";
+export type SuitePurpose = "release" | "live-verification" | "full-verification";
+
+function isSuitePurpose(value: string): value is SuitePurpose {
+  return value === "release" || value === "live-verification" || value === "full-verification";
+}
 
 type JobResult = "success" | "failure" | "cancelled" | "skipped";
 export type SuiteNeeds = Record<string, { result: JobResult }>;
@@ -33,7 +37,7 @@ export interface FullSuiteResult extends SuiteIdentity {
   omittedLegs: string[];
 }
 
-/** Required jobs succeed; only live verification may intentionally omit declared jobs. */
+/** Release and full verification require every job; only live verification permits omissions. */
 export function fullSuiteResult(
   needs: SuiteNeeds,
   identity: SuiteIdentity,
@@ -60,6 +64,7 @@ export function fullSuiteResult(
     } catch { /* Unknown or mismatched selections never qualify. */ }
   }
   const passed = /^[a-f0-9]{40}$/.test(identity.sha) &&
+    isSuitePurpose(purpose) &&
     validTestSelection &&
     VERIFICATION_FAMILIES.includes(verificationFamily) &&
     (purpose === "live-verification" || verificationFamily === "all") &&
@@ -83,7 +88,7 @@ export function fullSuiteResult(
 
 if (import.meta.main) {
   const purpose = process.env.FULL_SUITE_PURPOSE ?? "release";
-  if (purpose !== "release" && purpose !== "live-verification") {
+  if (!isSuitePurpose(purpose)) {
     console.error(`::error::Invalid full-suite purpose: ${purpose}`);
     process.exit(1);
   }
@@ -105,8 +110,9 @@ if (import.meta.main) {
     if (result.verificationTest && (purpose !== "live-verification" || verificationFamily === "all")) {
       console.error("::error::Exact test selection requires live-verification mode and one verification family");
     }
-    if (purpose === "release" && verificationFamily !== "all") {
-      console.error("::error::Release evidence requires verificationFamily=all");
+    if (purpose !== "live-verification" && verificationFamily !== "all") {
+      const label = purpose === "release" ? "Release evidence" : "Full verification";
+      console.error(`::error::${label} requires verificationFamily=all`);
     }
     console.error(`::error::Incomplete full suite for ${result.sha || process.env.FULL_SUITE_REF || "unknown ref"}: ` +
       Object.entries(result.legs).filter(([job, status]) => status !== (result.omittedLegs.includes(job) ? "skipped" : "success"))

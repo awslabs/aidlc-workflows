@@ -196,6 +196,15 @@ because its CLI exposes vendor API keys to agent environments; Copilot is
 excluded by account policy. Ordinary release-purpose runs require source
 already on `main`.
 
+To run the same full matrix on an unmerged PR, manually select its branch,
+set `ref` to that branch's exact workflow-head SHA, and set
+`full_verification=true`. This runs every declared native, deterministic,
+production-guard, hosted-live and release-contract job. Its separate
+`full-suite-verification-result` artifact records `purpose: "full-verification"`
+and requires every job to succeed, with no omitted legs. It cannot qualify for
+release. Full verification is manual-only, cannot be combined with
+`live_verification`, and does not accept family or file filters.
+
 Candidate live coverage can be requested explicitly with a manual Full Suite
 dispatch: select the candidate branch, set `ref` to its exact workflow-head SHA,
 and set `live_verification=true`. This flag is not a reusable-workflow input.

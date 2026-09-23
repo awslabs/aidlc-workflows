@@ -10,12 +10,16 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Commit or ref to test; live verification must match the selected workflow head"
+        description: "Commit or ref to test; verification modes must match the selected workflow head"
         required: true
         default: main
         type: string
       live_verification:
         description: "Run only live coverage for this workflow head; evidence cannot qualify for release"
+        type: boolean
+        default: false
+      full_verification:
+        description: "Run the full matrix for this workflow head, including an unmerged PR; evidence cannot qualify for release"
         type: boolean
         default: false
       verification_family:
@@ -65,6 +69,7 @@ jobs:
         id: source
         env:
           LIVE_VERIFICATION: "${{ inputs.live_verification == true }}"
+          FULL_VERIFICATION: "${{ inputs.full_verification == true }}"
           VERIFICATION_FAMILY: "${{ inputs.verification_family || 'all' }}"
           VERIFICATION_TEST: "${{ inputs.verification_test || '' }}"
         run: |
@@ -72,6 +77,10 @@ jobs:
           sha="$(git rev-parse HEAD)"
           family="${VERIFICATION_FAMILY-all}"
           selected_test="${VERIFICATION_TEST-}"
+          if [ "${LIVE_VERIFICATION:-false}" = true ] && [ "${FULL_VERIFICATION:-false}" = true ]; then
+            echo "::error::live_verification and full_verification are mutually exclusive"
+            exit 1
+          fi
           case "$family" in
             all|claude-sdk|claude-tui|codex|opencode) ;;
             *) echo "::error::invalid verification family"; exit 1 ;;
@@ -87,15 +96,19 @@ jobs:
               exit 1
             fi
           fi
-          case "${LIVE_VERIFICATION:-false}" in
-            true)
+          case "${LIVE_VERIFICATION:-false}:${FULL_VERIFICATION:-false}" in
+            true:false|false:true)
               if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$sha" != "$GITHUB_SHA" ]; then
-                echo "::error::live verification requires workflow_dispatch and source equal to the selected workflow head"
+                echo "::error::verification requires workflow_dispatch and source equal to the selected workflow head"
                 exit 1
               fi
-              purpose=live-verification
+              if [ "${FULL_VERIFICATION:-false}" = true ]; then
+                purpose=full-verification
+              else
+                purpose=live-verification
+              fi
               ;;
-            false)
+            false:false)
               git fetch --no-tags origin main
               git merge-base --is-ancestor "$sha" origin/main || {
                 echo "::error::full-suite only runs source already on main"
@@ -103,7 +116,7 @@ jobs:
               }
               purpose=release
               ;;
-            *) echo "::error::invalid live verification mode"; exit 1 ;;
+            *) echo "::error::invalid verification mode"; exit 1 ;;
           esac
           printf 'sha=%s\npurpose=%s\nverification_family=%s\nverification_test=%s\n' "$sha" "$purpose" "$family" "$selected_test" >> "$GITHUB_OUTPUT"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -130,17 +143,17 @@ jobs:
             console.log(`windows_required=${windows.length > 0}`);
           ' "$hosted" "$windows" >> "$GITHUB_OUTPUT"
       - name: "Prepare native obligations"
-        if: steps.source.outputs.purpose == 'release'
+        if: steps.source.outputs.purpose != 'live-verification'
         run: |
           bun tests/reconcile-tests.ts prepare --profile tests/native-terminal-profile.json --cohort "nightly-${{ github.run_id }}-${{ github.run_attempt }}" --repo . --output "$RUNNER_TEMP/native-plan.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: steps.source.outputs.purpose == 'release'
+        if: steps.source.outputs.purpose != 'live-verification'
         with:
           name: full-suite-native-plan
           path: "${{ runner.temp }}/native-plan.json"
   native_terminal:
     needs: plan
-    if: needs.plan.outputs.purpose == 'release'
+    if: needs.plan.outputs.purpose != 'live-verification'
     runs-on: "${{ matrix.runner }}"
     timeout-minutes: 120
     strategy:
@@ -239,7 +252,7 @@ jobs:
             tmp/full-suite-native/
           include-hidden-files: true
   native_reconcile:
-    if: "${{ always() && needs.plan.result == 'success' && needs.plan.outputs.purpose == 'release' }}"
+    if: "${{ always() && needs.plan.result == 'success' && needs.plan.outputs.purpose != 'live-verification' }}"
     needs: [plan, native_terminal]
     runs-on: ubuntu-latest
     steps:
@@ -274,7 +287,7 @@ jobs:
   deterministic:
     name: "Deterministic (${{ matrix.runner }}, ${{ matrix.suite.name }})"
     needs: plan
-    if: needs.plan.outputs.purpose == 'release'
+    if: needs.plan.outputs.purpose != 'live-verification'
     strategy:
       fail-fast: false
       matrix:
@@ -302,7 +315,7 @@ jobs:
       artifact-label: full-suite-deterministic-${{ matrix.suite.name }}
   production_guards:
     needs: plan
-    if: needs.plan.outputs.purpose == 'release'
+    if: needs.plan.outputs.purpose != 'live-verification'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -682,7 +695,7 @@ jobs:
       - if: "${{ always() }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: "${{ needs.plan.outputs.purpose == 'live-verification' && 'full-suite-live-verification-result' || 'full-suite-result' }}"
+          name: "${{ needs.plan.outputs.purpose == 'live-verification' && 'full-suite-live-verification-result' || needs.plan.outputs.purpose == 'full-verification' && 'full-suite-verification-result' || 'full-suite-result' }}"
           path: "${{ runner.temp }}/full-suite-result.json"
           retention-days: 90
           if-no-files-found: error

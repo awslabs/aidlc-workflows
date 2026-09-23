@@ -505,6 +505,7 @@ from disk reds the gate.
 | Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
+| Explicit manual Full Suite with `full_verification=true` | Full candidate verification | Runs every declared matrix job for the selected workflow head, including an unmerged PR; separate evidence is ineligible for release | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is ineligible for release | GitHub Actions |
 | Stable tag | Exact-source evidence and release assets | `release.yml` requires passing Full Suite evidence for the exact tag SHA, then contract checks, builds and native/installer/lifecycle validation; it does not rerun the source test tiers | GitHub Actions |
 
@@ -1171,7 +1172,7 @@ fail readiness; documented excluded families remain untested.
 ### Nightly full-suite matrix and provisioning
 
 `Full Suite` is callable with an explicit `ref` and manually dispatchable
-(default `main`, `live_verification=false`). Its ordinary release-purpose plan resolves that ref once and requires the SHA to
+(default `main`, both verification flags false). Its ordinary release-purpose plan resolves that ref once and requires the SHA to
 already be an ancestor of `origin/main` before installing dependencies or
 dispatching source-executing jobs. All matrix legs check out the authorized
 immutable SHA. Scheduled and manual `preview-release.yml` runs call it after
@@ -1196,7 +1197,30 @@ repeat the smoke/unit/integration/e2e source tiers. Preview also runs contract
 checks and Full Suite once, with publication deduplication applied only to the
 subsequent build and publication chain.
 
-For user-approved candidate validation, manually dispatch Full Suite on the
+For user-approved full validation of an unmerged PR, select its branch and set
+`ref` to that branch's exact workflow-head SHA:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f full_verification=true
+```
+
+Full verification runs every declared job: native obligations and reconciliation,
+all deterministic tiers, production guards, dependency preparation, all hosted
+live families and Windows release contracts. It uses the same file matrices,
+assertions, timeouts and credential isolation as an ordinary Full Suite run.
+The separate `full-suite-verification-result` artifact contains
+`full-suite-result.json` with `purpose: "full-verification"`; `passed` requires
+every job to succeed, `verificationFamily: "all"` and `omittedLegs: []`.
+The result cannot qualify a release, even if the candidate is later merged.
+Stable promotion still requires release-purpose evidence for its exact SHA.
+
+`full_verification` exists only on `workflow_dispatch`. It requires the checked-out
+SHA to equal the selected workflow head, is mutually exclusive with
+`live_verification`, and rejects family/file filters. No push or pull-request
+event automatically starts privileged full verification.
+
+For user-approved live-only candidate validation, manually dispatch Full Suite on the
 candidate branch with `live_verification=true` and set `ref` to that branch's
 exact workflow-head SHA:
 

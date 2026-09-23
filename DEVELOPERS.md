@@ -59,7 +59,22 @@ rerun that entire test gate. The other workflows have their own triggers:
 - Preview Release runs contract checks and Full Suite for its selected source
   commit, without repeating the PR CI test matrix.
 
-For explicitly approved live testing before merge, a maintainer can run:
+For explicitly approved full-suite testing before merge, a maintainer can run:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f full_verification=true
+```
+
+This runs the full declared matrix, including native obligations, deterministic
+tiers, production guards and all hosted live/release-contract jobs. Inspect
+`full-suite-verification-result/full-suite-result.json` for
+`purpose: "full-verification"`, `passed: true`, and no omitted jobs.
+The result is PR validation, not release evidence. The flag is manual-only,
+requires source equality with the selected workflow head, and cannot be combined
+with `live_verification` or family/file filters.
+
+For live-only testing before merge, use:
 
 ```bash
 gh workflow run full-suite.yml --ref '<candidate-branch>' \
@@ -87,7 +102,7 @@ not replace the ordinary CI checks.
 Inspect `full-suite-live-verification-result/full-suite-result.json` for
 `purpose: "live-verification"`, `verificationFamily`, and the live job results. A successful run still
 has `complete: false` and is never release evidence, even when run on `main`.
-Normal Full Suite runs keep `live_verification=false`, the main-source gate,
+Normal Full Suite runs keep both verification flags false, the main-source gate,
 all required jobs, and the ordinary `full-suite-result` artifact.
 
 ## 3. Let the nightly preview run
