@@ -22,7 +22,7 @@ skips ideation entirely (there is no new product to discover), runs
 reverse-engineering to understand the current code, pulls requirements for
 the fix, then generates, tests, and deploys it.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; reviewer read scope is lowered for undirected work, while plan approval and terminal review freeze remain mandatory.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
 
 ## Why these stages, why skip those
 

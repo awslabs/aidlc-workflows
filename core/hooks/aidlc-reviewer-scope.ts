@@ -814,6 +814,8 @@ export function blockReason(target: string, dispatch: ReviewerDispatch, defaulte
 
 /**
  * Whether the reviewer read-scope fence stands aside instead of refusing.
+ * Only `off`, its per-work switch, or its environment escape hatch lowers it;
+ * `relaxed` keeps this fence up.
  * Claimed-checkout write ownership never calls this function: Unit ownership
  * is a mandatory isolation boundary, not a policy-lowerable reviewer fence.
  */

@@ -10,11 +10,10 @@
 // stays valid for the gate: the gate presentation says the reviewed content
 // differs and names the diff, one CHANGE_ACCEPTED row is written, and the
 // reviewer's verdict is never altered. An output saved without the current
-// summary confirmation is recorded and the stage continues. Review freeze and
-// plan approval hold under every policy word; an explicit per-work switch can
-// still stand either fence aside with one line and one GUARD_STOOD_ASIDE row.
-// No value ever skips a human gate, the autonomous-mode plan stop, or a review
-// in progress.
+// summary confirmation is recorded and the stage continues. The review-freeze
+// and plan-approval fences hold under strict and stand aside (one line, one
+// GUARD_STOOD_ASIDE row) under relaxed and off; no value ever skips a human
+// gate, the autonomous-mode plan stop, or a review in progress.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -118,14 +117,6 @@ function project(mode: Mode): string {
   expect(state).not.toContain("- **Change Control**:");
   writeFileSync(statePath, state);
   return proj;
-}
-
-function lowerFence(proj: string, fence: "review-freeze" | "plan-approval"): void {
-  const statePath = seededStateFile(proj);
-  writeFileSync(
-    statePath,
-    setGuardsOffLine(readFileSync(statePath, "utf-8"), [fence]),
-  );
 }
 
 /** The one line the human hears when a relaxed or off policy carries a change through. */
@@ -328,27 +319,56 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(acceptedRows(proj)).toHaveLength(0);
   });
 
-  test("the review-freeze fence holds under every policy word", () => {
+  test("the review-freeze fence holds under strict and stands aside, logged, under relaxed and off", () => {
     const stoodAside = (proj: string) =>
       readAuditShardEvents(proj).filter((entry) => entry.event === "GUARD_STOOD_ASIDE");
-    for (const mode of ["strict", "relaxed", "off"] as const) {
+    const strictProject = project("strict");
+    recordReadyReview(strictProject);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], strictProject).status).toBe(0);
+    const blocked = runHook(FREEZE_HOOK, strictProject, {
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: artifact(strictProject) },
+    });
+    expect(blocked.code).toBe(2);
+    expect(blocked.stderr).toContain("review-freeze");
+    expect(stoodAside(strictProject)).toHaveLength(0);
+
+    // relaxed and off lower this fence: the write goes through with one line
+    // and one GUARD_STOOD_ASIDE row; the receipt and its verdict are untouched.
+    for (const mode of ["relaxed", "off"] as const) {
       const proj = project(mode);
       recordReadyReview(proj);
       expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
-      const blocked = runHook(FREEZE_HOOK, proj, {
+      const passed = runHook(FREEZE_HOOK, proj, {
         hook_event_name: "PreToolUse",
         tool_name: "Write",
         tool_input: { file_path: artifact(proj) },
       });
-      expect(blocked.code, mode).toBe(2);
-      expect(blocked.stderr, mode).toContain("review-freeze");
-      expect(stoodAside(proj), mode).toHaveLength(0);
+      expect(passed.code, mode).toBe(0);
+      expect(passed.stdout, mode).toContain(
+        `Continuing past the review-freeze check because it is off for this piece of work (guard policy ${mode} (set by you)). Recorded in the audit trail`,
+      );
+      const rows = stoodAside(proj);
+      expect(rows, mode).toHaveLength(1);
+      expect(auditBlockField(rows[0].block, "Guard")).toBe("review-freeze");
+      expect(auditBlockField(rows[0].block, "Tool")).toBe("Write");
+      expect(auditBlockField(rows[0].block, "Stage")).toBe(STAGE);
+      expect(reviewCompletedRows(proj)).toHaveLength(1);
+      expect(auditBlockField(reviewCompletedRows(proj)[0].block, "Verdict")).toBe("READY");
     }
   });
 
-  test("the review-freeze stand-aside line names the explicit per-work switch", () => {
+  test("the review-freeze stand-aside line names the scope policy or per-work switch that lowered it", () => {
     const proj = project("relaxed");
-    lowerFence(proj, "review-freeze");
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      setGuardPolicyLine(
+        setField(readFileSync(statePath, "utf-8"), "Scope", "classic"),
+        "relaxed (from scope classic)",
+      ),
+    );
     recordReadyReview(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     const payload = {
@@ -356,6 +376,11 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
       tool_name: "Write",
       tool_input: { file_path: artifact(proj) },
     };
+    const scopePolicy = runHook(FREEZE_HOOK, proj, payload);
+    expect(scopePolicy.code, scopePolicy.stderr).toBe(0);
+    expect(scopePolicy.stdout).toContain("(guard policy relaxed (from scope classic))");
+
+    writeFileSync(statePath, setGuardsOffLine(readFileSync(statePath, "utf-8"), ["review-freeze"]));
     const perWork = runHook(FREEZE_HOOK, proj, payload);
     expect(perWork.code, perWork.stderr).toBe(0);
     expect(perWork.stdout).toContain("off for this piece of work (set by you)");
@@ -364,7 +389,6 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
 
   test("stand-aside delivery uses a Claude systemMessage and a plain Codex line", () => {
     const proj = project("relaxed");
-    lowerFence(proj, "review-freeze");
     recordReadyReview(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     const payload = {
@@ -387,7 +411,6 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
 
   test("a lowered review-freeze records the matching session's dispatch grant for a subagent", () => {
     const proj = project("relaxed");
-    lowerFence(proj, "review-freeze");
     recordReadyReview(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     const sessionId = "dispatch-grant-session";
@@ -431,7 +454,6 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
 
   test("two live dispatches under one session lend no grant: the ambiguous stamp reads as the narrower authority", () => {
     const proj = project("relaxed");
-    lowerFence(proj, "review-freeze");
     recordReadyReview(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     const sessionId = "dispatch-shared-session";
@@ -921,7 +943,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
   });
 });
 
-describe("t335 (3) never relaxed: human gates and mandatory lifecycle barriers refuse identically", () => {
+describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progress review refuse identically; the two lowered fences stand aside", () => {
   /** The same scenario under all three values, normalised to the strict project's paths. */
   function pair(build: (mode: Mode) => { proj: string; out: string }) {
     const strict = build("strict");
@@ -954,7 +976,7 @@ describe("t335 (3) never relaxed: human gates and mandatory lifecycle barriers r
     expect(outcomes.strict).toContain("no new human reply has been received");
   });
 
-  test("Plan Approval itself: the fence holds under every policy word", () => {
+  test("Plan Approval itself: the fence holds under strict and stands aside, logged, under relaxed and off", () => {
     const dispatch = (proj: string) => {
       const statePath = seededStateFile(proj);
       writeFileSync(
@@ -974,10 +996,15 @@ describe("t335 (3) never relaxed: human gates and mandatory lifecycle barriers r
         cwd: proj,
       });
     };
-    for (const mode of ["strict", "relaxed", "off"] as const) {
-      const blocked = dispatch(project(mode));
-      expect(blocked.code, mode).toBe(2);
-      expect(blocked.stderr.length, mode).toBeGreaterThan(0);
+    const strict = dispatch(project("strict"));
+    expect(strict.code).toBe(2);
+    expect(strict.stderr.length).toBeGreaterThan(0);
+    for (const mode of ["relaxed", "off"] as const) {
+      const passed = dispatch(project(mode));
+      expect(passed.code, mode).toBe(0);
+      expect(passed.stdout, mode).toContain(
+        `Continuing past the plan-approval check because it is off for this piece of work (guard policy ${mode} (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent`,
+      );
     }
   });
 
@@ -1036,8 +1063,8 @@ describe("t335 (3) never relaxed: human gates and mandatory lifecycle barriers r
     expect(outcomes.relaxed.forged).toBe(outcomes.strict.forged);
     expect(outcomes.off.forged).toBe(outcomes.strict.forged);
     expect(outcomes.strict.write).toBe(2);
-    expect(outcomes.relaxed.write).toBe(2);
-    expect(outcomes.off.write).toBe(2);
+    expect(outcomes.relaxed.write).toBe(0);
+    expect(outcomes.off.write).toBe(0);
   });
 
   test("the review-freeze hook judges a write during a review in progress identically under every value", () => {

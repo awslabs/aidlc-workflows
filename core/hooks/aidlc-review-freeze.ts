@@ -293,12 +293,12 @@ export async function run(input: string): Promise<number> {
   }
   if (!verdict.block) return 0;
 
-  // The Guard Policy word never lowers this mandatory terminal barrier. The
-  // fence stands aside only through the human's explicit
-  // `guard.review-freeze off` switch or the documented machine escape hatch.
-  // A generic human message does not lower it. The review receipt and its
-  // verdict are untouched either way; the one-line notice and ledger row keep
-  // an explicit stand-aside visible.
+  // The fence stands aside when it is LOWERED for this piece of work, by the
+  // guard policy word (relaxed and off both lower this one) or by the human's
+  // own `guard.review-freeze off` switch. A human message, however recent, does
+  // not lower it: see decideGuard in aidlc-lib.ts for why. The review receipt
+  // and its verdict are untouched either way; what changes is that the human is
+  // told in one line and the ledger keeps the row.
   {
     let gate: ReturnType<typeof decideFence> | null = null;
     try {

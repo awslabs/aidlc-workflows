@@ -18,7 +18,7 @@ The full-lifecycle scope for new feature work at practical depth. Like
 Standard rather than Comprehensive depth — lighter ceremony, the same
 end-to-end coverage from ideation through operation.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced, the run continues, and reviewer read scope is lowered for undirected work. Plan approval and terminal review freeze remain mandatory.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced, the run continues, and plan approval and review freeze are lowered for undirected work.
 
 ## Why every stage
 

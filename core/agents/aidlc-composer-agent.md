@@ -636,7 +636,7 @@ one SHORT line per stage (≤15 words), not a paragraph.
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
   "guardPolicy": "strict | relaxed | off",
-  "guardPolicyRationale": "<1-2 sentences: which fences this value lowers (strict: none; relaxed: reviewer scope; off: state transition and reviewer scope; plan approval and terminal review freeze stay mandatory) and why an input change after approval should reopen it, or be recorded and continue>",
+  "guardPolicyRationale": "<1-2 sentences: which fences this value lowers (strict: none; relaxed: plan approval and review freeze; off: those plus state transition and reviewer scope) and why an input change after approval should reopen it, or be recorded and continue>",
   "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
@@ -658,10 +658,10 @@ will approve. Never return a front/report proposal that would create from only a
 `guardPolicyRationale` naming the fences it lowers and why an input change
 after approval should reopen it, or be recorded and continue. `strict` lowers
 no fences and reopens that approval;
-`relaxed` records the change once, tells the human in one line, continues,
-and stands the reviewer read-scope check aside; `off` does that and also stands the
-state-transition check aside. Plan approval and terminal review freeze remain
-mandatory under every policy word, and no value touches human presence. For `mode: "matched"` copy the stock scope's
+`relaxed` records the change once, tells the human in one line, and continues,
+and also stands the plan-approval and review-freeze checks aside; `off` does
+that and stands the state-transition and reviewer-scope checks aside too. No
+value removes a gate, and none of them touches human presence. For `mode: "matched"` copy the stock scope's
 `guard_policy` frontmatter value (read from that one scope `.md`; strict when
 the line is absent) and say so in the rationale. For `mode: "custom"` propose
 the value from the evidence: strict when `r` (risk) or `ve` (verification

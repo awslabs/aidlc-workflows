@@ -65,9 +65,8 @@ or confirmed something (a plan whose source moved, a reviewed document edited
 after its review, an output saved without the current summary confirmation):
 `strict` reopens that approval, while `relaxed` and `off` record the change once,
 tell the human in one line, and continue. And which authority fences hold:
-`strict` lowers none, `relaxed` lowers the reviewer read-scope fence (`reviewer-scope`), and `off` lowers
-`state-transition` and `reviewer-scope`. Plan approval and terminal review
-freeze remain mandatory under every policy word.
+`strict` lowers none, `relaxed` lowers `plan-approval` and `review-freeze`, and
+`off` lowers those two plus `state-transition` and `reviewer-scope`.
 `human-presence` is never lowered by the word. By default each intent takes its
 scope's value. To lower it from chat, a person must type the exact policy switch,
 such as `/aidlc --guard-policy relaxed` or `guard policy off`; an unrelated

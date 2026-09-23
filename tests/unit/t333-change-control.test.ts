@@ -766,14 +766,14 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toContain(`${STATUS_POLICY}off (set by you)\n`);
     expect(status.stdout).toContain(
-      `${STATUS_FENCES}plan-approval on (default), review-freeze on (default), state-transition off (guard policy off (set by you)), reviewer-scope off (guard policy off (set by you)), human-presence on (default)\n`,
+      `${STATUS_FENCES}plan-approval off (guard policy off (set by you)), review-freeze off (guard policy off (set by you)), state-transition off (guard policy off (set by you)), reviewer-scope off (guard policy off (set by you)), human-presence on (default)\n`,
     );
     expect(run(UTILITY, ["config-get", "guard-policy"], proj, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
     const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
     expect(listed.status, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toMatchObject({
       "guard-policy": "off (set by you)",
-      "guard.plan-approval": "on (default)",
+      "guard.plan-approval": "off (guard policy off (set by you))",
       "guard.state-transition": "off (guard policy off (set by you))",
     });
     expect(JSON.parse(listed.stdout)).not.toHaveProperty("guard.human-presence");
@@ -839,7 +839,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const status = run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR);
     expect(status.stdout).toContain(`${STATUS_POLICY}relaxed (from scope poc)\n`);
     expect(status.stdout).toContain(
-      `${STATUS_FENCES}plan-approval on (default), review-freeze on (default), state-transition on (default), reviewer-scope off (guard policy relaxed (from scope poc)), human-presence on (default)\n`,
+      `${STATUS_FENCES}plan-approval off (guard policy relaxed (from scope poc)), review-freeze off (guard policy relaxed (from scope poc)), state-transition on (default), reviewer-scope on (default), human-presence on (default)\n`,
     );
     const strict = project("enterprise");
     const strictStatus = run(UTILITY, ["status"], strict.proj, FENCE_ENV_CLEAR);
@@ -1696,7 +1696,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     };
   }
 
-  test("policy words never lower mandatory lifecycle barriers", () => {
+  test("strict lowers nothing; relaxed lowers two; off lowers four; human presence is never among them", () => {
     expect(GUARD_FENCES).toEqual([
       "plan-approval",
       "review-freeze",
@@ -1705,20 +1705,25 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       "human-presence",
     ]);
     expect(fencesLoweredByPolicy("strict")).toEqual([]);
-    expect(fencesLoweredByPolicy("relaxed")).toEqual(["reviewer-scope"]);
-    expect(fencesLoweredByPolicy("off")).toEqual(["state-transition", "reviewer-scope"]);
+    expect(fencesLoweredByPolicy("relaxed")).toEqual(["plan-approval", "review-freeze"]);
+    expect(fencesLoweredByPolicy("off")).toEqual([
+      "plan-approval",
+      "review-freeze",
+      "state-transition",
+      "reviewer-scope",
+    ]);
     withEnvAndFreshCaches(FENCE_ENV_CLEAR, () => {
       const strict = resolveFences(policy("strict"), "");
       for (const fence of GUARD_FENCES) expect(strict[fence]).toEqual({ fence, value: "on", source: "default" });
       const relaxed = resolveFences(policy("relaxed", "scope express"), "");
       expect(relaxed["plan-approval"]).toEqual({
         fence: "plan-approval",
-        value: "on",
-        source: "default",
+        value: "off",
+        source: "guard policy relaxed (from scope express)",
       });
-      expect(relaxed["review-freeze"].value).toBe("on");
+      expect(relaxed["review-freeze"].value).toBe("off");
       expect(relaxed["state-transition"]).toEqual({ fence: "state-transition", value: "on", source: "default" });
-      expect(relaxed["reviewer-scope"].value).toBe("off");
+      expect(relaxed["reviewer-scope"].value).toBe("on");
       expect(relaxed["human-presence"].value).toBe("on");
       const off = resolveFences(policy("off"), "");
       expect(off["state-transition"]).toEqual({
@@ -1728,7 +1733,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       });
       expect(off["reviewer-scope"].value).toBe("off");
       expect(off["human-presence"]).toEqual({ fence: "human-presence", value: "on", source: "default" });
-      expect(formatFence(relaxed["plan-approval"])).toBe("on (default)");
+      expect(formatFence(relaxed["plan-approval"])).toBe("off (guard policy relaxed (from scope express))");
       expect(formatFence(strict["plan-approval"])).toBe("on (default)");
     });
   });
@@ -1827,34 +1832,34 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   test("config set can raise a policy-lowered fence and the human-turn hook can lower it again without duplicate rows", () => {
     const { proj, state } = project("classic");
     const dispatcher = join(AIDLC_SRC, "tools", "aidlc.ts");
-    const raised = run(dispatcher, ["engine", "config", "set", "guard.reviewer-scope", "on"], proj, FENCE_ENV_CLEAR);
+    const raised = run(dispatcher, ["engine", "config", "set", "guard.plan-approval", "on"], proj, FENCE_ENV_CLEAR);
     expect(raised.status, raised.stderr).toBe(0);
     const onState = readFileSync(state, "utf-8");
-    expect(onState).toContain("- **Guards On**: reviewer-scope (set by you)");
+    expect(onState).toContain("- **Guards On**: plan-approval (set by you)");
     expect(getField(onState, GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
     const restoredRows = rowsOf(proj, "GUARD_RESTORED");
     expect(restoredRows).toHaveLength(1);
-    expect(auditBlockField(restoredRows[0].block, "Guard")).toBe("reviewer-scope");
+    expect(auditBlockField(restoredRows[0].block, "Guard")).toBe("plan-approval");
     expect(auditBlockField(restoredRows[0].block, "Scope")).toBe("classic");
     expect(auditBlockField(restoredRows[0].block, "Source")).toBe("you");
-    expect(run(UTILITY, ["config-get", "guard.reviewer-scope"], proj, FENCE_ENV_CLEAR).stdout).toBe("on (set by you)\n");
-    expect(run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR).stdout).toContain("reviewer-scope on (set by you)");
-    const again = run(dispatcher, ["engine", "config", "set", "guard.reviewer-scope", "on"], proj, FENCE_ENV_CLEAR);
+    expect(run(UTILITY, ["config-get", "guard.plan-approval"], proj, FENCE_ENV_CLEAR).stdout).toBe("on (set by you)\n");
+    expect(run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR).stdout).toContain("plan-approval on (set by you)");
+    const again = run(dispatcher, ["engine", "config", "set", "guard.plan-approval", "on"], proj, FENCE_ENV_CLEAR);
     expect(again.status, again.stderr).toBe(0);
-    expect(again.stdout).toContain("Fence reviewer-scope is already on");
+    expect(again.stdout).toContain("Fence plan-approval is already on");
     expect(readFileSync(state, "utf-8")).toBe(onState);
     expect(rowsOf(proj, "GUARD_RESTORED")).toHaveLength(1);
-    recordHumanPrompt(proj, "/aidlc config set guard.reviewer-scope off");
+    recordHumanPrompt(proj, "/aidlc config set guard.plan-approval off");
     const offState = readFileSync(state, "utf-8");
     expect(getField(offState, GUARDS_ON_FIELD)).toBe("none");
-    expect(getField(offState, GUARDS_OFF_FIELD)).toBe("reviewer-scope (set by you)");
+    expect(getField(offState, GUARDS_OFF_FIELD)).toBe("plan-approval (set by you)");
     const disabledRows = rowsOf(proj, "GUARD_DISABLED");
     expect(disabledRows).toHaveLength(1);
-    expect(auditBlockField(disabledRows[0].block, "Guard")).toBe("reviewer-scope");
-    expect(run(UTILITY, ["config-get", "guard.reviewer-scope"], proj, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
-    const unchanged = run(dispatcher, ["engine", "config", "set", "guard.reviewer-scope", "off"], proj, FENCE_ENV_CLEAR);
+    expect(auditBlockField(disabledRows[0].block, "Guard")).toBe("plan-approval");
+    expect(run(UTILITY, ["config-get", "guard.plan-approval"], proj, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
+    const unchanged = run(dispatcher, ["engine", "config", "set", "guard.plan-approval", "off"], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(unchanged.stdout).toContain("Fence reviewer-scope is already off");
+    expect(unchanged.stdout).toContain("Fence plan-approval is already off");
     expect(readFileSync(state, "utf-8")).toBe(offState);
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
   });
@@ -2057,18 +2062,16 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const { proj, state } = project("classic");
     const before = readFileSync(state, "utf-8");
     const ledger = mutationRows(proj);
-    const unchanged = run(UTILITY, ["config-change", "--guard.reviewer-scope", "off"], proj, FENCE_ENV_CLEAR);
+    const unchanged = run(UTILITY, ["config-change", "--guard.plan-approval", "off"], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(unchanged.stdout).toContain("Fence reviewer-scope is already off");
+    expect(unchanged.stdout).toContain("Fence plan-approval is already off");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
     const refused = run(UTILITY, [
-      "config-change", "--guard-policy", "strict", "--guard.reviewer-scope", "off",
+      "config-change", "--guard-policy", "strict", "--guard.plan-approval", "off",
     ], proj, FENCE_ENV_CLEAR);
     expect(refused.status).toBe(1);
-    expect(JSON.parse(refused.stderr)).toEqual({
-      error: fenceRefusal.replaceAll("plan-approval", "reviewer-scope"),
-    });
+    expect(JSON.parse(refused.stderr)).toEqual({ error: fenceRefusal });
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
   });
@@ -2541,8 +2544,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 });
 
 describe("t333 (10) retired policy confirmation", () => {
-  const relaxedNotice = "Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed now also lowers the reviewer-scope fence for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
-  const offNotice = "Guard Policy: off was carried over from this piece of work's retired Change Control line. Under Guard Policy, off now also lowers the state-transition and reviewer-scope fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy off' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
+  const relaxedNotice = "Guard Policy: relaxed was carried over from this piece of work's retired Change Control line. Under Guard Policy, relaxed now also lowers the plan-approval and review-freeze fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy relaxed' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
+  const offNotice = "Guard Policy: off was carried over from this piece of work's retired Change Control line. Under Guard Policy, off now also lowers the plan-approval, review-freeze, state-transition and reviewer-scope fences for work nobody directed, and every pass is recorded in the audit trail. Say 'guard policy off' to keep it, or 'guard policy strict' to raise them again; this notice repeats until you choose.";
   const conflictNotice = "Guard Policy: this piece of work carries both `Guard Policy: off (set by you)` and the retired `Change Control: strict (from scope classic)`, so strict applies until you choose. Say 'guard policy strict', 'guard policy relaxed', or 'guard policy off' to keep one line; this notice repeats until you do.";
 
   test("conflicting policy lines enforce strict and repeat the notice until a typed choice leaves one line", () => {
@@ -2672,7 +2675,7 @@ describe("t333 (10) retired policy confirmation", () => {
     expect(readFileSync(state, "utf-8")).toBe(retired);
   });
 
-  test("next announces the policy-lowered fences for retired off without changing state bytes", () => {
+  test("next announces all four fences for retired off without changing state bytes", () => {
     const { proj, state } = project("classic");
     const retired = readFileSync(state, "utf-8").replace(
       /^- \*\*Guard Policy\*\*:.*$/m,
@@ -2723,7 +2726,7 @@ describe("t333 (10) retired policy confirmation", () => {
     }
   });
 
-  test("the plan-approval hook refuses unapproved source writes under every retired policy", () => {
+  test("the plan-approval hook allows unapproved source writes under retired relaxed but refuses retired strict", () => {
     for (const policy of ["relaxed", "strict"]) {
       const { proj, state } = project("classic");
       const retired = setField(readFileSync(state, "utf-8"), "Current Stage", "code-generation")
@@ -2749,9 +2752,18 @@ describe("t333 (10) retired policy confirmation", () => {
         stdout: "pipe",
         stderr: "pipe",
       });
-      expect(guarded.exitCode, guarded.stderr.toString()).toBe(2);
-      expect(guarded.stdout.toString()).toBe("");
-      expect(rowsOf(proj, "GUARD_STOOD_ASIDE")).toHaveLength(0);
+      expect(guarded.exitCode, guarded.stderr.toString()).toBe(policy === "relaxed" ? 0 : 2);
+      if (policy === "relaxed") {
+        expect(guarded.stdout.toString()).toContain(
+          "Continuing past the plan-approval check because it is off for this piece of work",
+        );
+        const rows = rowsOf(proj, "GUARD_STOOD_ASIDE");
+        expect(rows).toHaveLength(1);
+        expect(auditBlockField(rows[0].block, "Guard")).toBe("plan-approval");
+      } else {
+        expect(guarded.stdout.toString()).toBe("");
+        expect(rowsOf(proj, "GUARD_STOOD_ASIDE")).toHaveLength(0);
+      }
     }
   });
 });

@@ -22,7 +22,7 @@ the bare path to running code is skipped: capture the intent, reverse-
 engineer any existing code, pull the requirements, then generate and test.
 No design ceremony, no operations, no delivery planning.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced, the spike keeps moving, and reviewer read scope is lowered for undirected work. Plan approval and terminal review freeze remain mandatory.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced, the spike keeps moving, and plan approval and review freeze are lowered for undirected work.
 
 ## Why these stages, why skip those
 

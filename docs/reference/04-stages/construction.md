@@ -203,10 +203,9 @@ Code Generation (3.5, `workspace_requires: true`) is NEVER wave-eligible:
 concurrent builders would collide writing into the shared workspace (the
 swarm path's per-unit worktrees exist for exactly this isolation), and its
 Step 3 Plan Approval is a mandatory hard stop in every execution mode that
-cannot fold into a builder's return message. The stop is enforced by both the
-conductor and the hook under every Guard Policy word. Only the person's
-explicit per-work switch or the documented machine escape hatch can lower the
-hook, and neither removes the approval question from the stage contract.
+cannot fold into a builder's return message. The stop is the conductor's:
+under a `relaxed` or `off` Guard Policy the plan-approval fence stands aside
+for undirected work and records `GUARD_STOOD_ASIDE` instead of refusing.
 
 Each entry carries kind-resolved consumes, explicit absent consumes, all
 produces, the applicable required subset, a Unit-local diary path, build state,

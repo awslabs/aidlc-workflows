@@ -1363,12 +1363,12 @@ export async function run(input: string): Promise<number> {
   }
   if (!verdict.block) return 0;
 
-  // The Guard Policy word never lowers this mandatory lifecycle barrier. The
-  // fence stands aside only through the human's explicit
-  // `guard.plan-approval off` switch or the documented machine escape hatch.
-  // A generic human message does not lower it. Standing aside costs one printed
-  // line and one audit row; the approval gate itself is untouched. Otherwise
-  // the refusal below carries the switch, so the way past is in hand.
+  // The fence stands aside when it is LOWERED for this piece of work, by the
+  // guard policy word (relaxed and off both lower this one) or by the human's
+  // own `guard.plan-approval off` switch. A human message, however recent, does
+  // not lower it: see decideGuard in aidlc-lib.ts for why. Standing aside costs
+  // one printed line and one audit row; the approval gate itself is untouched.
+  // Otherwise the refusal below carries the switch, so the way past is in hand.
   {
     let gate: ReturnType<typeof decideFence> | null = null;
     try {

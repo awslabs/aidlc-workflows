@@ -21,7 +21,7 @@ functional-design — a refactor reshapes structure, so the design of the
 behaviour being preserved matters — and retains the deployment stages needed
 to ship the verified change.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; reviewer read scope is lowered for undirected work, while plan approval and terminal review freeze remain mandatory.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
 
 ## Why these stages, why skip those
 

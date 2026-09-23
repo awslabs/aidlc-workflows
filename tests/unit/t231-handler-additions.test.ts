@@ -196,9 +196,8 @@ describe("t231 config get/list/set handlers", () => {
     expect(changed.stdout).toContain("Fence state-transition is already off");
     expect(renameNotices(changed.stderr)).toBe(0);
     // The seven settings the human names plus the four per-run fence switches,
-    // in the order config list prints them. relaxed lowers reviewer scope by
-    // itself; the explicit switch lowered state transition; the mandatory
-    // lifecycle barriers retain their defaults.
+    // in the order config list prints them. relaxed lowers two fences by
+    // itself; the switch lowered a third; the rest read their default.
     const expected = {
       depth: "Minimal",
       "test-strategy": "Comprehensive",
@@ -207,10 +206,10 @@ describe("t231 config get/list/set handlers", () => {
       sensors: "off (set by you)",
       learnings: "off (set by you)",
       "summary-confirmation": "off (set by you)",
-      "guard.plan-approval": "on (default)",
-      "guard.review-freeze": "on (default)",
+      "guard.plan-approval": "off (guard policy relaxed (set by you))",
+      "guard.review-freeze": "off (guard policy relaxed (set by you))",
       "guard.state-transition": "off (set by you)",
-      "guard.reviewer-scope": "off (guard policy relaxed (set by you))",
+      "guard.reviewer-scope": "on (default)",
     };
     for (const [key, value] of Object.entries(expected)) {
       const read = utility(["config-get", key], project, FENCE_ENV_CLEAR);

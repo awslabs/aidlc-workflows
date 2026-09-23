@@ -30093,14 +30093,11 @@ export function emitError(
 // confirmed something is asked about once, naming what changed, and the
 // authority fences hold against work nobody directed. `relaxed`: a changed
 // input is recorded as a CHANGE_ACCEPTED row, told to the human in one line,
-// and the work continues; the dispatched-reviewer read-scope fence stands
-// aside and logs. `off`: state-transition and reviewer read scope stand aside
-// and log. Claimed-checkout Unit ownership remains mandatory. Plan
-// approval and terminal review freeze remain mandatory under every policy
-// word; only the person's explicit per-work switch or the documented machine
-// escape hatch can lower them. No value removes a gate, alters a reviewer's
-// verdict, deletes evidence, or lets an agent answer for the human (human
-// presence is the key holder, not a fence). The value is
+// and the work continues; the plan-approval and review-freeze fences stand
+// aside and log. `off` also lowers state-transition and reviewer read scope.
+// Claimed-checkout Unit ownership remains mandatory. No value removes a gate,
+// alters a reviewer's verdict, deletes evidence, or lets an agent answer for
+// the human (human presence is the key holder, not a fence). The value is
 // the intent's own state line when present, else the scope default; any memory
 // layer that declares strict wins over both and cannot be flipped from chat.
 //
@@ -30645,8 +30642,8 @@ export const GUARD_FENCE_LABELS: Record<GuardFence, string> = {
 
 /** The fences the policy word lowers by itself. */
 export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[] {
-  if (policy === "off") return ["state-transition", "reviewer-scope"];
-  if (policy === "relaxed") return ["reviewer-scope"];
+  if (policy === "off") return ["plan-approval", "review-freeze", "state-transition", "reviewer-scope"];
+  if (policy === "relaxed") return ["plan-approval", "review-freeze"];
   return [];
 }
 
