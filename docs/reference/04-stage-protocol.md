@@ -1130,10 +1130,12 @@ stored receipts are not rewritten and their format does not change. See
    retries the same unmatched request once with `--retry-pending` (no iteration
    consumed - an advisory normal-flow budget is exactly one pass, so a counted
    cut-off would exhaust it without any review happening), and a second
-   incomplete attempt records the terminal receipt `--verdict NOT-READY` with no
-   review file and the brief's fallback finding "review did not complete within
-   its turn budget" - the gate is reached with a concrete finding, never
-   presented on (or deadlocked by) a silently missing verdict.
+   incomplete attempt records the terminal receipt `--verdict NOT-READY
+   --terminal-incomplete`. This operation is available only after the request's
+   one `--retry-pending` attempt; it removes any invalid draft left in the
+   request slot and records an empty review record. The brief then supplies the
+   fallback finding "review did not complete within its turn budget", so the
+   gate is reached with a concrete finding rather than a missing verdict.
    On `adversarial` with iterations remaining the re-invoke skips the lead
    (the artifact was never reviewed; there is nothing for the builder to act
    on).
@@ -1192,10 +1194,11 @@ before a verdict, or returns an incomplete attempt (no review file, or no
 single canonical verdict), rerun the same
 request command with `--retry-pending` before dispatching again - at most once
 per request; a second incomplete attempt records the terminal `NOT-READY`
-receipt instead. The logger accepts this recovery only for the same unmatched
-request, records `Retry: pending-request`, and does not consume another
-iteration. A completed request cannot be retried; stale-receipt recovery is a
-distinct request at the next ordinal.
+receipt with `--terminal-incomplete` instead. The logger accepts this recovery
+only for the same unmatched retried request, removes any invalid slot draft,
+records `Retry: pending-request`, and does not consume another iteration. A
+completed request cannot be retried; stale-receipt recovery is a distinct
+request at the next ordinal.
 
 ---
 

@@ -23,8 +23,10 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   auditBlockField,
   findStageBySlug,
+  parseReviewSection,
   readAllAuditShards,
   readAuditShardEvents,
+  reviewArtifactFingerprint,
   reviewArtifactEntries,
   sourcePathKey,
   writeUnitSourceSnapshot,
@@ -436,14 +438,28 @@ describe("t304 executable review brief scenarios", () => {
     const body = reviewMarkdown("READY", [])
       .replace("| ID | Severity | Location | Finding | Required action | Status |", header)
       .replace("|---|---|---|---|---|---|", `${separator}\n${row}`);
-    expect(() => parseReviewArtifact(body, "aidlc/requirements.md"))
+    expect(() =>
+      parseReviewSection(
+        body,
+        "aidlc/requirements.md",
+        undefined,
+        { strictFindingsTable: true },
+      )
+    )
       .toThrow(`findings table is missing required columns: ${missing}`);
   });
 
   test("a missing separator cannot silently consume the first finding", () => {
     const body = reviewMarkdown("READY", [ROW_NEW])
       .replace("|---|---|---|---|---|---|\n", "");
-    expect(() => parseReviewArtifact(body, "aidlc/requirements.md"))
+    expect(() =>
+      parseReviewSection(
+        body,
+        "aidlc/requirements.md",
+        undefined,
+        { strictFindingsTable: true },
+      )
+    )
       .toThrow("requires a Markdown separator row immediately after its header");
   });
 
@@ -451,7 +467,14 @@ describe("t304 executable review brief scenarios", () => {
     const body = reviewMarkdown("READY", [])
       .replace("| Status |", "| Status | ID |")
       .replace("|---|---|---|---|---|---|", "|---|---|---|---|---|---|---|");
-    expect(() => parseReviewArtifact(body, "aidlc/requirements.md"))
+    expect(() =>
+      parseReviewSection(
+        body,
+        "aidlc/requirements.md",
+        undefined,
+        { strictFindingsTable: true },
+      )
+    )
       .toThrow("findings table repeats required columns: ID");
   });
 
@@ -486,6 +509,21 @@ describe("t304 executable review brief scenarios", () => {
     ]);
     expect(parseReviewArtifact(body, "aidlc/requirements.md")!.findings.map((finding) => finding.id))
       .toEqual(["R-01", "R-02"]);
+  });
+
+  test("unfinished HTML before the table cannot hide its findings", () => {
+    const body = reviewMarkdown("READY", [ROW_NEW]).replace(
+      "### Findings\n\n| ID |",
+      "### Findings\n\nMalformed <span\n| ID |",
+    );
+    expect(
+      parseReviewSection(
+        body,
+        "aidlc/requirements.md",
+        undefined,
+        { strictFindingsTable: true },
+      ).findings.map((finding) => finding.id),
+    ).toEqual(["R-01"]);
   });
 
   test("valid findings preserve escaped pipes and explicit empty cells", () => {
@@ -570,6 +608,75 @@ describe("t304 executable review brief scenarios", () => {
     expect(completed.out).toContain("findings table is missing required columns");
     expect(readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"))
       .toHaveLength(0);
+  });
+
+  test("a shortened legacy embedded review remains readable through context, gate, and approval", () => {
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(
+      artifact,
+      readFileSync(artifact, "utf-8")
+        .replace(
+          "| ID | Severity | Location | Finding | Required action | Status |",
+          "| ID | Severity | Finding | Recommendation |",
+        )
+        .replace(
+          "|---|---|---|---|---|---|",
+          "|---|---|---|---|\n" +
+            "| R-01 | Minor | Missing acceptance criterion | Add it |",
+        ),
+      "utf-8",
+    );
+    const stage = findStageBySlug("requirements-analysis")!;
+    const fingerprint = reviewArtifactFingerprint(proj, stage);
+    expect(fingerprint).toBeString();
+    const receipt = {
+      Stage: "requirements-analysis",
+      Reviewer: "aidlc-product-lead-agent",
+      Iteration: "1",
+      "Artifact Fingerprint": fingerprint!,
+    };
+    appendAuditEntry("REVIEW_REQUESTED", receipt, proj);
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      { ...receipt, Verdict: "READY" },
+      proj,
+    );
+
+    const contexts = readReviewArtifactContexts(proj, stage);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]).toMatchObject({ verdict: "READY", findings: [] });
+    const context = run(
+      REVIEW_BRIEF,
+      ["context", "--stage", "requirements-analysis"],
+      proj,
+    );
+    expect(context.status, context.out).toBe(0);
+    const brief = run(
+      REVIEW_BRIEF,
+      ["review", "--stage", "requirements-analysis", "--why", "first"],
+      proj,
+    );
+    expect(brief.status, brief.out).toBe(0);
+    expect(brief.stdout).toContain(
+      "| - | - | - | No findings | No action required | Resolved |",
+    );
+    expect(
+      run(STATE, ["gate-start", "requirements-analysis"], proj).status,
+    ).toBe(0);
+    const approved = run(
+      ORCHESTRATE,
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "approved",
+        "--user-input",
+        "Approve",
+      ],
+      proj,
+    );
+    expect(approved.status, approved.out).toBe(0);
   });
 
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {
@@ -1353,10 +1460,54 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     ];
     const requested = run(LOG, request, proj);
     expect(requested.status, requested.out).toBe(0);
+    const { reviewFile } = JSON.parse(requested.stdout) as {
+      reviewFile: string;
+    };
+    const draft = join(proj, reviewFile);
+    const malformedBody = [
+      "**Verdict:** NOT-READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Iteration:** 1",
+      "",
+      "### Findings",
+      "",
+      "| ID | Severity | Finding | Recommendation |",
+      "|---|---|---|---|",
+      "| R-01 | Major | Missing criterion | Add it |",
+    ].join("\n");
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(draft, malformedBody, "utf-8");
+    const firstMalformed = run(
+      LOG,
+      [...request, "--verdict", "NOT-READY"],
+      proj,
+    );
+    expect(firstMalformed.status).not.toBe(0);
+    expect(firstMalformed.out).toContain(
+      "findings table is missing required columns",
+    );
     const retried = run(LOG, [...request, "--retry-pending"], proj);
     expect(retried.status, retried.out).toBe(0);
-    const completed = run(LOG, [...request, "--verdict", "NOT-READY"], proj);
+    writeFileSync(draft, malformedBody, "utf-8");
+    const malformed = run(
+      LOG,
+      [...request, "--verdict", "NOT-READY"],
+      proj,
+    );
+    expect(malformed.status).not.toBe(0);
+    expect(malformed.out).toContain("findings table is missing required columns");
+    const completed = run(
+      LOG,
+      [
+        ...request,
+        "--verdict",
+        "NOT-READY",
+        "--terminal-incomplete",
+      ],
+      proj,
+    );
     expect(completed.status, completed.out).toBe(0);
+    expect(existsSync(draft)).toBe(false);
     const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
     const recordPath = join(seededRecordDir(proj), reviewRecord);
     expect(existsSync(recordPath)).toBe(true);
@@ -1368,6 +1519,9 @@ describe("t304 protocol and harness projections use the deterministic renderer",
 
     const stage = findStageBySlug("requirements-analysis")!;
     expect(readReviewArtifactContexts(proj, stage)).toHaveLength(0);
+    expect(
+      run(STATE, ["gate-start", "requirements-analysis"], proj).status,
+    ).toBe(0);
     const fallbackFinding = "review did not complete within its turn budget";
     const brief = run(
       REVIEW_BRIEF,

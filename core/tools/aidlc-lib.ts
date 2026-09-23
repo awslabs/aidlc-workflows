@@ -12823,6 +12823,7 @@ export function parseReviewSection(
   review: string,
   artifact: string,
   unit?: string,
+  options: { strictFindingsTable?: boolean } = {},
 ): { verdict: ReviewVerdict | null; findings: ReviewFinding[] } {
   const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
   const verdict = (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
@@ -12845,12 +12846,18 @@ export function parseReviewSection(
     .flatMap((line, index) => line.trim().startsWith("|") ? [lines[heading + 1 + index]] : []);
   if (table.length === 0) return { verdict, findings: [] };
   if (table.length < 2) {
+    if (options.strictFindingsTable !== true) {
+      return { verdict, findings: [] };
+    }
     throw new Error(`${artifact}: findings table is missing its Markdown separator row`);
   }
   const headers = splitMarkdownRow(table[0]);
   const requiredColumns = ["ID", "Severity", "Location", "Finding", "Required action", "Status"];
   const missingColumns = requiredColumns.filter((name) => !headers.includes(name));
   if (missingColumns.length > 0) {
+    if (options.strictFindingsTable !== true) {
+      return { verdict, findings: [] };
+    }
     // A shortened table still contains findings. Refuse its completion instead
     // of recording an empty array beside a body that describes real concerns.
     throw new Error(
@@ -12858,22 +12865,24 @@ export function parseReviewSection(
         `Use columns: ${requiredColumns.join(" | ")}`,
     );
   }
-  const duplicateColumns = requiredColumns.filter((name) =>
-    headers.filter((header) => header === name).length !== 1
-  );
-  if (duplicateColumns.length > 0) {
-    throw new Error(
-      `${artifact}: findings table repeats required columns: ${duplicateColumns.join(", ")}`,
+  if (options.strictFindingsTable === true) {
+    const duplicateColumns = requiredColumns.filter((name) =>
+      headers.filter((header) => header === name).length !== 1
     );
-  }
-  const separators = splitMarkdownRow(table[1]);
-  if (
-    separators.length !== headers.length ||
-    separators.some((cell) => !/^:?-+:?$/.test(cell))
-  ) {
-    throw new Error(
-      `${artifact}: findings table requires a Markdown separator row immediately after its header`,
-    );
+    if (duplicateColumns.length > 0) {
+      throw new Error(
+        `${artifact}: findings table repeats required columns: ${duplicateColumns.join(", ")}`,
+      );
+    }
+    const separators = splitMarkdownRow(table[1]);
+    if (
+      separators.length !== headers.length ||
+      separators.some((cell) => !/^:?-+:?$/.test(cell))
+    ) {
+      throw new Error(
+        `${artifact}: findings table requires a Markdown separator row immediately after its header`,
+      );
+    }
   }
   const index = new Map(headers.map((name, position) => [name, position]));
   const findings: ReviewFinding[] = [];
@@ -30723,9 +30732,17 @@ export function visibleMarkdownLines(
 
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber++) {
     const rawLine = lines[lineNumber];
-    const singleLineTableRow: boolean = options.singleLineTableCells === true &&
+    const singleLineTableRow = options.singleLineTableCells === true &&
       /^ {0,3}\|/.test(rawLine) && fence === null && rawHtmlBlock === null &&
-      !inComment && !htmlTagOpen && codeSpanEnd === null;
+      !inComment;
+    if (singleLineTableRow) {
+      // A top-level GFM table row starts a fresh inline context. Malformed
+      // prose immediately before the table cannot carry an unfinished tag or
+      // code span into the header and hide every finding.
+      htmlTagOpen = false;
+      htmlAttributeQuote = null;
+      codeSpanEnd = null;
+    }
     const explicitContainerLine = markdownContainerLine(rawLine);
     let containerLine = explicitContainerLine;
     if (activeContainer !== null) {

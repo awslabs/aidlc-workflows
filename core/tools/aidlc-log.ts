@@ -202,7 +202,12 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
-      if (a === "--single" || a === "--retry-pending" || a === "--stage-level") {
+      if (
+        a === "--single" ||
+        a === "--retry-pending" ||
+        a === "--stage-level" ||
+        a === "--terminal-incomplete"
+      ) {
         flags[a.slice(2)] = "true";
         continue;
       }
@@ -2026,6 +2031,9 @@ function handleReview(args: string[]): void {
   // requests in the current attempt, and append under the same lock. This closes
   // duplicate/missing-label bypasses and makes concurrent requests serialize.
   if (flags.verdict === undefined) {
+    if (flags["terminal-incomplete"] === "true") {
+      error("--terminal-incomplete requires --verdict NOT-READY.");
+    }
     if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
       error("Starting a review requires --iteration <positive integer>.");
     }
@@ -2213,8 +2221,9 @@ function handleReview(args: string[]): void {
             refuseReview(
               `Refusing review retry for "${flags.stage}": REVIEW_REQUESTED ` +
                 `iteration ${iteration} already used its one pending-request retry. ` +
-                "Do not dispatch it again; record the bounded incomplete-review " +
-                "NOT-READY fallback or start the next permitted review iteration.",
+                "Do not dispatch it again; record the bounded fallback with " +
+                "--verdict NOT-READY --terminal-incomplete, or start the next " +
+                "permitted review iteration.",
             );
           }
           const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
@@ -2487,6 +2496,13 @@ function handleReview(args: string[]): void {
   }
   fields.Verdict = verdict;
   const reviewFileFlag = flags["review-file"];
+  const terminalIncomplete = flags["terminal-incomplete"] === "true";
+  if (terminalIncomplete && verdict !== "NOT-READY") {
+    error("--terminal-incomplete requires --verdict NOT-READY.");
+  }
+  if (terminalIncomplete && reviewFileFlag !== undefined) {
+    error("--terminal-incomplete cannot be combined with --review-file.");
+  }
   let recordPath: string | null = null;
   let reviewMarkdown: string | null = null;
   const verdictChangeNotices: string[] = [];
@@ -2551,6 +2567,12 @@ function handleReview(args: string[]): void {
 
       const slot = reviewSlot(attempt.floor, iteration);
       const legacy = requestBinding.legacyAppendix;
+      if (terminalIncomplete && !pendingRequest.retried) {
+        refuseReview(
+          `Cannot record the terminal incomplete-review fallback for "${flags.stage}": ` +
+            `review iteration ${iteration} has not used its one --retry-pending attempt.`,
+        );
+      }
 
       // Deprecated input path: a reviewer that still appends `## Review` to
       // the artifact (see reviewAppendedAfterRequest). Read, never written to;
@@ -2622,11 +2644,21 @@ function handleReview(args: string[]): void {
             "appended section so the artifact carries the bytes the reviewer was dispatched on.",
         );
       }
+      if (terminalIncomplete && appendedAfterRequest) {
+        refuseReview(
+          `Cannot record the terminal incomplete-review fallback for "${flags.stage}": ` +
+            "the reviewer appended a legacy review to the artifact. Restore the requested " +
+            "artifact bytes before recording the fallback.",
+        );
+      }
       const incompleteFallback =
-        body === null &&
-        !appendedAfterRequest &&
-        pendingRequest.retried &&
-        verdict === "NOT-READY";
+        terminalIncomplete ||
+        (
+          body === null &&
+          !appendedAfterRequest &&
+          pendingRequest.retried &&
+          verdict === "NOT-READY"
+        );
       const embeddedLegacy = body === null && !incompleteFallback && appendedAfterRequest;
       if (body === null && !incompleteFallback && !embeddedLegacy) {
         refuseReview(
@@ -2735,6 +2767,7 @@ function handleReview(args: string[]): void {
             recordBody.toString("utf-8"),
             artifactKey,
             flags.unit,
+            { strictFindingsTable: true },
           ).findings;
         } catch (parseError) {
           refuseReview(

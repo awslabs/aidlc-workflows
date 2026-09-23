@@ -298,7 +298,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       // named finding and routes per review class.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
       expect(labelled).toMatch(
-        /record the\s+terminal receipt with `--verdict NOT-READY` and no review file/,
+        /record the\s+terminal receipt with `--verdict NOT-READY --terminal-incomplete`/,
       );
       expect(labelled).toMatch(/on `advisory` it is terminal/);
       expect(labelled).toMatch(/skip the lead re-invoke/);

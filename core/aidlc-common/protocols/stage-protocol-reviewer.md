@@ -197,9 +197,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    the retry and blocks every later retry. A structurally malformed request row
    has no authority and is ignored, so a fresh normal request may reuse its
    ordinal. If the retried attempt is ALSO incomplete, stop retrying: record the
-   terminal receipt with `--verdict NOT-READY` and no review file; the logger
-   accepts a missing review only for this retried NOT-READY fallback, and
-   writes an empty review record for it. Proceed as that NOT-READY verdict directs for the
+   terminal receipt with `--verdict NOT-READY --terminal-incomplete`; the
+   logger accepts this only after the request used its one `--retry-pending`
+   attempt, discards any invalid draft left in the request slot, and writes an
+   empty review record. Proceed as that NOT-READY verdict directs for the
    effective review class - on `advisory` it is terminal (present the gate using
    the required Review brief below, with
    `--fallback-finding "review did not complete within its turn budget"` so the
