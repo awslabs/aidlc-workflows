@@ -33,8 +33,15 @@ actually select them.
 The shared policy in `tests/harness/test-budget.ts` gives unspecified test cases
 a 15-second default on Linux/macOS and 60 seconds on Windows. The Windows
 allowance includes approximately three times the observed 19-second fixture
-copy plus a sub-second CLI call. These are ceilings, so a completed test exits
-immediately. Explicit tests of deadline behavior retain their operation limits.
+copy plus a sub-second CLI call. Files dominated by fixture setup and CLI calls
+use `setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS)` for a shared 120-second
+case envelope. Whole multistep worktree journeys use
+`NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS` (300 seconds, over twice the observed
+143-second CI peak). Select one profile per file and remove smaller fixture-case
+overrides, preserving larger existing ceilings and intentional performance
+calibration case budgets. These are ceilings, so a completed test exits
+immediately. Explicit tests of deadline behavior retain their operation limits
+and clock assertions; the profiles do not change production timing.
 
 Budget measured work once, then add fixture, startup, assertion and cleanup
 allowances. The live-case helper reserves 60 seconds for fixtures, 120 seconds

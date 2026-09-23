@@ -37,6 +37,7 @@ import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { createCodexWorkspaceFailureCapture } from "../harness/codex-turn-evidence.ts";
 import {
   activeSpace,
   getField,
@@ -192,7 +193,7 @@ function execCodex(
     maxBuffer: 16 * 1024 * 1024,
   });
   const out = `${r.stdout ?? ""}\n${r.stderr ?? ""}\n${r.error?.message ?? ""}`;
-  const result = { rc: r.status ?? -1, out, signal: r.signal, error: r.error?.message };
+  const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", out, signal: r.signal, error: r.error?.message };
   recordCodexExec("workspace", proj, [CODEX_BIN, ...commandArgs], result);
   const commands: CodexCommand[] = [];
   if (r.status === 0) {
@@ -320,6 +321,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
       const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const journey = setupCodexJourney();
       const { root, home } = journey;
+      const captureFailure = createCodexWorkspaceFailureCapture(root, home, process.env.AIDLC_TEST_LOG_DIR);
       await withCodexFixture(root, () => cleanupWorkspaceJourney(journey), () => {
         // --- Step 1: auto-create A spanning both siblings ---------------------
         // Name the scope explicitly: a bare prose `/aidlc "<desc>"` emits an `ask`
@@ -451,7 +453,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
         expect(readIntentRegistry(root, "default").length).toBe(2);
-      }, deadlineMs);
+      }, deadlineMs, captureFailure);
     },
     TEST_TIMEOUT_MS,
   );

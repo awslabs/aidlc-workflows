@@ -839,7 +839,18 @@ function Get-CodexHomeInitializer {
     $body = @'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$initializerWatch = [Diagnostics.Stopwatch]::StartNew()
+function Write-CodexInitializerPhase([string]$Phase, [int]$Entry = -1) {
+    if ($env:AIDLC_CODEX_INITIALIZER_DIAGNOSTICS -ne '1') { return }
+    # Fixed labels and counts only. Never print paths, ACLs, hashes or secrets.
+    [Console]::Error.WriteLine((@{
+        probe = 'codex-home-initializer'; phase = $Phase; entry = $Entry
+        elapsedMs = $initializerWatch.ElapsedMilliseconds; pid = $PID
+    } | ConvertTo-Json -Compress))
+}
+Write-CodexInitializerPhase 'start'
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne __SID__) { throw 'Wrong Codex initializer identity.' }
+Write-CodexInitializerPhase 'add-type-start'
 Add-Type -TypeDefinition @"
 using System;
 using System.ComponentModel;
@@ -867,6 +878,7 @@ public static class AidlcCodexDirectoryPin {
     }
 }
 "@
+Write-CodexInitializerPhase 'add-type-complete'
 $pins = [Collections.Generic.List[IDisposable]]::new()
 function Pin-Path([string]$Path) {
     $cursor = [IO.Path]::GetPathRoot($Path)
@@ -894,6 +906,7 @@ function Access-Signature($Acl) {
     return ([string]$Acl.AreAccessRulesProtected + ':' + ($rules -join '|'))
 }
 try {
+    Write-CodexInitializerPhase 'directory-validation'
     if (-not $env:CODEX_HOME -or -not $env:TEMP) { throw 'Fresh Codex home and runner temporary root are required.' }
     if ($env:CODEX_HOME -notmatch '^[A-Za-z]:[\\/]') { throw 'Codex home must be an absolute local path.' }
     $homePath = [IO.Path]::GetFullPath($env:CODEX_HOME).TrimEnd('\')
@@ -903,23 +916,30 @@ try {
         throw 'Codex home is outside this test temporary root.'
     }
     Pin-Path $homePath
+    Write-CodexInitializerPhase 'home-owner-validation'
     if ((Get-Acl -LiteralPath $homePath).GetOwner([Security.Principal.SecurityIdentifier]).Value -cne __SID__) {
         throw 'Codex home is not owned by its calling user.'
     }
     $seed = __SEED__
+    Write-CodexInitializerPhase 'seed-directory-validation'
     Pin-Path $seed
+    Write-CodexInitializerPhase 'manifest-read'
     $manifest = Get-Content -LiteralPath (Join-Path $seed 'template.json') -Raw | ConvertFrom-Json
     $existing = [IO.Directory]::Exists((Join-Path $homePath '.sandbox'))
+    $entryIndex = 0
     foreach ($entry in $manifest.entries) {
         $path = Join-Path $homePath $entry.path
+        Write-CodexInitializerPhase 'acl-materialization' $entryIndex
         $acl = Access-Acl $entry
         if ($entry.directory) {
+            Write-CodexInitializerPhase 'entry-directory-validation' $entryIndex
             if (-not $existing) {
                 if (Test-Path -LiteralPath $path) { throw 'Refusing a partial or occupied Codex sandbox home.' }
                 [void][IO.Directory]::CreateDirectory($path, $acl)
             }
             $pins.Add([AidlcCodexDirectoryPin]::Open($path))
         } else {
+            Write-CodexInitializerPhase 'entry-file-validation' $entryIndex
             if (-not $existing) {
                 $input = [IO.File]::Open((Join-Path $seed $entry.path), 'Open', 'Read', 'Read')
                 try {
@@ -931,10 +951,12 @@ try {
             }
             $attributes = [IO.File]::GetAttributes($path)
             if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Linked Codex sandbox artifact.' }
+            Write-CodexInitializerPhase 'hash-validation' $entryIndex
             if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $entry.sha256) {
                 throw 'Codex sandbox artifact differs from this provisioning generation.'
             }
         }
+        Write-CodexInitializerPhase 'acl-validation' $entryIndex
         $actualAcl = Get-Acl -LiteralPath $path
         if ($actualAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne __SID__) {
             throw 'Codex sandbox artifact owner changed.'
@@ -942,13 +964,16 @@ try {
         $actual = Access-Signature $actualAcl
         $expected = Access-Signature $acl
         if ($actual -cne $expected) { throw 'Codex sandbox artifact access boundary changed.' }
+        $entryIndex++
     }
 } finally {
     for ($index = $pins.Count - 1; $index -ge 0; $index--) { $pins[$index].Dispose() }
 }
+Write-CodexInitializerPhase 'template-complete'
 '@
     return $body.Replace('__SID__', (ConvertTo-PSLiteral $sandboxSid.Value)).Replace('__SEED__', (ConvertTo-PSLiteral $codexSeed)) +
-        "`r`n" + (Get-CodexGuiBootstrap)
+        "`r`nWrite-CodexInitializerPhase 'gui-bootstrap-start'`r`n" + (Get-CodexGuiBootstrap) +
+        "`r`nWrite-CodexInitializerPhase 'gui-bootstrap-complete'`r`nWrite-CodexInitializerPhase 'completed'`r`n"
 }
 
 function Get-CodexDesktopProcessSource {
@@ -2130,10 +2155,25 @@ $native = __NATIVE__
 $bun = __BUN__
 $env:CODEX_MANAGED_PACKAGE_ROOT = __PACKAGE_ROOT__
 $env:AIDLC_CODEX_GUI_DIAGNOSTICS = '1'
+$env:AIDLC_CODEX_INITIALIZER_DIAGNOSTICS = '1'
 $expectedSids = __SIDS__
 $initializer = __INITIALIZER__
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $commandShell = __COMMAND_SHELL__
+function Invoke-ReadinessInitializer {
+    $previousPreference = $ErrorActionPreference
+    $nativeExit = $null
+    try {
+        # Credential-free readiness may relay fixed stderr phase diagnostics on
+        # stdout. PS5.1 must not mistake those diagnostics for a command failure.
+        $ErrorActionPreference = 'Continue'
+        $LASTEXITCODE = $null
+        & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $initializer 2>&1 |
+            ForEach-Object { [Console]::WriteLine([string]$_) }
+        $nativeExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousPreference }
+    if ($null -eq $nativeExit -or $nativeExit -ne 0) { throw 'Fresh Codex home initialization failed.' }
+}
 # Create the actual temporary root as the live user, as the test runner does.
 # Assigning another user's ownership from the administrator requires a restore
 # privilege that hosted runner tokens do not necessarily enable.
@@ -2153,8 +2193,7 @@ foreach ($network in @('false', 'true')) {
     $cwdMarker = '.aidlc-cwd-' + $cwdToken
     [IO.File]::WriteAllText((Join-Path $project $cwdMarker), $cwdToken)
     [IO.File]::WriteAllText((Join-Path $env:CODEX_HOME 'config.toml'), "[windows]`nsandbox = `"elevated`"`n")
-    & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $initializer
-    if ($LASTEXITCODE -ne 0) { throw 'Fresh Codex home initialization failed.' }
+    Invoke-ReadinessInitializer
     # No secret data is printed. The caller confirms existence; the sandboxed
     # command must prove access denial, not mistake a missing file for a deny.
     $secretPath = Join-Path $env:CODEX_HOME '.sandbox-secrets\sandbox_users.json'
@@ -2212,8 +2251,7 @@ process.exitCode = result.status === null ? 1 : result.status;
     if (-not [IO.File]::Exists((Join-Path $project 'workspace-write.txt'))) { throw 'Native workspace write was not observed.' }
     # Resume-style reentry must validate the same generation without resetting
     # global account passwords or overwriting the test's own config.
-    & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $initializer
-    if ($LASTEXITCODE -ne 0) { throw 'Codex home could not be reused after native sandbox execution.' }
+    Invoke-ReadinessInitializer
     $index++
 }
 [Console]::WriteLine('Codex elevated provisioning verified in two fresh low-user homes.')

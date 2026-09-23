@@ -9,6 +9,8 @@ export const LIVE_CLEANUP_TIMEOUT_MS = 60_000;
 export const NATIVE_STARTUP_TIMEOUT_MS = 30_000;
 export const NATIVE_COMPILE_TIMEOUT_MS = 30_000;
 export const NATIVE_FIXTURE_SETUP_TIMEOUT_MS = 120_000;
+// Whole multistep worktree fixture cases; the measured 143s CI peak gets >2x headroom.
+export const NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS = 300_000;
 // Infrastructure may launch several processes on a loaded runner. These are
 // ceilings, not sleeps: successful discovery and retirement finish immediately.
 export const NATIVE_PROCESS_IDENTITY_TIMEOUT_MS = 10_000;

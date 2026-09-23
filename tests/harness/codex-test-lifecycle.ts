@@ -12,7 +12,17 @@ export interface CodexExecution {
   error?: string;
 }
 
-const diagnostics = new AsyncLocalStorage<{ last?: string; deadlineMs?: number }>();
+export interface CodexFailureExecution {
+  cwd: string;
+  stdout?: string;
+  rc: number;
+}
+
+const diagnostics = new AsyncLocalStorage<{
+  last?: string; deadlineMs?: number;
+  onFailure?: (execution?: CodexFailureExecution) => void;
+  execution?: CodexFailureExecution;
+}>();
 let executionNumber = 0;
 let deferredNumber = 0;
 const limit = (text: string, maximum = 12_000): string => text.length <= maximum ? text
@@ -46,6 +56,7 @@ export function recordCodexExec(label: string, cwd: string, argv: string[], resu
   const summary = header + codexExecDiagnostic(result);
   const context = diagnostics.getStore();
   if (context) context.last = limit(summary);
+  if (context?.onFailure) context.execution = { cwd, stdout: result.stdout, rc: result.rc };
   if (process.env.AIDLC_TEST_LOG_DIR) {
     writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, `exec-codex-${label}-${++executionNumber}.log`),
       `${header}Exit code: ${result.rc}\nSignal: ${result.signal ?? "none"}\nSpawn error: ${result.error ?? "none"}\n\n` +
@@ -166,8 +177,9 @@ async function deferredWindowsCleanup(root: string): Promise<{ defer(): void; cl
 /** Preserve the original assertion and every cleanup error, in that order. */
 export async function withCodexFixture<T>(
   root: string, cleanup: () => void, body: () => T | Promise<T>, deadlineMs?: number,
+  onFailure?: (execution?: CodexFailureExecution) => void,
 ): Promise<T> {
-  return diagnostics.run({ deadlineMs }, async () => {
+  return diagnostics.run({ deadlineMs, onFailure }, async () => {
     let deferred: Awaited<ReturnType<typeof deferredWindowsCleanup>>;
     let unavailable: unknown;
     try { deferred = await deferredWindowsCleanup(resolve(root)); } catch (error) { unavailable = error; }
@@ -176,6 +188,8 @@ export async function withCodexFixture<T>(
     try { result = await body(); } catch (error) {
       errors.push(error);
       if (diagnostics.getStore()?.last) console.error(`[codex primary failure]\n${diagnostics.getStore()!.last}`);
+      try { onFailure?.(diagnostics.getStore()?.execution); }
+      catch { console.error("[codex workspace diagnostic] capture failed; original failure preserved"); }
     } finally {
       try {
         if (deferred) deferred.defer();

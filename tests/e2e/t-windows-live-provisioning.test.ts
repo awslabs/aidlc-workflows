@@ -483,6 +483,38 @@ public static class NativeOutputFixture {
       expect(result.stdout.trim()).toBe(`stdout-marker:${Buffer.from(args.join("\0")).toString("base64")}`);
       expect(result.stderr.trim()).toBe("stderr-marker");
     }, 20_000);
+    test("initializer phase markers diagnose a refused directory without stdout or secret contents", () => {
+      const sourceText = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+      const body = sourceText.match(/function Get-CodexHomeInitializer \{[\s\S]*?\$body = @'\r?\n([\s\S]*?)\r?\n'@/);
+      expect(body).not.toBeNull();
+      const script = join(root!, "initializer-phases.ps1");
+      writeFileSync(script, body![1]
+        .replaceAll("__SID__", "([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)")
+        .replaceAll("__SEED__", "'UNREAD_PRIVATE_SEED'"));
+      const shell = join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe");
+      const privateParent = join(root!, "different-private-parent");
+      mkdirSync(privateParent);
+      for (const enabled of ["1", "0"]) {
+        const result = spawnSync(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], {
+          encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS - 5000,
+          env: { ...process.env, CODEX_HOME: root!, TEMP: privateParent, TMP: privateParent,
+            AIDLC_CODEX_INITIALIZER_DIAGNOSTICS: enabled },
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("Codex home is outside this test temporary root.");
+        const rows = result.stderr.split(/\r?\n/).filter(line => line.startsWith("{")).map(line => JSON.parse(line));
+        expect(rows.map(row => row.phase)).toEqual(enabled === "1"
+          ? ["start", "add-type-start", "add-type-complete", "directory-validation"] : []);
+        for (const row of rows) {
+          expect(Object.keys(row).sort()).toEqual(["elapsedMs", "entry", "phase", "pid", "probe"]);
+          expect(row.probe).toBe("codex-home-initializer");
+          expect(row.elapsedMs).toBeGreaterThanOrEqual(0);
+          expect(row.entry).toBe(-1);
+        }
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
     test("preserves unrelated station ACL entries and refuses ambiguous cleanup", () => {
       const result = spawnSync(native, ["--verify-owned-station-acls"], { encoding: "utf8", timeout: 15_000 });
       expect(result.status, `${result.error ?? ""}\n${result.stderr}`).toBe(0);

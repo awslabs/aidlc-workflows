@@ -1,7 +1,7 @@
 // covers: tool:aidlc-lifecycle, tool:aidlc-machine-config, tool:aidlc-update
 // covers: tool:aidlc-completions, file:scripts/install.sh, file:scripts/install.ps1
 
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -50,7 +50,9 @@ import {
   serveReleaseFixture,
   writeReleaseFixture,
 } from "../harness/release-fixture.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -571,7 +573,7 @@ describe("t244 machine configuration and update discovery", () => {
       }
       await server.stop();
     }
-  }, process.platform === "win32" ? 120_000 : 10_000);
+  });
 
   test("interactive doctor bounds a missing-cache refresh to 750 milliseconds", async () => {
     const release = updateRelease;
@@ -659,7 +661,7 @@ describe("t244 machine configuration and update discovery", () => {
       }
       await server.stop();
     }
-  }, process.platform === "win32" ? 120_000 : 45_000);
+  });
 
   test("older authenticated metadata cannot replace a newer valid update cache", async () => {
     const newerRelease = updateRelease;
@@ -694,7 +696,7 @@ describe("t244 machine configuration and update discovery", () => {
       await newerServer.stop();
       await olderServer.stop();
     }
-  }, process.platform === "win32" ? 120_000 : 45_000);
+  });
 
   test("disabled and offline update checks open no socket", async () => {
     const release = updateRelease;
@@ -755,7 +757,7 @@ describe("t244 machine configuration and update discovery", () => {
         else process.env[key] = value;
       }
     }
-  }, process.platform === "win32" ? 120_000 : 5_000);
+  });
 });
 
 describe("t244 management lifecycle", () => {
@@ -912,7 +914,7 @@ describe("t244 management lifecycle", () => {
         `Transaction recovery: 1 quarantined path(s): ${projectQuarantine}`,
       ),
     }));
-  }, 60_000);
+  });
 
   test("all harness runtimes install together and config selects one project harness", () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
@@ -974,7 +976,7 @@ describe("t244 management lifecycle", () => {
     ], project, env);
     expect(multi.status).toBe(2);
     expect(multi.stdout + multi.stderr).toContain("multi-harness config is not supported yet");
-  }, 60_000);
+  });
 
   test("a missing declared runtime makes the retained version incomplete", () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
@@ -991,7 +993,7 @@ describe("t244 management lifecycle", () => {
     const listed = run(LIFECYCLE, ["versions", "list", "--json"], project, env);
     expect(listed.stdout).toContain('"complete":false');
     expect(run(LIFECYCLE, ["use", AIDLC_VERSION], project, env).status).toBe(4);
-  }, 60_000);
+  });
 
   test("update retains the prior active and pinned versions while pruning older versions", () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
@@ -1131,7 +1133,6 @@ describe("t244 management lifecycle", () => {
       // The installed tree is untouched by a same-version no-op.
       expect(statSync(runtimeFile).mode & 0o777).toBe(0o600);
     },
-    120_000,
   );
 
   test("uninstall removes command and versions while preserving machine state and projects", async () => {
@@ -1237,7 +1238,7 @@ describe("t244 management lifecycle", () => {
       expect(existsSync(join(machine, path))).toBe(false);
     }
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
-  }, process.platform === "win32" ? 180_000 : 60_000);
+  }, process.platform === "win32" ? 180_000 : NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t244 installer has no machine-level harness selection", () => {
@@ -1333,7 +1334,7 @@ describe("t244 Windows and completion release surfaces", () => {
       if (child.exitCode !== 0) console.error(diagnostic);
     }
     expect(child.exitCode, diagnostic).toBe(0);
-  }, 60_000);
+  });
 
   test("Windows uninstall cleanup supports adding completion metadata in PowerShell 5.1", () => {
     const source = readFileSync(
@@ -1635,7 +1636,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(manifest.assets).toContainEqual(
       expect.objectContaining({ name: "install.ps1", kind: "installer" }),
     );
-  }, process.platform === "win32" ? 120_000 : 5_000);
+  });
 
   test("PowerShell installer keeps analyzer suppressions narrow and helper calls named", () => {
     const script = readFileSync(INSTALL_PS1, "utf-8");
@@ -1764,7 +1765,6 @@ describe("t244 Windows and completion release surfaces", () => {
           expect(result.stdout).not.toContain("PARAM_OK");
         }
       },
-      35_000,
     );
   }
 
@@ -1891,7 +1891,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(result.stdout).toContain(`installed AI-DLC ${AIDLC_VERSION}`);
     expect(result.stderr).toBe("");
     expect(existsSync(join(bin, "aidlc"))).toBe(true);
-  }, 60_000);
+  });
 
   test("Unix installer turns Alpine musl loader failures into the canonical remediation", () => {
     if (process.platform !== "linux" || process.getuid?.() === 0) return;
@@ -2458,7 +2458,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const duplicate = invoke([...args, "--repo", "conflicting/repository"]);
     expect(duplicate.status).not.toBe(0);
     expect(existsSync(marker)).toBe(false);
-  }, 20_000);
+  });
 
   test("release MUST 3: signing emits one attested artifact for direct publication", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");

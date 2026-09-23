@@ -4,7 +4,7 @@
 // live harness variables: every assertion crosses the shipped CLI boundary and
 // reads the compiled routing result or the state written by intent-create.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -19,16 +19,14 @@ import {
   runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const projects: string[] = [];
 type Directive = Record<string, unknown>;
-
-// These three cases each copy the complete shipped install before invoking
-// the CLI. Hosted Windows measured a 19s copy followed by a correct 354ms call.
-const ROUTING_CASE_TIMEOUT = process.platform === "win32" ? 60_000 : undefined;
 
 const EXPRESS_STAGES = [
   "workspace-detection",
@@ -256,7 +254,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
       scope: "express",
       source: "keyword",
     });
-  }, ROUTING_CASE_TIMEOUT);
+  });
 
   test("explicit --scope express writes the exact 10-stage plan", () => {
     const p = project();
@@ -282,7 +280,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
       .map(([slug]) => slug)
       .sort();
     expect(execute).toEqual(EXPRESS_STAGES);
-  }, ROUTING_CASE_TIMEOUT);
+  });
 
   test("freeform text with no scope keyword falls back to the classic default", () => {
     expect(detectedScope("build a simple task tracker")).toMatchObject(
@@ -291,7 +289,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
         source: "freeform",
       },
     );
-  }, ROUTING_CASE_TIMEOUT);
+  });
 
   test("engine completes Express when the conditional deploy tail does not apply", () => {
     const p = project();
@@ -313,7 +311,7 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
     expect(readFileSync(activeStatePath(p), "utf-8")).toContain(
       "- **Status**: Completed",
     );
-  }, 60_000); // Seven next/continue handshakes plus six reports across the full journey.
+  }); // Seven next/continue handshakes plus six reports across the full journey.
 
   test("engine completes the Express deploy tail using explicit workspace fallbacks", () => {
     const p = project();
@@ -356,5 +354,5 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
     );
     // Includes three Operation approvals and their artifacts. Windows reached
     // observability approval when the previous 60s case deadline killed report.
-  }, process.platform === "win32" ? 120_000 : 60_000);
+  });
 });

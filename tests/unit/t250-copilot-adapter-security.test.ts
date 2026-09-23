@@ -27,7 +27,7 @@
 //
 // covers: file:hooks/aidlc-reviewer-scope.ts, file:hooks/aidlc-state-transition-guard.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, file:hooks/aidlc-write-audit-log.ts
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -45,7 +45,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ADAPTER_SRC = join(
   REPO_ROOT,
@@ -1181,7 +1183,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     } finally {
       s.cleanup();
     }
-  }, 15_000);
+  });
 
   test("24: malformed ledger data is preserved on mutation while guard lookup remains advisory", () => {
     const s = scratch();
