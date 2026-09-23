@@ -47,11 +47,12 @@ export type ProviderKind = "current" | "amazon-bedrock" | "builtin" | "other";
 
 // Kiro CLI and Kiro IDE provide their own model access. AI-DLC has no provider
 // decision to ask, write, or check for them, even when a legacy answer exists.
-export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide">;
+export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide" | "kirocrew">;
 
 const HARNESS_OWNED_MODEL_ACCESS: ReadonlySet<ModelHarness> = new Set<ModelHarness>([
   "kiro",
   "kiro-ide",
+  "kirocrew",
 ]);
 
 export function harnessOwnsModelAccess(
@@ -488,6 +489,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
     distribution !== "cursor" &&
     distribution !== "kiro" &&
     distribution !== "kiro-ide" &&
+    distribution !== "kirocrew" &&
     distribution !== "opencode"
   ) {
     throw new Error(`${path}: distribution must name a supported harness`);
@@ -830,6 +832,11 @@ const HARNESS_CLI: Record<
     command: "kiro-cli",
     required: true,
     install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
+  },
+  kirocrew: {
+    command: "kiro-cli",
+    required: true,
+    install: "Install Kiro CLI (Kiro Crew drives `kiro-cli chat` under its gateway) and ensure `kiro-cli --version` works.",
   },
   "kiro-ide": {
     required: false,

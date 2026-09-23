@@ -1618,7 +1618,7 @@ describe("t278 wave protocol parity", () => {
       );
       expectWaveProse(authored);
       expectWaveProse(generated);
-      if (harness.name === "kiro" || harness.name === "kiro-ide") {
+      if (harness.name === "kiro" || harness.name === "kiro-ide" || harness.name === "kirocrew") {
         for (const body of [authored, generated]) {
           expect(body).toContain(
             'Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2',

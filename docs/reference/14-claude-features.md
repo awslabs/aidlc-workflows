@@ -3,7 +3,7 @@
 AI-DLC's methodology concepts are harness-neutral; each CLI harness expresses
 them through its own native primitives. This chapter maps the AI-DLC concept to
 the primitive each harness uses, then details the **Claude Code** expression in
-depth (it is the most fully documented harness; Kiro CLI, Kiro IDE, Codex,
+depth (it is the most fully documented harness; Kiro CLI, Kiro IDE, Kiro Crew, Codex,
 opencode, GitHub Copilot, and Cursor express the same concepts through their
 own equivalents, summarised per chapter in
 [Running on other harnesses](../guide/harnesses/README.md), and the source

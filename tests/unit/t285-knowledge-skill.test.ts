@@ -79,6 +79,7 @@ const SKILL_REL: Record<string, string> = {
   cursor: ".cursor/skills",
   kiro: ".kiro/skills",
   "kiro-ide": ".kiro/skills",
+  kirocrew: ".kiro/skills",
   opencode: ".aidlc/skills",
 };
 

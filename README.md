@@ -2,8 +2,8 @@
 
 AI-DLC (AI-Driven Development Life Cycle) turns AI coding assistants into
 structured, verifiable software-delivery workflows. One harness-neutral core
-runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
-and GitHub Copilot.
+runs natively in Claude Code, Kiro CLI, Kiro IDE, Kiro Crew, Codex CLI, Cursor,
+opencode, and GitHub Copilot.
 
 ![version](https://img.shields.io/badge/version-2.9.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
@@ -47,9 +47,9 @@ aidlc config --harness claude
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`, or
-`copilot`. Running `aidlc config` without `--harness` starts the interactive
-setup when a terminal is available.
+Replace `claude` with `kiro`, `kiro-ide`, `kirocrew`, `codex`, `cursor`,
+`opencode`, or `copilot`. Running `aidlc config` without `--harness` starts the
+interactive setup when a terminal is available.
 
 ### 3. Start a workflow
 
@@ -74,6 +74,7 @@ guide in the table below. The complete walkthrough is in
 | Claude Code | `aidlc config --harness claude` | `claude` | `/aidlc` | [Getting Started](docs/guide/01-getting-started.md) |
 | Kiro CLI >= 2.6 | `aidlc config --harness kiro` | `kiro-cli chat` | `/aidlc` | [Kiro CLI](docs/guide/harnesses/kiro-cli.md) |
 | Kiro IDE | `aidlc config --harness kiro-ide` | Open the project | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
+| Kiro Crew | `aidlc config --harness kirocrew` | Kiro Crew session | `/aidlc` | [Kiro Crew](docs/guide/harnesses/kirocrew.md) |
 | Codex CLI >= 0.145.0 | `aidlc config --harness codex` | `codex` | `$aidlc` | [Codex CLI](docs/guide/harnesses/codex-cli.md) |
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
@@ -82,9 +83,9 @@ guide in the table below. The complete walkthrough is in
 Model-provider setup belongs to the harness. Shipped project configuration
 keeps the provider and model already selected by the user. `aidlc config
 providers` can apply Amazon Bedrock settings on supported project surfaces or
-record manual setup for other harnesses. Kiro CLI and Kiro IDE need no provider
-answer because model access comes with Kiro. The methodology itself is
-provider-independent.
+record manual setup for other harnesses. Kiro CLI, Kiro IDE, and Kiro Crew need
+no provider answer because model access comes with Kiro. The methodology itself
+is provider-independent.
 
 ## Recommended Model
 
