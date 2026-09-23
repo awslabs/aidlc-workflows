@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { renderFeedbackFrontmatter, type DecisionHint, type ReviewQuestion } from "./aidlc-review-ui-shared.ts";
@@ -624,9 +623,13 @@ code{font-family:ui-monospace,SFMono-Regular,monospace}blockquote{border-left:.2
 table{border-collapse:collapse}th,td{border:1px solid #888;padding:.35rem .6rem}img{max-width:100%;height:auto}
 `.trim();
 
+function escapeInlineScript(source: string): string {
+  return source.replace(/<(\/script|!--)/gi, "\\x3C$1");
+}
+
 export function selfContainedMarkdownExport(markdown: string, mermaidScript = ""): string {
   const script = mermaidScript
-    ? `<script>eval(atob("${Buffer.from(mermaidScript, "utf-8").toString("base64")}"))</script><script>mermaid.initialize({startOnLoad:true});</script>`
+    ? `<script>${escapeInlineScript(mermaidScript)}</script><script>mermaid.initialize({startOnLoad:true});</script>`
     : "";
   return [
     "<!doctype html>",
