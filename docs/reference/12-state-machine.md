@@ -131,8 +131,13 @@ stateDiagram-v2
 At `[?]`, `orchestrate next` first runs the `present-approval-gate` guard
 preflight. A refusal still wins. Otherwise it re-presents the current gate as
 `run-stage` with `gate_only: true` and `gate: true`, not another execution of
-the stage body or reviewer. Reviewer fields and body/reviewer protocol modules
-are absent; a Construction policy, when present, is marked `completion_only`.
+the stage body or reviewer. The directive retains `reviewer`, `review_artifact`,
+and `review_class` when they were present. `reviewer` and `review_artifact` name
+whose existing review the Review brief reads. Present the brief from the
+recorded review file and verdict; dispatch no reviewer and request no new
+review. Reviewer iteration settings and the `reviewer` and `ensemble` protocol
+modules are absent; a Construction policy, when present, is marked
+`completion_only`.
 `gate_only` takes precedence over generic completion-only bookkeeping and does
 not grant human approval. Team-owned gates retain `unit` and `unit_gate`;
 autonomous swarm settlement retains `swarm_settled` and its completion policy.

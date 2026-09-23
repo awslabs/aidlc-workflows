@@ -979,7 +979,13 @@ describe("open-gate resume liveness", () => {
 
   function expectGate(directive: Record<string, unknown>) {
     expect(directive).toMatchObject({ kind: "run-stage", gate: true, gate_only: true });
-    for (const field of ["reviewer", "review_artifact", "review_class", "reviewer_max_iterations", "wave"]) {
+    const stage = findStageBySlug(String(directive.stage))!;
+    if (stage.reviewer) {
+      expect(directive.reviewer).toBe(stage.reviewer);
+      expect(directive.review_artifact).toBe(stage.review_artifact);
+      if (stage.review_class) expect(directive.review_class).toBe(stage.review_class);
+    }
+    for (const field of ["reviewer_max_iterations", "wave"]) {
       expect(directive).not.toHaveProperty(field);
     }
     expect(directive.protocol_modules ?? []).not.toContain("reviewer");
@@ -1004,6 +1010,23 @@ describe("open-gate resume liveness", () => {
     expect(next(dir).directive).toEqual(first.directive);
     expect(readFileSync(markerPath, "utf-8")).toBe(marker);
     expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+  });
+
+  test("fresh-session next at an open gate preserves the Review brief without requesting another review", () => {
+    const dir = project();
+    const auditBefore = readAllAuditShards(dir);
+    const first = next(dir).directive!;
+    expectGate(first);
+
+    // Each next call starts a new process against the same recorded gate.
+    const resumed = next(dir).directive!;
+    expectGate(resumed);
+    expect(resumed).toEqual(first);
+    expect(resumed.review_artifact).toBe(first.review_artifact);
+    const auditAfter = readAllAuditShards(dir);
+    const requestsBefore = auditBefore.match(/\*\*Event\*\*: REVIEW_REQUESTED\b/g) ?? [];
+    expect(requestsBefore).toHaveLength(1);
+    expect(auditAfter.match(/\*\*Event\*\*: REVIEW_REQUESTED\b/g) ?? []).toEqual(requestsBefore);
   });
 
   test("next at an open team Unit gate preserves the named Unit and settled review", () => {

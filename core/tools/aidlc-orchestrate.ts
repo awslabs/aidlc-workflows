@@ -5693,9 +5693,6 @@ function isSettledAutonomousSwarm(
 function applyGateOnlyShape(directive: RunStageDirective): RunStageDirective {
   directive.gate_only = true;
   directive.gate = true;
-  delete directive.reviewer;
-  delete directive.review_artifact;
-  delete directive.review_class;
   delete directive.reviewer_max_iterations;
   delete directive.narration;
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(

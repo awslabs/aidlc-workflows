@@ -143,7 +143,10 @@ Every stage (except the 3 stages in the Initialization phase: workspace-scaffold
 **Open-gate re-entry (`directive.gate_only === true`).** Present this gate now.
 The stage body and its review are settled. Do not run the stage, dispatch its
 agents or reviewer, repeat its questions, or edit its outputs. Read the stage
-file only for its completion message and approval procedure. The delivered rules
+file only for its completion message and approval procedure. When present,
+`reviewer` and `review_artifact` name whose existing review the Review brief
+reads. Present the brief from the recorded review file and verdict. Dispatch
+no reviewer and request no new review. The delivered rules
 still apply. Run learnings only when `protocol_modules` lists `learnings`, then
 present the gate and report the human's exact choice through the existing
 approval procedure. A `unit_gate` follows the team-owned gate procedure with
