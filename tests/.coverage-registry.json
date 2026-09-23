@@ -2694,7 +2694,7 @@
       "coveredBy": [
         {
           "file": "tests/integration/t329-guard-recovery-loop.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
@@ -2766,7 +2766,7 @@
       "coveredBy": [
         {
           "file": "tests/integration/t329-guard-recovery-loop.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3728,7 +3728,7 @@
       "coveredBy": [
         {
           "file": "tests/integration/t329-guard-recovery-loop.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
@@ -4443,7 +4443,7 @@
       "coveredBy": [
         {
           "file": "tests/integration/t329-guard-recovery-loop.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
@@ -6582,7 +6582,7 @@
       "coveredBy": [
         {
           "file": "tests/integration/t329-guard-recovery-loop.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
