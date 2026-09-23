@@ -43,8 +43,9 @@
 //   1   stdout JSON parse failed (dispatcher reclassifies via branch f)
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
 
 interface ESLintMessage {
 	ruleId: string | null;
@@ -148,11 +149,33 @@ function findProjectRoot(filePath: string): string | null {
 // the sensor quietly degrades every fire to a tool-unavailable PASS -
 // masking real lint findings. Pinning the major makes resolution
 // deterministic: bunx fetches/caches this spec and ignores PATH
-// shadowing. Intentionally NOT applied to a project-local eslint - bunx
-// with a version spec bypasses node_modules too, which is the price of
-// determinism; projects needing their exact local eslint can override
-// the sensor manifest's command.
+// shadowing. A version spec also bypasses local node_modules, so first resolve
+// a local install of the SAME major and run its absolute CLI path. It is already
+// provisioned and never needs the bunx download cache. Older local versions
+// still take the pinned fallback instead of silently missing flat configs.
 const ESLINT_SPEC = "eslint@10";
+
+export function localEslintPath(cwd: string): string | null {
+	try {
+		const manifestPath = createRequire(join(cwd, "package.json")).resolve("eslint/package.json");
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+		if (manifest.name !== "eslint" || typeof manifest.version !== "string" ||
+			manifest.version.split(".")[0] !== ESLINT_SPEC.split("@")[1]) return null;
+		const cli = join(dirname(manifestPath), "bin", "eslint.js");
+		return existsSync(cli) ? cli : null;
+	} catch {
+		return null;
+	}
+}
+
+function invokeEslint(args: string[], cwd: string) {
+	const local = localEslintPath(cwd);
+	const options = { encoding: "utf-8" as const, timeout: 30_000, cwd };
+	// ESLint's published executable uses Node too. Naming its installed file
+	// avoids both PATH-shadowed eslint binaries and per-TMPDIR bunx installs.
+	if (local) return spawnSync("node", [local, ...args], options);
+	return spawnSync("bunx", [ESLINT_SPEC, ...args], options);
+}
 
 // Probe `bunx eslint --version` at startup. `bunx <tool>` returns non-127
 // codes for several failure modes (network-fetch failure, package-
@@ -160,11 +183,7 @@ const ESLINT_SPEC = "eslint@10";
 // (status === 127) won't catch those — so we propagate by exiting 127
 // ourselves on any non-zero exit from this probe.
 function probeEslintAvailable(cwd: string): void {
-	const result = spawnSync("bunx", [ESLINT_SPEC, "--version"], {
-		encoding: "utf-8",
-		timeout: 30_000,
-		cwd,
-	});
+	const result = invokeEslint(["--version"], cwd);
 	if (result.status !== 0) {
 		process.stderr.write("eslint-unavailable\n");
 		process.exit(127);
@@ -186,11 +205,7 @@ function probeEslintAvailable(cwd: string): void {
 // branch e then emits SENSOR_PASSED with Note=script-error: exit-2,
 // keeping the audit pair closed while flagging the breakage in stderr.
 function probeEslintConfig(filePath: string, cwd: string): void {
-	const result = spawnSync("bunx", [ESLINT_SPEC, "--print-config", filePath], {
-		encoding: "utf-8",
-		timeout: 30_000,
-		cwd,
-	});
+	const result = invokeEslint(["--print-config", filePath], cwd);
 	if (result.status === 0) return; // config resolved
 	const stderr = result.stderr ?? "";
 	// Cover both legacy (.eslintrc.*) and flat-config (eslint.config.js)
@@ -282,11 +297,7 @@ function runEslint(
 	// with `-` ("No -NUM option defined."). The plan-mandated
 	// "--max-warnings -1" requires the equals form to actually reach
 	// eslint as a numeric value.
-	const result = spawnSync(
-		"bunx",
-		[ESLINT_SPEC, "--format", "json", "--max-warnings=-1", filePath],
-		{ encoding: "utf-8", timeout: 30_000, cwd },
-	);
+	const result = invokeEslint(["--format", "json", "--max-warnings=-1", filePath], cwd);
 	return { stdout: result.stdout ?? "", status: result.status };
 }
 

@@ -215,7 +215,7 @@ describe("t338 atomic per-intent settings", () => {
     const before = readFileSync(state, "utf-8");
     const refused = run(UTILITY, [...command, "--depth", "minimal", "--change-control", "relaxed", "--sensors", "on"], proj);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(memory);
+    expect(JSON.parse(refused.stderr).error).toContain(memory);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(settingRows(proj)).toHaveLength(0);
     expect(readAuditShardEvents(proj).filter((row) => row.event === "SCOPE_CHANGED")).toHaveLength(0);

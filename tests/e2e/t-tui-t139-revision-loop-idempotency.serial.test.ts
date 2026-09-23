@@ -59,8 +59,8 @@
 //   - the AUQ gate footer + exact `❯` caret signal is gridHasMenu
 //     (tui-drive.ts; identical on tmux and Windows ConPTY).
 //
-// SERIAL (.serial. in the filename): two full back-to-back TUI run-throughs in one
-// test, each its own claude session, sequential. SPENDS REAL TOKENS (two bugfix
+// SERIAL (.serial. in the filename): one paired journey owns this file's resources.
+// Its two independent projects/sessions/profiles run concurrently. SPENDS REAL TOKENS (two bugfix
 // workflows on Opus/Bedrock — the heaviest journey in the §5-D set). Gated behind
 // AIDLC_TUI_LIVE=1; selected TUI substrate/claude/distributable absence SKIP with a
 // reason — never a hollow pass.
@@ -72,22 +72,21 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { basename, dirname, join } from "node:path";
 import { stateFilePathFor } from "../harness/sdk-drive.ts";
-import { gridHasMenu } from "../harness/tui-drive.ts";
+import { gridHasMenu, preseedClaudeOnboarding } from "../harness/tui-drive.ts";
 import {
   comparableTerminal, guardBypassCommands, monitorNativeAnswerGate,
   nativeRootProviderFailure, nativeToolCalls,
 } from "../harness/t139-fidelity.ts";
 import {
-  assertTuiDriveKill,
-  cleanupTuiProject,
   cleanupTuiProjectAfterKill,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+import { remainingTuiDriverMs, runTuiDriverWithinBudget, TUI_CLEANUP_RESERVE_MS } from "../harness/tui-time-budget.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -96,22 +95,11 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 const LIVE_CHILD_ENV = { ...process.env };
 delete LIVE_CHILD_ENV.AIDLC_SKIP_REVISION_BACKSTOP;
 
-// Two full run-throughs back-to-back. The bun:test cap is the hard ceiling; each
-// run's pass condition is its on-disk Completed milestone, not the clock.
-// 3600s, not 2400s: the REVISED run is structurally longer than the clean one
-// (reject re-runs the full rejected stage plus its review iterations before the
-// re-presented gate), so a 50/50 split of 2400s starved it - a healthy revised
-// run blew the 1170s backstop mid-revision (observed 2026-07-13, trace
-// answer_gate_menu_timeout with the workflow still actively progressing).
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "3600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 3600) * 1000;
-// The CLEAN run gets a fixed ~40% backstop; the REVISED run then gets whatever
-// actually remains of the ceiling (they run sequentially, so a fast clean run
-// hands its unused budget to the longer revised run instead of wasting it).
-const CLEAN_RUN_OVERALL_MS = Math.max(120_000, Math.floor(TEST_TIMEOUT_MS * 0.4));
-// Slack reserved for the non-answer-gate work between the deadline and bun's
-// cap (launch/paint waits, kills, state reads).
-const REVISED_SLACK_MS = 60_000;
+// Both workflows share the existing 40-minute file ceiling. Their pass condition
+// is still the on-disk milestone; parallel execution removes the clean run's
+// wall time from the revised run's critical path without shortening its work.
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
+const TEST_TIMEOUT_MS = Math.min(Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0 ? TIMEOUT_S : 2400, 2400) * 1000;
 
 // The post-init Completed milestone both runs terminate on (the t50 terminator):
 // init 3 + >= 2 Inception (reverse-engineering + requirements-analysis) >= 5.
@@ -122,10 +110,10 @@ interface Run {
   stdout: string;
   stderr: string;
 }
-function drive(args: string[]): Run {
+function drive(args: string[], env = LIVE_CHILD_ENV): Run {
   const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], {
     encoding: "utf-8",
-    env: LIVE_CHILD_ENV,
+    env,
   });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
@@ -134,7 +122,7 @@ function captureTeardownFailure(failures: unknown[], operation: () => void): voi
   try { operation(); } catch (error) { failures.push(error); }
 }
 
-function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
+function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number, env: NodeJS.ProcessEnv): boolean {
   return (
     drive([
       "wait",
@@ -146,7 +134,7 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
       String(timeoutMs),
       "--stable-ms",
       String(stableMs),
-    ]).rc === 0
+    ], env).rc === 0
   );
 }
 
@@ -169,9 +157,11 @@ class NativeFidelity {
   readonly sessionId = randomUUID();
   private transcriptPath: string | undefined;
 
+  constructor(private readonly configDir: string) {}
+
   inspect(final = false, completedCounter: () => number = () => 0): void {
     if (!this.transcriptPath) {
-      const projects = join(process.env.CLAUDE_CONFIG_DIR || join(os.homedir(), ".claude"), "projects");
+      const projects = join(this.configDir, "projects");
       if (existsSync(projects)) {
         this.transcriptPath = readdirSync(projects, { withFileTypes: true })
           .filter((entry) => entry.isDirectory())
@@ -248,34 +238,40 @@ function runAnswerGateToMilestone(
   session: string,
   sandbox: string,
   rejectFirstGate: boolean,
-  overallMs: number,
+  deadlineMs: number,
   fidelity: NativeFidelity,
+  env: NodeJS.ProcessEnv,
 ): Promise<number> {
-  const child = spawn(
-    DRIVE_BIN,
-    [
-      ...DRIVE_PREFIX,
-      "answer-gate",
-      "--session",
-      session,
-      "--project-dir",
-      sandbox,
-      "--until-state-field",
-      UNTIL_COMPLETED,
-      "--overall-timeout-ms",
-      String(overallMs),
-      ...(rejectFirstGate ? ["--reject-first-gate"] : []),
-    ],
-    { stdio: "inherit", env: LIVE_CHILD_ENV },
-  );
-  // The exact child handle is stopped on fidelity/provider failure; the existing
-  // outer cleanup still owns terminal retirement and fixture removal.
-  return monitorNativeAnswerGate(child, () => fidelity.inspect(false, () => {
-    try { return readTerminal(sandbox).completedCounter; } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; // State not initialized yet.
-      throw error;
-    }
-  }));
+  let monitored: Promise<number> | undefined;
+  const bounded = runTuiDriverWithinBudget(deadlineMs, (overallMs) => {
+    const child = spawn(
+      DRIVE_BIN,
+      [
+        ...DRIVE_PREFIX,
+        "answer-gate",
+        "--session",
+        session,
+        "--project-dir",
+        sandbox,
+        "--until-state-field",
+        UNTIL_COMPLETED,
+        "--overall-timeout-ms",
+        String(overallMs),
+        ...(rejectFirstGate ? ["--reject-first-gate"] : []),
+      ],
+      { stdio: "inherit", env },
+    );
+    // Both monitors own this exact client. Provider/fidelity errors and the
+    // common deadline stop it before the finally block retires its terminal.
+    monitored = monitorNativeAnswerGate(child, () => fidelity.inspect(false, () => {
+      try { return readTerminal(sandbox).completedCounter; } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+        throw error;
+      }
+    }));
+    return child;
+  });
+  return Promise.all([bounded, monitored!]).then(([code]) => code);
 }
 
 interface Terminal {
@@ -321,7 +317,7 @@ function readTerminal(sandbox: string): Terminal {
 
 /** Launch claude on a fresh brownfield bugfix project, clear modals, submit the
  *  bugfix command. Returns the session name (caller drives gates + reads disk). */
-function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity): void {
+function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity, env: NodeJS.ProcessEnv): void {
   // run-tests.ts disables the approve-time revision backstop globally because
   // most fixtures intentionally omit revision evidence. This test is the live
   // reject/revise proof, so its Claude child must not inherit that bypass. On
@@ -354,16 +350,16 @@ function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity
       ...claudeCommand,
       "--session-id",
       fidelity.sessionId,
-    ]).rc,
+    ], env).rc,
   ).toBe(0);
   // Share the original 60s trust + 15s permission + 45s readiness budget.
   const startupDeadlineMs = Date.now() + 120_000;
   const startup = drive([
     "startup", "--session", session,
     "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", "120000",
-  ]);
+  ], env);
   expect(startup.rc).toBe(0);
-  expect(waitFor(session, "\\[AIDLC\\].*ready", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
+  expect(waitFor(session, "\\[AIDLC\\].*ready", Math.max(0, startupDeadlineMs - Date.now()), 800, env)).toBe(true);
 
   // Explicit `--scope bugfix` (not the bare keyword) so the shipped
   // AWS_AIDLC_DEFAULT_SCOPE=classic env-default does NOT trigger a scope-
@@ -378,173 +374,114 @@ function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity
     "/aidlc --scope bugfix the todo checkbox state is not persisted after page reload",
     "--literal",
     "--no-enter",
-  ]);
-  drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
+  ], env);
+  drive(["send", "--session", session, "--keys", "Enter", "--no-enter"], env);
   // Do not require an intermediate phase/statusline paint here. Fresh brownfield
   // bootstraps can spend minutes routing while the statusline still shows ready
   // or an interim phase; the answer-gate's on-disk Completed terminator below is
   // the deterministic progress proof (same lesson as t50).
 }
 
+/** Each branch owns its project, Claude profile, driver and cleanup result. */
+async function runJourney(label: "clean" | "revised", deadlineMs: number): Promise<Terminal> {
+  const revised = label === "revised";
+  const session = `aidlc_tui_t139_${label}_${process.pid}`;
+  const sandbox = setupTuiProject({ brownfieldStub: true, noAidlcDocs: true });
+  // Keep this leaf short: Claude appends encoded project paths and UUIDs on Windows.
+  const profile = mkdtempSync(join(process.env.AIDLC_TEST_LOG_DIR || dirname(sandbox), revised ? "tr-" : "tc-"));
+  const env = { ...LIVE_CHILD_ENV, CLAUDE_CONFIG_DIR: profile };
+  const fidelity = new NativeFidelity(profile);
+  const failures: unknown[] = [];
+  let terminal: Terminal | undefined;
+  let sawMenu = false;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+  try {
+    preseedClaudeOnboarding(sandbox, env, os.homedir(), false);
+    console.log(`t139 ${label}: starting independent session ${fidelity.sessionId}`);
+    launchBugfix(session, sandbox, fidelity, env);
+    if (revised) {
+      pollTimer = setInterval(() => {
+        if (gridHasMenu(drive(["capture", "--session", session], env).stdout)) sawMenu = true;
+      }, 1000);
+    }
+    const rc = await runAnswerGateToMilestone(session, sandbox, revised, deadlineMs, fidelity, env);
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = undefined;
+    expect(rc).toBe(0);
+    // Completed is persisted before approve's nested advance. Sample the same
+    // post-advance milestone on both branches, within their common deadline.
+    terminal = await comparableTerminal(() => readTerminal(sandbox), Date.now() + remainingTuiDriverMs(deadlineMs));
+    fidelity.inspect(true);
+    if (process.env.AIDLC_TEST_LOG_DIR) {
+      writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, `t139-${label}-terminal.json`), JSON.stringify(terminal, null, 2));
+    }
+    expect(terminal.scope).toMatch(/bugfix/i);
+    expect(terminal.completedCounter).toBeGreaterThanOrEqual(5);
+    expect(terminal.completedCounter).toBe(terminal.completedGrid);
+    if (revised) {
+      // Never turn this into two clean runs: require the persisted rejection
+      // and a painted gate, independently of the final cross-run comparison.
+      expect(terminal.revisionCount).toBeGreaterThan(0);
+      expect(sawMenu).toBe(true);
+    } else {
+      expect(terminal.revisionCount).toBe(0);
+    }
+    console.log(`t139 ${label}: reached comparable terminal milestone`);
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    if (pollTimer) clearInterval(pollTimer);
+    // A failure in one branch must neither stop its sibling nor remove the
+    // sibling's files. Failed retirement preserves this branch's fixture.
+    captureTeardownFailure(failures, () => {
+      const killed = drive(["kill", "--session", session], env);
+      if (process.env.AIDLC_TEST_LOG_DIR) {
+        captureTeardownFailure(failures, () => {
+          writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR!, `t139-${label}-kill.json`), JSON.stringify(killed, null, 2));
+        });
+      }
+      cleanupTuiProjectAfterKill(sandbox, session, killed);
+    });
+  }
+  if (failures.length) {
+    throw new AggregateError(failures,
+      `t139 ${label} workflow/teardown failures: ${failures.map(String).join("; ")}`, { cause: failures[0] });
+  }
+  if (!terminal) throw new Error(`t139 ${label} did not produce a terminal state`);
+  return terminal;
+}
+
 describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve, modulo Revision Count)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `reject-then-approve reaches the same terminal state as clean approve${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
-      // ===================================================================
-      // RUN 1 — CLEAN: approve every gate, drive to the Completed milestone.
-      // ===================================================================
-      const cleanSession = `aidlc_tui_t139_clean_${process.pid}`;
-      const cleanSandbox = setupTuiProject({ brownfieldStub: true, noAidlcDocs: true });
-      const cleanFidelity = new NativeFidelity();
-      let revisedSession = "";
-      let revisedSandbox = "";
-      const failures: unknown[] = [];
-      try {
-        const testStartMs = Date.now();
-        launchBugfix(cleanSession, cleanSandbox, cleanFidelity);
-        const cleanDeadline = Math.min(testStartMs + TEST_TIMEOUT_MS, Date.now() + CLEAN_RUN_OVERALL_MS);
-        const cleanRc = await runAnswerGateToMilestone(
-          cleanSession,
-          cleanSandbox,
-          false,
-          CLEAN_RUN_OVERALL_MS,
-          cleanFidelity,
-        );
-        expect(cleanRc).toBe(0);
-        // Completed is persisted before approve's nested advance. Wait for
-        // the cursor to leave the completed stage before sampling its phase.
-        const clean = await comparableTerminal(() => readTerminal(cleanSandbox), cleanDeadline);
-        cleanFidelity.inspect(true);
-        if (process.env.AIDLC_TEST_LOG_DIR) {
-          writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "t139-clean-terminal.json"), JSON.stringify(clean, null, 2));
-        }
-        assertTuiDriveKill(
-          drive(["kill", "--session", cleanSession]),
-          cleanSession,
-        );
-
-        // CLEAN sanity: it reached the milestone with NO rejection.
-        expect(clean.scope).toMatch(/bugfix/i);
-        expect(clean.completedCounter).toBeGreaterThanOrEqual(5);
-        expect(clean.completedCounter).toBe(clean.completedGrid); // counter==grid sync
-        expect(clean.revisionCount).toBe(0); // clean path never rejected
-
-        // ===================================================================
-        // RUN 2 — REVISED: reject the FIRST approval gate once (Down+Enter =
-        // "Request changes"), then approve the rest to the same milestone.
-        // ===================================================================
-        revisedSession = `aidlc_tui_t139_revised_${process.pid}`;
-        revisedSandbox = setupTuiProject({ brownfieldStub: true, noAidlcDocs: true });
-        const revisedFidelity = new NativeFidelity();
-
-        // Render value-add: prove a gate painted at least once during the run.
-        let sawMenu = false;
-        let pollTimer: ReturnType<typeof setInterval> | undefined;
-        try {
-          launchBugfix(revisedSession, revisedSandbox, revisedFidelity);
-
-          // Drive the gates with --reject-first-gate: the answer-gate loop selects
-          // "Request changes" on the FIRST APPROVAL gate (the menu whose options
-          // contain "Request changes" — distinguishing it from the clarifying-
-          // QUESTION menus requirements-analysis presents first, which a blind
-          // pre-loop keystroke would mis-target — the verified first-attempt
-          // finding 2026-06-07), then approves the re-presented gate and every
-          // later gate to the SAME Completed milestone. The reject fires
-          // handleReject (GATE_REJECTED + STAGE_REVISING + Revision Count++,
-          // aidlc-state.ts:769,786). Tail the grid for the render proof while it
-          // runs (mirrors t50's pollTimer). The answer-gate's own backstops are
-          // HANG-only; pass is the on-disk Completed>=5 terminator, never the clock.
-          pollTimer = setInterval(() => {
-            const grid = drive(["capture", "--session", revisedSession]).stdout;
-            if (gridHasMenu(grid)) sawMenu = true;
-          }, 1000);
-          // The revised run's backstop is everything left of the ceiling: a
-          // fast clean run hands its unused budget to this structurally longer
-          // reject->revise->approve run. Floor keeps a degenerate remainder
-          // from starving it outright.
-          const revisedOverallMs = Math.max(
-            300_000,
-            TEST_TIMEOUT_MS - (Date.now() - testStartMs) - REVISED_SLACK_MS,
-          );
-          const revisedDeadline = Math.min(testStartMs + TEST_TIMEOUT_MS, Date.now() + revisedOverallMs);
-          const revisedRc = await runAnswerGateToMilestone(
-            revisedSession,
-            revisedSandbox,
-            true, // reject the first approval gate once
-            revisedOverallMs,
-            revisedFidelity,
-          );
-          if (pollTimer) clearInterval(pollTimer);
-          pollTimer = undefined;
-          expect(revisedRc).toBe(0);
-          const revised = await comparableTerminal(() => readTerminal(revisedSandbox), revisedDeadline);
-          revisedFidelity.inspect(true);
-          if (process.env.AIDLC_TEST_LOG_DIR) {
-            writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "t139-revised-terminal.json"), JSON.stringify(revised, null, 2));
-          }
-
-          // --- VACUOUS-PASS GUARD: the reject ACTUALLY took. ----------------
-          // Without this, a run that silently approved everything would make the
-          // comparison a tautology (two clean runs trivially match). Revision Count
-          // > 0 is the on-disk proof the reject->revise cycle fired (handleReject
-          // increments it, aidlc-state.ts:786). The audit pair is asserted via the
-          // state too: a nonzero Revision Count is set ONLY by handleReject.
-          expect(revised.revisionCount).toBeGreaterThan(0);
-
-          // The gate rendered (the tui-only value-add the sdk path is blind to).
-          expect(sawMenu).toBe(true);
-
-          // --- THE METAMORPHIC INVARIANT: same terminal state, modulo Revision
-          //     Count. ----------------------------------------------------------
-          // Same scope.
-          expect(revised.scope).toBe(clean.scope);
-          // Same lifecycle phase at the milestone.
-          expect(revised.phase).toBe(clean.phase);
-          expect(revised.currentStage).toBe(clean.currentStage);
-          // Same SET of completed stages (order-independent) — the revision loop
-          // neither added nor dropped a completed stage.
-          expect(revised.completedSlugs).toEqual(clean.completedSlugs);
-          // Same completed count, and counter==grid sync holds in the revised run.
-          expect(revised.completedCounter).toBe(clean.completedCounter);
-          expect(revised.completedCounter).toBe(revised.completedGrid);
-
-          // The ONE allowed difference: Revision Count diverges (revised > clean).
-          expect(revised.revisionCount).toBeGreaterThan(clean.revisionCount);
-        } catch (error) {
-          failures.push(error);
-        } finally {
-          if (pollTimer) clearInterval(pollTimer);
-          if (revisedSession) {
-            captureTeardownFailure(failures, () => {
-              assertTuiDriveKill(
-                drive(["kill", "--session", revisedSession]),
-                revisedSession,
-              );
-            });
-          }
-        }
-      } catch (error) {
-        failures.push(error);
-      } finally {
-        captureTeardownFailure(failures, () => {
-          cleanupTuiProjectAfterKill(
-            cleanSandbox,
-            cleanSession,
-            drive(["kill", "--session", cleanSession]),
-          );
-        });
-        if (revisedSandbox) {
-          captureTeardownFailure(failures, () => cleanupTuiProject(revisedSandbox));
-        }
+      // The driver helper reserves 30 seconds itself. Leave a second reserve
+      // here for the two terminal teardowns and the cross-run comparison.
+      const deadlineMs = performance.now() + TEST_TIMEOUT_MS - TUI_CLEANUP_RESERVE_MS;
+      const [cleanResult, revisedResult] = await Promise.allSettled([
+        runJourney("clean", deadlineMs),
+        runJourney("revised", deadlineMs),
+      ]);
+      const failures = [cleanResult, revisedResult]
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason);
+      if (failures.length) {
+        throw new AggregateError(failures, `t139 paired journey failed: ${failures.map(String).join("; ")}`, { cause: failures[0] });
       }
-      // Throw only after both owned cleanup paths have been attempted. Keep the
-      // original error objects/stacks and include every message in JUnit/logs.
-      if (failures.length === 1) throw failures[0];
-      if (failures.length > 1) {
-        throw new AggregateError(failures,
-          `t139 workflow/teardown failures:\n${failures.map((error, i) => `[${i + 1}] ${String(error)}`).join("\n")}`,
-          { cause: failures[0] });
+      if (cleanResult.status !== "fulfilled" || revisedResult.status !== "fulfilled") {
+        throw new Error("t139 requires both terminal states");
       }
+      const clean = cleanResult.value;
+      const revised = revisedResult.value;
+      // Same scope, phase, cursor and completed-stage set; only revision count
+      // differs. Both full workflows and both fidelity audits remain required.
+      expect(revised.scope).toBe(clean.scope);
+      expect(revised.phase).toBe(clean.phase);
+      expect(revised.currentStage).toBe(clean.currentStage);
+      expect(revised.completedSlugs).toEqual(clean.completedSlugs);
+      expect(revised.completedCounter).toBe(clean.completedCounter);
+      expect(revised.completedCounter).toBe(revised.completedGrid);
+      expect(revised.revisionCount).toBeGreaterThan(clean.revisionCount);
     },
     TEST_TIMEOUT_MS,
   );

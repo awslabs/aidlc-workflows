@@ -40,6 +40,7 @@ import {
   candidateReviewCoverageProjection,
   consumeSharedDirectiveAsk,
   evaluateGuardRefusal,
+  type GuardRefusalInput,
   type GuardRecoveryFeedbackStatus,
   type GuardRemedyOp,
   findStageBySlug,
@@ -570,6 +571,94 @@ describe("bounded guard-remedy liveness", () => {
     ).toBe(false);
   });
 
+  // A revising stage has two ways out, and the write-freeze hook shows the
+  // FIRST executable remedy's action as its guidance. Leading with the redo
+  // jump made the expensive route look like the only one, so operators paid a
+  // summary re-confirmation they did not owe; and the jump's own cost was
+  // understated, because a new attempt unauthorizes every output document still
+  // stamped with the old confirmation.
+  test("finishing a revision is separate from the priced restart command", () => {
+    const refusal = evaluateGuardRefusal({
+      code: "REVISION_TEST",
+      blockedAction: "review",
+      stage: "functional-design",
+      projectDir: "/workspace",
+      stateContent: state("R"),
+      invariant: "A revising stage reopens its gate before it completes.",
+      userMessage: "blocked",
+      attempt: {
+        recovery: "spent",
+        summaryCoverage: "current",
+        reviewCoverage: "current",
+        sourceCoverage: "current",
+      },
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    expect(refusal.state).toBe("revising");
+    const finish = refusal.remedies.find((remedy) =>
+      remedy.op === "finish-revision"
+    );
+    expect(finish).toMatchObject({
+      interaction: "external-work",
+      requiresHuman: false,
+      executableNow: true,
+    });
+    expect(finish?.operation).toBeUndefined();
+    expect(finish?.action).toContain(
+      "bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design " +
+        "--result revised --project-dir /workspace",
+    );
+
+    const restart = refusal.remedies.find((remedy) => remedy.op === "redo-jump");
+    expect(restart).toMatchObject({
+      interaction: "command",
+      requiresHuman: true,
+      executableNow: true,
+      operation: { kind: "restart-stage", stage: "functional-design" },
+    });
+    expect(restart?.action).toContain("save every output document again");
+    expect(restart?.action).not.toContain("--result revised");
+  });
+
+  // "Record the verdict" is not a command. Closing a review is the request
+  // command with --verdict added, which is why operators went looking for a
+  // recorder that does not exist.
+  test("the record-verdict remedy spells out the closing command", () => {
+    const refusal = evaluateGuardRefusal({
+      code: "PENDING_TEST",
+      blockedAction: "present-approval-gate",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: state("-"),
+      invariant: "A review request receives its verdict.",
+      userMessage: "blocked",
+      attempt: {
+        recovery: "available",
+        pendingReview: {
+          iteration: 2,
+          retryable: false,
+          recordVerdict:
+            "bun .claude/tools/aidlc-log.ts review --stage functional-design " +
+            "--reviewer aidlc-product-lead-agent --unit alpha --iteration 2 " +
+            "--verdict '<READY|NOT-READY>' --project-dir /workspace",
+        },
+        summaryCoverage: "current",
+        reviewCoverage: "missing",
+        sourceCoverage: "current",
+      },
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    const record = refusal.remedies.find((remedy) => remedy.op === "record-verdict");
+    expect(record?.action).toContain(
+      "Record the verdict for pending review iteration 2",
+    );
+    expect(record?.action).toContain(
+      "bun .claude/tools/aidlc-log.ts review --stage functional-design " +
+        "--reviewer aidlc-product-lead-agent --unit alpha --iteration 2 " +
+        "--verdict '<READY|NOT-READY>' --project-dir /workspace",
+    );
+  });
+
   test("repair-required progress exposes only the admission-gated next iteration remedy", () => {
     const cases = [
       { marker: "-" as const, summary: "current" as const, executable: true },
@@ -744,7 +833,10 @@ describe("bounded guard-remedy liveness", () => {
       status: "pending",
       gateStage: "code-generation",
     });
-    const refusal = evaluateGuardRefusal({
+    if (resolved?.resolved !== true) {
+      throw new Error("expected a resolved unit-end gate");
+    }
+    const input: GuardRefusalInput = {
       code: "UNIT_END_TEST",
       blockedAction: "artifact-write",
       stage: "functional-design",
@@ -760,7 +852,8 @@ describe("bounded guard-remedy liveness", () => {
       },
       humanAuthority: { freshTurn: false, unattended: false },
       teamGate: resolved,
-    });
+    };
+    const refusal = evaluateGuardRefusal(input);
     expect(refusal.stage).toBe("functional-design");
     const rejection = refusal.remedies.find((remedy) =>
       remedy.action.includes('Ask "What should change?"')
@@ -769,6 +862,22 @@ describe("bounded guard-remedy liveness", () => {
       'stage "code-generation" for Unit "alpha"',
     );
     expect(rejection?.command).toBeUndefined();
+
+    const revising = evaluateGuardRefusal({
+      ...input,
+      projectDir: "/workspace",
+      teamGate: { ...resolved, status: "revising" },
+    });
+    const finish = revising.remedies.find((remedy) =>
+      remedy.op === "finish-revision"
+    );
+    expect(finish?.action).toContain(
+      "report --stage code-generation --unit alpha --result revised " +
+        "--project-dir /workspace",
+    );
+    expect(finish?.action).not.toContain(
+      "report --stage functional-design --unit alpha",
+    );
 
     const unresolvedState = unitEndState.replace(
       /\u2014 EXECUTE/g,

@@ -60,10 +60,13 @@ Before submitting a PR, verify:
 - Stale stage names, paths, or flags do not remain in examples, docs, or generated output (grep `docs/` and `README.md` when renaming anything).
 - If the change adds an input to any fingerprint, epoch, or receipt identity, the PR names the human-visible change that input detects (see the Authority Policy in [`docs/reference/11-contributing.md`](docs/reference/11-contributing.md#authority-policy)).
 
-By maintainer decision on 2026-09-21, `main` is not production: PR CI stays fast
-with contract checks, smoke, unit shards, native-terminal units and production
-guards; deterministic and live deep tiers gate previews in `full-suite.yml`
-called by `preview-release.yml`.
+`main` is not production: PR CI runs contract checks, Linux smoke, unit shards
+and integration tests, plus focused platform and production-guard checks.
+`deterministic-tests.yml` supplies the shared test definition; nightly
+`full-suite.yml` runs it across Linux, macOS and Windows alongside required live
+coverage. Preview runs contract checks and Full Suite without repeating the PR
+test matrix. Stable releases consume passing evidence for the exact source
+commit and validate their built artifacts.
 
 ## Testing Changes
 

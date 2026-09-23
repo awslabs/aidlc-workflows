@@ -1,7 +1,7 @@
 // covers: tool:aidlc-lifecycle, tool:aidlc-machine-config, tool:aidlc-update
 // covers: tool:aidlc-completions, file:scripts/install.sh, file:scripts/install.ps1
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   activeExecutablePath,
@@ -39,14 +39,20 @@ import {
 } from "../../core/tools/aidlc-update.ts";
 import { _resetSettingsCacheForTests } from "../../core/tools/aidlc-settings.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
-import { scanWindowsUninstallJournals } from "../../core/tools/aidlc-windows-uninstall.ts";
+import {
+  scanWindowsUninstallJournals,
+  windowsUninstallCleanupScript,
+  type WindowsUninstallJournal,
+} from "../../core/tools/aidlc-windows-uninstall.ts";
 import {
   type ReleaseFixtureOptions,
   type ReleaseServerFault,
   serveReleaseFixture,
   writeReleaseFixture,
 } from "../harness/release-fixture.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -78,6 +84,7 @@ const RELEASE_HARNESSES = [
   "opencode",
 ] as const;
 const temporary: string[] = [];
+const suiteTemporary = new Set<string>();
 const originalPath = process.env.PATH;
 
 beforeAll(() => {
@@ -96,11 +103,23 @@ const REMOVABLE_VERSION = patchVersion(4);
 const RUNTIME_ASSET = `aidlc-runtime-${AIDLC_VERSION}.tar.gz`;
 const COPY_RUNTIME_ASSET = `aidlc-copy-runtime-${AIDLC_VERSION}.tar.gz`;
 
-// Removing the whole suite's copied release trees needs its own bounded budget.
+function cleanupTemporary(keepSuiteFixtures: boolean): void {
+  for (let index = temporary.length - 1; index >= 0; index--) {
+    const path = temporary[index];
+    if (keepSuiteFixtures && suiteTemporary.has(path)) continue;
+    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    temporary.splice(index, 1);
+  }
+}
+
+// Do not retain every installed version and release archive until one teardown:
+// that both exhausts small Windows disks and overruns the final hook's budget.
+afterEach(() => cleanupTemporary(true), 30_000);
+
 afterAll(() => {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
-  for (const path of temporary) rmSync(path, { recursive: true, force: true });
+  cleanupTemporary(false);
 }, 30_000);
 
 // Production emits canonical project and machine paths, so fixtures live under
@@ -377,7 +396,31 @@ function envFor(machine: string): NodeJS.ProcessEnv {
   };
 }
 
+function uninstallFenceFor(machine: string): string {
+  const keys = ["AIDLC_INSTALL_ROOT", "AIDLC_BIN_DIR"] as const;
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, envFor(machine));
+  try {
+    return windowsUninstallFencePath();
+  } finally {
+    for (const key of keys) {
+      const value = saved[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 describe("t244 machine configuration and update discovery", () => {
+  let updateRelease: string;
+  beforeAll(() => {
+    // These discovery cases only read the same release bytes. Build its copied
+    // projections and archives once, outside the refresh case's 5s deadline.
+    // Servers, request counters, faults, and machine/cache roots remain separate.
+    updateRelease = fixture(NEXT_VERSION, { binary: "bytes" });
+    suiteTemporary.add(updateRelease);
+  }, process.platform === "win32" ? 120_000 : 30_000);
+
   test("global config works outside projects and precedence is flag, env, config, default", () => {
     const machine = temp("aidlc-t241-config-");
     const cwd = temp("aidlc-t241-config-cwd-");
@@ -457,7 +500,7 @@ describe("t244 machine configuration and update discovery", () => {
   });
 
   test("doctor explicit refresh honors its mirror and quiet modes stay network-free", async () => {
-    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const release = updateRelease;
     const server = await serveReleaseFixtureForChildren(release);
     const machine = temp("aidlc-t240-doctor-update-");
     const keys = [
@@ -523,17 +566,17 @@ describe("t244 machine configuration and update discovery", () => {
       }, true);
       expect(server.requests).toHaveLength(0);
     } finally {
-      await server.stop();
       for (const key of keys) {
         const value = saved[key];
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+      await server.stop();
     }
-  }, process.platform === "win32" ? 120_000 : 10_000);
+  });
 
   test("interactive doctor bounds a missing-cache refresh to 750 milliseconds", async () => {
-    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const release = updateRelease;
     const server = await serveReleaseFixtureForChildren(release, {
       kind: "delay",
       asset: "version.json",
@@ -563,17 +606,19 @@ describe("t244 machine configuration and update discovery", () => {
       expect(elapsed).toBeGreaterThanOrEqual(500);
       expect(elapsed).toBeLessThan(1_500);
     } finally {
-      await server.stop();
+      // Do not leave a timed-out case's machine settings installed across an
+      // async teardown boundary, where the next refresh case may already run.
       for (const key of keys) {
         const value = saved[key];
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+      await server.stop();
     }
   }, process.platform === "win32" ? 120_000 : 5_000);
 
   test("authenticated refresh replaces the cache and every failed refresh preserves it", async () => {
-    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const release = updateRelease;
     const server = await serveReleaseFixtureForChildren(release);
     const machine = temp("aidlc-t241-update-");
     const saved = Object.fromEntries(
@@ -610,16 +655,16 @@ describe("t244 machine configuration and update discovery", () => {
       expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
       await captive.stop();
     } finally {
-      await server.stop();
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+      await server.stop();
     }
-  }, process.platform === "win32" ? 120_000 : 45_000);
+  });
 
   test("older authenticated metadata cannot replace a newer valid update cache", async () => {
-    const newerRelease = fixture(NEXT_VERSION, { binary: "bytes" });
+    const newerRelease = updateRelease;
     const olderRelease = fixture("0.0.1", { binary: "bytes" });
     const newerServer = await serveReleaseFixtureForChildren(newerRelease);
     const olderServer = await serveReleaseFixtureForChildren(olderRelease);
@@ -644,17 +689,17 @@ describe("t244 machine configuration and update discovery", () => {
       expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
       expect(readUpdateCache()?.latestVersion).toBe(NEXT_VERSION);
     } finally {
-      await newerServer.stop();
-      await olderServer.stop();
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+      await newerServer.stop();
+      await olderServer.stop();
     }
-  }, process.platform === "win32" ? 120_000 : 45_000);
+  });
 
   test("disabled and offline update checks open no socket", async () => {
-    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const release = updateRelease;
     const server = serveReleaseFixture(release);
     const machine = temp("aidlc-t241-no-socket-");
     const env = {
@@ -712,7 +757,7 @@ describe("t244 machine configuration and update discovery", () => {
         else process.env[key] = value;
       }
     }
-  }, process.platform === "win32" ? 120_000 : 5_000);
+  });
 });
 
 describe("t244 management lifecycle", () => {
@@ -869,7 +914,7 @@ describe("t244 management lifecycle", () => {
         `Transaction recovery: 1 quarantined path(s): ${projectQuarantine}`,
       ),
     }));
-  }, 60_000);
+  });
 
   test("all harness runtimes install together and config selects one project harness", () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
@@ -931,7 +976,7 @@ describe("t244 management lifecycle", () => {
     ], project, env);
     expect(multi.status).toBe(2);
     expect(multi.stdout + multi.stderr).toContain("multi-harness config is not supported yet");
-  }, 60_000);
+  });
 
   test("a missing declared runtime makes the retained version incomplete", () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
@@ -948,7 +993,7 @@ describe("t244 management lifecycle", () => {
     const listed = run(LIFECYCLE, ["versions", "list", "--json"], project, env);
     expect(listed.stdout).toContain('"complete":false');
     expect(run(LIFECYCLE, ["use", AIDLC_VERSION], project, env).status).toBe(4);
-  }, 60_000);
+  });
 
   test("update retains the prior active and pinned versions while pruning older versions", () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
@@ -1088,7 +1133,6 @@ describe("t244 management lifecycle", () => {
       // The installed tree is untouched by a same-version no-op.
       expect(statSync(runtimeFile).mode & 0o777).toBe(0o600);
     },
-    120_000,
   );
 
   test("uninstall removes command and versions while preserving machine state and projects", async () => {
@@ -1098,9 +1142,11 @@ describe("t244 management lifecycle", () => {
     mkdirSync(join(project, ".git"));
     writeFileSync(join(project, "keep.txt"), "project-owned\n");
     const env = envFor(machine);
-    expect(run(LIFECYCLE, [
+    const completionPaths = process.platform === "win32" ? [uninstallFenceFor(machine)] : [];
+    const installed = run(LIFECYCLE, [
       "update", "--version", AIDLC_VERSION, "--from", release,
-    ], project, env).status).toBe(0);
+    ], project, env);
+    expect(installed.status, `${installed.stdout}\n${installed.stderr}`).toBe(0);
     const command = join(
       machine,
       "bin",
@@ -1138,13 +1184,16 @@ describe("t244 management lifecycle", () => {
 
     expect(run(LIFECYCLE, ["uninstall"], project, env).status).toBe(2);
     const uninstall = run(LIFECYCLE, ["uninstall", "--yes"], project, env);
-    expect(uninstall.status).toBe(0);
+    expect(uninstall.status, `${uninstall.stdout}\n${uninstall.stderr}`).toBe(0);
     if (process.platform !== "win32") {
       expect(uninstall.stdout).toContain(
         "Removed aidlc and all retained releases. Machine settings, update cache, pins, harness default, and project files were kept.",
       );
     }
-    await waitForAbsent([join(machine, "versions"), command]);
+    // Windows restores retained files before retiring the mutation fence.
+    // Wait for that final marker too; visible files alone do not mean reinstall
+    // can begin, or that fixture cleanup may safely remove this machine root.
+    await waitForAbsent([join(machine, "versions"), command, ...completionPaths]);
     await waitForPresent([
       join(machine, "aidlc.settings.json"),
       join(machine, "update-check.json"),
@@ -1157,12 +1206,13 @@ describe("t244 management lifecycle", () => {
     expect(existsSync(join(machine, "pins.json"))).toBe(true);
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
 
-    expect(run(LIFECYCLE, [
+    const reinstalled = run(LIFECYCLE, [
       "update", "--version", AIDLC_VERSION, "--from", release,
-    ], project, env).status).toBe(0);
+    ], project, env);
+    expect(reinstalled.status, `${reinstalled.stdout}\n${reinstalled.stderr}`).toBe(0);
     writeFileSync(join(machine, "default-harness"), "claude\n");
     const purge = run(LIFECYCLE, ["uninstall", "--purge", "--yes"], project, env);
-    expect(purge.status).toBe(0);
+    expect(purge.status, `${purge.stdout}\n${purge.stderr}`).toBe(0);
     if (process.platform !== "win32") {
       expect(purge.stdout).toContain(
         "Removed aidlc, all retained releases, machine settings, update cache, pins, and harness default. Project files were kept.",
@@ -1171,6 +1221,7 @@ describe("t244 management lifecycle", () => {
     await waitForAbsent([
       join(machine, "versions"),
       command,
+      ...completionPaths,
       join(machine, "aidlc.settings.json"),
       join(machine, "update-check.json"),
       join(machine, "pins.json"),
@@ -1187,7 +1238,7 @@ describe("t244 management lifecycle", () => {
       expect(existsSync(join(machine, path))).toBe(false);
     }
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
-  }, process.platform === "win32" ? 180_000 : 60_000);
+  }, process.platform === "win32" ? 180_000 : NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t244 installer has no machine-level harness selection", () => {
@@ -1206,6 +1257,85 @@ describe("t244 installer has no machine-level harness selection", () => {
 });
 
 describe("t244 Windows and completion release surfaces", () => {
+  test.skipIf(process.platform !== "win32")("uninstall releases the project CWD before retiring its fence, while the worker remains alive", async () => {
+    const root = temp("aidlc-t244-uninstall-cwd-");
+    const project = join(root, "project");
+    const machine = join(root, "machine");
+    const control = join(root, "control");
+    for (const path of [project, machine, control]) mkdirSync(path);
+    writeFileSync(join(project, "keep.txt"), "project-owned\n");
+    const preserved = join(machine, "aidlc.settings.json");
+    writeFileSync(preserved, "machine-owned\n");
+    const journalPath = join(control, "uninstall.json");
+    const cleanupPath = join(control, "uninstall.ps1");
+    const ready = join(control, "ready.json");
+    const release = join(control, "release");
+    const journal: WindowsUninstallJournal = {
+      schemaVersion: 1,
+      operation: "windows-uninstall-continuation",
+      status: "pending",
+      parentPid: 0, // This focused worker has no owning CLI/shim to wait for.
+      shimPid: null,
+      installRoot: machine,
+      commandPath: join(machine, "aidlc.cmd"),
+      pointerPath: join(machine, "active-executable"),
+      cleanupPath,
+      fencePath: join(machine, "uninstall-fence.json"),
+      purge: false,
+      preserved: [preserved],
+    };
+    writeFileSync(journalPath, JSON.stringify(journal));
+    writeFileSync(journal.fencePath, JSON.stringify({
+      schemaVersion: 1, operation: journal.operation, journalPath,
+    }));
+    const ps = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    // Use the real cleanup payload, then hold its process open after completion.
+    // This makes the CWD lifetime deterministic without changing production waits.
+    writeFileSync(cleanupPath, windowsUninstallCleanupScript(journal) + [
+      `$receipt = @{ nativeCwd = [Environment]::CurrentDirectory; location = (Get-Location).Path; pid = $PID } | ConvertTo-Json -Compress`,
+      `[IO.File]::WriteAllText(${ps(ready)}, $receipt)`,
+      "$deadline = [DateTime]::UtcNow.AddSeconds(20)",
+      `while (-not (Test-Path -LiteralPath ${ps(release)})) {`,
+      "  if ([DateTime]::UtcNow -ge $deadline) { exit 9 }",
+      "  Start-Sleep -Milliseconds 50",
+      "}",
+    ].join("\r\n"));
+    const child = Bun.spawn([
+      "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", cleanupPath, journalPath,
+    ], { cwd: project, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+    const output = Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    let diagnostic = "";
+    try {
+      const deadline = Date.now() + 20_000;
+      while (!existsSync(ready) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(50);
+      expect(existsSync(ready), `cleanup did not reach its completion marker; exit=${child.exitCode}`).toBe(true);
+      const receipt = JSON.parse(readFileSync(ready, "utf-8"));
+      diagnostic = JSON.stringify({ receipt, pid: child.pid, project });
+      console.error(`t244 uninstall worker CWD: ${diagnostic}`);
+      expect(child.exitCode, diagnostic).toBeNull();
+      expect(receipt.pid, diagnostic).toBe(child.pid);
+      expect(existsSync(journal.fencePath), diagnostic).toBe(false);
+      expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
+      expect(readFileSync(preserved, "utf-8")).toBe("machine-owned\n");
+      // No retries: fence retirement must not leave the project pinned by CWD.
+      rmSync(project, { recursive: true });
+      expect(existsSync(project), diagnostic).toBe(false);
+      expect(child.exitCode, diagnostic).toBeNull();
+      expect(receipt.nativeCwd, diagnostic).toBe(parse(cleanupPath).root);
+      expect(receipt.location, diagnostic).toBe(parse(cleanupPath).root);
+    } finally {
+      writeFileSync(release, "release\n");
+      await child.exited;
+      const [stdout, stderr] = await output;
+      diagnostic += `\nstdout=${stdout}\nstderr=${stderr}`;
+      if (child.exitCode !== 0) console.error(diagnostic);
+    }
+    expect(child.exitCode, diagnostic).toBe(0);
+  });
+
   test("Windows uninstall cleanup supports adding completion metadata in PowerShell 5.1", () => {
     const source = readFileSync(
       join(REPO_ROOT, "core", "tools", "aidlc-windows-uninstall.ts"),
@@ -1506,7 +1636,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(manifest.assets).toContainEqual(
       expect.objectContaining({ name: "install.ps1", kind: "installer" }),
     );
-  }, process.platform === "win32" ? 120_000 : 5_000);
+  });
 
   test("PowerShell installer keeps analyzer suppressions narrow and helper calls named", () => {
     const script = readFileSync(INSTALL_PS1, "utf-8");
@@ -1635,7 +1765,6 @@ describe("t244 Windows and completion release surfaces", () => {
           expect(result.stdout).not.toContain("PARAM_OK");
         }
       },
-      35_000,
     );
   }
 
@@ -1762,7 +1891,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(result.stdout).toContain(`installed AI-DLC ${AIDLC_VERSION}`);
     expect(result.stderr).toBe("");
     expect(existsSync(join(bin, "aidlc"))).toBe(true);
-  }, 60_000);
+  });
 
   test("Unix installer turns Alpine musl loader failures into the canonical remediation", () => {
     if (process.platform !== "linux" || process.getuid?.() === 0) return;
@@ -1983,6 +2112,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
     const previewWorkflow = readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8");
     const fullSuiteWorkflow = readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf-8");
+    const deterministicWorkflow = readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
       permissions?: Record<string, string>;
       jobs: Record<string, {
@@ -1990,7 +2120,7 @@ describe("t244 Windows and completion release surfaces", () => {
       }>;
     };
     expect(parsed.permissions).toEqual({ contents: "read" });
-    expect(parsed.jobs.test_unit.strategy?.["fail-fast"]).toBe(false);
+    expect(parsed.jobs.test_unit).toBeUndefined();
     expect(parsed.jobs["native-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(parsed.jobs["musl-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(workflow).toContain("name: Validate release tag and source");
@@ -2014,7 +2144,7 @@ describe("t244 Windows and completion release surfaces", () => {
     // Third-party actions are pinned to a full commit SHA. A same-repository
     // reusable workflow (`./.github/workflows/...`) is referenced by path and
     // resolves to the commit already being run, so it carries no ref to pin.
-    const actionRefs = [workflow, previewWorkflow, fullSuiteWorkflow].flatMap(
+    const actionRefs = [workflow, previewWorkflow, fullSuiteWorkflow, deterministicWorkflow].flatMap(
       (workflowText) =>
         [...workflowText.matchAll(/^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm)]
           .map((match) => match[1]),
@@ -2025,7 +2155,8 @@ describe("t244 Windows and completion release surfaces", () => {
       expect(ref).toMatch(/^[^@\s]+@[a-f0-9]{40}$/);
     }
     expect(workflow).not.toMatch(/^\s*(?:-\s+)?uses:\s+[^@\s]+@v\d/m);
-    expect(actionRefs).toContain("./.github/workflows/ci.yml");
+    expect(actionRefs).toContain("./.github/workflows/deterministic-tests.yml");
+    expect(actionRefs).not.toContain("./.github/workflows/ci.yml");
     expect(workflow).toContain("shellcheck scripts/install.sh");
     expect(workflow).toContain("Invoke-ScriptAnalyzer -Path scripts/install.ps1");
     expect(workflow).toContain("unix-lifecycle:");
@@ -2049,40 +2180,17 @@ describe("t244 Windows and completion release surfaces", () => {
     );
     expect(verifyJob).toContain(regen);
     expect(verifyJob.indexOf(regen)).toBeLessThan(verifyJob.indexOf("- run: bun run check"));
-    const smokeTests = workflowJob(workflow, "test_smoke");
-    expect(smokeTests).toContain("needs: validate");
-    expect(smokeTests).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
-    expect(smokeTests).toContain(regen);
-    expect(smokeTests).toContain("bun tests/run-tests.ts --smoke");
-    const unitTests = workflowJob(workflow, "test_unit");
-    expect(unitTests).toContain("needs: validate");
-    expect(unitTests).toContain("shard: [1, 2, 3, 4]");
-    expect(unitTests).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
-    expect(unitTests).toContain(regen);
-    expect(unitTests).toContain("sudo apt-get install -y -qq zsh");
-    expect(unitTests).toContain(
-      `bun tests/run-tests.ts --unit --shard \${{ matrix.shard }}/4`,
-    );
-    const deepTests = workflowJob(workflow, "test_deep");
-    expect(deepTests).toContain("needs: validate");
-    expect(deepTests).toContain("timeout-minutes: 90");
-    expect(deepTests).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
-    expect(deepTests).toContain(regen);
-    expect(deepTests).toContain(
-      "bun tests/run-tests.ts --integration --e2e --no-llm --parallel 8",
-    );
-    const releaseTests = workflowJob(workflow, "test");
-    expect(releaseTests).toContain(`if: \${{ always() }}`);
-    expect(releaseTests).toContain("needs: [test_smoke, test_unit, test_deep]");
-    expect(releaseTests).toContain('test "$SMOKE_RESULT" = "success"');
-    expect(releaseTests).toContain('test "$UNIT_RESULT" = "success"');
-    expect(releaseTests).toContain('test "$DEEP_RESULT" = "success"');
+    for (const name of ["test_smoke", "test_unit", "test_deep", "test"]) {
+      expect(parsed.jobs[name], `stable source tests must consume nightly evidence: ${name}`).toBeUndefined();
+    }
+    expect(workflow).toContain("Require passing full-suite evidence");
+    expect(workflow).not.toContain("tests/run-tests.");
     const nativeSmokeJob = workflow.slice(
       workflow.indexOf("  native-smoke:"),
       workflow.indexOf("  build:"),
     );
     expect(nativeSmokeJob).toContain(regen);
-    expect(nativeSmokeJob).toContain("needs: [validate, verify, test]");
+    expect(nativeSmokeJob).toContain("needs: [validate, verify]");
     expect(nativeSmokeJob).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
     expect(nativeSmokeJob.indexOf(regen))
       .toBeLessThan(nativeSmokeJob.indexOf("t238-build-binaries.test.ts"));
@@ -2350,7 +2458,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const duplicate = invoke([...args, "--repo", "conflicting/repository"]);
     expect(duplicate.status).not.toBe(0);
     expect(existsSync(marker)).toBe(false);
-  }, 20_000);
+  });
 
   test("release MUST 3: signing emits one attested artifact for direct publication", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
@@ -2433,21 +2541,27 @@ describe("t244 Windows and completion release surfaces", () => {
   });
 
   test("CI test jobs build the projections before running their tiers", () => {
+    type Job = { uses?: string; steps?: Array<{ run?: string }> };
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       on: { pull_request: { branches: string[] } };
-      jobs: Record<string, { steps: Array<{ run?: string }> }>;
+      jobs: Record<string, Job>;
+    };
+    const shared = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
     };
     expect(ci.on.pull_request.branches).toContain("main");
     expect(ci.on.pull_request.branches).not.toContain("v2");
-    for (const name of ["test_smoke", "test_unit", "test_native_terminal"]) {
-      const steps = ci.jobs[name].steps;
+    expect(ci.jobs.deterministic.uses).toBe("./.github/workflows/deterministic-tests.yml");
+    for (const name of ["deterministic", "test_native_terminal"]) {
+      const job = ci.jobs[name];
+      const steps = job.uses ? shared.jobs.test.steps! : job.steps!;
       const build = steps.findIndex((step) => step.run?.trim().startsWith("bun scripts/package.ts"));
-      const run = steps.findIndex((step) => step.run?.includes("tests/run-tests.ts"));
+      const run = steps.findIndex((step) => /tests\/run-tests\.(sh|ts)/.test(step.run ?? ""));
       expect(build, `${name} must regenerate its projections`).toBeGreaterThanOrEqual(0);
       expect(run, `${name} must invoke the test runner`).toBeGreaterThanOrEqual(0);
       expect(build, `${name} must build before running its tier`).toBeLessThan(run);
     }
-    const isolation = ci.jobs.test_live_isolation.steps;
+    const isolation = ci.jobs.test_live_isolation.steps!;
     const build = isolation.findIndex((step) => step.run === "bun scripts/package.ts");
     expect(build).toBeGreaterThanOrEqual(0);
     for (const [index, step] of isolation.entries()) {

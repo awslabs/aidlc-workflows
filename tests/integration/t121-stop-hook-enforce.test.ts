@@ -84,7 +84,7 @@
 // {"decision":"block"} stdout; the guard/release/fail-open cases prove the hook
 // lets go — a happy-path-only twin would not be equal-or-stronger.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -306,8 +306,10 @@ function rewriteCopilotMarker(proj: string, update: (marker: Record<string, unkn
 
 const tempDirs: string[] = [];
 
-afterAll(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+// Every case owns its projects. Retire them per case instead of accumulating
+// the entire file's fixtures for one cleanup hook (7s on Windows CI).
+afterEach(() => {
+  while (tempDirs.length > 0) rmSync(tempDirs.pop()!, { recursive: true, force: true });
 });
 
 // The MOCK engine, byte-for-byte the .sh's heredoc: emit one directive of
@@ -896,6 +898,7 @@ function seedTurnMarkers(
 interface HookResult {
   rc: number;
   out: string; // stdout only (the .sh discarded stderr with 2>/dev/null)
+  diagnostic: string;
 }
 
 /**
@@ -937,6 +940,7 @@ function runHook(
   else delete env.AIDLC_COPILOT_SESSION_ID;
   // The hook reads stdin + env only; it ignores argv (mirrors the .sh's bare
   // `bun "$HOOK_TS"`).
+  const started = performance.now();
   const res = spawnSync(BUN, [HOOK_TS], {
     input: payload,
     encoding: "utf-8",
@@ -944,7 +948,17 @@ function runHook(
     env,
     timeout: 20_000,
   });
-  return { rc: res.status ?? -1, out: (res.stdout ?? "").trim() };
+  return {
+    rc: res.status ?? -1,
+    out: (res.stdout ?? "").trim(),
+    diagnostic: JSON.stringify({
+      elapsedMs: Math.round(performance.now() - started),
+      status: res.status,
+      signal: res.signal,
+      error: res.error?.message,
+      stderr: res.stderr,
+    }),
+  };
 }
 
 function runCopilotStop(proj: string, cap = "2"): HookResult {
@@ -2704,13 +2718,14 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
   }, 30000);
 
-  test("(h) a native Windows Bash diagnostic does not turn a completed config refusal into workflow continuation", () => {
-    // Native T27 carried a literal quoted Windows cd, successful next -> terminal
-    // print, then a real config refusal. Bind its prelude to the owned fixture;
-    // preserve native Windows spelling only on the platform that executes it.
-    for (const diagnostic of ["", `${bashStartupDiagnostic}\n`, `${bashStartupDiagnostic}\r\n`]) {
-      for (const format of ["claude", "codex"] as const) {
-        for (const textArray of [false, true]) {
+  // Native T27 carried a literal quoted Windows cd, successful next -> terminal
+  // print, then a real config refusal. Each transcript/prelude variant owns its
+  // fixture and deadline; twelve independent CLI sequences need not share 30s.
+  for (const diagnostic of ["", `${bashStartupDiagnostic}\n`, `${bashStartupDiagnostic}\r\n`]) {
+    for (const format of ["claude", "codex"] as const) {
+      for (const textArray of [false, true]) {
+        const prelude = diagnostic === "" ? "none" : diagnostic.includes("\r") ? "CRLF" : "LF";
+        test(`(h) a native Windows Bash diagnostic preserves a completed config refusal (${format}, ${prelude}, text-array=${textArray})`, () => {
           const proj = makeProject();
           const nativePrefix = process.platform === "win32"
             ? `cd '${proj}' && `
@@ -2745,10 +2760,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
           expect(result.out, `${format}: ${JSON.stringify(diagnostic)}`).toBe("");
           expect(readFileSync(seededStateFile(proj), "utf8")).toBe(before);
           expect(readFileSync(artifact, "utf8")).toBe("preserve the existing feasibility work\n");
-        }
+        }, 30000);
       }
     }
-  }, 30000);
+  }
 
   const configProofCases: Array<{
     label: string;
@@ -3342,9 +3357,9 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       token,
     }));
     const stopped = runCopilotStop(proj);
-    expect(stopped.rc).toBe(0);
+    expect(stopped.rc, stopped.diagnostic).toBe(0);
     expect(stopped.out).toBe("");
     expect(readFileSync(markerPath, "utf-8")).toBe(before);
     expect(statSync(lockDir).isDirectory()).toBe(true);
-  }, 10000);
+  }, 25_000); // Outer fixture budget covers runHook's unchanged 20s child limit; CI took 13.16s.
 });

@@ -81,6 +81,7 @@ import {
   appendAuditEntryAtPathUnlocked,
 } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditLockDir,
   auditFilePath,
   humanActedSinceGate,
   readAllAuditShards,
@@ -187,16 +188,16 @@ function runOnboard(p: string, args: string[] = []): { status: number; out: stri
  *  Written as a file rather than inlined so the shell script stays readable, and
  *  shared by every trio below so a fix cannot land in nine of ten holders.
  *
- *  The hold sits far inside both lock bounds, which is why it is safe: a waiter
- *  gets 50 x 100ms of acquire budget (`acquireAuditLock` defaults in
- *  aidlc-lib.ts), and a LIVE holder is only stealable once it is over-age at
- *  DEFAULT_LOCK_STALE_MS (10 minutes) -- so a hold of a second or two is never
- *  reaped out from under the test, and never starves the subject either. */
+ *  Existing race fixtures release as soon as their mutator acknowledges its
+ *  write. The Windows queue-budget case uses a longer cap so it can hold a
+ *  fully staged onboard past the shared default's five-second retry window.
+ *  Every holder still exits at its cap if the release marker never arrives. */
 function writeLockHolder(
   path: string,
   p: string,
   heldMarker: string,
   mutationDoneMarker: string,
+  holdCapMs = HOLD_CAP_MS,
 ): string {
   writeFileSync(
     path,
@@ -205,7 +206,7 @@ function writeLockHolder(
       `lib.withAuditLock(${JSON.stringify(p)}, () => {\n` +
       `  fs.writeFileSync(${JSON.stringify(heldMarker)}, "1");\n` +
       `  const minimumHold = Date.now() + ${MIN_HOLD_MS};\n` +
-      `  const cap = Date.now() + ${HOLD_CAP_MS};\n` +
+      `  const cap = Date.now() + ${holdCapMs};\n` +
       `  while (Date.now() < cap) {\n` +
       `    if (Date.now() >= minimumHold && fs.existsSync(${JSON.stringify(mutationDoneMarker)})) break;\n` +
       // Sleep rather than spin: the subject needs the CPU to reach its staging
@@ -468,6 +469,23 @@ describe("t298 the audit row lands in the SPACE shard, not the active intent's",
     doc(p, "b.md");
     onboard(p, SPACE, undefined, NOW);
     const body = readFileSync(spaceAuditShardPath(p, SPACE), "utf-8");
+    expect(body.match(/\*\*Event\*\*: DOCUMENT_INDEXED/g)?.length).toBe(2);
+  });
+
+  test("a mixed new and unchanged batch repairs missing audit history for the unchanged row", () => {
+    const p = projectWithIntent();
+    const existing = doc(p, "existing.md");
+    const existingId = onboard(p, SPACE, existing, NOW).indexed[0].id;
+    rmSync(spaceAuditShardPath(p, SPACE));
+    doc(p, "new.md");
+
+    const result = onboard(p, SPACE, undefined, NOW);
+    expect(result.indexed.map((row) => row.status).sort()).toEqual(["already", "fresh"]);
+    const rows = readIndex(p, SPACE).documents;
+    expect(rows).toHaveLength(2);
+    const body = readFileSync(spaceAuditShardPath(p, SPACE), "utf8");
+    expect(body).toContain(`**Document**: ${existingId}`);
+    for (const row of rows) expect(body).toContain(`**Document**: ${row.id}`);
     expect(body.match(/\*\*Event\*\*: DOCUMENT_INDEXED/g)?.length).toBe(2);
   });
 
@@ -772,6 +790,82 @@ describe("t298 the digest is re-validated INSIDE the lock", () => {
 });
 
 describe("t298 concurrency: N parallel onboards lose no row", () => {
+  test.skipIf(process.platform !== "win32")("Windows onboard commits wait beyond five seconds behind a live owner", async () => {
+    const p = projectWithIntent();
+    const source = doc(p, "queued.md", "queued document\n");
+    const held = join(p, "owner-held");
+    const release = join(p, "owner-release");
+    const holderScript = writeLockHolder(join(p, "holder.ts"), p, held, release, 25_000);
+    const holder = Bun.spawn([process.execPath, holderScript], {
+      stdin: "ignore",
+      stdout: Bun.file(join(p, "holder.out")),
+      stderr: Bun.file(join(p, "holder.err")),
+      env: CHILD_ENV,
+      timeout: 30_000,
+    });
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      const readyDeadline = Date.now() + 10_000;
+      while (!existsSync(held) && holder.exitCode === null && Date.now() < readyDeadline) {
+        await Bun.sleep(10);
+      }
+      expect(existsSync(held), "live holder did not acquire the space lock").toBe(true);
+      const ownerPath = join(auditLockDir(p, undefined, SPACE), "owner.json");
+      const ownerBefore = readFileSync(ownerPath, "utf8");
+      child = Bun.spawn([
+        process.execPath, join(AIDLC_TOOLS, "aidlc-knowledge.ts"),
+        "onboard", source, "--project-dir", p, "--json",
+      ], {
+        stdin: "ignore",
+        stdout: Bun.file(join(p, "queued.out")),
+        stderr: Bun.file(join(p, "queued.err")),
+        env: CHILD_ENV,
+        timeout: 25_000,
+      });
+      // Observe completed text staging while another process holds the lock.
+      // This both anchors the queued wait and keeps extraction outside it.
+      const journal = journalDir(p, SPACE);
+      const staged = (): boolean => existsSync(journal) &&
+        readdirSync(journal, { withFileTypes: true }).some((txn) =>
+          txn.isDirectory() && readdirSync(join(journal, txn.name), { withFileTypes: true })
+            .some((row) => row.isDirectory() &&
+              existsSync(join(journal, txn.name, row.name, "content.md"))),
+        );
+      const stageDeadline = Date.now() + 10_000;
+      while (!staged() && child.exitCode === null && Date.now() < stageDeadline) {
+        await Bun.sleep(10);
+      }
+      expect(staged(), "onboard did not finish staging before lock acquisition").toBe(true);
+      const waitStarted = performance.now();
+      await Bun.sleep(6_000);
+      expect(holder.exitCode, "the owner must remain live throughout the queued wait").toBeNull();
+      expect(readFileSync(ownerPath, "utf8")).toBe(ownerBefore);
+      expect(readIndex(p, SPACE).documents).toHaveLength(0);
+      const exitBeforeRelease = child.exitCode;
+      writeFileSync(release, "release\n");
+      expect(await holder.exited).toBe(0);
+      const code = await child.exited;
+      const diagnostic = JSON.stringify({
+        queuedMs: performance.now() - waitStarted,
+        exitBeforeRelease,
+        code,
+        stdout: readFileSync(join(p, "queued.out"), "utf8"),
+        stderr: readFileSync(join(p, "queued.err"), "utf8"),
+      });
+      console.error(`t298 queued onboard: ${diagnostic}`);
+      expect(exitBeforeRelease, diagnostic).toBeNull();
+      expect(code, diagnostic).toBe(0);
+      const rows = readIndex(p, SPACE).documents;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].sha256).toBe(sha256Hex(Buffer.from("queued document\n")));
+    } finally {
+      writeFileSync(release, "release\n");
+      const processes = child ? [child, holder] : [holder];
+      for (const proc of processes) if (proc.exitCode === null) proc.kill();
+      await Promise.allSettled(processes.map((proc) => proc.exited));
+    }
+  }, 45_000);
+
   test("twelve concurrent processes each indexing a distinct file land ALL twelve", async () => {
     // In-process calls would serialise on the reentrant lock and prove nothing.
     // Separate PROCESSES contend for the real OS lock, which is the thing under
@@ -797,7 +891,9 @@ describe("t298 concurrency: N parallel onboards lose no row", () => {
     const childCode = (i: number): string => join(p, `child-${i}.code`);
     const deadline = Date.now() + 45_000;
     const pids: number[] = [];
+    const timings: { child: number; pid: number; code: number; elapsedMs: number }[] = [];
     const batch = await Promise.allSettled(names.map(async (n, i) => {
+      const started = performance.now();
       const child = Bun.spawn([
         process.execPath,
         tool,
@@ -815,12 +911,24 @@ describe("t298 concurrency: N parallel onboards lose no row", () => {
       });
       pids.push(child.pid);
       const code = await child.exited;
+      timings.push({ child: i, pid: child.pid, code, elapsedMs: performance.now() - started });
       writeFileSync(childCode(i), `${code}\n`);
     }));
     // A failed launch/receipt write is distinct from a child exit or lost row.
     const batchErrors = batch.flatMap((result) =>
       result.status === "rejected" ? [String(result.reason)] : [],
     );
+    if (process.env.AIDLC_TEST_LOG_DIR) {
+      writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, `t298-onboard-batch-${process.pid}.json`),
+        JSON.stringify({
+          batchErrors,
+          children: timings.sort((a, b) => a.child - b.child).map((timing) => ({
+            ...timing,
+            stdout: readFileSync(childOut(timing.child), "utf8"),
+            stderr: readFileSync(childErr(timing.child), "utf8"),
+          })),
+        }, null, 2));
+    }
     expect(batchErrors, "the concurrent batch failed to launch or record its children").toEqual([]);
     expect(pids).toHaveLength(names.length);
     expect(new Set(pids).size, "twelve distinct native processes must run").toBe(names.length);

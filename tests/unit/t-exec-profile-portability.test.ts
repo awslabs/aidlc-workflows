@@ -1,9 +1,37 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
-import { codexWindowsSandboxConfig, setupCodexProject } from "../harness/exec-drive.ts";
+import { codexBedrockEndpointConfig, codexWindowsSandboxConfig, setupCodexProject } from "../harness/exec-drive.ts";
+
+test("Codex broker endpoint stays in the provider table and rejects non-loopback destinations", () => {
+  const config = parse([
+    ...codexBedrockEndpointConfig({ AIDLC_BROKER_URL: "http://127.0.0.1:4321/" }),
+    "[model_providers.amazon-bedrock.aws]",
+    'profile = "codex"',
+    'region = "us-east-2"',
+  ].join("\n"));
+  expect(config.model_providers).toEqual({
+    "amazon-bedrock": { base_url: "http://127.0.0.1:4321/openai/v1", aws: { profile: "codex", region: "us-east-2" } },
+  });
+  expect(codexBedrockEndpointConfig({})).toEqual([]);
+  for (const value of ["https://example.com", "http://user@127.0.0.1:4321", "http://127.0.0.1:4321/path", "http://127.0.0.1:4321/?q=1"]) {
+    expect(() => codexBedrockEndpointConfig({ AIDLC_BROKER_URL: value })).toThrow();
+  }
+});
+
+test("every bespoke Codex home selects the broker and excludes its environment from shell tools", () => {
+  const directory = join(import.meta.dir, "../e2e");
+  const writers = readdirSync(directory).filter((file) => file.startsWith("t-exec-codex-"))
+    .map((file) => ({ file, body: readFileSync(join(directory, file), "utf8") }))
+    .filter(({ body }) => body.includes("[model_providers.amazon-bedrock.aws]"));
+  expect(writers.length).toBeGreaterThan(0);
+  for (const { file, body } of writers) {
+    expect(body, file).toContain("...codexBedrockEndpointConfig()");
+    expect(body, file).toContain('exclude = ["AWS_*", "AIDLC_BROKER_*"');
+  }
+});
 
 test("native Windows sandbox selection preserves workspace permissions and provider configuration", () => {
   const base = [

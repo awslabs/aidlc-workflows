@@ -33,6 +33,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { remainingOperationTimeoutMs, TestBudgetExhaustedError } from "./test-budget.ts";
 
 // Visible command text has both legacy script and public dispatcher spellings.
 // Keep these non-global so repeated assertions do not share RegExp state.
@@ -49,6 +50,15 @@ const DEFAULT_KIRO_IDE_BIN =
 export const KIRO_IDE_BIN = process.env.AIDLC_KIRO_IDE_BIN ?? DEFAULT_KIRO_IDE_BIN;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+function cdpTimeoutError(fallback: Error, deadlineMs?: number): Error {
+  try {
+    remainingOperationTimeoutMs(undefined, { deadlineMs, phase: "IDE CDP" });
+  } catch (error) {
+    return error as Error;
+  }
+  return fallback;
+}
 
 // ---------------------------------------------------------------------------
 // Raw CDP target (the substrate, ported from cdp.mjs:13-107).
@@ -230,18 +240,37 @@ export class CdpTarget {
   contexts: ExecContext[] = [];
   private handlers = new Map<string, (params: unknown) => void>();
 
-  constructor(private readonly wsUrl: string) {}
+  constructor(private readonly wsUrl: string, private readonly deadlineMs?: number) {}
 
   on(method: string, fn: (params: unknown) => void): void {
     this.handlers.set(method, fn);
   }
 
   connect(): Promise<void> {
+    const timeoutMs = remainingOperationTimeoutMs(undefined, {
+      deadlineMs: this.deadlineMs, phase: "IDE CDP connect",
+    });
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.wsUrl);
-      this.ws.onopen = () => resolve();
-      this.ws.onerror = (e: unknown) =>
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+        reject(cdpTimeoutError(new Error("IDE CDP connect budget expired"), this.deadlineMs));
+        const socket = this.ws as (WebSocket & { terminate?: () => void }) | null;
+        try {
+          if (typeof socket?.terminate === "function") socket.terminate();
+          else socket?.close();
+        } catch { /* already closed */ }
+      }, timeoutMs);
+      try {
+        this.ws = new WebSocket(this.wsUrl);
+      } catch (error) {
+        clearTimeout(timer);
+        reject(error);
+        return;
+      }
+      this.ws.onopen = () => { clearTimeout(timer); resolve(); };
+      this.ws.onerror = (e: unknown) => {
+        clearTimeout(timer);
         reject(new Error(`ws error: ${(e as { message?: string })?.message ?? "unknown"}`));
+      };
       this.ws.onmessage = (ev: MessageEvent) => {
         let msg: {
           id?: number;
@@ -279,16 +308,29 @@ export class CdpTarget {
   /** JSON-RPC send with an auto-incrementing id and a per-call reject timeout
    *  (cdp.mjs:56-68: the spike used a fixed 20_000ms). */
   send(method: string, params: Record<string, unknown> = {}, timeoutMs = 20_000): Promise<unknown> {
+    const allocation = remainingOperationTimeoutMs(timeoutMs, {
+      deadlineMs: this.deadlineMs, phase: "IDE CDP request",
+    });
+    if (allocation === undefined) throw new Error("Invalid test budget: CDP requests require a positive timeout");
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws?.send(JSON.stringify({ id, method, params }));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
-          reject(new Error(`CDP timeout: ${method}`));
+          reject(cdpTimeoutError(new Error(`CDP timeout: ${method}`), this.deadlineMs));
         }
-      }, timeoutMs);
+      }, allocation);
+      this.pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
+      try {
+        this.ws?.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
@@ -310,8 +352,12 @@ export class CdpTarget {
    *  frame (including nested OOPIF webviews) arrive into this.contexts
    *  (cdp.mjs:83-87). */
   async enableContexts(waitMs = 1500): Promise<ExecContext[]> {
-    await this.send("Runtime.enable").catch(() => {});
-    await sleep(waitMs);
+    await this.send("Runtime.enable").catch((error) => {
+      if (error instanceof TestBudgetExhaustedError) throw error;
+    });
+    if (waitMs !== 0) await sleep(remainingOperationTimeoutMs(waitMs, {
+      deadlineMs: this.deadlineMs, phase: "IDE context discovery",
+    })!);
     return this.contexts;
   }
 
@@ -584,6 +630,7 @@ export async function launchKiroIde(
   runtime: Partial<KiroIdeLaunchRuntime> = {},
 ): Promise<KiroIdeHandle> {
   const env = runtime.env ?? process.env;
+  remainingOperationTimeoutMs(opts.startupTimeoutMs ?? 60_000, { env, phase: "IDE startup" });
   const launchStarted = performance.now();
   const windows = (runtime.platform ?? platform()) === "win32";
   const inheritedGroup = env.AIDLC_TEST_WORKER_PROCESS_GROUP === "1";
@@ -611,6 +658,8 @@ export async function launchKiroIde(
   let child: ChildProcess;
   const spawnChild: KiroIdeLaunchRuntime["spawn"] = runtime.spawn ?? spawn;
   try {
+    // Profile copying consumes the parent allocation before the child is started.
+    remainingOperationTimeoutMs(opts.startupTimeoutMs ?? 60_000, { env, phase: "IDE startup" });
     child = spawnChild(opts.bin ?? KIRO_IDE_BIN, [
       opts.workspace,
       "--remote-debugging-port=0",
@@ -769,7 +818,8 @@ export async function launchKiroIde(
       const onExit = () => fail(new Error("Kiro exited before reporting its CDP endpoint"));
       const timer = setTimeout(
         () => fail(new Error("Kiro timed out reporting its OS-assigned CDP endpoint")),
-        opts.startupTimeoutMs ?? 60_000,
+        opts.startupTimeoutMs === 0 ? 0 :
+          remainingOperationTimeoutMs(opts.startupTimeoutMs ?? 60_000, { env, phase: "IDE startup" }),
       );
       child.once("error", fail);
       child.once("exit", onExit);
@@ -841,24 +891,40 @@ export async function withKiroIdeCleanup<T>(
 /** Poll GET /json/version until the CDP endpoint answers (drive-unblocked.mjs:48-56
  *  - this is already a proper poll in the spike; kept verbatim in shape). */
 export async function waitForCdp(port: number, timeoutMs = 60_000): Promise<boolean> {
-  const end = Date.now() + timeoutMs;
+  const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE CDP readiness" });
+  const end = Date.now() + (timeoutMs === 0 ? 0 : allocation ?? timeoutMs);
   while (Date.now() < end) {
+    const allocation = remainingOperationTimeoutMs(Math.max(1, end - Date.now()), { phase: "IDE CDP readiness" })!;
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/json/version`);
+      const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(allocation) });
       if (r.ok) return true;
     } catch {
+      remainingOperationTimeoutMs(undefined, { phase: "IDE CDP readiness" });
       /* not up yet */
     }
-    await sleep(400);
+    const remaining = end - Date.now();
+    if (remaining <= 0) break;
+    await sleep(remainingOperationTimeoutMs(Math.min(400, remaining), { phase: "IDE CDP readiness" })!);
   }
+  remainingOperationTimeoutMs(undefined, { phase: "IDE CDP readiness" });
   return false;
 }
 
 /** GET /json/list - every page/iframe target with a webSocketDebuggerUrl
  *  (cdp.mjs:8-11). */
-export async function listTargets(port: number): Promise<CdpTargetInfo[]> {
-  const r = await fetch(`http://127.0.0.1:${port}/json/list`);
-  return (await r.json()) as CdpTargetInfo[];
+export async function listTargets(port: number, deadlineMs?: number): Promise<CdpTargetInfo[]> {
+  const timeoutMs = remainingOperationTimeoutMs(undefined, { deadlineMs, phase: "IDE target discovery" });
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
+    });
+    return (await r.json()) as CdpTargetInfo[];
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw cdpTimeoutError(error, deadlineMs);
+    }
+    throw error;
+  }
 }
 
 /** Open a CdpTarget on the top-level page target - the keyboard/screenshot channel
@@ -926,36 +992,51 @@ const FIND_CHAT_INPUT_EXPR = `(() => {
 /** Poll all contexts for the chat-input placeholder before driving keystrokes.
  *  Replaces the spike's fixed settle sleeps (drive-unblocked.mjs:57-58,119). */
 export async function waitForChatInput(port: number, timeoutMs = 60_000): Promise<boolean> {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    const targets = await listTargets(port);
-    for (const tgt of targets) {
-      if (!tgt.webSocketDebuggerUrl || (tgt.type !== "page" && tgt.type !== "iframe")) continue;
-      const t = new CdpTarget(tgt.webSocketDebuggerUrl);
-      try {
-        await t.connect();
-        // 1500ms (not the spike's 500ms): the deeply-nested OOPIF chat webview's
-        // executionContextCreated arrives late on a loaded box - a 500ms budget raced
-        // past it and missed the input on a first pass (live probe finding).
-        const contexts = await t.enableContexts(1500);
-        for (const c of contexts) {
-          try {
-            if (await t.evaluateInContext<boolean>(c.id, FIND_CHAT_INPUT_EXPR)) {
-              t.close();
-              return true;
+  const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE chat readiness" });
+  const end = Date.now() + (timeoutMs === 0 ? 0 : allocation ?? timeoutMs);
+  try {
+    while (Date.now() < end) {
+      const targets = await listTargets(port, end);
+      for (const tgt of targets) {
+        if (!tgt.webSocketDebuggerUrl || (tgt.type !== "page" && tgt.type !== "iframe")) continue;
+        const t = new CdpTarget(tgt.webSocketDebuggerUrl, end);
+        try {
+          await t.connect();
+          // 1500ms (not the spike's 500ms): the deeply-nested OOPIF chat webview's
+          // executionContextCreated arrives late on a loaded box - a 500ms budget raced
+          // past it and missed the input on a first pass (live probe finding).
+          const contexts = await t.enableContexts(1500);
+          for (const c of contexts) {
+            try {
+              if (await t.evaluateInContext<boolean>(c.id, FIND_CHAT_INPUT_EXPR)) {
+                t.close();
+                return true;
+              }
+            } catch (error) {
+              if (error instanceof TestBudgetExhaustedError) throw error;
+              /* context gone */
             }
-          } catch {
-            /* context gone */
           }
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
+          /* target gone */
+        } finally {
+          t.close();
         }
-      } catch {
-        /* target gone */
-      } finally {
-        t.close();
       }
+      const remaining = end - Date.now();
+      if (remaining <= 0) break;
+      await sleep(remainingOperationTimeoutMs(Math.min(800, remaining), { phase: "IDE chat readiness" })!);
     }
-    await sleep(800);
+  } catch (error) {
+    if (!(error instanceof TestBudgetExhaustedError)) throw error;
+    // The readiness deadline has always returned false. Recheck the file alone
+    // first: if both deadlines expire together, shared-budget failure must win.
+    remainingOperationTimeoutMs(undefined, { phase: "IDE chat readiness" });
+    if (Date.now() < end) throw error;
+    return false;
   }
+  remainingOperationTimeoutMs(undefined, { phase: "IDE chat readiness" });
   return false;
 }
 
@@ -1075,7 +1156,9 @@ export async function settleKiroIdeChatSurface(
   timeoutMs = 15_000,
   pollMs = 250,
 ): Promise<KiroIdeChatPreparation> {
-  const deadline = adapter.now() + timeoutMs;
+  const remaining = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE chat surface" });
+  const allocation = timeoutMs === 0 ? 0 : remaining ?? timeoutMs;
+  const deadline = adapter.now() + allocation;
   let dismissed: string | null = null;
   let surface: KiroIdeChatSurfaceState = {
     chatFrameCount: 0,
@@ -1084,6 +1167,7 @@ export async function settleKiroIdeChatSurface(
   };
 
   for (;;) {
+    remainingOperationTimeoutMs(undefined, { phase: "IDE chat surface" });
     surface = await adapter.inspect();
     if (chatSurfaceIsReady(surface)) return { dismissed, surface };
 
@@ -1183,11 +1267,13 @@ export async function readChatText(port: number): Promise<string> {
             t.close();
             return r;
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();
@@ -1218,11 +1304,13 @@ async function focusChatEditor(port: number): Promise<boolean> {
       for (const context of await t.enableContexts(600)) {
         try {
           if (await t.evaluateInContext<boolean>(context.id, FOCUS_CHAT_EDITOR_EXPR)) return true;
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();
@@ -1390,11 +1478,13 @@ export async function clickByText(port: number, texts: string[]): Promise<string
             t.close();
             return r;
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();
@@ -1473,11 +1563,13 @@ export async function snapshotChatDom(port: number): Promise<KiroIdeDomSnapshot[
               ...view,
             });
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();
@@ -1556,11 +1648,13 @@ export async function snapshotNumberedLists(
               ...list,
             });
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof TestBudgetExhaustedError) throw error;
           /* context gone */
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TestBudgetExhaustedError) throw error;
       /* target gone */
     } finally {
       t.close();

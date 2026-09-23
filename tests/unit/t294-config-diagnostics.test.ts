@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, posix } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
@@ -32,6 +32,7 @@ import {
   providerMenuCopy,
   readConfigDiagnosticRecords,
   reconcileProviderActions,
+  resolveExecutableOnPath,
   runtimeDoctorChecks,
   runtimeIssues,
   trustStatus,
@@ -49,8 +50,10 @@ const DIST = join(REPO_ROOT, "dist");
 const DIST_RELEASE = join(REPO_ROOT, "dist-release");
 const temporary: string[] = [];
 
-afterAll(() => {
-  for (const path of temporary) rmSync(path, { recursive: true, force: true });
+// Each case owns its installations. Release them before the next case rather
+// than retaining every copied runtime until the entire file finishes.
+afterEach(() => {
+  for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true });
 }, 30_000);
 
 function temp(prefix: string): string {
@@ -232,6 +235,10 @@ describe("t294 config section dispatch", () => {
 });
 
 describe("t294 runtime diagnostics", () => {
+  // The injected platform selects Linux configuration sources; the returned
+  // PATH and filesystem resolver still use this process's native path format.
+  const linuxBaseline = ["/bin", "/usr/bin"].join(delimiter);
+
   test("baseline, interactive-only, and absent PATH cases are hermetic", () => {
     const project = temp("aidlc-t294-runtime-probe-");
     const hooks = join(project, ".claude", "hooks");
@@ -306,9 +313,12 @@ describe("t294 runtime diagnostics", () => {
   // environment.d; the probe reads them under the injected systemRoot.
   test("Linux baseline PATH includes /etc/environment, login.defs, and environment.d entries", () => {
     const root = temp("aidlc-t294-system-root-");
-    const home = temp("aidlc-t294-system-home-");
+    // Linux PATH records cannot contain a Windows drive colon. Keep logical
+    // Linux paths separate from the native directories holding the fixtures.
+    const home = "/home/aidlc-fixture";
+    const configHome = temp("aidlc-t294-system-home-");
     mkdirSync(join(root, "etc", "environment.d"), { recursive: true });
-    mkdirSync(join(home, ".config", "environment.d"), { recursive: true });
+    mkdirSync(join(configHome, "environment.d"), { recursive: true });
     writeFileSync(
       join(root, "etc", "environment"),
       'PATH="/usr/local/bin:/opt/from-environment/bin" # site\nLANG=C.UTF-8\n',
@@ -327,7 +337,7 @@ describe("t294 runtime diagnostics", () => {
       ].join(""),
     );
     writeFileSync(
-      join(home, ".config", "environment.d", "10-user.conf"),
+      join(configHome, "environment.d", "10-user.conf"),
       [
         "PATH=$",
         "{PATH}:/opt/from-user-environment-d/bin\nPATH=$HOME/.local/bin:$PATH\nPATH=$",
@@ -338,10 +348,10 @@ describe("t294 runtime diagnostics", () => {
       platform: "linux",
       systemRoot: root,
       home,
-      env: {},
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      env: { XDG_CONFIG_HOME: configHome },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     });
-    const entries = baseline.split(":");
+    const entries = baseline.split(delimiter);
     expect(entries.slice(0, 2)).toEqual(["/bin", "/usr/bin"]);
     expect(entries).toEqual(expect.arrayContaining([
       "/usr/local/bin",
@@ -352,8 +362,8 @@ describe("t294 runtime diagnostics", () => {
       "/opt/from-user-environment-d/bin",
       "/opt/foo/bin",
       "/opt/lead/bin",
-      join(home, ".local", "bin"),
-      join(home, "bin"),
+      posix.join(home, ".local", "bin"),
+      posix.join(home, "bin"),
     ]));
     // ENV_SUPATH is root's path, not a login-independent user PATH; $PATH
     // references, expression fragments, quotes, and comments never survive as entries.
@@ -371,11 +381,11 @@ describe("t294 runtime diagnostics", () => {
     const bare = deriveNonInteractivePath({
       platform: "linux",
       systemRoot: temp("aidlc-t294-system-root-empty-"),
-      home: temp("aidlc-t294-system-home-empty-"),
-      env: {},
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      home: "/home/empty-fixture",
+      env: { XDG_CONFIG_HOME: temp("aidlc-t294-system-home-empty-") },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     });
-    expect(bare).toBe("/bin:/usr/bin");
+    expect(bare).toBe(linuxBaseline);
   });
 
   test("Linux runtime probe resolves aidlc from /etc/environment and user environment.d", () => {
@@ -397,15 +407,32 @@ describe("t294 runtime diagnostics", () => {
     writeExecutable(join(siteBin, "aidlc"));
     const systemRoot = temp("aidlc-t294-system-root-site-");
     const home = temp("aidlc-t294-system-home-probe-");
+    const linuxHome = "/home/aidlc-fixture";
+    const linuxSite = "/opt/aidlc-site/bin";
+    const linuxInteractive = "/opt/aidlc-interactive/bin";
+    const directories = new Map([
+      [linuxSite, siteBin],
+      [linuxInteractive, interactiveBin],
+      [posix.join(linuxHome, ".local", "bin"), join(home, ".local", "bin")],
+    ]);
     mkdirSync(join(systemRoot, "etc"), { recursive: true });
-    writeFileSync(join(systemRoot, "etc", "environment"), `PATH="${siteBin}" # site\n`);
+    writeFileSync(join(systemRoot, "etc", "environment"), `PATH="${linuxSite}" # site\n`);
     const options = {
       platform: "linux" as const,
       systemRoot,
-      home,
-      env: { PATH: interactiveBin },
+      home: linuxHome,
+      env: { PATH: linuxInteractive, XDG_CONFIG_HOME: join(home, ".config") },
       includeHarnessCli: false,
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      which(command: string, pathValue: string): string | null {
+        for (const entry of pathValue.split(delimiter)) {
+          const directory = directories.get(entry);
+          if (!directory) continue;
+          const executable = resolveExecutableOnPath(command, directory);
+          if (executable) return executable;
+        }
+        return null;
+      },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     };
     const site = probeRuntime(project, ".claude", "claude", options);
 
@@ -444,9 +471,9 @@ describe("t294 runtime diagnostics", () => {
     const bare = probeRuntime(project, ".claude", "claude", {
       ...options,
       systemRoot: emptyRoot,
-      env: { PATH: join(home, ".local", "bin") },
+      env: { ...options.env, PATH: posix.join(linuxHome, ".local", "bin") },
     });
-    expect(bare.baselinePath).toBe("/bin:/usr/bin");
+    expect(bare.baselinePath).toBe(linuxBaseline);
     expect(bare.binaries.find((item) => item.name === "aidlc")?.status).toBe(
       "interactive-only",
     );
@@ -454,22 +481,25 @@ describe("t294 runtime diagnostics", () => {
     // Blanking an unresolved variable must not expose an unrelated executable.
     const unresolvedHome = temp("aidlc-t294-system-home-unresolved-");
     const toolchainRoot = temp("aidlc-t294-toolchain-");
+    const linuxToolchain = "/opt/toolchain";
+    directories.set(posix.join(linuxToolchain, "bin"), join(toolchainRoot, "bin"));
     mkdirSync(join(toolchainRoot, "bin"));
     writeExecutable(join(toolchainRoot, "bin", "aidlc"));
     mkdirSync(join(unresolvedHome, ".config", "environment.d"), { recursive: true });
     writeFileSync(
       join(unresolvedHome, ".config", "environment.d", "10-user.conf"),
-      `TOOLCHAIN=gcc\nPATH=${toolchainRoot}/$TOOLCHAIN/bin:$PATH\n`,
+      `TOOLCHAIN=gcc\nPATH=${linuxToolchain}/$TOOLCHAIN/bin:$PATH\n`,
     );
     const unresolved = probeRuntime(project, ".claude", "claude", {
       ...options,
       systemRoot: temp("aidlc-t294-system-root-unresolved-"),
-      home: unresolvedHome,
+      home: "/home/unresolved-fixture",
+      env: { ...options.env, XDG_CONFIG_HOME: join(unresolvedHome, ".config") },
     });
     expect({
       status: unresolved.binaries.find((item) => item.name === "aidlc")?.status,
-      toolchainEntries: unresolved.baselinePath.split(":").filter((entry) =>
-        entry.startsWith(toolchainRoot)
+      toolchainEntries: unresolved.baselinePath.split(delimiter).filter((entry) =>
+        entry.startsWith(linuxToolchain)
       ),
     }).toEqual({
       status: "interactive-only",
@@ -629,8 +659,8 @@ describe("t294 provider diagnostics", () => {
     expect(result.regions).toEqual(["ap-southeast-2", "eu-west-1", "us-east-1"]);
   });
 
-  test("shared provider writers apply only the selected harness surfaces", () => {
-    const record = reconcileProviderActions({
+  describe("shared provider writers apply only the selected harness surfaces", () => {
+    const record = () => reconcileProviderActions({
       schemaVersion: 1,
       provider: "amazon-bedrock",
       region: "eu-west-1",
@@ -641,77 +671,87 @@ describe("t294 provider diagnostics", () => {
       ],
     }, "claude", true);
 
-    const claude = temp("aidlc-t294-provider-claude-");
-    cpSync(join(DIST, "claude"), claude, { recursive: true });
-    applyConfigDiagnosticRecords(
-      claude,
-      ".claude",
-      "claude",
-      emptyRecords(record),
-    );
-    const settings = JSON.parse(
-      readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
-    ) as { env: Record<string, string> };
-    expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
-    expect(settings.env.AWS_REGION).toBe("eu-west-1");
-    expect(settings.env.AWS_PROFILE).toBe("dev");
-    const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
-    expect(claudeMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
-    expect(claudeMcp).toContain("AWS_REGION=eu-west-1");
-
-    const codex = temp("aidlc-t294-provider-codex-");
-    cpSync(join(DIST, "codex"), codex, { recursive: true });
-    const codexBefore = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
-    applyConfigDiagnosticRecords(
-      codex,
-      ".codex",
-      "codex",
-      emptyRecords(record),
-    );
-    const codexAfter = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
-    expect(codexAfter).toBe(codexBefore);
-    expect(codexAfter).not.toContain("[model_providers.amazon-bedrock");
-
-    const opencode = temp("aidlc-t294-provider-opencode-");
-    cpSync(join(DIST, "opencode"), opencode, { recursive: true });
-    applyConfigDiagnosticRecords(
-      opencode,
-      ".aidlc",
-      "opencode",
-      emptyRecords(record),
-    );
-    const opencodeJson = JSON.parse(
-      readFileSync(join(opencode, "opencode.json"), "utf-8"),
-    ) as {
-      provider: {
-        "amazon-bedrock": { options: { region: string; profile: string } };
-      };
-    };
-    expect(opencodeJson.provider["amazon-bedrock"].options).toEqual({
-      region: "eu-west-1",
-      profile: "dev",
+    // Each surface is independent. Keep its real distribution and assertions,
+    // but do not charge eleven tree copies to one default test deadline.
+    test("Claude writes provider settings and MCP region", () => {
+      const claude = temp("aidlc-t294-provider-claude-");
+      cpSync(join(DIST, "claude"), claude, { recursive: true });
+      applyConfigDiagnosticRecords(
+        claude,
+        ".claude",
+        "claude",
+        emptyRecords(record()),
+      );
+      const settings = JSON.parse(
+        readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
+      ) as { env: Record<string, string> };
+      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
+      expect(settings.env.AWS_REGION).toBe("eu-west-1");
+      expect(settings.env.AWS_PROFILE).toBe("dev");
+      const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
+      expect(claudeMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
+      expect(claudeMcp).toContain("AWS_REGION=eu-west-1");
     });
 
-    const decline = temp("aidlc-t294-provider-opencode-decline-");
-    cpSync(join(DIST, "opencode"), decline, { recursive: true });
-    const before = readFileSync(join(decline, "opencode.json"), "utf-8");
-    applyConfigDiagnosticRecords(
-      decline,
-      ".aidlc",
-      "opencode",
-      emptyRecords({ ...record, opencodeDefault: false }),
-    );
-    expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
+    test("Codex leaves its project configuration unchanged", () => {
+      const codex = temp("aidlc-t294-provider-codex-");
+      cpSync(join(DIST, "codex"), codex, { recursive: true });
+      const codexBefore = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
+      applyConfigDiagnosticRecords(
+        codex,
+        ".codex",
+        "codex",
+        emptyRecords(record()),
+      );
+      const codexAfter = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
+      expect(codexAfter).toBe(codexBefore);
+      expect(codexAfter).not.toContain("[model_providers.amazon-bedrock");
+    });
+
+    test("OpenCode applies an accepted default provider", () => {
+      const opencode = temp("aidlc-t294-provider-opencode-");
+      cpSync(join(DIST, "opencode"), opencode, { recursive: true });
+      applyConfigDiagnosticRecords(
+        opencode,
+        ".aidlc",
+        "opencode",
+        emptyRecords(record()),
+      );
+      const opencodeJson = JSON.parse(
+        readFileSync(join(opencode, "opencode.json"), "utf-8"),
+      ) as {
+        provider: {
+          "amazon-bedrock": { options: { region: string; profile: string } };
+        };
+      };
+      expect(opencodeJson.provider["amazon-bedrock"].options).toEqual({
+        region: "eu-west-1",
+        profile: "dev",
+      });
+    });
+
+    test("OpenCode leaves a declined default provider unchanged", () => {
+      const decline = temp("aidlc-t294-provider-opencode-decline-");
+      cpSync(join(DIST, "opencode"), decline, { recursive: true });
+      const before = readFileSync(join(decline, "opencode.json"), "utf-8");
+      applyConfigDiagnosticRecords(
+        decline,
+        ".aidlc",
+        "opencode",
+        emptyRecords({ ...record(), opencodeDefault: false }),
+      );
+      expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
+    });
 
     // Owned harnesses: no record writes anything, Kiro CLI included. The aws-mcp
     // region there is carried from the project's own file during staging, and a
     // record's region never reaches it, even when the file says something else.
-    for (const [harness, dir, file] of [
+    test.each([
       ["kiro", ".kiro", "settings/mcp.json"],
       ["kiro-ide", ".kiro", "tools/data/harness.json"],
       ["copilot", ".aidlc", "tools/data/harness.json"],
       ["cursor", ".cursor", "cli.json"],
-    ] as const) {
+    ] as const)("%s leaves its owned surface unchanged", (harness, dir, file) => {
       const root = temp(`aidlc-t294-provider-${harness}-`);
       cpSync(join(DIST, harness), root, { recursive: true });
       const path = join(root, dir, file);
@@ -720,34 +760,38 @@ describe("t294 provider diagnostics", () => {
         root,
         dir,
         harness,
-        emptyRecords(record),
+        emptyRecords(record()),
       );
       expect(readFileSync(path), harness).toEqual(original);
-    }
+    });
 
     // Staging preservation: the project's aws-mcp endpoint and metadata replace
     // the release values in the staged copy, argument by argument, and a project
     // without that entry leaves the staged bytes alone.
-    const kiroProject = temp("aidlc-t294-kiro-mcp-project-");
-    cpSync(join(DIST, "kiro"), kiroProject, { recursive: true });
-    const projectMcpPath = join(kiroProject, ".kiro", "settings", "mcp.json");
-    writeFileSync(projectMcpPath, withMcpRegion(readFileSync(projectMcpPath, "utf-8"), "ap-southeast-2"));
-    const kiroStaged = temp("aidlc-t294-kiro-mcp-staged-");
-    cpSync(join(DIST, "kiro"), kiroStaged, { recursive: true });
-    preserveKiroMcpRegion(kiroProject, kiroStaged, ".kiro");
-    const stagedMcp = readFileSync(join(kiroStaged, ".kiro", "settings", "mcp.json"), "utf-8");
-    expect(stagedMcp).toContain("https://aws-mcp.ap-southeast-2.api.aws/mcp");
-    expect(stagedMcp).toContain("AWS_REGION=ap-southeast-2");
-    expect(stagedMcp).not.toContain("us-east-1");
-    expect(stagedMcp).toBe(readFileSync(projectMcpPath, "utf-8"));
-    const emptyProject = temp("aidlc-t294-kiro-mcp-empty-");
-    mkdirSync(join(emptyProject, ".kiro", "settings"), { recursive: true });
-    writeFileSync(join(emptyProject, ".kiro", "settings", "mcp.json"), "{}\n");
-    const untouched = temp("aidlc-t294-kiro-mcp-untouched-");
-    cpSync(join(DIST, "kiro"), untouched, { recursive: true });
-    const before2 = readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8");
-    preserveKiroMcpRegion(emptyProject, untouched, ".kiro");
-    expect(readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8")).toBe(before2);
+    test("Kiro staging preserves the project's MCP region and metadata", () => {
+      const kiroProject = temp("aidlc-t294-kiro-mcp-project-");
+      cpSync(join(DIST, "kiro"), kiroProject, { recursive: true });
+      const projectMcpPath = join(kiroProject, ".kiro", "settings", "mcp.json");
+      writeFileSync(projectMcpPath, withMcpRegion(readFileSync(projectMcpPath, "utf-8"), "ap-southeast-2"));
+      const kiroStaged = temp("aidlc-t294-kiro-mcp-staged-");
+      cpSync(join(DIST, "kiro"), kiroStaged, { recursive: true });
+      preserveKiroMcpRegion(kiroProject, kiroStaged, ".kiro");
+      const stagedMcp = readFileSync(join(kiroStaged, ".kiro", "settings", "mcp.json"), "utf-8");
+      expect(stagedMcp).toContain("https://aws-mcp.ap-southeast-2.api.aws/mcp");
+      expect(stagedMcp).toContain("AWS_REGION=ap-southeast-2");
+      expect(stagedMcp).not.toContain("us-east-1");
+      expect(stagedMcp).toBe(readFileSync(projectMcpPath, "utf-8"));
+    });
+    test("Kiro staging leaves an absent project MCP entry alone", () => {
+      const emptyProject = temp("aidlc-t294-kiro-mcp-empty-");
+      mkdirSync(join(emptyProject, ".kiro", "settings"), { recursive: true });
+      writeFileSync(join(emptyProject, ".kiro", "settings", "mcp.json"), "{}\n");
+      const untouched = temp("aidlc-t294-kiro-mcp-untouched-");
+      cpSync(join(DIST, "kiro"), untouched, { recursive: true });
+      const before2 = readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8");
+      preserveKiroMcpRegion(emptyProject, untouched, ".kiro");
+      expect(readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8")).toBe(before2);
+    });
   });
 
   test("current detects and removes stale project Bedrock overrides", () => {

@@ -109,8 +109,10 @@
 // tmux backends, Node with type stripping for explicit legacy node-pty. The
 // driver subprocess remains the source of the `tui` mechanism evidence.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertAuditEvent, assertToolResultContains } from "../harness/assert.ts";
@@ -130,7 +132,7 @@ import {
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { driveAidlc, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
+import { driveAidlc, recordDirFor, stateFilePathFor, type CapturedToolResult } from "../harness/sdk-drive.ts";
 import {
   cleanupTuiProject,
   cleanupTuiProjectAfterKill,
@@ -142,11 +144,43 @@ import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
+/** Retain command structure after raw SDK traces are sanitized, never token/key contents. */
+function steeringDiagnostics(results: CapturedToolResult[]): string {
+  const digest = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
+  const issued = new Set<string>();
+  const rows: unknown[] = [];
+  for (const result of results) {
+    if (result.toolName !== "Bash") continue;
+    const command = typeof result.input.command === "string" ? result.input.command : "";
+    const continuation = /\borchestrate(?:\.ts)?["']?\s+continue\b([\s\S]*)/.exec(command);
+    if (continuation || result.resultText.includes('"kind":"error"')) {
+      const atoms = continuation?.[1].match(/"[^"]*"|'[^']*'|[^\s]+/g) ?? [];
+      rows.push({
+        toolUseIdHash: digest(result.toolUseId),
+        commandHash: digest(command),
+        commandLength: command.length,
+        continueArgumentAtoms: atoms.length,
+        hasShellOperators: /[;&|`]/.test(continuation?.[1] ?? ""),
+        tokens: [...command.matchAll(/[A-Za-z0-9_-]{100,}/g)].slice(0, 4).map(([token]) => ({
+          length: token.length, hash: digest(token), issuedPreviously: issued.has(token),
+        })),
+        engineError: result.resultText.includes('"kind":"error"'),
+      });
+    }
+    for (const match of result.resultText.matchAll(/"continue_token"\s*:\s*"([A-Za-z0-9_-]+)"/g)) {
+      issued.add(match[1]);
+    }
+  }
+  return JSON.stringify({ issuedTokenCount: issued.size, commands: rows.slice(-12) });
+}
+
 // Wedge-ceiling, never a budget (the timer lesson): one generous cap; pass on
 // the on-disk signal, not the clock. Matches the suite convention.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 interface Run {
   rc: number;
@@ -314,7 +348,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         );
       }
     },
-    90_000,
+    liveCaseTimeoutMs(0),
   );
 
   // -------------------------------------------------------------------------
@@ -410,7 +444,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
           .filter((tr) => tr.toolName === "Bash")
           .map((tr) => tr.resultText)
           .filter((text) => text.includes('"kind":"error"') || text.includes("Transition rejected"));
-        expect(engineErrors).toEqual([]);
+        expect(engineErrors, steeringDiagnostics(r.toolResults)).toEqual([]);
         const directiveText = r.toolResults
           .filter((tr) => tr.toolName === "Bash")
           .map((tr) => tr.resultText)
@@ -516,7 +550,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
               "--until-file",
               PLAN_OUTPUT_REL,
               "--overall-timeout-ms",
-              String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+            String(Math.max(60000, LIVE_WORK_TIMEOUT_MS - 30000)),
             ],
             { stdio: "inherit" },
           );

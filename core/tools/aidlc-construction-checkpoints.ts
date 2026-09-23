@@ -513,10 +513,15 @@ export function verifyConstructionCheckpoint(
   const command = process.platform === "win32"
     ? process.env.ComSpec ?? "cmd.exe"
     : existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
-  const args = process.platform === "win32" ? ["/d", "/s", "/c", before.command] : ["-c", before.command];
+  // cmd.exe parses the authorized shell text itself. /s strips only these
+  // outer quotes; argv escaping would turn its inner quotes into literal \".
+  const args = process.platform === "win32"
+    ? ["/d", "/s", "/c", `"${before.command}"`]
+    : ["-c", before.command];
   const check = spawnSync(command, args, {
     cwd: projectDir, timeout: CHECK_TIMEOUT_MS,
     maxBuffer: CHECK_OUTPUT_BYTES, killSignal: "SIGKILL", windowsHide: true,
+    windowsVerbatimArguments: process.platform === "win32",
   });
   const proof: ConstructionCheckpointProof = {
     ...before.proof,

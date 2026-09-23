@@ -44,7 +44,7 @@ function hookPathEnv(
   if (process.platform === "win32") {
     writeFileSync(
       join(bin, "powershell.cmd"),
-      `@echo off\r\necho ${bin}\r\n`,
+      `@echo off\r\necho ${bin}\r\nexit /b 0\r\n`,
       "utf-8",
     );
   } else {
@@ -106,10 +106,10 @@ function run(
       ...process.env,
       ...env,
       // Feed the forced-TTY fixture through its scripted-answer seam. Runtime
-      // re-probes on Windows must not depend on a previously drained stdin pipe.
+      // re-probes on Windows must not share a redirected dialogue pipe.
       AIDLC_TEST_CONFIG_INPUT: input,
     },
-    input,
+    stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf-8",
     timeout: 60_000,
   });
@@ -511,7 +511,15 @@ describe("t296 first-run config setup walk", () => {
     expect(result.stdout).not.toContain("Runtime configuration for");
     expect(result.stdout).not.toContain("Trust configuration for");
     expect(result.stdout).not.toContain("Outstanding actions:");
-    expect(result.stdout).toContain("Setup complete. 0 actions still need you");
+    const runtimeDiagnostic = result.stdout.includes("Setup complete. 0 actions still need you")
+      ? ""
+      : run(
+          ["config", "runtime", "--show", "--json", "--project-dir", path, "--harness", "claude"],
+          path,
+          env,
+        );
+    expect(result.stdout, runtimeDiagnostic && JSON.stringify(runtimeDiagnostic))
+      .toContain("Setup complete. 0 actions still need you");
     // The recorded preset is what closes the row; a declined walk would leave it
     // open and the ledger would name the command instead.
     expect(readFileSync(join(path, "aidlc.settings.json"), "utf-8"))

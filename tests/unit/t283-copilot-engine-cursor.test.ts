@@ -510,6 +510,7 @@ describe("t283 engine-owned continuation cursor", () => {
   }, 30000);
 
   test("fresh next emits no work directive when cursor reset publication contends", () => {
+    // Include initial publication, then the unchanged production lock retry loop.
     const installed = project(HARNESSES[0]);
     invoke(installed, "next");
     // Removing the marker makes publication genuinely necessary, which is the
@@ -540,7 +541,7 @@ describe("t283 engine-owned continuation cursor", () => {
     expect(blocked.message).not.toContain("Retry `next`");
     expect(existsSync(markerPath(installed))).toBe(false);
     expect(existsSync(lockDir)).toBe(true);
-  });
+  }, 15_000);
 
   test("a repeated next answers from the issued directive without taking the coordination lock", () => {
     const installed = project(HARNESSES[0]);

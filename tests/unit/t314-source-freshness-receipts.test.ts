@@ -36,6 +36,7 @@
 // per-unit branch resolves `none` and exercises the stage-level fallback -
 // exactly the receipt path the fingerprint filter protects.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, beforeEach, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -92,7 +93,7 @@ import {
 
 // The default also governs afterAll removal of a dozen-plus worktree fixtures,
 // which exceeds bun's 5s hook default under load; per-case literals stay.
-setDefaultTimeout(120_000);
+setDefaultTimeout(Math.max(120_000, deterministicCaseTimeoutMs()));
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -2734,18 +2735,30 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         seedBoltDag(proj, args[unitsIndex + 1].split(","));
       }
     }
+    const startedNs = process.hrtime.bigint();
+    const wallStartedMs = Date.now();
     const r = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], {
       cwd: proj,
       encoding: "utf-8",
       env: { ...process.env, ...extraEnv },
     });
+    const spawnError = r.error as NodeJS.ErrnoException | undefined;
     return {
       rc: r.status ?? -1,
       out: r.stdout ?? "",
       stderr: r.stderr ?? "",
       // Keep stdout parseable for existing callers while retaining failures
       // which the CLI reports only on stderr (including spawn errors).
-      diagnostic: [r.stdout, r.stderr, r.error?.message, r.signal && `signal: ${r.signal}`]
+      diagnostic: [r.stdout, r.stderr, JSON.stringify({
+        command: args,
+        elapsedMs: Number(process.hrtime.bigint() - startedNs) / 1_000_000,
+        wallElapsedMs: Date.now() - wallStartedMs,
+        status: r.status,
+        signal: r.signal,
+        error: spawnError ? {
+          code: spawnError.code, errno: spawnError.errno, syscall: spawnError.syscall, message: spawnError.message,
+        } : null,
+      })]
         .filter(Boolean).join("\n"),
     };
   }
@@ -3922,16 +3935,30 @@ process.stdin.on("end", () => server.stop(true));
         NO_PROXY: "127.0.0.1",
         no_proxy: "127.0.0.1",
       };
+      const controlStartedNs = process.hrtime.bigint();
+      const controlWallStartedMs = Date.now();
       const control = spawnSync(
         "git", ["ls-remote", endpoint, "HEAD", "refs/heads/*", "refs/tags/*"],
         { cwd: proj, env: { ...process.env, ...remoteEnv }, encoding: "utf-8", timeout: 5000 },
       );
+      const controlError = control.error as NodeJS.ErrnoException | undefined;
+      appendFileSync(trace, `${JSON.stringify({
+        at: Date.now(),
+        event: "control-result",
+        elapsedMs: Number(process.hrtime.bigint() - controlStartedNs) / 1_000_000,
+        wallElapsedMs: Date.now() - controlWallStartedMs,
+        status: control.status,
+        signal: control.signal,
+        error: controlError ? { code: controlError.code, message: controlError.message } : null,
+        stderr: control.stderr,
+      })}\n`);
       expect(control.status, `${control.stdout}${control.stderr}${control.error ?? ""}`).toBe(0);
       expect(control.stdout).toContain(`${head.stdout.trim()}\tHEAD`);
       expect(requests().some((row) => row.event === "advertisement-response" && row.delayed === false)).toBe(true);
 
       writeFileSync(delay, "delay ref advertisement by 1000ms\n");
-      const started = Date.now();
+      const started = process.hrtime.bigint();
+      const wallStartedMs = Date.now();
       const finalized = runSwarm(
         proj,
         [
@@ -3944,10 +3971,29 @@ process.stdin.on("end", () => server.stop(true));
           ...remoteEnv,
           AIDLC_TEST_NEW_GITLINK_RECOVERY_BUDGET_MS: "100",
           AIDLC_TEST_NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS: "1000",
+          AIDLC_TEST_NEW_GITLINK_RECOVERY_TRACE: "1",
         },
       );
-      const elapsed = Date.now() - started;
-      appendFileSync(trace, `${JSON.stringify({ at: Date.now(), event: "finalize-result", elapsed, rc: finalized.rc })}\n`);
+      const elapsed = Number(process.hrtime.bigint() - started) / 1_000_000;
+      const recoveryAttempts: Array<{
+        operation: string; attempt: number; attempts: number;
+        timeoutMs: number; remainingBeforeMs: number; remainingAfterMs: number;
+        commandRemainingBeforeMs: number; commandRemainingAfterMs: number;
+        deadlineExceeded: boolean; commandDeadlineExceeded: boolean;
+      }> = [];
+      for (const line of finalized.stderr.split(/\r?\n/)) {
+        const prefix = "AIDLC_RECOVERY_COMMAND ";
+        if (!line.startsWith(prefix)) continue;
+        const command = JSON.parse(line.slice(prefix.length));
+        recoveryAttempts.push(command);
+        appendFileSync(trace, `${JSON.stringify({
+          at: Date.now(), event: "recovery-command", ...command,
+        })}\n`);
+      }
+      appendFileSync(trace, `${JSON.stringify({
+        at: Date.now(), event: "finalize-result", elapsed,
+        wallElapsedMs: Date.now() - wallStartedMs, rc: finalized.rc,
+      })}\n`);
       const observed = requests();
       const diagnostic = `${finalized.diagnostic}\nloopback Git requests: ${JSON.stringify(observed)}`;
       expect(elapsed, diagnostic).toBeLessThan(5000);
@@ -3964,6 +4010,18 @@ process.stdin.on("end", () => server.stop(true));
         observed.some((row) => row.event === "advertisement-request" && row.delayed === true),
         "the recovery deadline must be exercised by the delayed remote, not by unrelated startup latency",
       ).toBe(true);
+      expect(recoveryAttempts.length, diagnostic).toBeGreaterThan(0);
+      expect(recoveryAttempts.length, diagnostic).toBeLessThanOrEqual(2);
+      for (const [index, attempt] of recoveryAttempts.entries()) {
+        expect(attempt.operation, diagnostic).toBe("ls-remote");
+        expect(attempt.attempt, diagnostic).toBe(index + 1);
+        expect(attempt.attempts, diagnostic).toBe(recoveryAttempts.length);
+        expect(attempt.timeoutMs, diagnostic).toBeLessThanOrEqual(
+          Math.ceil(Math.min(attempt.remainingBeforeMs, attempt.commandRemainingBeforeMs)),
+        );
+        expect(attempt.deadlineExceeded, diagnostic).toBe(attempt.remainingAfterMs <= 0);
+        expect(attempt.commandDeadlineExceeded, diagnostic).toBe(attempt.commandRemainingAfterMs <= 0);
+      }
     } catch (error) {
       failures.push(error);
     }

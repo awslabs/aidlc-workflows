@@ -42,6 +42,7 @@
 // ASSERTS ONLY ON: toolResults (the Bash doctor stdout bytes), auditEvents
 // (HEALTH_CHECKED + growth), and resultEvent. NEVER on assistantText.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -53,14 +54,14 @@ import {
 import { driveAidlc, readAuditEvents } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. A multi-tool /aidlc --doctor turn on Opus/Bedrock takes
-// minutes. Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the .sh
-// set it to 600). Drive aborts a hair before bun kills the test so a stuck
-// run surfaces a partial DriveResult to diagnose rather than an opaque hang.
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 // Known-answer doctor strings, read from the shipped handler (see header).
 const DOCTOR_HEADER = "AI-DLC doctor";

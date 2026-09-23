@@ -402,7 +402,147 @@ function returnedJump(instruction: Json): string {
   return match![1];
 }
 
+function completeReview(
+  fixture: Fixture,
+  projectDir: string,
+  iteration = 1,
+): Json {
+  fixture.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
+  const stageDir = join(
+    seededRecordDir(projectDir),
+    "inception",
+    STAGE,
+  );
+  mkdirSync(stageDir, { recursive: true });
+  writeFileSync(join(stageDir, "requirements.md"), "# Requirements\n");
+  writeFileSync(
+    join(stageDir, `${STAGE}-questions.md`),
+    "# Requirements Questions\n",
+  );
+  const requestArgs = [
+    "review",
+    "--stage",
+    STAGE,
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    String(iteration),
+  ];
+  const argv = fixture.projection === "native"
+    ? ["aidlc", "engine", "log", ...requestArgs, "--project-dir", projectDir]
+    : [BUN, join(fixture.tools, "aidlc-log.ts"), ...requestArgs, "--project-dir", projectDir];
+  const requested = json(run(argv, fixture.cwd, fixture.env));
+  const reviewFile = join(projectDir, String(requested.reviewFile));
+  mkdirSync(dirname(reviewFile), { recursive: true });
+  writeFileSync(
+    reviewFile,
+    "## Review\n\n" +
+      "**Verdict:** READY\n" +
+      "**Reviewer:** aidlc-product-lead-agent\n" +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+  );
+  const recordVerdict = String(requested.recordVerdict);
+  const recordArgs = splitKiroCommandArgs(recordVerdict);
+  expect(recordArgs[recordArgs.indexOf("--project-dir") + 1]).toBe(projectDir);
+  expect(recordArgs[recordArgs.indexOf("--reviewer") + 1])
+    .toBe("aidlc-product-lead-agent");
+  expect(recordArgs[recordArgs.indexOf("--iteration") + 1])
+    .toBe(String(iteration));
+  expect(recordArgs[recordArgs.indexOf("--verdict") + 1])
+    .toBe("<READY|NOT-READY>");
+  const completed = json(fixture.exact(
+    recordVerdict.replace("<READY|NOT-READY>", "READY"),
+  ));
+  expect(completed.emitted).toBe("REVIEW_COMPLETED");
+  return requested;
+}
+
 describe("source and native guard remedies execute their owning operations", () => {
+  for (const projection of ["source", "native"] as const) {
+    test(`${projection}: a returned verdict command closes a review in its target worktree`, () => {
+      const p = new Fixture(projection, HARNESS_RUNTIMES[0], "state-mid-inception.md");
+      const slug = `${projection}-review-target`;
+      succeeded(p.tool("worktree", ["create", "--slug", slug, "--base", "main"]));
+      const target = worktreePath(p.project, fixtureIntentId8(p.project), slug);
+      expect(existsSync(target)).toBe(true);
+
+      const requested = completeReview(p, target);
+      const command = String(requested.recordVerdict);
+      expect(command.startsWith("bun .claude/tools/aidlc-log.ts review "))
+        .toBe(projection === "source");
+      expect(command.startsWith("aidlc engine log review "))
+        .toBe(projection === "native");
+      const targetAudit = readdirSync(seededAuditDir(target))
+        .filter((name) => name.endsWith(".md"))
+        .map((name) => readFileSync(join(seededAuditDir(target), name), "utf-8"))
+        .join("\n");
+      expect(targetAudit).toContain("**Event**: REVIEW_COMPLETED");
+      expect(p.audit()).not.toContain("**Event**: REVIEW_COMPLETED");
+      p.assertNoNestedState();
+    }, 120_000);
+  }
+
+  test("finish-revision reopens the gate without executing the restart operation", () => {
+    const p = new Fixture("source", HARNESS_RUNTIMES[0], "state-mid-inception.md");
+    p.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+    completeReview(p, p.project);
+    succeeded(p.tool("orchestrate", [
+      "report", "--stage", STAGE, "--result", "awaiting-approval",
+    ]));
+    succeeded(p.tool("orchestrate", [
+      "report", "--stage", STAGE, "--result", "rejected",
+      "--user-input", "Request Changes", "--reason", "Clarify the requirement.",
+    ]));
+    expect(p.state()).toContain(`- [R] ${STAGE} — EXECUTE`);
+    completeReview(p, p.project);
+
+    const evaluated = json(run([BUN, "--eval", EVALUATE], p.project, {
+      ...p.evaluationEnv,
+      AIDLC_REMEDY_EVALUATOR_TOOLS: p.tools,
+    }, {
+      code: "REVISION_FINISH_EXECUTION",
+      blockedAction: "complete",
+      stage: STAGE,
+      projectDir: p.project,
+      stateContent: p.state(),
+      invariant: "A reviewed revision reopens its existing approval gate.",
+      userMessage: "The revision is ready to finish.",
+      attempt: {
+        recovery: "spent",
+        summaryCoverage: "current",
+        reviewCoverage: "current",
+        sourceCoverage: "current",
+      },
+      humanAuthority: { freshTurn: false, unattended: false },
+    } satisfies GuardRefusalInput));
+    const refusal = evaluated.refusal as GuardRefusal;
+    const finish = refusal.remedies.find((remedy) => remedy.op === "finish-revision");
+    expect(finish).toMatchObject({
+      interaction: "external-work",
+      executableNow: true,
+      requiresHuman: false,
+    });
+    expect(finish?.operation).toBeUndefined();
+    expect(finish?.command).toBeUndefined();
+    const finishCommand = /`([^`]+)`/.exec(finish!.action)?.[1];
+    expect(finishCommand).toBeString();
+    expect(finishCommand).toContain("--result revised");
+    expect(finishCommand).toContain(`--project-dir '${p.project}'`);
+
+    const before = p.audit();
+    const finished = json(p.exact(finishCommand!));
+    expect(finished).toMatchObject({
+      kind: "print",
+      message: `Recorded revised for "${STAGE}".`,
+    });
+    expect(p.state()).toContain(`- [?] ${STAGE} — EXECUTE`);
+    const appended = p.audit().slice(before.length);
+    expect(appended).toContain("**Event**: STAGE_AWAITING_APPROVAL");
+    expect(appended).not.toContain("**Event**: STAGE_JUMPED");
+    p.assertNoNestedState();
+  }, 120_000);
+
   test("native jump resolution before human selection does not authorize its returned reset", () => {
     const { p, remedy } = restartFixture();
     const state = p.state();

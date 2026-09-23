@@ -151,16 +151,12 @@ describe("t152 Windows portability guard", () => {
     );
   });
 
-  test("Windows ConPTY and process metadata keep UTF-8 boundaries explicit", () => {
+  test("Windows ConPTY keeps UTF-8 explicit and records the target lifecycle", () => {
     const driver = read("tests/harness/tui-drive.ts");
     expect(driver).toContain('"chcp.com", ["65001"]');
     expect(driver).toContain("windowsHide: false");
-    expect(
-      driver.match(
-        /\[Convert\]::ToBase64String\(\[Text\.Encoding\]::UTF8\.GetBytes\(\$json\)\)/g,
-      ),
-    ).toHaveLength(3);
-    expect(driver).toContain("parsePowerShellBase64Json");
+    // Native metadata encoding is exercised by t-tui-windows-native-identity,
+    // including Unicode command lines and the base64/UTF-8 transport round trip.
     expect(driver).toContain('"target-spawn.json",');
     expect(driver).toContain('"target-exit.json",');
   });

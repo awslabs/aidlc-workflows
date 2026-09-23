@@ -21,7 +21,7 @@
 // with the context on stdin (1.x) or in USER_PROMPT (0.12) and asserts the
 // observable effect.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -44,6 +44,7 @@ import {
   writeActiveDirectiveMarker,
   stateDigest,
   workspaceSourceFingerprint,
+  workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -61,7 +62,9 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_IDE_TREE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 
@@ -144,18 +147,24 @@ function seedCodeGenerationDirective(dir: string, unit?: string): void {
   });
 }
 
-function initGitWorkspace(dir: string): void {
+function initGitWorkspace(dir: string, options: { applicationSourceOnly?: boolean } = {}): void {
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "base.ts"), "export const base = true;\n");
+  const sourceBefore = options.applicationSourceOnly ? workspaceSourceState(dir) : null;
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"],
-    ["add", "-A"],
+    options.applicationSourceOnly ? ["add", "--", "src"] : ["add", "-A"],
     ["commit", "-qm", "baseline"],
   ]) {
     const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
     expect(result.status, result.stderr).toBe(0);
+  }
+  if (options.applicationSourceOnly) {
+    expect(sourceBefore).not.toBeNull();
+    expect([...sourceBefore!.listing.keys()]).toEqual(["\0src/base.ts"]);
+    expect(workspaceSourceFingerprint(dir)).toBe(sourceBefore!.fingerprint);
   }
 }
 
@@ -554,7 +563,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           rmSync(dir, { recursive: true, force: true });
         }
       }
-    }, 15_000);
+    });
   }
 
   test("7c: modern session identity survives second-intent handoff into payload-free Stop and SessionEnd", () => {
@@ -806,7 +815,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 15_000);
+  });
 
   test("8: session-start emits plain-text context, not the JSON wrapper", () => {
     const dir = scratchProject(true);
@@ -1321,7 +1330,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test("9: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
@@ -1660,7 +1669,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   for (const toolName of ["execute_bash", "execute_pwsh"]) {
     test(`${toolName} forwards native planning commands to the core guard without Plan Approval (#1047)`, () => {
@@ -1726,7 +1735,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-    }, 60000);
+    });
   }
 
   test("execute_pwsh and shell are routed to legacy recovery exactly like execute_bash", () => {
@@ -1769,7 +1778,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   // Multiple adapter subprocesses need a bounded setup budget under full gate load.
   test("legacy 0.12 consumes directive-issued choices while PostToolUse stays silent", () => {
@@ -1908,7 +1917,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   test("legacy file-tool mediation injects the contract and records a valid human approval", () => {
     const dir = scratchProject(true);
@@ -2026,12 +2035,15 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   test("legacy mediation records both approval tags from a section that carries neither", () => {
     const dir = scratchProject(true);
     try {
-      initGitWorkspace(dir);
+      // The real adapter still uses the installed runtime. Its files and the
+      // record tree are excluded from application identity, so do not commit
+      // those installed fixture files just to establish an application HEAD.
+      initGitWorkspace(dir, { applicationSourceOnly: true });
       seedCodeGenerationDirective(dir);
       const choices = seedLegacyDirectiveChoices(dir);
       expect(runIde(dir, "session-start", null).code).toBe(0);
@@ -2097,7 +2109,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 20000);
+  });
 
   test("legacy same-host chats cannot consume or overwrite another challenge", () => {
     const dir = scratchProject(true);
@@ -2201,7 +2213,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("legacy noncanonical writes stay poisoned unless human recovery preserves the source floor", () => {
     for (const target of [
@@ -2313,7 +2325,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 120_000);
+  });
 
   test("legacy offer corruption or deletion requires exact human recovery before replacement", () => {
     for (const mode of ["corrupt", "delete"] as const) {
@@ -2402,7 +2414,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 60000);
+  });
 
   test("interrupted legacy authority write requires recovery without PostToolUse", () => {
     const dir = scratchProject(true);
@@ -2486,7 +2498,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("failed write cleanup cannot erase another host's interrupted-write latch", () => {
     const dir = scratchProject(true);
@@ -2559,7 +2571,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("foreign host cannot bypass an interrupted write after durable state deletion", () => {
     const dir = scratchProject(true);
@@ -2661,9 +2673,10 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("legacy writes that destroy state or marker authority remain poisoned before PostToolUse", () => {
+    // Budget all four Git-backed corruption/deletion fixtures and real recovery hooks.
     for (const target of [
       "state-corrupt",
       "state-delete",
@@ -2743,7 +2756,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 30000);
+  });
 
   test("partial and custom mutation payloads fail closed while reads remain available", () => {
     const dir = scratchProject(true);
@@ -2790,7 +2803,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("umbrella dispatcher preserves native human-turn and Plan Approval payloads", () => {
     const dir = scratchProject(true);
@@ -2825,7 +2838,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("IDE read aliases remain available before approval without admitting writes or unknown tools", () => {
     const dir = scratchProject(true);
@@ -2878,7 +2891,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("malformed Plan Approval payloads fail closed during active Code Generation", () => {
     const dir = scratchProject(true);
@@ -2906,7 +2919,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("malformed payloads fail closed when the active directive is Code Generation but the durable stage differs", () => {
     const dir = scratchProject(true);
@@ -2945,6 +2958,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   // completed PostToolUse mediation. Listed reads must pass while the write and
   // shell denies on the latch stay in place. Adapted from #1040.
   test("Kiro reads including disclose_context pass the legacy write-recovery latch while writes and shell stay denied (#1039)", () => {
+    // The two-channel read matrix and retained write/shell denials invoke 20 hooks.
     const dir = scratchProject(true);
     try {
       initGitWorkspace(dir);
@@ -3181,6 +3195,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     ["adapter", runIdeStdin],
     ["dispatcher", runIdeDispatcherStdin],
   ] as const)("N6c: %s retains real prompt session identities without a startup callback", (_name, invoke) => {
+    // Budget five sequential real hook invocations plus fixture setup and cleanup.
     const dir = scratchProject(true);
     const marker = join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session");
     const prompt = (session: string | undefined) => JSON.stringify({
@@ -3305,7 +3320,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 30_000);
+  });
 
   test("N11: agentStop targets survive an empty USER_PROMPT with stdin held open (#639)", async () => {
     // Restores the coverage deleted with 12b. The live IDE agentStop shape is a
@@ -3339,7 +3354,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 90_000);
+  });
 
   test("N12: non-string tool names fail open on both channels and entry paths", () => {
     const result = "Implementation complete.";
@@ -3632,6 +3647,7 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
 
 describe("t218 log-subagent identity extraction (#459)", () => {
   test("S1: a **Reviewer:** first line is recorded as the Agent Type", () => {
+    // Include the copied runtime and real log-subagent subprocess on hosted runners.
     const dir = scratchProject(true);
     try {
       const result = "**Reviewer:** aidlc-product-lead-agent\n\nVerdict: READY\nAll findings resolved.";
@@ -3743,8 +3759,7 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
     }
   });
 
-  test("T1b: guarded legacy write failures clear the pre-write latch for retry", () => {
-    for (const entry of [
+  for (const entry of [
       {
         toolName: "fs_write",
         result: "Write failed before creating the file",
@@ -3756,7 +3771,8 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
           "Caught an error while replacing string String '[Answer]:' found multiple times in the file",
         toolSuccess: undefined,
       },
-    ]) {
+  ]) {
+    test(`T1b: guarded legacy ${entry.toolName} failures clear the pre-write latch for retry`, () => {
       const dir = scratchProject(true);
       try {
         initGitWorkspace(dir);
@@ -3796,8 +3812,8 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-    }
-  }, 30000);
+    });
+  }
 
   test("T2: toolSuccess=true on the same write IS audited (guard is not over-broad)", () => {
     const dir = scratchProject(true);

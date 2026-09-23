@@ -50,7 +50,7 @@ jobs:
           printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - name: Plan preview publication
         id: plan
         shell: bash
@@ -73,12 +73,10 @@ jobs:
             jq -c . "$plan"
           } >> "$GITHUB_OUTPUT"
   gate:
+    name: Contract checks
     needs: validate
-    if: needs.validate.outputs.skip != 'true'
-    uses: ./.github/workflows/ci.yml
-
-  verify:
-    needs: [validate, gate]
+    # Full Suite owns the test matrix; do not run the PR test suite again here.
+    # Contract checks still run when publication is deduplicated.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -86,40 +84,36 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      # Regenerate the projections from core/ + harness/ so the release gate
-      # tests CI-built bytes; the --check inside `bun run check` then acts as a
-      # generator-determinism guard rather than a staleness check.
-      - run: bun scripts/package.ts
+      # Regenerate projections, check determinism, typecheck, and lint.
       - run: bun run check
       - name: ShellCheck installer
         run: shellcheck scripts/install.sh
 
   full_suite:
     needs: [validate, gate]
-    if: needs.validate.outputs.skip != 'true'
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/full-suite.yml
     with:
       ref: ${{ needs.validate.outputs.sha }}
-    secrets: inherit
 
   test:
     name: Release tests
-    if: ${{ !cancelled() && needs.validate.outputs.skip != 'true' }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' }}
     needs: [validate, full_suite]
     runs-on: ubuntu-latest
     steps:
-      - name: Require complete full suite
+      - name: Require declared full-suite coverage
         env:
           FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
         run: test "$FULL_SUITE_RESULT" = "success"
 
   native-smoke:
-    needs: [validate, verify, test]
+    needs: [validate, gate, test]
+    if: needs.validate.outputs.skip != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -131,7 +125,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # t238 builds the native binary from dist-release/; regenerate first so
       # the smoke proves CI-built bytes on every OS in the matrix.
@@ -189,7 +183,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # Build from projections regenerated on this runner, never from the
       # committed trees; the --check that follows is the generator-determinism
@@ -242,7 +236,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -548,7 +542,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - name: Recheck preview source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
@@ -610,7 +604,7 @@ jobs:
           path: build/release
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - name: Recheck preview source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
@@ -659,7 +653,7 @@ jobs:
   release-result:
     name: Release result
     if: ${{ !cancelled() }}
-    needs: [validate, release]
+    needs: [validate, test, release]
     runs-on: ubuntu-latest
     steps:
       - name: Require publication or an intentional preview skip
@@ -667,9 +661,11 @@ jobs:
           RELEASE_RESULT: ${{ needs.release.result }}
           RELEASE_SKIP: ${{ needs.validate.outputs.skip }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
+          TEST_RESULT: ${{ needs.test.result }}
         run: |
           set -euo pipefail
           test "$VALIDATE_RESULT" = success
+          test "$TEST_RESULT" = success
           if [ "$RELEASE_SKIP" = true ]; then
             test "$RELEASE_RESULT" = skipped
             exit 0

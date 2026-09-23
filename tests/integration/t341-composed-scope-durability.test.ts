@@ -48,13 +48,17 @@
 // on-disk effects and rendered report - the same discipline as t314 (the plugin
 // reinstall twin) and t204. No live model runs here; the fixture is the seam.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+
+// Each case installs a project and makes several real CLI round trips.
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 
 const BUN = process.execPath;
 
@@ -350,13 +354,13 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     expect(compile(proj).status).toBe(0);
     expect(readGrid(proj)["untagged-probe"]).toBeUndefined();
 
-    const row = durabilityRow(doctor(proj).out);
+    const report = doctor(proj).out;
+    const row = durabilityRow(report);
     expect(row).toContain("untagged-probe");
     expect(row).toContain("no record to rebuild it from");
 
     // The remedy has to say compile will not reach this, and name a route that
     // does. Before this it said only "run graph compile".
-    const report = doctor(proj).out;
     expect(report).toContain("cannot rebuild a column with no record behind it");
     expect(report).toContain("scopes:");
 

@@ -1,6 +1,6 @@
 // Read-only identities for native session lock owners and daemon retirement.
 // Do not import the supervisor: callers may run under Node and never own a PTY.
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { closeSync, constants, fstatSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve, win32 } from "node:path";
@@ -140,15 +140,17 @@ export interface WindowsIdentityApi<Handle> {
 }
 
 /** Every query and close addresses one stable handle, never a second PID lookup. */
-export function readWindowsNativeProcessIdentity<Handle>(
+function inspectWindowsProcess<Handle, Result>(
   pid: number,
   api: WindowsIdentityApi<Handle>,
-): string | null {
+  access: number,
+  inspect: (handle: Handle, creation: bigint) => Result,
+): Result | null {
   validatePid(pid);
   const failure = (call: string, code = api.GetLastError()) =>
     new Error(`${call}(${pid}) failed: Windows error ${code}`);
-  // PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE; no termination rights.
-  const handle = api.OpenProcess(0x101000, 0, pid);
+  // Read/query and synchronization rights only; never VM read/write or termination.
+  const handle = api.OpenProcess(access, 0, pid);
   if (handle === null) {
     const code = api.GetLastError();
     // With a validated nonzero PID and fixed flags, INVALID_PARAMETER means
@@ -165,19 +167,258 @@ export function readWindowsNativeProcessIdentity<Handle>(
   };
   try {
     if (!running()) return null;
-    const times = Array.from({ length: 4 }, () => new Uint32Array(2));
-    if (!api.GetProcessTimes(handle, times[0], times[1], times[2], times[3])) {
-      throw failure("GetProcessTimes");
+    let result: Result;
+    try {
+      const times = Array.from({ length: 4 }, () => new Uint32Array(2));
+      if (!api.GetProcessTimes(handle, times[0], times[1], times[2], times[3])) {
+        throw failure("GetProcessTimes");
+      }
+      const creation = (BigInt(times[0][1]) << 32n) | BigInt(times[0][0]);
+      result = inspect(handle, creation);
+    } catch (error) {
+      // Metadata can disappear during termination (for example NTSTATUS
+      // 0xc000010a). Only this retained handle signaling proves exit.
+      if (!running()) return null;
+      throw error;
     }
-    const creation = (BigInt(times[0][1]) << 32n) | BigInt(times[0][0]);
     if (!running()) return null;
-    return `win32:${pid}:${creation}`;
+    return result;
   } finally {
     if (!api.CloseHandle(handle)) {
       // biome-ignore lint/correctness/noUnsafeFinally: Failed handle cleanup must invalidate the identity observation, including a pending null return.
       throw failure("CloseHandle");
     }
   }
+}
+
+
+export function readWindowsNativeProcessIdentity<Handle>(
+  pid: number,
+  api: WindowsIdentityApi<Handle>,
+): string | null {
+  return inspectWindowsProcess(pid, api, 0x101000, (_handle, creation) => `win32:${pid}:${creation}`);
+}
+
+export interface WindowsProcessDetails {
+  pid: number;
+  parentPid: number;
+  creationDate: string;
+  commandLine: string;
+  nativeIdentity: string;
+}
+
+export interface WindowsProcessDetailsApi<Handle> extends WindowsIdentityApi<Handle> {
+  NtQueryInformationProcess(handle: Handle, informationClass: number, buffer: Uint8Array,
+    bytes: number, returned: Uint32Array): number;
+  bufferAddress(buffer: Uint8Array): bigint;
+}
+
+const WINDOWS_FILETIME_EPOCH_MS = 11_644_473_600_000n;
+const WINDOWS_COMMAND_LINE_BUFFER_BYTES = 16 + 65_536;
+
+export function windowsFileTimeToISOString(creation: bigint): string {
+  if (creation <= 0n) throw new Error("Windows process creation time is invalid");
+  const date = new Date(Number(creation / 10_000n - WINDOWS_FILETIME_EPOCH_MS)).toISOString();
+  return `${date.slice(0, -1)}${(creation % 10_000n).toString().padStart(4, "0")}Z`;
+}
+
+/** The command-line pointer must address our returned buffer, never remote memory. */
+export function readWindowsProcessDetails<Handle>(
+  pid: number,
+  api: WindowsProcessDetailsApi<Handle>,
+): WindowsProcessDetails | null {
+  // PROCESS_QUERY_INFORMATION | SYNCHRONIZE, matching the core parent/time reader.
+  return inspectWindowsProcess(pid, api, 0x100400, (handle, creation) => {
+    const basic = new Uint8Array(48); // LLP64 PROCESS_BASIC_INFORMATION, x64/arm64.
+    const returned = new Uint32Array(1);
+    const checkedQuery = (informationClass: number, buffer: Uint8Array): number => {
+      returned[0] = 0;
+      const status = api.NtQueryInformationProcess(handle, informationClass, buffer, buffer.byteLength, returned);
+      if (status !== 0) throw new Error(`NtQueryInformationProcess(${pid}, ${informationClass}) failed: NTSTATUS 0x${(status >>> 0).toString(16)}`);
+      return returned[0];
+    };
+    if (checkedQuery(0, basic) !== basic.byteLength) throw new Error(`invalid basic process identity for ${pid}`);
+    const basicView = new DataView(basic.buffer, basic.byteOffset, basic.byteLength);
+    const queriedPid = basicView.getBigUint64(32, true);
+    const parentPid = basicView.getBigUint64(40, true);
+    if (queriedPid !== BigInt(pid) || parentPid > 0xffffffffn || parentPid === queriedPid) {
+      throw new Error(`invalid basic process identity for ${pid}`);
+    }
+    const command = new Uint8Array(WINDOWS_COMMAND_LINE_BUFFER_BYTES);
+    const used = checkedQuery(60, command); // ProcessCommandLineInformation.
+    if (used < 16 || used > command.byteLength) throw new Error(`invalid command-line buffer for ${pid}`);
+    const view = new DataView(command.buffer, command.byteOffset, command.byteLength);
+    const length = view.getUint16(0, true);
+    const maximum = view.getUint16(2, true);
+    const pointer = view.getBigUint64(8, true);
+    let commandLine = "";
+    if (length !== 0 || maximum !== 0 || pointer !== 0n) {
+      const offset = pointer - api.bufferAddress(command);
+      if (length % 2 !== 0 || maximum % 2 !== 0 || length > maximum ||
+        offset < 16n || offset + BigInt(length) > BigInt(used) ||
+        offset + BigInt(maximum) > BigInt(command.byteLength)) {
+        throw new Error(`invalid command-line string for ${pid}`);
+      }
+      commandLine = Buffer.from(command.buffer, command.byteOffset + Number(offset), length).toString("utf16le");
+      if (commandLine.includes("\0")) throw new Error(`invalid command-line string for ${pid}`);
+    }
+    return { pid, parentPid: Number(parentPid), creationDate: windowsFileTimeToISOString(creation),
+      commandLine, nativeIdentity: `win32:${pid}:${creation}` };
+  });
+}
+
+/** One fresh handle per PID; an error aborts the whole snapshot instead of omitting a row. */
+async function withWindowsDetailsApi<Result>(
+  use: (api: WindowsProcessDetailsApi<bigint> & WindowsProcessSnapshotApi<bigint>) => Result,
+): Promise<Result> {
+  if (process.platform !== "win32" || !process.versions.bun || !["x64", "arm64"].includes(process.arch)) {
+    throw new Error("Windows process details require native 64-bit Windows Bun");
+  }
+  const { dlopen, ptr } = await import("bun:ffi");
+  const kernel = dlopen("kernel32.dll", {
+    OpenProcess: { args: ["u32", "i32", "u32"], returns: "u64" },
+    GetProcessTimes: { args: ["u64", "ptr", "ptr", "ptr", "ptr"], returns: "i32" },
+    WaitForSingleObject: { args: ["u64", "u32"], returns: "u32" },
+    CloseHandle: { args: ["u64"], returns: "i32" },
+    GetLastError: { args: [], returns: "u32" },
+    CreateToolhelp32Snapshot: { args: ["u32", "u32"], returns: "u64" },
+    Process32FirstW: { args: ["u64", "ptr"], returns: "i32" },
+    Process32NextW: { args: ["u64", "ptr"], returns: "i32" },
+  });
+  try {
+    const nt = dlopen("ntdll.dll", {
+      NtQueryInformationProcess: { args: ["u64", "u32", "ptr", "u32", "ptr"], returns: "i32" },
+    });
+    try {
+      const api = { ...kernel.symbols, ...nt.symbols,
+        bufferAddress: (buffer: Uint8Array) => BigInt(ptr(buffer)),
+        OpenProcess: (access: number, inherit: number, pid: number) => {
+          const handle = BigInt(kernel.symbols.OpenProcess(access, inherit, pid));
+          return handle === 0n ? null : handle;
+        },
+        CreateToolhelp32Snapshot: (flags: number, pid: number) => BigInt(kernel.symbols.CreateToolhelp32Snapshot(flags, pid)),
+        invalidSnapshot: (handle: bigint | null) => handle === null || handle === 0n || handle === 0xffffffffffffffffn,
+      };
+      return use(api);
+    } finally { nt.close(); }
+  } finally { kernel.close(); }
+}
+
+export async function getWindowsProcessDetails(pids: readonly number[]): Promise<Array<{ pid: number; identity: WindowsProcessDetails | null }>> {
+  for (const pid of pids) validatePid(pid);
+  return withWindowsDetailsApi(api => pids.map(pid => ({ pid, identity: readWindowsProcessDetails(pid, api) })));
+}
+
+export interface WindowsProcessSnapshotApi<Handle> {
+  CreateToolhelp32Snapshot(flags: number, pid: number): Handle | null;
+  invalidSnapshot(handle: Handle | null): boolean;
+  Process32FirstW(handle: Handle, entry: Uint8Array): number;
+  Process32NextW(handle: Handle, entry: Uint8Array): number;
+  CloseHandle(handle: Handle): number;
+  GetLastError(): number;
+}
+
+/** Toolhelp supplies candidates; parent and generation are reread on each stable process handle. */
+export function readWindowsProcessChildren<Handle>(
+  parentPid: number,
+  api: WindowsProcessDetailsApi<Handle> & WindowsProcessSnapshotApi<Handle>,
+): { currentRoot: WindowsProcessDetails | null; children: WindowsProcessDetails[] } {
+  validatePid(parentPid);
+  const currentRoot = readWindowsProcessDetails(parentPid, api);
+  const snapshot = api.CreateToolhelp32Snapshot(2, 0); // TH32CS_SNAPPROCESS, read-only.
+  if (api.invalidSnapshot(snapshot) || snapshot === null) throw new Error(`CreateToolhelp32Snapshot failed: Windows error ${api.GetLastError()}`);
+  try {
+    const entry = new Uint8Array(568); // PROCESSENTRY32W on Windows x64/arm64.
+    const view = new DataView(entry.buffer);
+    view.setUint32(0, entry.byteLength, true);
+    let more = api.Process32FirstW(snapshot, entry);
+    const candidates = new Set<number>();
+    while (more) {
+      const pid = view.getUint32(8, true);
+      if (view.getUint32(32, true) === parentPid && pid !== 0 && pid !== parentPid) candidates.add(pid);
+      more = api.Process32NextW(snapshot, entry);
+    }
+    const error = api.GetLastError();
+    if (error !== 18) throw new Error(`process enumeration failed: Windows error ${error}`); // ERROR_NO_MORE_FILES.
+    const children: WindowsProcessDetails[] = [];
+    for (const pid of candidates) {
+      const child = readWindowsProcessDetails(pid, api);
+      if (child?.parentPid === parentPid) children.push(child);
+    }
+    return { currentRoot, children };
+  } finally {
+    if (!api.CloseHandle(snapshot)) {
+      // biome-ignore lint/correctness/noUnsafeFinally: A failed snapshot close invalidates the observation.
+      throw new Error(`CloseHandle snapshot failed: Windows error ${api.GetLastError()}`);
+    }
+  }
+}
+
+export async function getWindowsProcessChildren(parentPid: number): Promise<{ currentRoot: WindowsProcessDetails | null; children: WindowsProcessDetails[] }> {
+  return withWindowsDetailsApi(api => readWindowsProcessChildren(parentPid, api));
+}
+
+export function windowsProcessDetailsCommand(pids: readonly number[], env: NodeJS.ProcessEnv = process.env): [string, string[]] {
+  for (const pid of pids) validatePid(pid);
+  const bin = env.AIDLC_BUN_BIN ?? (process.versions.bun ? process.execPath : "bun");
+  if (!bin.trim() || bin.includes("\0")) throw new Error("invalid AIDLC_BUN_BIN for Windows process details");
+  return [bin, [fileURLToPath(import.meta.url), "--windows-process-details", ...pids.map(String)]];
+}
+
+export function parseWindowsProcessDetailsReply(raw: string, requested: readonly number[]): WindowsProcessDetails[] {
+  const rows: unknown = JSON.parse(Buffer.from(raw.trim(), "base64").toString("utf8"));
+  const expected = new Set(requested);
+  const seen = new Set<number>();
+  if (!Array.isArray(rows) || rows.length !== expected.size) throw new Error("incomplete native process snapshot");
+  const live: WindowsProcessDetails[] = [];
+  for (const row of rows) {
+    if (!row || !expected.has(row.pid) || seen.has(row.pid) || !Object.hasOwn(row, "identity")) {
+      throw new Error("invalid native process snapshot row");
+    }
+    seen.add(row.pid);
+    if (row.identity === null) continue;
+    const value = row.identity;
+    const match = typeof value?.nativeIdentity === "string" && new RegExp(`^win32:${row.pid}:([1-9][0-9]*)$`).exec(value.nativeIdentity);
+    if (value?.pid !== row.pid || !Number.isSafeInteger(value.parentPid) || value.parentPid < 0 ||
+      value.parentPid > 0xffffffff || value.parentPid === row.pid || typeof value.commandLine !== "string" ||
+      value.commandLine.includes("\0") || !match || typeof value.creationDate !== "string" ||
+      Date.parse(value.creationDate) !== Date.parse(windowsFileTimeToISOString(BigInt(match[1])))) {
+      throw new Error("invalid native process identity");
+    }
+    live.push(value);
+  }
+  return live;
+}
+
+export function parseWindowsProcessChildrenReply(raw: string, parentPid: number): {
+  currentRoot: WindowsProcessDetails | null; children: WindowsProcessDetails[];
+} {
+  validatePid(parentPid);
+  const value = JSON.parse(Buffer.from(raw.trim(), "base64").toString("utf8"));
+  if (!value || !Object.hasOwn(value, "currentRoot") || !Array.isArray(value.children)) {
+    throw new Error("invalid native child-process snapshot");
+  }
+  const rows = [{ pid: parentPid, identity: value.currentRoot },
+    ...value.children.map((child: WindowsProcessDetails) => ({ pid: child?.pid, identity: child }))];
+  const pids = rows.map(row => row.pid);
+  for (const pid of pids) validatePid(pid);
+  const live = parseWindowsProcessDetailsReply(Buffer.from(JSON.stringify(rows)).toString("base64"), pids);
+  const children = live.filter(row => row.pid !== parentPid);
+  if (children.some(row => row.parentPid !== parentPid)) throw new Error("native child-process parent mismatch");
+  return { currentRoot: live.find(row => row.pid === parentPid) ?? null, children };
+}
+
+/** Node can synchronously query the Bun FFI helper without loading any DLL itself. */
+export function getWindowsProcessDetailsWithBun(
+  pids: readonly number[], timeoutMs: number, env: NodeJS.ProcessEnv = process.env,
+): WindowsProcessDetails[] {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Windows process identity deadline exhausted");
+  const requested = [...new Set(pids)];
+  if (requested.length === 0) return [];
+  const [bin, args] = windowsProcessDetailsCommand(requested, env);
+  const raw = execFileSync(bin, args, { env, encoding: "utf8", windowsHide: true, timeout: timeoutMs,
+    maxBuffer: Math.max(256 * 1024, requested.length * 192 * 1024) });
+  return parseWindowsProcessDetailsReply(raw, requested);
 }
 
 async function readWindowsWithFfi(pid: number): Promise<string | null> {
@@ -363,12 +604,21 @@ if (isEntrypoint()) {
   try {
     // A wrong runtime override must fail here instead of recursively spawning.
     if (!process.versions.bun) throw new Error("identity subprocess requires Bun; set AIDLC_BUN_BIN");
+    if (process.argv[2] === "--windows-process-details") {
+      const args = process.argv.slice(3);
+      if (args.length === 0 || args.some(value => !/^[1-9]\d*$/.test(value))) throw new Error("expected process IDs");
+      const rows = await getWindowsProcessDetails([...new Set(args.map(Number))]);
+      console.log(Buffer.from(JSON.stringify(rows)).toString("base64"));
+    } else if (process.argv[2] === "--windows-process-children" && process.argv.length === 4 && /^[1-9]\d*$/.test(process.argv[3])) {
+      console.log(Buffer.from(JSON.stringify(await getWindowsProcessChildren(Number(process.argv[3])))).toString("base64"));
+    } else {
     if (process.argv.length !== 4 || process.argv[2] !== "--native-process-identity" ||
       !/^[1-9]\d*$/.test(process.argv[3])) {
       throw new Error("usage: bun tui-process-identity.ts --native-process-identity <pid>");
     }
     const pid = Number(process.argv[3]);
     console.log(JSON.stringify({ pid, identity: await getNativeProcessIdentity(pid) }));
+    }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

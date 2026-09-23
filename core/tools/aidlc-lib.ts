@@ -18,6 +18,7 @@ import {
   type GuardRecoveryInteraction,
   type GuardRecoveryOperation,
   isGuardRecoveryOperation,
+  renderEngineInvocation,
   renderGuardOperation,
 } from "./aidlc-guard-operation.ts";
 import {
@@ -10036,6 +10037,7 @@ export function checkSummaryConfirmationEvidence(
         blockedAction: "summary-confirmation",
         stage: stage.slug,
         ...(options.unit ? { unit: options.unit } : {}),
+        projectDir,
         stateContent: options.stateContent,
         invariant:
           "Generated outputs descend from a current human-backed summary confirmation.",
@@ -16202,24 +16204,51 @@ function readSyncBufferedBytes(
   return bytes;
 }
 
+function rawGitReadDetail(args: string[], result: {
+  status: number | null;
+  signal?: string | null;
+  stdout?: string | Buffer | null;
+  stderr?: string | Buffer | null;
+  error?: Error;
+}): string {
+  const text = (value: string | Buffer | null | undefined, limit: number) =>
+    Buffer.isBuffer(value) ? value.subarray(0, limit).toString("utf8") : value?.slice(0, limit) ?? "";
+  return JSON.stringify({
+    command: ["git", ...args],
+    bun: process.versions.bun,
+    status: result.status,
+    signal: result.signal,
+    error: result.error?.message,
+    errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
+    stdoutBytes: result.stdout == null ? 0 : Buffer.byteLength(result.stdout),
+    stdoutPreview: text(result.stdout, 512),
+    stderr: text(result.stderr, 4096),
+  });
+}
+
 export function gitTreeLeafEntries(
   repoDir: string,
   commit: string,
 ): GitTreeLeafEntry[] | null {
+  clearSourceFailure();
+  const typeArgs = ["-C", repoDir, "cat-file", "-t", commit];
   const objectType = spawnSync(
     "git",
-    ["-C", repoDir, "cat-file", "-t", commit],
+    typeArgs,
     { encoding: "utf-8", maxBuffer: 1024 * 1024 },
   );
   if (objectType.status !== 0 || objectType.stdout.trim() !== "commit") {
-    return null;
+    return noteSourceFailure(null, "unreadable", `Expected a commit object: ${rawGitReadDetail(typeArgs, objectType)}`);
   }
+  const treeArgs = ["-C", repoDir, "ls-tree", "-r", "-z", "--full-tree", commit];
   const listed = spawnSync(
     "git",
-    ["-C", repoDir, "ls-tree", "-r", "-z", "--full-tree", commit],
+    treeArgs,
     { maxBuffer: 512 * 1024 * 1024 },
   );
-  if (listed.status !== 0 || !Buffer.isBuffer(listed.stdout)) return null;
+  if (listed.status !== 0 || !Buffer.isBuffer(listed.stdout)) {
+    return noteSourceFailure(null, "unreadable", `Raw tree listing failed: ${rawGitReadDetail(treeArgs, listed)}`);
+  }
   const maxEntries = sourceIdentityBudget(
     "AIDLC_TEST_SOURCE_MAX_ENTRIES",
     250_000,
@@ -16229,7 +16258,7 @@ export function gitTreeLeafEntries(
   let offset = 0;
   while (offset < listed.stdout.length) {
     const nul = listed.stdout.indexOf(0, offset);
-    if (nul === -1) return null;
+    if (nul === -1) return noteSourceFailure(null, "walk-failed", `Raw tree record has no NUL at byte ${offset} of ${listed.stdout.length}; commit ${commit}`);
     if (nul === offset) {
       offset += 1;
       continue;
@@ -16237,18 +16266,18 @@ export function gitTreeLeafEntries(
     const record = listed.stdout.subarray(offset, nul);
     offset = nul + 1;
     const tab = record.indexOf(0x09);
-    if (tab === -1) return null;
+    if (tab === -1) return noteSourceFailure(null, "walk-failed", `Raw tree record has no header separator; header hex ${record.subarray(0, 160).toString("hex")}; commit ${commit}`);
     const header = record.subarray(0, tab).toString("ascii");
     const match =
       /^(100644|100755|120000|160000) (blob|commit) ([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/
         .exec(header);
-    if (match === null) return null;
+    if (match === null) return noteSourceFailure(null, "walk-failed", `Invalid raw tree header ${JSON.stringify(header.slice(0, 160))}; commit ${commit}`);
     const mode = match[1] as GitTreeLeafEntry["mode"];
     if (
       (mode === "160000" && match[2] !== "commit") ||
       (mode !== "160000" && match[2] !== "blob")
     ) {
-      return null;
+      return noteSourceFailure(null, "walk-failed", `Raw tree mode/type mismatch: ${header}; commit ${commit}`);
     }
     const pathBytes = record.subarray(tab + 1);
     const path = pathBytes.toString("utf-8");
@@ -16265,13 +16294,13 @@ export function gitTreeLeafEntries(
           /[. ]$/.test(part) || /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(part)) ||
       seen.has(path)
     ) {
-      return null;
+      return noteSourceFailure(null, "excluded-path", `Raw tree path is nonportable or duplicated; path hex ${pathBytes.subarray(0, 256).toString("hex")}; commit ${commit}`, path);
     }
     const oid = normalizeGitObjectId(match[3]);
-    if (oid === null) return null;
+    if (oid === null) return noteSourceFailure(null, "walk-failed", `Invalid raw tree object ID ${match[3]}; commit ${commit}`, path);
     seen.add(path);
     entries.push({ mode, oid, path });
-    if (entries.length > maxEntries) return null;
+    if (entries.length > maxEntries) return noteSourceFailure(null, "budget-entries", `Raw tree entry count ${entries.length} exceeds ${maxEntries}; commit ${commit}`, path);
   }
   return entries;
 }
@@ -16285,13 +16314,28 @@ function materializeRawGitTree(
   const privateRoot = dirname(checkoutRoot);
   const blobs = entries.filter((entry) => entry.mode !== "160000");
   const batchPath = resolvePath(privateRoot, "cat-file.batch");
-  if (batchPath === privateRoot || !pathIsWithinRoot(privateRoot, batchPath)) return false;
+  if (batchPath === privateRoot || !pathIsWithinRoot(privateRoot, batchPath)) {
+    return noteSourceFailure(false, "excluded-path", "Raw batch output would escape its private root");
+  }
+  const batchArgs = ["-C", repoDir, "cat-file", "--batch"];
   let batchFd: number | undefined;
+  let batchBytes: number | undefined;
+  let reader: SyncBufferedReader | undefined;
+  let operation = "open batch output";
+  let currentPath: string | undefined;
+  let batchOutcome: string | undefined;
+  const streamFailure = (reason: string): false => noteSourceFailure(false, "walk-failed", JSON.stringify({
+    operation, reason, batchOutcome, batchBytes,
+    consumedBytes: reader ? reader.position - reader.end + reader.offset : null,
+    bufferedBytes: reader ? reader.end - reader.offset : null,
+    nextByte: reader && reader.offset < reader.end ? reader.buffer[reader.offset] : null,
+  }), currentPath);
   try {
     batchFd = openSync(batchPath, "w+");
+    operation = "git cat-file --batch";
     const batch = spawnSync(
       "git",
-      ["-C", repoDir, "cat-file", "--batch"],
+      batchArgs,
       {
         input: Buffer.from(
           blobs.map((entry) => entry.oid).join("\n") +
@@ -16302,8 +16346,10 @@ function materializeRawGitTree(
         maxBuffer: 16 * 1024 * 1024,
       },
     );
-    if (batch.status !== 0) return false;
-    const reader: SyncBufferedReader = {
+    batchOutcome = rawGitReadDetail(batchArgs, batch);
+    try { batchBytes = fstatSync(batchFd).size; } catch { /* The actual read will report descriptor failure. */ }
+    if (batch.status !== 0) return noteSourceFailure(false, "unreadable", `Raw blob batch failed: ${batchOutcome}; output bytes ${batchBytes ?? "unknown"}`);
+    reader = {
       buffer: Buffer.allocUnsafe(64 * 1024),
       end: 0,
       fd: batchFd,
@@ -16311,8 +16357,10 @@ function materializeRawGitTree(
       position: 0,
     };
     for (const entry of blobs) {
+      currentPath = entry.path;
+      operation = "read batch header";
       const header = readSyncBufferedLine(reader, 8192);
-      if (header === null) return false;
+      if (header === null) return streamFailure(`Missing or oversized batch header (limit 8192); expected blob ${entry.oid}`);
       const parsed =
         /^([0-9a-fA-F]{40}|[0-9a-fA-F]{64}) blob ([0-9]+)$/
           .exec(header.toString("ascii"));
@@ -16327,27 +16375,32 @@ function materializeRawGitTree(
         size < 0 ||
         size > 4 * 1024 * 1024 * 1024
       ) {
-        return false;
+        return streamFailure(`Invalid batch header, identity, or size; expected ${entry.oid}, parsed size ${size}, header hex ${header.subarray(0, 160).toString("hex")}`);
       }
       const target = resolvePath(checkoutRoot, entry.path);
-      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return false;
+      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return noteSourceFailure(false, "excluded-path", "Raw blob target escapes checkout", entry.path);
+      operation = "create blob parent";
       mkdirSync(dirname(target), { recursive: true });
       if (entry.mode === "120000") {
+        operation = "materialize symlink";
         const linkBytes = readSyncBufferedBytes(reader, size, 64 * 1024);
-        if (linkBytes === null) return false;
+        if (linkBytes === null) return streamFailure(`Symlink body or separator failed; declared size ${size}, limit 65536, blob ${entry.oid}`);
         const linkText = linkBytes.toString("utf-8");
-        if (!Buffer.from(linkText, "utf-8").equals(linkBytes)) return false;
+        if (!Buffer.from(linkText, "utf-8").equals(linkBytes)) return streamFailure(`Non-UTF-8 symlink target; blob ${entry.oid}`);
         symlinkSync(linkText, target);
         continue;
       }
       let outputFd: number | undefined;
       try {
+        operation = "materialize regular blob";
         outputFd = openSync(
           target,
           "wx",
           entry.mode === "100755" ? 0o755 : 0o644,
         );
-        if (!copySyncBufferedBytes(reader, size, outputFd)) return false;
+        if (!copySyncBufferedBytes(reader, size, outputFd)) {
+          return streamFailure(`Blob body or separator failed; declared size ${size}, written bytes ${fstatSync(outputFd).size}, blob ${entry.oid}`);
+        }
       } finally {
         if (outputFd !== undefined) closeSync(outputFd);
       }
@@ -16355,13 +16408,19 @@ function materializeRawGitTree(
     }
     for (const entry of entries) {
       if (entry.mode !== "160000") continue;
+      currentPath = entry.path;
+      operation = "materialize gitlink";
       const target = resolvePath(checkoutRoot, entry.path);
-      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return false;
+      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return noteSourceFailure(false, "excluded-path", "Raw gitlink target escapes checkout", entry.path);
       mkdirSync(target, { recursive: true });
     }
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return noteSourceFailure(false, "unreadable", JSON.stringify({
+      operation, error: errorMessage(error),
+      errorCode: (error as NodeJS.ErrnoException)?.code,
+      batchOutcome, batchBytes,
+    }), currentPath);
   } finally {
     if (batchFd !== undefined) closeSync(batchFd);
   }
@@ -16380,7 +16439,9 @@ export function gitCommitSourceListing(
   carriesWorkspaceShell: boolean,
   followExternalTargets = false,
 ): WorkspaceSourceListing | null {
-  if (!isGitRepoDir(repoDir) || !GIT_OBJECT_ID_RE.test(commit)) return null;
+  clearSourceFailure();
+  if (!isGitRepoDir(repoDir)) return noteSourceFailure(null, "unreadable", `Raw source repository has no .git marker: ${repoDir}`);
+  if (!GIT_OBJECT_ID_RE.test(commit)) return noteSourceFailure(null, "walk-failed", `Invalid raw source commit ID: ${commit}`);
   const root = join(tmpdir(), `aidlc-commit-listing-${process.pid}-${randomUUID().slice(0, 8)}`);
   const checkoutDir = join(root, "checkout");
   try {
@@ -16395,7 +16456,12 @@ export function gitCommitSourceListing(
       followExternalTargets ? "follow" : "tree-only",
       false,
     );
-    if (source === null) return null;
+    if (source === null) {
+      if (lastWorkspaceSourceFailure() === null) {
+        noteSourceFailure(null, "walk-failed", `Materialized source walk returned no identity; commit ${commit}`);
+      }
+      return null;
+    }
     return prefixedSourceListing(source.listing);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -23131,6 +23197,7 @@ export const GUARD_REMEDY_OPS = [
   "record-verdict",
   "retry-pending",
   "request-changes",
+  "finish-revision",
   "redo-jump",
   "restore-or-jump",
   "restart-stage",
@@ -23179,6 +23246,7 @@ export interface GuardAttemptState {
     iteration: number;
     retryable: boolean;
     verdictRecordable?: boolean;
+    recordVerdict?: string;
   };
   repairReview?: {
     iteration: number;
@@ -23216,6 +23284,7 @@ export interface GuardRefusalInput {
   blockedAction: string;
   stage: string;
   unit?: string;
+  projectDir?: string;
   stateContent: string;
   invariant: string;
   userMessage: string;
@@ -23250,6 +23319,34 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
     operation,
     command: renderGuardOperation(operation, { harnessDir: harnessDir() }),
   };
+}
+
+export function renderReviewVerdictCommand(input: {
+  projectDir: string;
+  stage: string;
+  reviewer: string;
+  unit?: string;
+  single?: boolean;
+  iteration: number;
+}): string {
+  return renderEngineInvocation({
+    route: "log",
+    args: [
+      "review",
+      "--stage",
+      input.stage,
+      "--reviewer",
+      input.reviewer,
+      ...(input.unit ? ["--unit", input.unit] : []),
+      ...(input.single ? ["--single"] : []),
+      "--iteration",
+      String(input.iteration),
+      "--verdict",
+      "<READY|NOT-READY>",
+      "--project-dir",
+      input.projectDir,
+    ],
+  }, { harnessDir: harnessDir() });
 }
 
 function restartStageRemedy(stage: string): GuardRemedy {
@@ -23302,12 +23399,12 @@ function lifecycleResetRemedies(
   if (input.teamGate?.resolved === false) {
     return [unresolvedTeamGateRemedy(input.teamGate)];
   }
+  const reportStage =
+    input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
   if (state === "pending" || state === "skipped") {
     return [restartStageRemedy(input.stage)];
   }
   if (state === "in-progress" || state === "awaiting-approval") {
-    const reportStage =
-      input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
     const unitContext =
       input.teamGate?.resolved === true && input.unit
         ? ` for Unit "${input.unit}"`
@@ -23340,13 +23437,38 @@ function lifecycleResetRemedies(
     ];
   }
   if (state === "revising") {
+    const finishRevisionCommand = renderEngineInvocation({
+      route: "orchestrate",
+      args: [
+        "report",
+        "--stage",
+        reportStage,
+        ...(input.unit ? ["--unit", input.unit] : []),
+        "--result",
+        "revised",
+        ...(input.projectDir ? ["--project-dir", input.projectDir] : []),
+      ],
+    }, { harnessDir: harnessDir() });
     return [
+      {
+        op: "finish-revision",
+        action:
+          "Finish the current revision without restarting the stage by running " +
+          `\`${finishRevisionCommand}\`. This reopens the approval gate without ` +
+          "re-running the stage or re-asking anything.",
+        requiresHuman: false,
+        executableNow:
+          input.attempt.summaryCoverage === "current" &&
+          input.attempt.reviewCoverage === "current",
+      },
       {
         op: "redo-jump",
         action:
-          "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
-          `/aidlc --stage ${input.stage} (your recorded answers survive; you will ` +
-          "re-confirm the summary once).",
+          `Restart the stage from the top with /aidlc --stage ${input.stage}. ` +
+          "This costs more than finishing the current revision: your " +
+          "recorded answers survive, but you re-confirm the summary once and then " +
+          "save every output document again, so each one descends from the new " +
+          "confirmation.",
         ...guardOperation({ kind: "restart-stage", stage: input.stage }),
         requiresHuman: true,
         executableNow: true,
@@ -23409,9 +23531,16 @@ export function evaluateGuardRefusal(
       ) {
         remedies.push({
           op: "record-verdict",
+          // Spell the closing call out. Requesting a review and recording its
+          // verdict are the same command with --verdict added, which is not
+          // guessable from the request's own output, so "record the verdict"
+          // alone left operators looking for a command that does not exist.
           action:
             `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration} if the reviewer returned.`,
+            `${input.attempt.pendingReview.iteration} if the reviewer returned` +
+            (input.attempt.pendingReview.recordVerdict
+              ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
+              : " using the recordVerdict command returned by the review request."),
           requiresHuman: false,
           executableNow: true,
         });
@@ -23583,6 +23712,7 @@ export function guardAttemptState(
     pendingStatus?: PendingReviewRequestStatus | null;
     accounting?: ReviewAttemptAccounting | null;
     requireRequiredArtifacts?: boolean;
+    single?: boolean;
   } = {},
 ): GuardAttemptSnapshot {
   const unit = options.unit;
@@ -23678,6 +23808,14 @@ export function guardAttemptState(
         pendingStatus?.iteration === iteration
           ? pendingStatus.verdictRecordable
           : true,
+      recordVerdict: renderReviewVerdictCommand({
+        projectDir,
+        stage: stage.slug,
+        reviewer: stage.reviewer as string,
+        ...(unit ? { unit } : {}),
+        ...(options.single ? { single: true } : {}),
+        iteration,
+      }),
     },
   });
   const budget = options.reviewBudget ?? null;
@@ -24075,7 +24213,7 @@ export function guardRecoveryAskFromRefusalText(
 // A sentence for the prose refusals that still describe the way out: the first
 // executable remedy the evaluator would offer for a spent recovery.
 export function recoveryGuidance(
-  _projectDir: string,
+  projectDir: string,
   stateContent: string,
   stageSlug: string,
   options: {
@@ -24088,6 +24226,7 @@ export function recoveryGuidance(
     blockedAction: "review",
     stage: stageSlug,
     ...(options.unit ? { unit: options.unit } : {}),
+    projectDir,
     stateContent,
     invariant: "A review attempt can be reset only through a sanctioned boundary.",
     userMessage: "",
@@ -25107,6 +25246,12 @@ function releaseReapClaim(receipt: OwnerStampedLockReceipt): boolean {
 // PID, or a genuinely old missing-stamp directory. The fixed owner-stamped reap
 // gate blocks acquisition while canonical ownership is moved or restored.
 function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
+  // A live/ambiguous owner cannot be reaped. Avoid taking and publishing the
+  // coordination gate merely to rediscover that fact: blocked contenders can
+  // otherwise starve the owner's release. This read authorizes no mutation;
+  // re-read and validate the candidate under the gate below.
+  const observed = reapCandidate(lockDir);
+  if (observed === null || (!reapUnstamped && observed.owner === null)) return false;
   const claim = acquireReapClaim(lockDir);
   if (!claim) return false;
   let releaseClaim = true;
@@ -25221,7 +25366,17 @@ function releaseOwnerStampedLock(
 function releaseCanonicalOwnerStampedLock(
   receipt: OwnerStampedLockReceipt,
 ): LockReleaseOutcome {
-  const gate = acquireReapClaim(receipt.lockDir);
+  // A contender can briefly own the coordination gate while discovering our
+  // still-live canonical lock. Give that gate time to clear before deferring
+  // release to process exit: callers such as sensors run subprocesses between
+  // audit windows and must not retain the first window's lock across that work.
+  const deadline = process.hrtime.bigint() + 500_000_000n;
+  let gate = acquireReapClaim(receipt.lockDir);
+  while (!gate && process.hrtime.bigint() < deadline) {
+    Bun.sleepSync(5);
+    if (process.hrtime.bigint() >= deadline) break;
+    gate = acquireReapClaim(receipt.lockDir);
+  }
   if (!gate) return "retryable";
   try {
     return releaseOwnerStampedLock(receipt);
@@ -25261,6 +25416,9 @@ function acquireOwnerStampedLock(
   reapLiveOwnerAfterStale = true,
 ): OwnerStampedLockReceipt | null {
   const create = (): OwnerStampedLockReceipt | null => {
+    // Negative fast path only. A missing name still goes through the complete
+    // coordinated create/recovery protocol and its exclusive mkdir.
+    if (existsSync(lockDir)) return null;
     const gate = acquireReapClaim(lockDir);
     if (!gate) return null;
     try {

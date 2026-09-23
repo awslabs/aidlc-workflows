@@ -82,6 +82,7 @@
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { assertAuditEvent, assertToolResultContains } from "../harness/assert.ts";
@@ -97,14 +98,14 @@ import {
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. The .sh set AIDLC_TEST_TIMEOUT=300. The
-// backward jump terminates cleanly at the target — the live probe measured
-// ~184s / 27 turns — so the 300s ceiling is comfortable. The driver aborts a
-// hair before bun kills the test so a stuck run surfaces a partial DriveResult.
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "300", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 300) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 300) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 // Known-answer literals, read from the SHIPPED jump/audit handlers (see header).
 // The jump DESTINATION (intent-capture) and DIRECTION (backward) are asserted on
