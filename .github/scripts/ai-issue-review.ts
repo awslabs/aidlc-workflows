@@ -948,7 +948,8 @@ export function validateStructuredIssueReview(
 
   let recommendationsStarted = false;
   let previousPriority = -1;
-  const findings = candidate.findings.map((value, index): Finding => {
+  const omittedRepositoryFindings: Array<{ index: number; path: string }> = [];
+  const findings = candidate.findings.map((value, index): Finding | null => {
     const finding = record(value, `findings[${index}]`);
     if (
       typeof finding.priority !== "string" ||
@@ -989,7 +990,8 @@ export function validateStructuredIssueReview(
     if (!Array.isArray(finding.evidence) || finding.evidence.length === 0) {
       throw new Error(`findings[${index}].evidence must be non-empty`);
     }
-    const evidence = finding.evidence.map((value, evidenceIndex): FindingEvidence => {
+    let unmatchedRepositoryPath: string | undefined;
+    const evidence = finding.evidence.map((value, evidenceIndex): FindingEvidence | undefined => {
       const item = record(value, `findings[${index}].evidence[${evidenceIndex}]`);
       if (item.source === "ISSUE_TITLE" || item.source === "ISSUE_BODY") {
         const quote = requiredText(
@@ -1015,7 +1017,8 @@ export function validateStructuredIssueReview(
           500,
         );
         if (!repositoryFile(repositoryRoot, expectedBase, path).includes(quote)) {
-          throw new Error(`REPOSITORY evidence quote is not present in ${path}`);
+          unmatchedRepositoryPath = path;
+          return undefined;
         }
         return { source: "REPOSITORY", path, quote };
       }
@@ -1060,7 +1063,11 @@ export function validateStructuredIssueReview(
         };
       }
       throw new Error(`findings[${index}].evidence[${evidenceIndex}].source is invalid`);
-    });
+    }).filter((item): item is FindingEvidence => item !== undefined);
+    if (unmatchedRepositoryPath !== undefined) {
+      omittedRepositoryFindings.push({ index, path: unmatchedRepositoryPath });
+      return null;
+    }
     const title = requiredText(finding.title, `findings[${index}].title`, 160);
     if (/[\r\n]/.test(title)) throw new Error(`findings[${index}].title must be one line`);
     return {
@@ -1077,7 +1084,10 @@ export function validateStructuredIssueReview(
         2000,
       ),
     };
-  });
+  }).filter((finding): finding is Finding => finding !== null);
+  validation.push(...omittedRepositoryFindings.map(({ index, path }) =>
+    `Omitted finding ${index + 1}: its repository evidence quote was not present in trusted base file ${path}.`
+  ));
   const decisionCandidate = record(candidate.decision, "decision");
   const rationale = requiredText(decisionCandidate.rationale, "decision.rationale", 1000);
   let decision: IssueDecision;

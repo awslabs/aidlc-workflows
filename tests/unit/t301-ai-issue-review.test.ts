@@ -278,7 +278,7 @@ describe("t301 AI issue intent review", () => {
     }
   });
 
-  test("validator accepts only evidence present in immutable issue and trusted sources", () => {
+  test("validator omits findings with unmatched repository quotes", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-issue-evidence-"));
     try {
       mkdirSync(join(root, "docs"));
@@ -317,7 +317,7 @@ describe("t301 AI issue intent review", () => {
         path: "docs/direction.md",
         quote: "Forged mutable workspace content.",
       }];
-      expect(() => validateStructuredIssueReview(
+      const withoutUnsupportedFinding = validateStructuredIssueReview(
         JSON.stringify(candidate),
         ISSUE.number,
         CONTEXT_ID,
@@ -326,7 +326,23 @@ describe("t301 AI issue intent review", () => {
         CATALOG,
         CONVERSATION,
         root,
-      )).toThrow("REPOSITORY evidence quote is not present");
+      );
+      expect(withoutUnsupportedFinding.findings).toHaveLength(3);
+      expect(withoutUnsupportedFinding.findings.some(finding =>
+        finding.title === "Tie the review to the software-factory direction"
+      )).toBe(false);
+      expect(withoutUnsupportedFinding.validation).toContain(
+        "Omitted finding 4: its repository evidence quote was not present in trusted base file docs/direction.md.",
+      );
+      const renderedWithoutUnsupportedFinding = renderIssueReview(
+        withoutUnsupportedFinding,
+      ).body;
+      expect(renderedWithoutUnsupportedFinding).toContain(
+        "Omitted finding 4: its repository evidence quote was not present in trusted base file docs/direction.md.",
+      );
+      expect(renderedWithoutUnsupportedFinding).not.toContain(
+        "Tie the review to the software-factory direction",
+      );
 
       candidate.findings[0].evidence = [{
         source: "ISSUE_BODY",
@@ -973,6 +989,8 @@ if (endpoint === "repos/acme/repo/issues/1285") {
     expect(JUDGE_PROMPT).toContain("Reserve P0 for reachable exposure");
     expect(JUDGE_PROMPT).toContain("regular tracked files in the trusted base revision");
     expect(JUDGE_PROMPT).toContain("Never cite `.ai-issue-review-*` artifacts");
+    expect(JUDGE_PROMPT).toContain("Repository evidence is optional and supplementary");
+    expect(JUDGE_PROMPT).toContain("validator omits that entire");
     expect(JUDGE_PROMPT).toContain("author/clarify");
     expect(JUDGE_PROMPT).toContain("maintainer/direction");
     expect(JUDGE_PROMPT).toContain("maintainer/plan");
