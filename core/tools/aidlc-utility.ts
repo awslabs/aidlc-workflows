@@ -257,6 +257,7 @@ import {
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   copyProjectSurfaces,
+  cutPluginFragment,
   projectDiffPlan,
 } from "./aidlc-plugin.ts";
 import { executePlan } from "./aidlc-transaction.ts";
@@ -1147,8 +1148,7 @@ function removePluginFragments(content: string, plugin: string): string {
     const close = `<!-- /${match[0].slice(5)}`;
     const closeIdx = out.indexOf(close, match.index);
     if (closeIdx === -1) break; // unpaired marker: leave as-is (doctor territory)
-    const end = closeIdx + close.length;
-    out = `${out.slice(0, match.index)}${out.slice(end)}`.replace(/\n{3,}/g, "\n\n");
+    out = cutPluginFragment(out, match.index, closeIdx + close.length);
     openRe.lastIndex = 0;
     match = openRe.exec(out);
   }
@@ -3670,7 +3670,7 @@ export async function collectDoctorReport(
     const missingPluginStages: string[] = [];
     const stageSources = new Map<
       string,
-      { path: string; content: string; parsed: Record<string, unknown> }
+      { path: string; content: string; parsed: Record<string, unknown>; kind: "stage" | "agent" }
     >();
     const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
     // Persona contributions (prose fragments into <harness>/agents/*.md) are
@@ -3681,7 +3681,7 @@ export async function collectDoctorReport(
       for (const f of readdirSync(personasRoot).filter((name) => name.endsWith(".md")).sort()) {
         const path = join(personasRoot, f);
         try {
-          stageSources.set(f.replace(/\.md$/, ""), { path, content: readFileSync(path, "utf-8"), parsed: {} });
+          stageSources.set(f.replace(/\.md$/, ""), { path, content: readFileSync(path, "utf-8"), parsed: {}, kind: "agent" });
         } catch {
           // An unreadable persona surfaces through the agent roster checks.
         }
@@ -3698,7 +3698,7 @@ export async function collectDoctorReport(
           const slug = typeof parsed.slug === "string" ? parsed.slug : f.replace(/\.md$/, "");
           const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;
           const stagePhase = typeof parsed.phase === "string" ? parsed.phase : phase;
-          stageSources.set(slug, { path, content, parsed });
+          stageSources.set(slug, { path, content, parsed, kind: "stage" });
           if (
             expectedEnabledBySelection({ plugin, phase: stagePhase }) &&
             !graphSlugs.has(slug)
@@ -3786,7 +3786,7 @@ export async function collectDoctorReport(
           );
           if (missing.length > 0) {
             missingComposition.push(
-              `${plugin}: stage ${target} (${source.path}) missing ${missing.join("; ")}`,
+              `${plugin}: ${source.kind} ${target} (${source.path}) missing ${missing.join("; ")}`,
             );
           }
         }

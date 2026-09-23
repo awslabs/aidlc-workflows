@@ -346,6 +346,30 @@ never lands
     expect(byFile("no-such-agent.md")).toContain("contribution-adds");
   });
 
+  test("contribution files outside contributions/<dir>/<file>.md are reported, not accepted", () => {
+    // Compose reads one level deep, so a nested or top-level file would be
+    // valid-looking prose that never lands.
+    const root = fixture();
+    const body = `---
+target: aidlc-quality-agent
+plugin: fixture-plugin
+fragments:
+  - anchor: end-of-body
+    order: 100
+---
+
+## fragment: end-of-body
+
+never read
+`;
+    write(join(root, "contributions", "agents", "nested", "aidlc-quality-agent.md"), body);
+    write(join(root, "contributions", "stray.md"), body);
+    const findings = validatePluginRoot(root).errors;
+    const rulesFor = (file: string) => findings.filter((f) => f.file === file).map((f) => f.rule);
+    expect(rulesFor("contributions/agents/nested/aidlc-quality-agent.md")).toEqual(["contribution-path"]);
+    expect(rulesFor("contributions/stray.md")).toEqual(["contribution-path"]);
+  });
+
   test("c: scope naming, depth, and empty declared keywords fail", () => {
     const root = fixture();
     const scope = join(root, "scopes", "fixture-plugin-validation.md");

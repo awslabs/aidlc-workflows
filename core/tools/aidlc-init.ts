@@ -76,6 +76,7 @@ import {
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
   DEFAULT_SPACE,
+  escapeRegex,
   getField,
   listIntents,
   listSpaces,
@@ -85,6 +86,7 @@ import {
   type ProjectFlagsRecord,
   withAuditLock,
 } from "./aidlc-lib.ts";
+import { cutPluginFragment } from "./aidlc-plugin.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import {
   canonicalScopeTableRegion,
@@ -3599,10 +3601,16 @@ function stripRecordedContributions(content: string, record: StageContribRecord)
 }
 
 function stripPluginFragments(content: string): string {
-  return content.replace(
-    /<!-- plugin:([^:\n]+):([^\n]+?):(\d+):([0-9a-f]+) -->\n[\s\S]*?<!-- \/plugin:\1:\2:\3:\4 -->\n?/g,
-    "",
-  ).replace(/\n{3,}/g, "\n\n");
+  const open = /<!-- plugin:([^:\n]+):([^\n]+?):(\d+):([0-9a-f]+) -->\n/g;
+  let value = content;
+  for (let match = open.exec(value); match; match = open.exec(value)) {
+    const close = `<!-- /plugin:${match[1]}:${match[2]}:${match[3]}:${match[4]} -->`;
+    const closeAt = value.indexOf(close, match.index);
+    if (closeAt < 0) continue;
+    value = cutPluginFragment(value, match.index, closeAt + close.length);
+    open.lastIndex = Math.max(0, match.index - 2);
+  }
+  return value;
 }
 
 function pluginFragments(content: string): Array<{ marker: string; anchor: string; block: string }> {
@@ -3673,6 +3681,19 @@ function mergePluginFragments(
   let value = fresh;
   for (const fragment of fragments) {
     if (value.includes(fragment.marker)) continue;
+    // Fragments arrive in document order, which is compose's (order, plugin)
+    // order at each anchor: one whose peer is already placed goes right after
+    // it, joined by a blank line as compose joins them, so an anchor that
+    // resolves before its blocks (after-preflight) keeps their order.
+    const peers = [...value.matchAll(
+      new RegExp(`<!-- /plugin:[^:\\n]+:${escapeRegex(fragment.anchor)}:\\d+:[0-9a-f]+ -->`, "g"),
+    )];
+    const lastPeer = peers.at(-1);
+    if (lastPeer) {
+      const at = (lastPeer.index ?? 0) + lastPeer[0].length;
+      value = `${value.slice(0, at)}\n\n${fragment.block}${value.slice(at)}`;
+      continue;
+    }
     const offset = anchorOffset(value, fragment.anchor);
     if (offset < 0) {
       throw new Error(`cannot reapply plugin fragment at missing anchor ${fragment.anchor}`);

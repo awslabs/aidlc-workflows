@@ -56,6 +56,7 @@ export type PluginValidationRule =
   | "artifact-namespace"
   | "contribution-target"
   | "contribution-adds"
+  | "contribution-path"
   | "stage-body"
   | "tools-payload"
   | "compose-template-missing"
@@ -767,6 +768,17 @@ function validateContributions(
     (path) => path.endsWith(".md"),
   )) {
     const displayFile = posixRelative(root, file);
+    // Compose reads contributions/<phase-or-agents>/<file>.md only.
+    if (displayFile.split("/").length !== 3) {
+      addError(
+        findings,
+        displayFile,
+        "contribution-path",
+        "contribution files sit exactly one directory below contributions/; compose does not read this one",
+        "Move the file to contributions/<phase>/<slug>.md or contributions/agents/<agent>.md.",
+      );
+      continue;
+    }
     const frontmatter = frontmatterBlock(readFileSync(file, "utf-8")) ?? "";
     const target = scalarField(frontmatter, "target");
     // contributions/agents/<agent>.md enriches a core persona with prose

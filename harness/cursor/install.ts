@@ -520,12 +520,29 @@ function removeConsumesEntries(content: string, artifacts: ReadonlySet<string>):
   return content.replace(blockRe, replacement);
 }
 
+// Cuts a fragment block together with the separator compose inserted with it,
+// and nothing else, so the file's own whitespace survives. Compose wraps the
+// blocks at one insertion point in a newline on each side and joins them with
+// a blank line: a block owns the blank line to the block after it, else the
+// one from the block before it, else its two surrounding newlines.
+function cutPluginFragment(content: string, start: number, end: number): string {
+  if (content.startsWith("\n\n<!-- plugin:", end)) return content.slice(0, start) + content.slice(end + 2);
+  const before = content.slice(0, start);
+  const previousClose = before.lastIndexOf("<!-- /plugin:");
+  if (previousClose !== -1 && /^<!-- \/plugin:[^\n]* -->\n\n$/.test(before.slice(previousClose))) {
+    return content.slice(0, start - 2) + content.slice(end);
+  }
+  const from = content[start - 1] === "\n" ? start - 1 : start;
+  const to = content[end] === "\n" ? end + 1 : end;
+  return content.slice(0, from) + content.slice(to);
+}
+
 function stripPluginFragments(content: string, fragments: readonly PluginFragment[]): string {
   let stripped = content;
   for (const fragment of [...fragments].sort((left, right) => right.start - left.start)) {
-    stripped = stripped.slice(0, fragment.start) + stripped.slice(fragment.end);
+    stripped = cutPluginFragment(stripped, fragment.start, fragment.end);
   }
-  return stripped.replace(/\n{3,}/g, "\n\n");
+  return stripped;
 }
 
 function mergeListValues(content: string, field: string, values: readonly string[]): string | null {
@@ -1094,7 +1111,9 @@ export async function install(targetDir: string): Promise<void> {
           ? pluginRuntime.stages.get(basename(rel, ".md"))
           : undefined;
       if (targetBytes && pluginStage) {
-        const rebuilt = rebuildPluginComposedStage(sourceBytes, targetBytes, pluginStage);
+        // Rebuild from the active-space-adjusted core content, not the raw
+        // distribution bytes, so a persona keeps its repointed memory paths.
+        const rebuilt = rebuildPluginComposedStage(desired, targetBytes, pluginStage);
         if (rebuilt) {
           desired = rebuilt.desired;
           pluginBase = rebuilt.base;
@@ -1114,10 +1133,11 @@ export async function install(targetDir: string): Promise<void> {
           reconcileCoreOwnedContributions(sourceBytes, pluginStage);
         }
       } else if (priorReceipt?.managedFiles[rel] !== undefined) {
-        const unchangedSinceInstall = pluginStage
-          ? pluginBase !== undefined &&
-            sha256(pluginBase) === priorReceipt.managedFiles[rel]
-          : sha256(receiptComparableContent(rel, targetBytes!, activeSpace)) ===
+        // A composed file is compared without its plugin contributions.
+        const comparable = pluginStage ? pluginBase : targetBytes;
+        const unchangedSinceInstall =
+          comparable !== undefined &&
+          sha256(receiptComparableContent(rel, comparable, activeSpace)) ===
             priorReceipt.managedFiles[rel];
         if (unchangedSinceInstall || runtimeOwned) {
           actions.push({ kind: "write", target, content: desired });

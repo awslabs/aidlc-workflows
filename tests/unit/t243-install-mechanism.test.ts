@@ -2885,6 +2885,72 @@ describe("t243 project initialization", () => {
     expect(readFileSync(stagePath, "utf-8")).toContain("test-pro-refresh-artifact");
   }, 60_000);
 
+  test("refresh keeps a composed persona's own bytes, before and after its plugin is disabled", () => {
+    const project = temp("aidlc-t240-persona-refresh-");
+    mkdirSync(join(project, ".git"));
+    const refresh = () => run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project);
+    const first = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const personaPath = join(project, ".claude", "agents", "aidlc-quality-agent.md");
+    const installed = readFileSync(personaPath, "utf-8");
+
+    // Compose two persona fragments with the bundled compose hook.
+    const plugin = temp("aidlc-t240-persona-plugin-");
+    const built = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
+    cpSync(join(built, ".claude-plugin"), join(plugin, ".claude-plugin"), { recursive: true });
+    cpSync(join(built, "hooks"), join(plugin, "hooks"), { recursive: true });
+    const manifestPath = join(plugin, ".claude-plugin", "plugin.json");
+    writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf-8")), name: "aidlc-syn-persona" }));
+    mkdirSync(join(plugin, "scopes"), { recursive: true });
+    writeFileSync(join(plugin, "scopes", "syn-persona.md"), [
+      "---", "name: syn-persona", "plugin: syn-persona", "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope carrying the plugin identity", "skeleton: off", "---", "", "# syn-persona", "",
+    ].join("\n"));
+    mkdirSync(join(plugin, "contributions", "agents"), { recursive: true });
+    writeFileSync(join(plugin, "contributions", "agents", "aidlc-quality-agent.md"), [
+      "---", "target: aidlc-quality-agent", "plugin: syn-persona",
+      "fragments:", "  - anchor: after-preflight", "    order: 100", "  - anchor: after-preflight", "    order: 110",
+      "  - anchor: in:Collaboration", "    order: 100",
+      "---", "", "## fragment: after-preflight", "", "**Synthetic anchor:** read the snapshot first.", "",
+      "## fragment: after-preflight", "", "**Synthetic second anchor:** name the snapshot.", "",
+      "## fragment: in:Collaboration", "", "- **Works with (syn)**: a synthetic helper", "",
+    ].join("\n"));
+    const compose = spawnSync(BUN, [join(plugin, "hooks", "compose.ts")], {
+      cwd: project,
+      encoding: "utf-8",
+      timeout: 60_000,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(compose.status, compose.stderr).toBe(0);
+    const composed = readFileSync(personaPath, "utf-8");
+    expect(composed.indexOf("**Synthetic anchor:**")).toBeLessThan(composed.indexOf("**Synthetic second anchor:**"));
+
+    // A same-release refresh recognises the composed persona and re-applies
+    // its fragments exactly as compose placed them, same-anchor order included.
+    const refreshed = refresh();
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(personaPath, "utf-8")).toBe(composed);
+
+    // Disabling the plugin restores the persona's own bytes, so the next
+    // refresh still recognises it.
+    const disable = run(join(project, ".claude", "tools", "aidlc-utility.ts"), ["select-plugins", "aidlc"], project, {
+      CLAUDE_PROJECT_DIR: project,
+      AIDLC_HARNESS_DIR: ".claude",
+    });
+    expect(disable.status, disable.stdout + disable.stderr).toBe(0);
+    expect(readFileSync(personaPath, "utf-8")).toBe(installed);
+    const afterDisable = refresh();
+    expect(afterDisable.status, afterDisable.stdout + afterDisable.stderr).toBe(0);
+  }, 60_000);
+
   test("refresh planning never mutates generated runners on dry-run or conflict", () => {
     const project = temp("aidlc-t240-refresh-isolation-");
     mkdirSync(join(project, ".git"));

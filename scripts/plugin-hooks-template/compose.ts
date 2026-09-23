@@ -2117,11 +2117,37 @@ try {
   // this plugin's own scope files were already copied in above, and
   // contributions must not conjure new scope files.
   const installedScopes = installedNameRoster(join(HARNESS_DIR, "scopes"));
+  // The core persona roster the plugin validator checks targets against,
+  // shipped with the installed engine; null on an engine that predates it or
+  // a damaged install.
+  const coreAgentRoster = (() => {
+    try {
+      const { agents } = JSON.parse(readFileSync(join(HARNESS_DIR, "tools", "data", "plugin-authoring-context.json"), "utf-8")) as { agents?: unknown };
+      return Array.isArray(agents) && agents.every((agent) => typeof agent === "string") ? new Set<string>(agents) : null;
+    } catch {
+      return null;
+    }
+  })();
+  // Compose reads contributions/<phase-or-agents>/<file>.md, one level deep:
+  // a file placed higher or a directory nested lower is reported, not skipped
+  // silently.
+  const isDirectory = (path: string): boolean => {
+    try { return statSync(path).isDirectory(); } catch { return false; }
+  };
   for (const phase of contribPhases) {
     const phaseDir = join(contribRoot, phase);
+    if (!isDirectory(phaseDir)) {
+      if (phase.endsWith(".md")) recordDrop(`contribution file "contributions/${phase}" sits outside a phase or agents directory and was not read; move it to contributions/<phase>/ or contributions/agents/`);
+      continue;
+    }
     let files: string[];
     try { files = readdirSync(phaseDir); } catch { continue; }
     for (const file of files) {
+      // A directory is never read, whatever its name (a "x.md" directory too).
+      if (isDirectory(join(phaseDir, file))) {
+        recordDrop(`contribution directory "contributions/${phase}/${file}/" is nested too deep and was not read; move its files up to contributions/${phase}/`);
+        continue;
+      }
       if (!file.endsWith(".md")) continue;
       // Normalize CRLF once so every downstream block/list regex is newline-safe;
       // strip a leading UTF-8 BOM and any leading blank lines so the `^---`
@@ -2167,10 +2193,24 @@ try {
       const isAgentContribution = phase === "agents";
       const stageFile = isAgentContribution ? findAgentFile(target) : findStageFile(target);
       if (!stageFile) { recordDrop(`contribution "${file}" targets missing ${isAgentContribution ? "agent" : "stage"} "${target}"`); continue; }
+      // Only a core persona takes contributions, checked against the same
+      // roster as the validator. Without it, fail closed: an engine that
+      // predates the roster also predates persona strip, refresh and doctor.
+      if (isAgentContribution) {
+        if (!coreAgentRoster) {
+          recordDrop(`contribution "${file}" targets agent "${target}", but the installed engine ships no core agent roster (tools/data/plugin-authoring-context.json); upgrade the engine, then re-run compose; skipped`);
+          continue;
+        }
+        if (!coreAgentRoster.has(target)) {
+          recordDrop(`contribution "${file}" targets agent "${target}", which is not a core persona (it is not in the core agent roster); skipped`);
+          continue;
+        }
+      }
 
       // structural: adds.produces / adds.sensors / adds.consumes
       const declaredAdds = fm.match(/^adds:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m)?.[1] ?? "";
-      if (isAgentContribution && declaredAdds.trim() !== "") {
+      // Any adds: key on a persona is reported, adds: [] included, as the validator does.
+      if (isAgentContribution && /^adds:/m.test(fm)) {
         recordDrop(`contribution to ${target}: agent contributions carry prose fragments only; adds.* has no meaning on a persona and was ignored`, "advisory");
       }
       const addsBlock = isAgentContribution ? "" : declaredAdds;

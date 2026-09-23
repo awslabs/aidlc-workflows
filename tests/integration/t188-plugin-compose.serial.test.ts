@@ -470,6 +470,78 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(
       graphAfterReinstall.some((item) => item.slug === "test-pro-integration"),
     ).toBe(true);
+
+    // In a non-default space the composed persona is rebuilt from the
+    // space-adjusted core content: the reinstall keeps its repointed memory
+    // paths and its fragment instead of colliding.
+    const utilityEnv = { ...process.env, AIDLC_PROJECT_DIR: cursorProject, AIDLC_HARNESS_DIR: ".cursor", AIDLC_HARNESS_NAME: "cursor" };
+    const utility = join(cursorProject, ".cursor", "tools", "aidlc-utility.ts");
+    for (const args of [["space", "create", "engineering"], ["space", "switch", "engineering"]]) {
+      const step = spawnSync(BUN, [utility, ...args], { cwd: cursorProject, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env: utilityEnv });
+      expect(step.status, step.stderr).toBe(0);
+    }
+    const composedPersona = join(cursorProject, ".cursor", "agents", "aidlc-quality-agent.md");
+    expect(readFileSync(composedPersona, "utf-8")).toContain("aidlc/spaces/engineering/memory/");
+    const spaceReinstall = spawnSync(
+      BUN,
+      [join(upgradedDist, "install.ts"), cursorProject],
+      { cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000 },
+    );
+    expect(spaceReinstall.status, spaceReinstall.stderr).toBe(0);
+    const personaAfter = readFileSync(composedPersona, "utf-8");
+    expect(personaAfter).toContain("aidlc/spaces/engineering/memory/");
+    expect(personaAfter).not.toContain("aidlc/spaces/default/memory/");
+    expect(personaAfter).toContain("<!-- plugin:test-pro:after-preflight:90:");
+  });
+
+  test("Cursor reinstall keeps an end-of-body persona fragment before the absorbed reviewer knowledge", () => {
+    // Reviewer personas end with knowledge the packager absorbs at build time;
+    // end-of-body lands before it, and a reinstall must rebuild it there.
+    const built = join(tmp, "cursor-plugin-end-of-body");
+    cpSync(pluginBuilds.get("cursor")!, built, { recursive: true });
+    writeFileSync(join(built, "contributions", "agents", "aidlc-architecture-reviewer-agent.md"), [
+      "---", "target: aidlc-architecture-reviewer-agent", "plugin: test-pro",
+      "fragments:", "  - anchor: end-of-body", "    order: 100",
+      "---", "", "## fragment: end-of-body", "", "**test-pro review posture:** check the coverage read-out.", "",
+    ].join("\n"));
+    const cursorProject = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "cursor",
+      projectDir: join(tmp, "cursor-end-of-body"),
+      pluginBuilt: built,
+    }).projectDir;
+    const personaPath = join(cursorProject, ".cursor", "agents", "aidlc-architecture-reviewer-agent.md");
+    const beforeAbsorbed = (content: string) => {
+      const block = content.indexOf("<!-- plugin:test-pro:end-of-body:100:");
+      return block > -1 && block < content.indexOf("<!-- Absorbed at build time");
+    };
+    const composed = readFileSync(personaPath, "utf-8");
+    expect(beforeAbsorbed(composed)).toBe(true);
+
+    const install = (dist: string) => spawnSync(BUN, [join(dist, "install.ts"), cursorProject], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+    });
+    // A same-version reinstall recognises the composed persona as current.
+    const same = install(CURSOR_DIST);
+    expect(same.status, same.stderr).toBe(0);
+    expect(readFileSync(personaPath, "utf-8")).toBe(composed);
+
+    // An upgrade that changes the persona body rebuilds it with the fragment
+    // still after that body and before the absorbed knowledge.
+    const upgraded = join(tmp, "cursor-end-of-body-dist");
+    cpSync(CURSOR_DIST, upgraded, { recursive: true });
+    cpSync(CURSOR_INSTALLER_SOURCE, join(upgraded, "install.ts"));
+    const shipped = join(upgraded, ".cursor", "agents", "aidlc-architecture-reviewer-agent.md");
+    writeFileSync(shipped, readFileSync(shipped, "utf-8").replace(
+      "\n---\n\n<!-- Absorbed at build time",
+      "\nUpgraded reviewer body.\n\n---\n\n<!-- Absorbed at build time",
+    ));
+    const upgrade = install(upgraded);
+    expect(upgrade.status, upgrade.stderr).toBe(0);
+    const after = readFileSync(personaPath, "utf-8");
+    expect(after.indexOf("Upgraded reviewer body.")).toBeGreaterThan(-1);
+    expect(after.indexOf("Upgraded reviewer body.")).toBeLessThan(after.indexOf("<!-- plugin:test-pro:end-of-body:100:"));
+    expect(beforeAbsorbed(after)).toBe(true);
   });
 
   test("Cursor launcher passes its plugin root through the installed aidlc branch", () => {
@@ -1845,9 +1917,28 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "---", "target: aidlc-architect-agent", "plugin: syn-persona",
       "adds:", "  produces:", "    - syn-persona-ignored",
       "fragments:", "  - anchor: after-preflight", "    order: 100",
+      "  - anchor: after-preflight", "    order: 110",
+      "  - anchor: end-of-body", "    order: 100",
       "---", "",
       "## fragment: after-preflight", "",
       "**Synthetic mandatory anchor:** read the frozen standards snapshot before designing.", "",
+      "## fragment: after-preflight", "",
+      "**Synthetic second anchor:** name the snapshot you read.", "",
+      "## fragment: end-of-body", "",
+      "Synthetic closing note.", "",
+    ].join("\n");
+    // A persona a plugin ships is not core: the validator refuses it as a
+    // target, and compose must too, even though the file is installed.
+    const pluginAgent = [
+      "---", "name: syn-persona-helper-agent", "display_name: Syn Persona Helper Agent",
+      "plugin: syn-persona", "description: synthetic plugin-owned persona", "---", "",
+      "# Syn Persona Helper Agent", "", "Body.", "",
+    ].join("\n");
+    const onPluginAgent = [
+      "---", "target: syn-persona-helper-agent", "plugin: syn-persona",
+      "fragments:", "  - anchor: end-of-body", "    order: 100",
+      "---", "",
+      "## fragment: end-of-body", "", "must never land on a plugin persona", "",
     ].join("\n");
     const unknown = [
       "---", "target: no-such-agent", "plugin: syn-persona",
@@ -1855,10 +1946,29 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "---", "",
       "## fragment: in:Collaboration", "", "- never lands", "",
     ].join("\n");
+    // A persona in the core namespace that the core roster does not list
+    // (user-authored) is not core either: compose checks the same roster as
+    // the validator.
+    const onCustomAgent = onPluginAgent.replace("target: syn-persona-helper-agent", "target: aidlc-custom-agent");
+    // An empty adds: on a persona is reported too, as the validator reports it.
+    const emptyAdds = [
+      "---", "target: aidlc-developer-agent", "plugin: syn-persona", "adds: []",
+      "fragments:", "  - anchor: end-of-body", "    order: 100",
+      "---", "", "## fragment: end-of-body", "", "Synthetic developer note.", "",
+    ].join("\n");
     const { drops, proj } = composeSynthetic("syn-persona", {
       "scopes/syn-persona.md": scope,
+      "agents/syn-persona-helper-agent.md": pluginAgent,
       "contributions/agents/aidlc-architect-agent.md": anchored,
       "contributions/agents/no-such-agent.md": unknown,
+      "contributions/agents/syn-persona-helper-agent.md": onPluginAgent,
+      "contributions/agents/aidlc-custom-agent.md": onCustomAgent,
+      "contributions/agents/aidlc-developer-agent.md": emptyAdds,
+    }, ".claude", (_proj, harnessDir) => {
+      writeFileSync(join(harnessDir, "agents", "aidlc-custom-agent.md"), [
+        "---", "name: aidlc-custom-agent", "display_name: Custom Agent", "description: user-authored persona", "---", "",
+        "# Custom Agent", "", "Body.", "",
+      ].join("\n"));
     });
     const personaPath = join(proj, ".claude", "agents", "aidlc-architect-agent.md");
     const persona = readFileSync(personaPath, "utf-8");
@@ -1874,14 +1984,24 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // adds.* on a persona is ignored with an advisory drop, never merged.
     expect(persona).not.toContain("syn-persona-ignored");
     expect(drops).toContain("agent contributions carry prose fragments only");
+    expect(drops).toContain("contribution to aidlc-developer-agent: agent contributions carry prose fragments only");
     // An unknown persona is dropped-with-log; compose stays fail-open.
     expect(drops).toContain('targets missing agent "no-such-agent"');
+    const helperPath = join(proj, ".claude", "agents", "syn-persona-helper-agent.md");
+    expect(existsSync(helperPath)).toBe(true);
+    expect(readFileSync(helperPath, "utf-8")).not.toContain("must never land");
+    expect(drops).toContain('targets agent "syn-persona-helper-agent", which is not a core persona');
+    expect(drops).toContain('targets agent "aidlc-custom-agent", which is not a core persona (it is not in the core agent roster)');
+    expect(readFileSync(join(proj, ".claude", "agents", "aidlc-custom-agent.md"), "utf-8")).not.toContain("must never land");
     expect(drops).not.toContain("compile failed");
     const sidecarPath = join(proj, ".claude", "tools", "data", "plugin-contrib-syn-persona.json");
     const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8"));
     expect(sidecar["aidlc-architect-agent"]?.fragments).toEqual([
       expect.objectContaining({ anchor: "after-preflight", order: 100 }),
+      expect.objectContaining({ anchor: "after-preflight", order: 110 }),
+      expect.objectContaining({ anchor: "end-of-body", order: 100 }),
     ]);
+    expect(sidecar["syn-persona-helper-agent"]).toBeUndefined();
 
     // Disable-time strip removes the fragment and the sidecar, like stage fragments.
     const strip = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
@@ -1889,11 +2009,56 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
     });
     expect(strip.status).toBe(0);
-    const stripped = readFileSync(personaPath, "utf-8");
-    expect(stripped).not.toContain("plugin:syn-persona:");
-    expect(stripped).not.toContain("Synthetic mandatory anchor");
-    expect(stripped).toContain("<!-- aidlc-delegated-knowledge-preflight -->");
+    // The strip takes out exactly what compose added: the persona is back to
+    // its shipped bytes, blank-line runs after the preflight included.
+    expect(readFileSync(personaPath, "utf-8")).toBe(
+      readFileSync(join(CLAUDE_DIST, "agents", "aidlc-architect-agent.md"), "utf-8"),
+    );
     expect(existsSync(sidecarPath)).toBe(false);
+  });
+
+  test("agent contributions fail closed on an engine without the core agent roster", () => {
+    // Without the roster compose cannot tell a core persona from any other,
+    // and an engine that old cannot strip, refresh or verify the fragment.
+    const contribution = [
+      "---", "target: aidlc-architect-agent", "plugin: syn-noroster",
+      "fragments:", "  - anchor: end-of-body", "    order: 100",
+      "---", "", "## fragment: end-of-body", "", "must never land", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-noroster", {
+      "contributions/agents/aidlc-architect-agent.md": contribution,
+    }, ".claude", (_proj, harnessDir) => {
+      rmSync(join(harnessDir, "tools", "data", "plugin-authoring-context.json"));
+    });
+    expect(drops).toContain('targets agent "aidlc-architect-agent", but the installed engine ships no core agent roster');
+    expect(readFileSync(join(proj, ".claude", "agents", "aidlc-architect-agent.md"), "utf-8")).not.toContain("must never land");
+  });
+
+  test("a contribution file outside contributions/<dir>/<file>.md is reported, not skipped silently", () => {
+    // Compose reads one level deep. A nested directory or a file placed
+    // directly under contributions/ used to be skipped with no drop line.
+    const contribution = (target: string, anchor: string) => [
+      "---", `target: ${target}`, "plugin: syn-nested",
+      "fragments:", `  - anchor: ${anchor}`, "    order: 100",
+      "---", "", `## fragment: ${anchor}`, "", "must never land", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-nested", {
+      "contributions/agents/nested/aidlc-architect-agent.md": contribution("aidlc-architect-agent", "end-of-body"),
+      "contributions/construction/nested/functional-design.md": contribution("functional-design", "end-of-steps"),
+      "contributions/stray.md": contribution("aidlc-architect-agent", "end-of-body"),
+      // A directory named like a Markdown file is a directory too, and must
+      // not abort the rest of the compose.
+      "contributions/agents/weird.md/aidlc-architect-agent.md": contribution("aidlc-architect-agent", "end-of-body"),
+      "contributions/agents/aidlc-developer-agent.md": contribution("aidlc-developer-agent", "end-of-body").replace("must never land", "lands"),
+    });
+    expect(drops).not.toContain("compose threw");
+    expect(drops).toContain('contribution directory "contributions/agents/weird.md/" is nested too deep');
+    expect(readFileSync(join(proj, ".claude", "agents", "aidlc-developer-agent.md"), "utf-8")).toContain("lands");
+    expect(drops).toContain('contribution directory "contributions/agents/nested/" is nested too deep');
+    expect(drops).toContain('contribution directory "contributions/construction/nested/" is nested too deep');
+    expect(drops).toContain('contribution file "contributions/stray.md" sits outside a phase or agents directory');
+    expect(readFileSync(join(proj, ".claude", "agents", "aidlc-architect-agent.md"), "utf-8")).not.toContain("must never land");
+    expect(stageBody(proj, "construction", "functional-design")).not.toContain("must never land");
   });
 
   test("a contribution target that is not a bare slug is refused before any path is built", () => {
