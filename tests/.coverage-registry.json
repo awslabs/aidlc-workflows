@@ -11829,6 +11829,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t238-build-binaries.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
         },
@@ -12854,6 +12858,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t238-build-binaries.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"
         },
@@ -12878,6 +12886,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t238-build-binaries.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         },
@@ -12895,6 +12907,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t231-handler-additions.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t238-build-binaries.test.ts",
           "mechanism": "cli"
         },
         {

@@ -754,6 +754,108 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
+  test("runtime integrity allows inert dispatcher argv in project writes, inline code, and wrapper scripts", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const route = '"engine", "hook", "record-human-turn"';
+    for (const content of [
+      `const route = [${route}];`,
+      `const config = { args: ["aidlc", ${route}] };`,
+      `const fixture = [process.execPath, ".claude/tools/aidlc.ts", ${route}];`,
+      `// Example route: [${route}]\nconst note = '[${route}]';`,
+      `Bun.spawnSync(["echo", "ready"]); const route = [${route}];`,
+      `const route = [${route}]; Bun.spawnSync(["echo", "ready"]);`,
+      // Even process argv can be data: echo/printf do not execute these words.
+      `Bun.spawnSync(["echo", "aidlc", ${route}]);`,
+      `spawnSync("echo", [${route}]);`,
+      `execFileSync("printf", ["%s", ${route}]);`,
+    ]) {
+      writeFileSync(join(project, "argv-data.ts"), content);
+      for (const [tool_name, tool_input] of [
+        ["Write", { file_path: "scripts/data.ts", content }],
+        ["Edit", { file_path: "scripts/data.ts", new_string: content }],
+        ["MultiEdit", { file_path: "scripts/data.ts", edits: [{ new_string: content }] }],
+        ["NotebookEdit", { notebook_path: "analysis.ipynb", new_source: content }],
+        ["Bash", { command: "bun argv-data.ts" }],
+        ["Bash", { command: `bun -e '${content.replaceAll("'", "'\\''")}'` }],
+        ["Bash", { command: `bun <<'EOF'\n${content}\nEOF` }],
+      ] as const) {
+        const r = spawnSync(process.execPath, [HOOK], {
+          cwd: project,
+          input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+          encoding: "utf-8",
+          env: unownedEnv(),
+        });
+        expect(r.status, `${tool_name}: ${JSON.stringify(tool_input)}`).toBe(0);
+        expect(r.stderr, content).toBe("");
+      }
+    }
+  });
+
+  test("runtime integrity does not treat eval, print, or check arguments as dispatcher scripts", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const route = '"engine", "hook", "record-human-turn"';
+    for (const mode of ["-e", "--eval", "-p", "--print", "-c", "--check", "-pe", "-ie",
+      "-e0", "--eval=0", "-p0", "--print=0", "-ie0"]) {
+      for (const content of [
+        `Bun.spawnSync(["bun", "${mode}", "aidlc.ts", ${route}]);`,
+        `execFileSync("node", ["${mode}", "aidlc.ts", ${route}]);`,
+      ]) {
+        for (const [tool_name, tool_input] of [
+          ["Write", { file_path: "scripts/data.ts", content }],
+          ["Bash", { command: `bun -e '${content}'` }],
+        ] as const) {
+          const r = spawnSync(process.execPath, [HOOK], {
+            cwd: project,
+            input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+            encoding: "utf-8",
+            env: unownedEnv(),
+          });
+          expect(r.status, `${tool_name}: ${content}`).toBe(0);
+          expect(r.stderr, content).toBe("");
+        }
+      }
+    }
+  });
+
+  test("runtime integrity still refuses dispatcher argv in process execution calls", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const route = '"engine", "hook", "record-human-turn"';
+    for (const content of [
+      `Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts", ${route}]);`,
+      `Bun.spawn({ cmd: ["aidlc", ${route}], stdout: "pipe" });`,
+      `Bun.spawnSync(["bun", "--silent", "run", ".claude/tools/aidlc.ts", ${route}]);`,
+      `spawnSync("aidlc", [${route}]);`,
+      `child_process.spawn("/opt/bin/aidlc", [${route}]);`,
+      `execFileSync(process.execPath, [".claude/tools/aidlc.ts", ${route}]);`,
+      `execFile("node", ["--no-warnings", ".claude/tools/aidlc.ts", ${route}]);`,
+      `subprocess.run(["aidlc", ${route}], check=True)`,
+      `subprocess.Popen(["bun", "run", ".claude/tools/aidlc.ts", ${route}])`,
+      `Bun.spawnSync(["bun", "--eval", \`import("aidlc-guard-switch")\`]);`,
+      `execFileSync("node", ["--print", \`require("aidlc-guard-switch")\`]);`,
+      `Bun.spawnSync(["bun", "--eval", \`Bun.spawnSync(["aidlc", ${route}])\`]);`,
+    ]) {
+      writeFileSync(join(project, "argv-execution.ts"), content);
+      for (const [tool_name, tool_input] of [
+        ["Write", { file_path: "scripts/execute.ts", content }],
+        ["Bash", { command: "bun argv-execution.ts" }],
+        ["Bash", { command: `bun -e '${content}'` }],
+        ["Bash", { command: `bash -lc 'bun -e '\\''${content}'\\'''` }],
+      ] as const) {
+        const r = spawnSync(process.execPath, [HOOK], {
+          cwd: project,
+          input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+          encoding: "utf-8",
+          env: unownedEnv(),
+        });
+        expect(r.status, `${tool_name}: ${JSON.stringify(tool_input)}`).toBe(2);
+        expect(r.stderr, content).toContain("AIDLC runtime records and hooks belong to the harness");
+      }
+    }
+  });
+
   test("runtime integrity exempts installed tools and repository development, not sibling paths", () => {
     const project = createTestProject();
     projects.push(project);

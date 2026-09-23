@@ -1,6 +1,8 @@
 // covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version, hook:aidlc-review-freeze
 // covers: subcommand:aidlc-utility:plugin-sync
 // covers: subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:config-change,
+// subcommand:aidlc-utility:config-get, subcommand:aidlc-utility:config-list
 //
 // Native-only unit coverage for the release binary builder. The cross-target
 // matrix, including Bun's Windows .exe append behavior, is intentionally left
@@ -35,6 +37,11 @@ import {
 import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { VERSION_ID_PATTERN } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
+import {
+  createTestProject,
+  seedStateFile,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -377,6 +384,60 @@ describe("t238 build-binaries release builder", () => {
       expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("/$bunfs/");
     } finally {
       rmSync(pluginFixture, { recursive: true, force: true });
+    }
+
+    // Reuse this build to exercise orchestrate's compiled sibling dispatch.
+    // Empty PATH means neither a Bun fallback nor a global aidlc can satisfy it.
+    // Each initial next response must already contain the real config result.
+    const configProject = createTestProject();
+    tempDirs.push(configProject);
+    cpSync(
+      join(dirname(native.artifact), "runtime", "claude", ".claude"),
+      join(configProject, ".claude"),
+      { recursive: true },
+    );
+    seedStateFile(configProject, "state-brownfield-feature.md");
+    const configState = seededStateFile(configProject);
+    const beforeConfig = readFileSync(configState, "utf-8");
+    expect(beforeConfig).toContain("- **Depth**: Standard");
+    const workflowRows = (state: string): string[] | null =>
+      state.match(/^(- \*\*(?:Current Stage|In Progress|Lifecycle Phase|Status)\*\*:.*|- \[[^\]]\].*)$/gm);
+    let stateAfterSet = beforeConfig;
+    for (const [args, output] of [
+      [["set", "depth", "minimal"], "Depth changed: Standard -> Minimal"],
+      [["get", "depth"], "\n\nMinimal"],
+      [["list", "--json"], '"depth":"Minimal"'],
+    ] as const) {
+      const configured = spawnSync(native.artifact, [
+        "engine", "orchestrate", "next", "config", ...args,
+        "--project-dir", configProject,
+      ], {
+        cwd: configProject,
+        encoding: "utf-8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          PATH: "",
+          AIDLC_PROJECT_DIR: configProject,
+          CLAUDE_PROJECT_DIR: configProject,
+          AIDLC_HARNESS_DIR: ".claude",
+          AIDLC_HARNESS_NAME: "claude",
+          AIDLC_INSTALL_ROOT: join(root, "typed-config-install"),
+          AIDLC_STOP_HOOK_PROBE: "0",
+          AIDLC_ROUTE_CHECK: "0",
+        },
+      });
+      const captured = `${configured.stdout ?? ""}${configured.stderr ?? ""}`;
+      expect(configured.error, captured).toBeUndefined();
+      expect(configured.status, captured).toBe(0);
+      const directive = JSON.parse(configured.stdout ?? "") as { kind: string; message: string };
+      expect(directive.kind, captured).toBe("print");
+      expect(directive.message).toContain(output);
+      const afterConfig = readFileSync(configState, "utf-8");
+      expect(afterConfig).toContain("- **Depth**: Minimal");
+      expect(workflowRows(afterConfig)).toEqual(workflowRows(beforeConfig));
+      if (args[0] === "set") stateAfterSet = afterConfig;
+      else expect(afterConfig).toBe(stateAfterSet);
     }
 
     const doctor = spawnSync(native.artifact, ["doctor"], {

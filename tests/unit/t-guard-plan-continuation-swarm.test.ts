@@ -357,6 +357,42 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
 }
 
 describe("swarm consumes lowered plan-approval allowance", () => {
+  test.each(["relaxed", "off"] as const)("prepare records combined content and source drift under %s", (mode) => {
+    const pd = fixture();
+    const original = approvalSnapshot(pd);
+    const approvals = readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
+    const state = seededStateFile(pd);
+    writeFileSync(state, setGuardPolicyLine(readFileSync(state, "utf-8"), `${mode} (set by you)`));
+    publish(pd);
+    revise(pd, true);
+    writeFileSync(join(pd, "src", `${UNIT}.ts`), `export const ${UNIT} = 2;\n`);
+    // A native worker needs the selected source to be reproducible from its
+    // commit; keep this independent of the existing dirty-source preflight.
+    git(pd, ["add", "-A"]);
+    git(pd, ["commit", "-qm", "revised execution source"]);
+    const source = workspaceSourceFingerprint(pd);
+    if (source === null) throw new Error("Combined-drift swarm source must be bindable");
+    expect(source).not.toBe(original.receipt.certifiedSourceSha256);
+    const result = prepare(pd);
+    succeeded(result);
+    expect(result.out).toContain(`src/${UNIT}.ts`);
+    const changes = readAuditShardEvents(pd).filter((row) => row.event === "CHANGE_ACCEPTED" &&
+      auditBlockField(row.block, "Checkpoint") === "plan-approval");
+    expect(changes).toHaveLength(1);
+    expect(auditBlockField(changes[0].block, "Changed")).toBe(`src/${UNIT}.ts`);
+    expect(readPlanApprovalReceipt(pd, original.key)).toEqual({
+      ...original.receipt, certifiedSourceSha256: source, status: "generation",
+    });
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvals);
+    for (const project of [pd, child(pd)]) {
+      expect(evaluateCodeGenerationApproval(project, TARGET).ok).toBe(false);
+      expect(codeGenerationExecutionAllowed(project, TARGET)).toBe(true);
+      expect(readFileSync(join(codeGenerationRecordDir(project, UNIT), "code-generation-questions.md"), "utf-8"))
+        .toBe(original.questions);
+    }
+    expect(readFileSync(join(child(pd), "src", `${UNIT}.ts`), "utf-8")).toBe(`export const ${UNIT} = 2;\n`);
+  });
+
   for (const operation of ["prepare", "resume"] as const) {
     test.each([...MODES])(`${operation} preserves approval truth and native Unit provenance under %s`, (mode) => {
       const pd = fixture();

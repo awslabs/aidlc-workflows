@@ -103,6 +103,7 @@ import {
 } from "../tools/aidlc-lib.ts";
 import {
   beginCodeGeneration,
+  codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
   type CodeGenerationTarget,
@@ -1382,6 +1383,22 @@ export async function run(input: string): Promise<number> {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
     }
     if (gate?.decision === "stand-aside") {
+      // A lowered fence keeps its permission decision, but an existing genuine
+      // approval still needs source provenance before execution. Reuse the
+      // locked start transaction even when edited content made the verdict fail.
+      // This hook emits its own stand-aside row below, so begin only reports drift.
+      for (const mentioned of verdict.mentioned) {
+        const target = { unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned };
+        if (!codeGenerationExecutionAllowed(projectDir, target)) continue;
+        try {
+          for (const notice of beginCodeGeneration(projectDir, target, { recordContinuation: false })) {
+            process.stdout.write(`${notice}\n`);
+          }
+        } catch (e) {
+          recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+          process.stdout.write(`The plan-approval check is off, but source provenance could not be recorded: ${errorMessage(e)}\n`);
+        }
+      }
       const detail = guardedDispatch
         ? `dispatch of ${subagentType}`
         : blockedMutation?.target ?? toolName;

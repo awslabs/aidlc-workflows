@@ -928,11 +928,18 @@ This stage has a **two-part structure**: planning followed by generation.
    continuation is permitted, even if `ok: false` says the current content is
    not approved. Use that execution result; `begin` and `brief` honor it too.
    The friendly `reason` explains continuation; `approval_reason` keeps the
-   stale binding detail and is not a new approval stop. Existing delegated
+   stale binding detail and is not a new approval stop. When both content and
+   source changed, read-only `verify` also previews the source change in
+   `change_notices`. Generation start, including guard dispatch and swarm
+   preparation, records and announces the accepted source change and
+   re-baselines source provenance under the lowered fence. The original
+   approval fingerprint, answer, and session remain unchanged. Existing delegated
    workers follow the live fence of their verified parent intent, including
    later lowering or raising.
-   Missing artifacts or malformed Testing Contract JSON need repair before
-   execution, not an automatic new approval ceremony.
+   Missing artifacts or malformed or structurally incomplete Testing Contracts
+   need repair before execution, not an automatic new approval ceremony.
+   `obligations.strategy` must match `test_strategy`; both `strategy_volume`
+   and `scope_floor` must contain nonblank obligations.
 
 #### PART 2 -- Generation (Steps 4-7)
 

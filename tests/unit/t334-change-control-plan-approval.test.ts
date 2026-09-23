@@ -40,6 +40,7 @@ import {
   setGuardsOffLine,
   setGuardsOnLine,
   stateDigest,
+  workspaceSourceFingerprint,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -851,6 +852,149 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
     expect(approvalRows(project)).toEqual(approvalsBefore);
     expect(receiptFiles(project)).toEqual(receiptsBefore);
   }, 60000);
+});
+
+describe("t334 F20 combined content and source changes", () => {
+  for (const mode of ["relaxed", "off", "strict"] as const) {
+    for (const route of ["begin", "dispatch", "write"] as const) {
+      test(`${mode} ${route} records source drift without approving changed content`, () => {
+        const project = createProject(mode, mode === "strict" ? "off" : undefined);
+        const questions = presentPlan(project);
+        const session = `combined-${mode}-${route}`;
+        startSession(project, session);
+        expect(decide(project, questions, session).code).toBe(0);
+        humanTurn(project, session);
+        expect(answer(project, questions, session).code).toBe(0);
+        const approval = evaluateCodeGenerationApproval(project, { unit: null });
+        expect(approval.ok, approval.reason).toBe(true);
+        const authority = resolveCodeGenerationAuthority(project, { unit: null });
+        const key = {
+          targetId: authority.targetId, runFloor: authority.runFloor,
+          fingerprint: approval.approvalFingerprint!,
+        };
+        const original = readPlanApprovalReceipt(project, key)!;
+        const approvals = approvalRows(project);
+        const receipts = receiptFiles(project);
+        const originalQuestions = readFileSync(questions, "utf-8");
+        const dir = codeGenerationRecordDir(project, null);
+        const planPath = join(dir, "code-generation-plan.md");
+        const plan = readFileSync(planPath, "utf-8");
+        if (route === "begin") {
+          writeFileSync(planPath, `${plan}\n- [ ] Implement the revised behavior.\n`);
+        } else if (route === "dispatch") {
+          writeFileSync(join(dir, "unit-test-instructions.md"), "# Revised tests\n\nVerify the new behavior twice.\n");
+        } else {
+          const contract = parseTestingContract(plan)!;
+          const changed = resolveTestingPostureFromSections({ project: "Verify the new behavior twice." }, {
+            scope: contract.scope, testStrategy: contract.test_strategy, projectType: contract.project_type,
+          });
+          writeFileSync(planPath, plan.replace(renderTestingContract(contract), renderTestingContract(changed)));
+        }
+        writeFileSync(join(project, "src", "changed.ts"), "export const changed = true;\n");
+        const source = workspaceSourceFingerprint(project);
+        if (source === null) throw new Error("Combined-drift fixture source must be bindable");
+        expect(source).not.toBe(original.certifiedSourceSha256);
+
+        const verified = spawn([BUN, POSTURE, "verify", "--stage-level", "--project-dir", project], project);
+        expect(verified.code, verified.stderr).toBe(0);
+        expect(JSON.parse(verified.stdout)).toMatchObject({ ok: false, execution_allowed: true });
+        expect(JSON.parse(verified.stdout).change_notices).toHaveLength(1);
+        expect(JSON.parse(verified.stdout).change_notices[0]).toContain("src/changed.ts");
+        expect(acceptedRows(project)).toHaveLength(0);
+        expect(receiptFiles(project)).toEqual(receipts);
+
+        let output: string;
+        if (route === "begin") {
+          const result = begin(project);
+          expect(result.code, result.stderr).toBe(0);
+          output = result.stdout;
+        } else {
+          const handoff = brief(project);
+          expect(handoff.code, handoff.stderr).toBe(0);
+          const result = spawn([BUN, GUARD], project, JSON.stringify({
+            hook_event_name: "PreToolUse", session_id: session, cwd: project,
+            tool_name: route === "dispatch" ? "Task" : "Write",
+            tool_input: route === "dispatch"
+              ? { subagent_type: "aidlc-developer-agent", prompt: handoff.stdout }
+              : { file_path: join(project, "src", "base.ts"), content: "export const base = 2;\n" },
+          }));
+          expect(result.code, `${result.stderr}\n${hookDrops(project)}`).toBe(0);
+          output = result.stdout;
+        }
+        expect(output).toContain("1 file changed since this plan was approved: src/changed.ts.");
+        const rows = acceptedRows(project);
+        expect(rows).toHaveLength(1);
+        expect(auditBlockField(rows[0].block, "Changed")).toBe("src/changed.ts");
+        expect(auditBlockField(rows[0].block, "Current")).toBe(source);
+        expect(readPlanApprovalReceipt(project, key)).toEqual({
+          ...original, certifiedSourceSha256: source, status: "generation",
+        });
+        expect(approvalRows(project)).toEqual(approvals);
+        expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
+        expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
+        expect(begin(project).code).toBe(0);
+        expect(acceptedRows(project)).toHaveLength(1);
+        const repeated = spawn([BUN, POSTURE, "verify", "--stage-level", "--project-dir", project], project);
+        expect(repeated.code, repeated.stderr).toBe(0);
+        expect(JSON.parse(repeated.stdout).change_notices).toBeUndefined();
+      }, 60000);
+    }
+  }
+});
+
+describe("t334 F21 executable obligations remain required under lowered fences", () => {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, canonical(entry)]));
+    }
+    return value;
+  };
+  const invalidObligations: Array<[string, (obligations: Record<string, unknown>) => void]> = [
+    ["missing strategy", (value) => { delete value.strategy; }],
+    ["invalid strategy", (value) => { value.strategy = "none"; }],
+    ["contradictory strategy", (value) => { value.strategy = "comprehensive"; }],
+    ["empty strategy obligations", (value) => { value.strategy_volume = []; }],
+    ["blank strategy obligation", (value) => { value.strategy_volume = ["Run tests.", "  "]; }],
+    ["empty scope floor", (value) => { value.scope_floor = []; }],
+    ["blank scope obligation", (value) => { value.scope_floor = ["\t"]; }],
+  ];
+  for (const mode of ["relaxed", "off"] as const) {
+    test.each(invalidObligations)(`${mode} refuses %s without changing approval`, (_name, mutate) => {
+      const project = createProject(mode);
+      const questions = presentPlan(project);
+      const session = `obligations-${mode}`;
+      startSession(project, session);
+      expect(decide(project, questions, session).code).toBe(0);
+      humanTurn(project, session);
+      expect(answer(project, questions, session).code).toBe(0);
+      const approvals = approvalRows(project);
+      const receipts = receiptFiles(project);
+      const planPath = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
+      const plan = readFileSync(planPath, "utf-8");
+      const original = parseTestingContract(plan)!;
+      const { contract_sha256: _hash, ...body } = original;
+      const obligations: Record<string, unknown> = { ...body.obligations };
+      mutate(obligations);
+      const changedBody = { ...body, obligations };
+      const changed = {
+        ...changedBody,
+        contract_sha256: `sha256:${createHash("sha256").update(JSON.stringify(canonical(changedBody))).digest("hex")}`,
+      };
+      writeFileSync(planPath, plan.replace(renderTestingContract(original),
+        `## Testing Contract\n\n\`\`\`json\n${JSON.stringify(changed, null, 2)}\n\`\`\`\n`));
+      expect(parseTestingContract(readFileSync(planPath, "utf-8"))).not.toBeNull();
+      const verified = spawn([BUN, POSTURE, "verify", "--stage-level", "--project-dir", project], project);
+      expect(verified.code).toBe(2);
+      expect(JSON.parse(verified.stdout)).toMatchObject({ ok: false, execution_allowed: false });
+      expect(JSON.parse(verified.stdout).reason).toContain("Repair");
+      expect(begin(project).code).not.toBe(0);
+      expect(brief(project).code).not.toBe(0);
+      expect(approvalRows(project)).toEqual(approvals);
+      expect(receiptFiles(project)).toEqual(receipts);
+    }, 60000);
+  }
 });
 
 describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall", () => {

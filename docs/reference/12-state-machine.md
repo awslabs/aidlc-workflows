@@ -135,8 +135,12 @@ the stage body or reviewer. The directive retains `reviewer`, `review_artifact`,
 and `review_class` when they were present. `reviewer` and `review_artifact` name
 whose existing review the Review brief reads. Present the brief from the
 recorded review file and verdict; dispatch no reviewer and request no new
-review. Reviewer iteration settings and the `reviewer` and `ensemble` protocol
-modules are absent; a Construction policy, when present, is marked
+review. A later Review Override, including `none`, does not erase that brief:
+gate re-entry uses the paired review completion from the current attempt and
+the settings in effect for that review. Reviews from an earlier attempt do not
+create a brief for a reviewless gate. This metadata grants no approval and
+does not make edited content reviewed. Reviewer iteration settings and the
+`reviewer` and `ensemble` protocol modules are absent; a Construction policy, when present, is marked
 `completion_only`.
 `gate_only` takes precedence over generic completion-only bookkeeping and does
 not grant human approval. Team-owned gates retain `unit` and `unit_gate`;

@@ -29,8 +29,26 @@ const HARNESS_CONTROL_ASSIGNMENT = /\b(?:AIDLC_SESSION_OVERRIDE|AIDLC_SESSION_OV
 const PROTECTED_MODULE_USE = new RegExp(
   String.raw`(?:\bimport\b[^\n;]*?|\brequire\s*\(\s*|\bfrom\s+)["'\x60][^"'\x60\n]*(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?["'\x60]` +
   String.raw`|\b(?:bun|node|tsx|deno)\b[^\n;|&]*hooks[\\/]aidlc-[a-z-]+\.ts\b` +
-  String.raw`|\baidlc(?:\.ts)?["']?\s+engine\s+hook\b` +
-  String.raw`|(?:\[|,)\s*["'\x60]engine["'\x60]\s*,\s*["'\x60]hook["'\x60]\s*,\s*["'\x60]record-human-turn["'\x60](?=\s*(?:,|\]))`,
+  String.raw`|\baidlc(?:\.ts)?["']?\s+engine\s+hook\b`,
+);
+// Literal argv is executable only at a process-launch site and with the
+// dispatcher in command/script position. A stored route, an unrelated call
+// beside it, or echo/printf arguments containing the route are ordinary data.
+// Recognize array APIs (Bun/Python) and executable + args APIs (Node), including
+// Bun's { cmd: [...] } form. Computed commands remain outside this lexical check.
+const ARGV_SEPARATOR = String.raw`\s*,\s*(?:\[\s*)?`;
+const ARGV_INTERPRETER = String.raw`(?:process\.execPath|["'\x60](?:[^"'\x60\n]*[\\/])?(?:bun|node|tsx|deno)(?:\.exe)?["'\x60])`;
+// Eval/print consume inline source; check only parses a file. None makes the
+// following aidlc.ts a script being executed. Include attached values and
+// short-option clusters (-pe/-ie); protectedContent still detects hook use
+// inside executable inline source.
+const ARGV_SCRIPT_OPTIONS = String.raw`(?:["'\x60](?!--(?:eval|print|check)(?:=|["'\x60])|-i*[epc])-[^"'\x60\n]*["'\x60]\s*,\s*)*(?:["'\x60]run["'\x60]\s*,\s*)?`;
+const PROTECTED_DISPATCHER_ARGV_USE = new RegExp(
+  String.raw`\b(?:spawn(?:Sync)?|execFile(?:Sync)?|subprocess\s*\.\s*(?:run|Popen|call|check_call|check_output))\s*\(\s*` +
+  String.raw`(?:\{\s*["']?cmd["']?\s*:\s*|args\s*=\s*)?(?:\[\s*)?` +
+  `(?:${ARGV_INTERPRETER}${ARGV_SEPARATOR}${ARGV_SCRIPT_OPTIONS})?` +
+  String.raw`["'\x60](?:[^"'\x60\n]*[\\/])?aidlc(?:\.ts|\.exe)?["'\x60]${ARGV_SEPARATOR}` +
+  String.raw`["'\x60]engine["'\x60]\s*,\s*["'\x60]hook["'\x60]\s*,\s*["'\x60]record-human-turn["'\x60](?=\s*(?:,|\]))`,
 );
 const SHELL_FUNCTION = /(?:^|[;\n|&])\s*(?:function\s+[\w-]+(?:\s*\(\s*\))?|[\w-]+\s*\(\s*\))\s*\{/;
 const SCRIPT_EXTENSION = /\.(?:ts|js|mjs|cjs|sh|py)$/;
@@ -85,7 +103,7 @@ function protectedScriptFile(path: string, cwd: string): boolean {
     if (harnessInstallRoots(cwd).some((root) =>
       pathWithin(canonical, canonicalExistingPath(root))
     )) return false;
-    return PROTECTED_MODULE_USE.test(readFileSync(absolute, "utf-8"));
+    return protectedContent(readFileSync(absolute, "utf-8"));
   } catch {
     // An unreadable or missing script is outside this lexical check's reach.
     return false;
@@ -93,7 +111,9 @@ function protectedScriptFile(path: string, cwd: string): boolean {
 }
 
 function protectedContent(value: unknown): boolean {
-  return typeof value === "string" && PROTECTED_MODULE_USE.test(value);
+  return typeof value === "string" && (
+    PROTECTED_MODULE_USE.test(value) || PROTECTED_DISPATCHER_ARGV_USE.test(value)
+  );
 }
 
 function protectedContentWrite(
@@ -142,7 +162,7 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): "runtime" | "con
       return "runtime";
     }
     let contentViolation = (command.includes("<<") || SHELL_FUNCTION.test(command)) &&
-      PROTECTED_MODULE_USE.test(command);
+      protectedContent(command);
     for (const { name, args, executable } of shellCommandInvocationDetails(command)) {
       if (name === "mkdir" && args.some((path) => protectedRuntimePath(path, cwd))) {
         return "runtime";
@@ -168,7 +188,7 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): "runtime" | "con
           inline = true;
           // Inline code can compute writes without a concrete shell target.
           if (RUNTIME_RECORD_MENTION.test(script)) return "runtime";
-          if (PROTECTED_MODULE_USE.test(script)) contentViolation = true;
+          if (protectedContent(script)) contentViolation = true;
         }
       }
       if (contentViolation || inline) continue;

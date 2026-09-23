@@ -7,7 +7,9 @@
 //
 // The engine reads workflow state (aidlc-docs/aidlc-state.md) and the compiled
 // stage graph (data/stage-graph.json), then emits EXACTLY ONE typed Directive
-// (JSON) to stdout. `next` is read-only for every legacy/solo workflow. Exact
+// (JSON) to stdout. Workflow routing through `next` is read-only for every
+// legacy/solo workflow. Explicit `next config set|get|list` requests execute
+// their terminal config command before returning its output. Exact
 // team ownership is the narrow exception: before routing it delegates a
 // guarded `refresh-unit-progress` projection to aidlc-state.ts so the derived
 // grid and aggregate Construction checkboxes cannot drift from audit receipts.
@@ -56,7 +58,8 @@
 // canonical `Invalid AWS_AIDLC_DEFAULT_SCOPE "...". Valid scopes: ...`) is
 // relayed unchanged rather than reconstructed — reconstruction would drift from
 // the tool the rest of the framework asserts on. The one read-only invariant
-// `next` keeps: it never spawns a subcommand that MUTATES. The jump-direction
+// workflow routing keeps: it never spawns a subcommand that MUTATES. Explicit
+// typed config requests are terminal commands, not workflow routing. The jump
 // (resolve) and env-scope (resolve-env-scope) subcommands are pure reads; the
 // init guard is spawned ONLY on the already-state-exists path, where the tool
 // dies at its guard before any scaffold write.
@@ -154,6 +157,7 @@ import {
   type GuardRemedy,
   humanAuthorityState,
   latestMainWorkflowStageRunFloorForProject,
+  latestReviewRecordRefs,
   isAutonomousConstructionGate,
   isConstructionSwarmEnabled,
   recordGuardRefusal,
@@ -215,6 +219,9 @@ import {
   relativeRecordDirForSelection,
   relativeSpaceRecordPrefix,
   reviewArtifactEntries,
+  reviewAttemptWindow,
+  setField,
+  sortAttemptEvents,
   resolveBoltDag,
   type BoltDagResolution,
   resolveCeremony,
@@ -989,6 +996,7 @@ function toolPath(file: string): string {
 
 function toolCommand(toolFile: string, args: string[]): string[] {
   if (IS_COMPILED) {
+    if (toolFile === "aidlc.ts") return [process.execPath, ...args];
     if (toolFile === "aidlc-utility.ts" && args[0] === "resolve-env-scope") {
       return [process.execPath, "engine", "scope", "resolve-env", ...args.slice(1)];
     }
@@ -1746,7 +1754,7 @@ interface ParsedFlags {
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
   orchestratorVerb?: "park" | "team-board"; // leading orchestrator verb: terminal print naming that command
   orchestratorVerbArgs?: string[]; // allowlisted trailing args for team-board (--space <s>, --intent <i>, --snapshot)
-  configCommand?: string[]; // leading `config set|get|list ...`: terminal print naming the config route, never freeform intent text
+  configCommand?: string[]; // leading `config set|get|list ...`: execute the terminal config route, never freeform intent text
   newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
   report?: string; // --report <path>: compose from a scan report (the composer triages the file)
   claim?: string;
@@ -1803,8 +1811,8 @@ function parseNextFlags(args: string[]): ParsedFlags {
   }
   // A leading `config set|get|list` is the typed settings form (the prompt-time
   // guard switch among them), never a task description: routing it as freeform
-  // text drew the new-work offer over an active intent. The engine names the
-  // config route; the setter itself decides what a setting does.
+  // text drew the new-work offer over an active intent. The engine executes
+  // the config route; the setter itself decides what a setting does.
   if (args[0] === "config" && ["set", "get", "list"].includes(args[1] ?? "")) {
     const usage = "Usage: /aidlc config set <key> <value> [--key value ...] | config get <key> | config list [--json].";
     const tail = args.slice(2);
@@ -4503,7 +4511,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 // while Stop probes use a deterministic first-hop token and never publish the
 // prepared directive. Ordinary routing never mutates shared workflow state;
 // `--single` adds only its synthetic audit start and cannot move the main
-// workflow pointer.
+// workflow pointer. Typed config commands execute their requested operation;
+// observers only describe that command and never execute it.
 function routeNext(args: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
   activeRetiredGuardPolicyNotice = null;
@@ -4751,14 +4760,33 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // who typed `/aidlc config set guard.state-transition off` has already had
   // the prompt-time hook apply that switch; the words are a setting, never a
   // task description, so they must not draw the new-work offer or resume the
-  // stage. The engine names the config route; the setter reports the setting
-  // (an already-applied switch is a no-op that says so) and refuses lowering
-  // on its own.
+  // stage. Execute the canonical config route before returning the terminal
+  // response: argv-only Stop classification is safe only once the requested
+  // operation has actually finished. The setter reports an already-applied
+  // switch as a no-op and still refuses lowering on its own.
   if (flags.configCommand) {
     const [, verb, ...tail] = flags.configCommand;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    const command = `${aidlcDispatcherInvocation(`config ${verb}`)}${suffix}`;
+    if (isReadOnlyEngineProbe()) {
+      emit(printDirective(
+        `Run \`${command}\`, print its output verbatim, then stop. This read-only probe did not execute the configuration command.`,
+      ));
+      return;
+    }
+    const run = runTool("aidlc.ts", [
+      "engine", "config", verb, ...tail,
+      "--project-dir", resolveProjectDir(projectDir),
+    ]);
+    if (!run.ok) {
+      emit(errorDirective(toolErrorMessage(run)));
+      return;
+    }
+    if (run.stderr) process.stderr.write(run.stderr);
     emit(printDirective(
-      `Run \`${aidlcDispatcherInvocation(`config ${verb}`)}${suffix}\`, print its output verbatim, then stop. This is a setting, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `\`${command}\` completed. Print the following output verbatim, then stop. ` +
+        "This is a setting, NOT workflow work: do NOT run `next` and do NOT advance, resume, or run any workflow stage.\n\n" +
+        run.stdout.trimEnd(),
     ));
     return;
   }
@@ -5547,7 +5575,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           if (isSettledAutonomousSwarm(currentNode, scope, stateContent, pd)) {
             applySettledSwarmShape(directive);
           }
-          emit(applyGateOnlyShape(directive));
+          emit(applyGateOnlyShape(directive, pd, stateContent));
           return;
         }
       }
@@ -5690,7 +5718,12 @@ function isSettledAutonomousSwarm(
 
 // Reuse the settled run-stage surface without re-entering body or review work.
 // Unlike autonomous swarm bookkeeping, an open human gate keeps its approval.
-function applyGateOnlyShape(directive: RunStageDirective): RunStageDirective {
+function applyGateOnlyShape(
+  directive: RunStageDirective,
+  projectDir: string,
+  stateContent: string,
+): RunStageDirective {
+  retainGateReview(directive, projectDir, stateContent);
   directive.gate_only = true;
   directive.gate = true;
   delete directive.reviewer_max_iterations;
@@ -5705,6 +5738,52 @@ function applyGateOnlyShape(directive: RunStageDirective): RunStageDirective {
     directive.construction_policy.completion_only = true;
   }
   return directive;
+}
+
+// A later Review Override controls future review work, not the review the
+// human is about to read. Recover the metadata from the paired completion in
+// this attempt, including the override/scope in effect before later settings
+// changes. This is presentation only: it neither grants approval nor refreshes
+// a review receipt for changed content.
+function retainGateReview(
+  directive: RunStageDirective,
+  projectDir: string,
+  stateContent: string,
+): void {
+  const node = nodeForSlug(directive.stage);
+  if (!node?.reviewer || !node.review_artifact) return;
+  const ref = latestReviewRecordRefs(projectDir, node).get(directive.unit ?? "");
+  if (ref === undefined) return;
+  const attempt = reviewAttemptWindow(projectDir, stateContent, node);
+  const completion = attempt.events.slice(attempt.floorIdx + 1).findLast((event) =>
+    event.event === "REVIEW_COMPLETED" &&
+    (ref !== null
+      ? event.block === ref.completion
+      : auditBlockField(event.block, "Stage") === node.slug &&
+        auditBlockField(event.block, "Reviewer") === node.reviewer &&
+        (auditBlockField(event.block, "Unit") ?? "") === (directive.unit ?? "") &&
+        auditBlockField(event.block, "Workflow") === null)
+  );
+  if (!completion) return;
+  let reviewState = stateContent;
+  for (const event of sortAttemptEvents(attempt.allEvents).reverse()) {
+    if (event.block === completion.block) break;
+    if (event.event === "REVIEW_CLASS_CHANGED") {
+      const old = auditBlockField(event.block, "Old Override");
+      if (old !== null) {
+        reviewState = setField(reviewState, "Review Override", old === "none set" ? "" : old);
+      }
+    } else if (event.event === "SCOPE_CHANGED") {
+      const old = auditBlockField(event.block, "Old Scope");
+      if (old !== null) reviewState = setField(reviewState, "Scope", old);
+    }
+  }
+  directive.reviewer = node.reviewer;
+  directive.review_artifact = node.review_artifact;
+  const reviewClass = resolveReviewClass(node.review_class, getField(reviewState, "Scope") ?? "", reviewState);
+  // Legacy/manual state edits may carry no setting-change row. A verified
+  // completion still proves review happened; retain the declared class then.
+  directive.review_class = reviewClass === "none" ? node.review_class ?? "adversarial" : reviewClass;
 }
 
 function applySettledSwarmShape(
@@ -7411,7 +7490,7 @@ function emitTeamUnitMajorRunStage(
           emit(preflight);
           return;
         }
-        emit(applyGateOnlyShape(directive));
+        emit(applyGateOnlyShape(directive, projectDir, refreshedState));
         return;
       }
     }
@@ -7450,7 +7529,7 @@ function emitTeamUnitMajorRunStage(
         emit(preflight);
         return;
       }
-      emit(applyGateOnlyShape(directive));
+      emit(applyGateOnlyShape(directive, projectDir, refreshedState));
       return;
     }
   }
@@ -10183,7 +10262,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   if (payload.x) directive.single = true;
   if (payload.z === true) applySettledSwarmShape(directive);
   if (payload.q !== undefined) directive.unit_gate = payload.q;
-  if (payload.o === true) applyGateOnlyShape(directive);
+  if (payload.o === true) applyGateOnlyShape(directive, pd, liveState ?? "");
   if (payload.j !== undefined && payload.u !== null && liveState !== null) {
     applyConstructionCheckpointShape(
       directive, resolveConstructionCheckpoint(pd, payload.u, payload.j, liveState),

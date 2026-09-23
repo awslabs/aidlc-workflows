@@ -158,6 +158,11 @@ values and sources for Guard Policy, the four switchable fences, and the ceremon
 /aidlc config list --json
 ```
 
+Typed `config set`, `get`, and `list` requests execute during dispatch and
+return the command's actual output before the turn finishes. A refused setting
+returns its error; successful settings do not advance the workflow. Guard
+lowering still belongs to the human-turn hook.
+
 The additional read-only `guard.human-presence` lookup reports `on (default)` or `off (env AIDLC_SKIP_HUMAN_PRESENCE_GUARD)`; it is not a per-work setting and is not included in `config list`.
 
 `config-change` accepts only those setting flags and `--intent`, `--space`,
