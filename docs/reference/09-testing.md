@@ -1516,10 +1516,22 @@ Kiro uses only the dedicated CI-identity Windows host's existing sign-in, withou
 workflow-injected API keys. Runner-owned collection copies completed logs back
 for sanitization before upload; it does not execute sandbox-authored code.
 
+After Windows sandbox processes have stopped, test logs and launch logs are
+collected independently. A failed test-tree copy still preserves validated
+launch stdout/stderr under `tests/logs/windows-launch-<uuid>/`. Only complete,
+validated trees are published; collection remains failed when either copy
+fails. `tests/logs/windows-collection-<uuid>.json` records completion per source
+and, on failure, the operation, safe relative path and exception codes. It omits
+exception messages, absolute paths and sensitive path components. An uploaded
+collection report or fallback log does not establish that a test passed.
+
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and
-is blocked if sanitization fails. Driver NDJSON, `sdk-drive*`, `tui-drive*` and
-`e2e-artifacts/**/traces` are deleted by default; setting repository variable
-`AIDLC_NIGHTLY_UPLOAD_TRACES=1` explicitly retains eligible text traces. Invalid
+is blocked if sanitization fails. Full-suite and shared deterministic jobs retain
+eligible driver NDJSON, `sdk-drive*`, `tui-drive*` and `e2e-artifacts/**/traces`
+by default so tool calls, completion boundaries and timeout behavior remain
+available for diagnosis. Repository variable `AIDLC_NIGHTLY_UPLOAD_TRACES=0`
+opts out of trace retention. The standalone sanitizer still deletes these traces
+unless its `AIDLC_NIGHTLY_UPLOAD_TRACES` environment variable is `1`. Invalid
 UTF-8, UTF-16, NUL-containing and other non-text files are always deleted, with
 their relative paths and reasons recorded in `sanitizer-report.json`; there is
 no binary/screenshot allowlist. Remaining UTF-8 text is redacted for AWS

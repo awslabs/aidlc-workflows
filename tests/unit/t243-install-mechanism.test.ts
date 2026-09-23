@@ -3561,12 +3561,17 @@ describe("t243 release lifecycle", () => {
       },
     });
     try {
+      // The shared deadline can expire before a request starts, or abort an
+      // in-flight request. Both must remain timeout-specific release failures.
       await expect(acquireRelease({
         version: manifest.version,
         names: [binary],
         baseUrl: `http://127.0.0.1:${delayed.port}`,
         metadataTimeoutMs: 10,
-      })).rejects.toThrow("timed out after 10ms");
+      })).rejects.toMatchObject({
+        name: "ReleaseUnavailableError",
+        message: expect.stringContaining("timed out"),
+      });
     } finally {
       delayed.stop(true);
     }

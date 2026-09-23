@@ -236,31 +236,75 @@ function Set-RuntimeAcl([string]$Path, $Identity, [string]$Rights, [switch]$Tree
     }
 }
 
-function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout, [switch]$RejectLinks) {
-    Assert-PlainPath $Source
-    Assert-PlainPath $Destination
-    [void][IO.Directory]::CreateDirectory($Destination)
-    foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($Source)) {
-        $name = [IO.Path]::GetFileName($entry)
-        if ($Checkout -and ($name -match '^(\.git|\.aws|\.ssh|\.azure|\.config|\.npmrc|\.netrc|_netrc|\.pypirc|\.env(?:\..*)?)$')) { continue }
-        $attributes = [IO.File]::GetAttributes($entry)
-        if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            if ($RejectLinks) { throw 'Refusing linked log evidence.' }
-            continue
+function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string]$SourceRoot) {
+    # Paths are artifact-only, relative to an explicitly selected log root.
+    # Never serialize exception messages/stacks, absolute paths or environment.
+    $relative = '[outside-log-root]'
+    try {
+        $prefix = [IO.Path]::GetFullPath($SourceRoot).TrimEnd('\') + '\'
+        $full = [IO.Path]::GetFullPath($Path)
+        if ($full.TrimEnd('\') -ieq $prefix.TrimEnd('\')) { $relative = '.' }
+        elseif ($full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            $relative = $full.Substring($prefix.Length).Replace('\', '/')
         }
-        $target = Join-Path $Destination $name
-        Assert-PlainPath $target
-        if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
-            Copy-PlainTree $entry $target -Checkout:$Checkout -RejectLinks:$RejectLinks
-        } else {
-            # Copy bytes, not source ACLs, alternate streams, or hard-link identity.
-            $sourceStream = [IO.File]::Open($entry, 'Open', 'Read', 'Read')
-            try {
-                if ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($sourceStream) }
-                $output = [IO.File]::Open($target, 'CreateNew', 'Write', 'None')
-                try { $sourceStream.CopyTo($output) } finally { $output.Dispose() }
-            } finally { $sourceStream.Dispose() }
+    } catch { $relative = '[unavailable-path]' } # Keep the original error if path normalization itself fails.
+    if ($relative -match '(?i)(^|/)(\.sandbox-secrets|\.aws|\.ssh|\.azure|\.env(?:\..*)?|credentials?(?:[./-]|$))' -or
+        $relative -match '[^\x20-\x7e]' -or $relative.Length -gt 512) {
+        $relative = '[withheld-path]'
+    }
+    $exceptions = @()
+    for ($exception = $Failure.Exception; $null -ne $exception; $exception = $exception.InnerException) {
+        $detail = [ordered]@{ type = $exception.GetType().FullName; hresult = ('0x{0:X8}' -f $exception.HResult) }
+        if ($exception -is [ComponentModel.Win32Exception]) { $detail['nativeCode'] = $exception.NativeErrorCode }
+        $exceptions += $detail
+    }
+    return [ordered]@{ operation = $Operation; relativePath = $relative; exceptions = $exceptions }
+}
+
+function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout, [switch]$RejectLinks, [hashtable]$Diagnostic) {
+    $operation = 'inspect-source'
+    $observed = $Source
+    try {
+        Assert-PlainPath $Source
+        $operation = 'create-destination'
+        Assert-PlainPath $Destination
+        [void][IO.Directory]::CreateDirectory($Destination)
+        $operation = 'enumerate-source'
+        # Enumerate eagerly while the diagnostic still identifies this directory;
+        # a lazy MoveNext failure must not inherit the previous entry's operation.
+        $entries = [IO.Directory]::GetFileSystemEntries($Source)
+        foreach ($entry in $entries) {
+            $observed = $entry
+            $operation = 'inspect-entry'
+            $name = [IO.Path]::GetFileName($entry)
+            if ($Checkout -and ($name -match '^(\.git|\.aws|\.ssh|\.azure|\.config|\.npmrc|\.netrc|_netrc|\.pypirc|\.env(?:\..*)?)$')) { continue }
+            $attributes = [IO.File]::GetAttributes($entry)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                if ($RejectLinks) { throw 'Refusing linked log evidence.' }
+                continue
+            }
+            $target = Join-Path $Destination $name
+            Assert-PlainPath $target
+            if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
+                Copy-PlainTree $entry $target -Checkout:$Checkout -RejectLinks:$RejectLinks -Diagnostic $Diagnostic
+            } else {
+                # Copy bytes, not source ACLs, alternate streams, or hard-link identity.
+                $operation = 'open-source'
+                $sourceStream = [IO.File]::Open($entry, 'Open', 'Read', 'Read')
+                try {
+                    $operation = 'validate-source-handle'
+                    if ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($sourceStream) }
+                    $operation = 'copy-bytes'
+                    $output = [IO.File]::Open($target, 'CreateNew', 'Write', 'None')
+                    try { $sourceStream.CopyTo($output) } finally { $output.Dispose() }
+                } finally { $sourceStream.Dispose() }
+            }
         }
+    } catch {
+        if ($null -ne $Diagnostic -and -not $Diagnostic.ContainsKey('failure')) {
+            $Diagnostic.failure = Get-LogCopyFailure $_ $operation $observed $Diagnostic.root
+        }
+        throw
     }
 }
 
@@ -282,6 +326,75 @@ function Remove-OwnedTree([string]$Path) {
         }
     }
     [IO.Directory]::Delete($Path)
+}
+
+function Collect-RuntimeLogs {
+    # Called only after sandbox logons are disabled and owned processes drained.
+    # Stage on the destination volume so publication is an atomic directory move.
+    $parent = Join-Path $workspace 'tests'
+    $destination = Join-Path $parent 'logs'
+    Assert-PlainPath $parent
+    Assert-PlainPath $destination
+    [void][IO.Directory]::CreateDirectory($parent)
+    $records = @()
+    foreach ($item in @(
+        @{ label = 'tests'; source = (Join-Path $work 'tests\logs'); optional = $true },
+        @{ label = 'launch'; source = (Join-Path $tools 'logs'); optional = $false }
+    )) {
+        $staging = Join-Path $parent ('.aidlc-collect-' + [Guid]::NewGuid().ToString('N'))
+        $created = $false
+        $diagnostic = @{ root = $item.source }
+        $record = [ordered]@{ source = $item.label; complete = $false }
+        $operation = 'inspect-source'
+        try {
+            Assert-PlainPath $item.source
+            if ($item.optional -and -not (Test-Path -LiteralPath $item.source)) {
+                $record['missing'] = $true
+                $record.complete = $true
+            } else {
+                $operation = 'stage-source'
+                New-PrivateDirectory $staging
+                $created = $true
+                Copy-PlainTree $item.source $staging -RejectLinks -Diagnostic $diagnostic
+                $operation = 'seal-staging'
+                Set-RuntimeAcl $staging $null 'ReadAndExecute' -Tree -RejectLinks
+                $operation = 'publish-staging'
+                if ($item.label -eq 'tests' -and -not (Test-Path -LiteralPath $destination)) {
+                    $target = $destination
+                } else {
+                    Assert-PlainPath $destination
+                    if (-not (Test-Path -LiteralPath $destination)) { New-PrivateDirectory $destination }
+                    $name = if ($item.label -eq 'tests') { 'windows-isolated-' } else { 'windows-launch-' }
+                    $target = Join-Path $destination ($name + [Guid]::NewGuid().ToString('N'))
+                }
+                [IO.Directory]::Move($staging, $target)
+                $created = $false
+                $record.complete = $true
+            }
+        } catch {
+            $record['failure'] = if ($diagnostic.ContainsKey('failure')) { $diagnostic.failure }
+                else { Get-LogCopyFailure $_ $operation $item.source $item.source }
+        } finally {
+            if ($created) {
+                try { Remove-OwnedTree $staging }
+                catch { $record['stagingCleanupFailure'] = Get-LogCopyFailure $_ 'remove-staging' $staging $staging }
+            }
+        }
+        $records += $record
+    }
+    # A bulk-copy failure must not suppress the independent launch log copy.
+    # Only validated complete trees were published; partial staging stays out.
+    Assert-PlainPath $destination
+    if (-not (Test-Path -LiteralPath $destination)) { New-PrivateDirectory $destination }
+    $failed = @($records | Where-Object { -not $_.complete -or $_.Contains('stagingCleanupFailure') }).Count -ne 0
+    $report = Join-Path $destination ('windows-collection-' + [Guid]::NewGuid().ToString('N') + '.json')
+    $json = [ordered]@{ complete = -not $failed; sources = $records } | ConvertTo-Json -Depth 8
+    $stream = [IO.File]::Open($report, 'CreateNew', 'Write', 'None')
+    try {
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json + "`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+    } finally { $stream.Dispose() }
+    if ($failed) { throw 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.' }
 }
 
 function ConvertTo-PSLiteral([string]$Value) {
@@ -2652,25 +2765,7 @@ exit $LASTEXITCODE
     if ($Mode -eq 'collect') {
         Stop-SandboxProcesses -Disable -AdditionalSids $codexSandboxSids
         Remove-CodexHostedStationAccess $sandboxSid.Value $codexSandboxSids
-        $source = Join-Path $work 'tests\logs'
-        Assert-PlainPath (Join-Path $work 'tests')
-        Assert-PlainPath $source
-        $destination = Join-Path $workspace 'tests\logs'
-        Assert-PlainPath $destination
-        if ([IO.Directory]::Exists($source)) {
-            # Fresh staging prevents overwriting a link planted in an existing destination.
-            $staging = Join-Path $stateRoot ('logs-' + [Guid]::NewGuid().ToString('N'))
-            Copy-PlainTree $source $staging -RejectLinks
-            if (Test-Path -LiteralPath $destination) {
-                # Preserve existing trusted logs rather than deleting another step's evidence.
-                $destination = Join-Path $destination ('windows-isolated-' + [Guid]::NewGuid().ToString('N'))
-            }
-            Copy-PlainTree $staging $destination -RejectLinks
-        } else { [void][IO.Directory]::CreateDirectory($destination) }
-        $launchLogs = Join-Path $destination ('windows-launch-' + [Guid]::NewGuid().ToString('N'))
-        [void][IO.Directory]::CreateDirectory($launchLogs)
-        Copy-PlainTree (Join-Path $tools 'logs') $launchLogs -RejectLinks
-        Set-RuntimeAcl (Join-Path $workspace 'tests\logs') $null 'ReadAndExecute' -Tree
+        Collect-RuntimeLogs
         [Console]::WriteLine('Collected runner-owned Windows logs for sanitization; sandbox logons are disabled.')
         exit 0
     }

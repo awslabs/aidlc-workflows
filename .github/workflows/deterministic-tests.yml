@@ -182,7 +182,7 @@ jobs:
         id: sanitize
         if: ${{ always() }}
         env:
-          AIDLC_NIGHTLY_UPLOAD_TRACES: ${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}
+          AIDLC_NIGHTLY_UPLOAD_TRACES: ${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}
         run: |
           bun scripts/ci-sanitize-logs.ts tests/logs
           bun scripts/ci-sanitize-logs.ts tmp/ci-deterministic

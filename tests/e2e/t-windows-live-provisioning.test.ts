@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
@@ -701,6 +701,36 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
     }
 
   });
+
+  for (const name of ["collect-valid", "collect-enumeration-error", "collect-linked", "collect-launch-linked", "collect-sensitive", "collect-junction"]) {
+    test(`${name} preserves independent evidence without publishing incomplete trees`, () => {
+      const root = mkdtempSync(join(tmpdir(), "aidlc-collection-"));
+      const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
+      const evidence = join(process.env.AIDLC_TEST_LOG_DIR ?? root, `collection-${randomUUID()}`);
+      try {
+        const result = spawnSync(powershell, [
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fixture,
+          "-SourceRoot", source, "-FixtureRoot", root, "-BunPath", process.execPath,
+          "-Case", name, "-FixtureId", randomUUID(),
+        ], { encoding: "utf8", timeout: 180_000, windowsHide: true });
+        mkdirSync(evidence, { recursive: true });
+        writeFileSync(join(evidence, "stdout.log"), result.stdout);
+        writeFileSync(join(evidence, "stderr.log"), result.stderr);
+        const collected = join(root, "runner-workspace/tests/logs");
+        if (existsSync(collected)) cpSync(collected, join(evidence, "collected"), { recursive: true });
+        expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
+        const record = JSON.parse(readFileSync(join(root, "result.json"), "utf8").replace(/^\uFEFF/, ""));
+        expect(record).toMatchObject({
+          case: name, collection: { complete: name === "collect-valid" },
+          originalAssertionRetained: name !== "collect-launch-linked",
+          existingEvidencePreserved: true, partialTreesPublished: false,
+        });
+        console.log(`Windows collection evidence: ${JSON.stringify(record)}`);
+      } finally {
+        rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    }, 230_000);
+  }
 
   for (const [name, expected] of [
     ["seal", { singleLinkTools: true, lowUserWriteDenied: true }],

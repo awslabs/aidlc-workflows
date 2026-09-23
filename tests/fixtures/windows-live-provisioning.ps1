@@ -1,7 +1,8 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
 param([string]$SourceRoot, [string]$FixtureRoot, [string]$BunPath, [string]$RunnerPath,
-    [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny', 'runner-bootstrap')][string]$Case,
+    [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny', 'runner-bootstrap',
+        'collect-valid', 'collect-enumeration-error', 'collect-linked', 'collect-launch-linked', 'collect-sensitive', 'collect-junction')][string]$Case,
     [ValidateSet('run', 'cleanup')][string]$Mode = 'run', [Parameter(Mandatory)][Guid]$FixtureId)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -188,6 +189,94 @@ $poisonedLog = Join-Path $tools 'logs\linked.log'
 $result = [ordered]@{ case = $Case }
 $fixtureFailure = $null
 $identityReceipt = $null
+
+if ($Case.StartsWith('collect-')) {
+    # Filesystem-only regression: execute the real collector in a private scope,
+    # after the production caller's process drain. No accounts or global runtime.
+    $testLogs = Join-Path $work 'tests\logs'
+    $launchLogs = Join-Path $tools 'logs'
+    $destination = Join-Path $workspace 'tests\logs'
+    foreach ($path in @($testLogs, $launchLogs, $destination)) {
+        [void][IO.Directory]::CreateDirectory($path)
+    }
+    [IO.File]::WriteAllText((Join-Path $destination 'previous.log'), 'earlier trusted evidence')
+    [IO.File]::WriteAllText((Join-Path $testLogs 'summary.txt'), "Result: FAIL`nFailed files: 1`n")
+    [IO.File]::WriteAllText((Join-Path $testLogs 'failure.log'), 'ORIGINAL_ASSERTION expected 1 received 2')
+    $output = "ORIGINAL_ASSERTION expected 1 received 2`n" + (('later test output' + "`n") * 80)
+    [IO.File]::WriteAllText((Join-Path $launchLogs 'stdout.log'), $output)
+    [IO.File]::WriteAllText((Join-Path $FixtureRoot 'protected.txt'), $secret)
+    if ($Case -eq 'collect-enumeration-error') {
+        # A real .NET directory-enumeration error, independent of elevated
+        # tokens' ability to enumerate a directory with a restrictive DACL.
+        Remove-OwnedTree $testLogs
+        [IO.File]::WriteAllText($testLogs, 'a log root must be a directory')
+    } elseif ($Case -eq 'collect-junction') {
+        $outside = Join-Path $FixtureRoot 'outside-logs'
+        [void][IO.Directory]::CreateDirectory($outside)
+        [IO.File]::WriteAllText((Join-Path $outside 'private.log'), $secret)
+        New-Item -ItemType Junction -Path (Join-Path $testLogs 'linked-directory') -Target $outside | Out-Null
+    } elseif ($Case -in @('collect-linked', 'collect-launch-linked', 'collect-sensitive')) {
+        $selected = if ($Case -eq 'collect-linked') { $testLogs } else { $launchLogs }
+        if ($Case -eq 'collect-sensitive') {
+            $selected = Join-Path $testLogs '.sandbox-secrets\credential-fixture'
+            [void][IO.Directory]::CreateDirectory($selected)
+        }
+        New-Item -ItemType HardLink -Path (Join-Path $selected 'linked.log') -Target (Join-Path $FixtureRoot 'protected.txt') | Out-Null
+    }
+    $failed = $false
+    try { Collect-RuntimeLogs }
+    catch {
+        $failed = $true
+        Check ($_.Exception.Message -eq 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.') 'Unexpected collection error.'
+    }
+    Check ($failed -eq ($Case -ne 'collect-valid')) 'Collection returned the wrong verdict.'
+    $reports = @([IO.Directory]::GetFiles($destination, 'windows-collection-*.json'))
+    Check ($reports.Count -eq 1) 'Missing independent collection report.'
+    $reportText = [IO.File]::ReadAllText($reports[0])
+    $report = $reportText | ConvertFrom-Json
+    Check ($report.complete -eq (-not $failed)) 'Collection report misstates completeness.'
+    Check (-not $reportText.Contains($FixtureRoot) -and -not $reportText.Contains($secret) -and
+        -not $reportText.Contains('credential-fixture')) 'Collection diagnostic disclosed a protected path or value.'
+    Check ([IO.File]::ReadAllText((Join-Path $destination 'previous.log')) -eq 'earlier trusted evidence') 'Collection replaced existing evidence.'
+    $testCopies = @([IO.Directory]::GetDirectories($destination, 'windows-isolated-*'))
+    $launchCopies = @([IO.Directory]::GetDirectories($destination, 'windows-launch-*'))
+    $testExpected = $Case -in @('collect-valid', 'collect-launch-linked')
+    Check ($testCopies.Count -eq [int]$testExpected) 'Bulk collection published a partial tree or lost a valid one.'
+    Check ($launchCopies.Count -eq [int]($Case -ne 'collect-launch-linked')) 'Independent launch evidence was lost or linked evidence was published.'
+    if ($launchCopies.Count -eq 1) {
+        Check ([IO.File]::ReadAllText((Join-Path $launchCopies[0] 'stdout.log')) -ceq $output) 'The original assertion was truncated or lost.'
+    }
+    if ($testExpected) {
+        Check ([IO.File]::ReadAllText((Join-Path $testCopies[0] 'failure.log')).Contains('ORIGINAL_ASSERTION')) 'Bulk failure details were lost.'
+    }
+    if ($Case -eq 'collect-enumeration-error') {
+        $failure = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].failure
+        Check ($failure.operation -eq 'enumerate-source') 'Collection did not identify directory enumeration.'
+        Check (@($failure.exceptions | Where-Object { $_.type -eq 'System.IO.IOException' -and $_.hresult -eq '0x8007010B' }).Count -eq 1) 'Native directory failure code was not retained.'
+        Check ($failure.relativePath -ceq '.') 'Wrong relative enumeration diagnostic path.'
+    }
+    if ($Case -eq 'collect-junction') {
+        $failure = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].failure
+        Check ($failure.operation -eq 'inspect-entry' -and $failure.relativePath -eq 'linked-directory') 'Junction rejection was not diagnosed.'
+        Check ([IO.File]::ReadAllText((Join-Path $outside 'private.log')) -ceq $secret) 'Collection changed a junction target.'
+    }
+    if ($Case -in @('collect-linked', 'collect-launch-linked')) {
+        $failure = @($report.sources | Where-Object { -not $_.complete })[0].failure
+        Check ($failure.operation -eq 'validate-source-handle' -and $failure.relativePath -eq 'linked.log') 'Hard-link rejection was not diagnosed.'
+    }
+    if ($Case -eq 'collect-sensitive') {
+        $failure = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].failure
+        Check ($failure.relativePath -ceq '[withheld-path]') 'A sensitive diagnostic path was not withheld.'
+    }
+    Check (@([IO.Directory]::GetDirectories((Join-Path $workspace 'tests'), '.aidlc-collect-*')).Count -eq 0) 'Partial staging was left behind.'
+    $result['collection'] = $report
+    $result['originalAssertionRetained'] = $launchCopies.Count -eq 1
+    $result['existingEvidencePreserved'] = $true
+    $result['partialTreesPublished'] = $false
+    $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $FixtureRoot 'result.json') -Encoding UTF8
+    [Console]::WriteLine(($result | ConvertTo-Json -Depth 12 -Compress))
+    exit 0
+}
 
 try {
     Set-RuntimeAcl $FixtureRoot $null 'ReadAndExecute'

@@ -576,6 +576,7 @@ describe("t345 complete nightly coverage", () => {
         if (!step.uses?.startsWith("actions/upload-artifact@") || typeof path !== "string" || !path.split("\n").includes("tests/logs/")) continue;
         const sanitize = steps(job)[index - 1];
         expect(sanitize).toMatchObject({ id: "sanitize", if: `\${{ always() }}` });
+        expect(sanitize.env?.AIDLC_NIGHTLY_UPLOAD_TRACES).toBe(`\${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}`);
         expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tests/logs");
         if (path.includes("tmp/full-suite-native/")) expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tmp/full-suite-native");
         expect(step.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);
@@ -585,6 +586,7 @@ describe("t345 complete nightly coverage", () => {
     const upload = sharedSteps.find((step) => step.uses?.startsWith("actions/upload-artifact@"))!;
     const sanitize = sharedSteps.find((step) => step.id === "sanitize")!;
     expect(sanitize.if).toBe(`\${{ always() }}`);
+    expect(sanitize.env?.AIDLC_NIGHTLY_UPLOAD_TRACES).toBe(`\${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}`);
     expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tests/logs");
     expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tmp/ci-deterministic");
     expect(upload.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);

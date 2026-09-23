@@ -225,7 +225,7 @@ jobs:
         id: sanitize
         if: "${{ always() }}"
         env:
-          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
         run: |
           bun scripts/ci-sanitize-logs.ts tests/logs
           bun scripts/ci-sanitize-logs.ts tmp/full-suite-native
@@ -325,6 +325,8 @@ jobs:
       - name: "Sanitize production guard evidence"
         id: sanitize
         if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
         run: |
           bun scripts/ci-sanitize-logs.ts tests/logs
           bun scripts/ci-sanitize-logs.ts tmp/full-suite-production-guards
@@ -503,7 +505,7 @@ jobs:
         id: sanitize
         if: "${{ always() }}"
         env:
-          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
@@ -600,7 +602,7 @@ jobs:
         id: sanitize
         if: "${{ always() }}"
         env:
-          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
@@ -636,7 +638,7 @@ jobs:
         id: sanitize
         if: "${{ always() }}"
         env:
-          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}"
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"

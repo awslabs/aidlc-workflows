@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync,
+  copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -78,7 +78,58 @@ function run(root: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
   return {
     code: result.status, output: result.stdout + result.stderr,
     log: match?.[1].trim(),
+    stdout: result.stdout, stderr: result.stderr, signal: result.signal,
+    spawnError: result.error ? { name: result.error.name, message: result.error.message, code: (result.error as NodeJS.ErrnoException).code } : null,
   };
+}
+
+function retainRunnerDiagnostics(result: ReturnType<typeof run>, evidence: string): void {
+  writeFileSync(join(evidence, "stdout.log"), result.stdout);
+  writeFileSync(join(evidence, "stderr.log"), result.stderr);
+  writeFileSync(join(evidence, "exit.json"), JSON.stringify({
+    code: result.code, signal: result.signal, spawnError: result.spawnError, log: result.log,
+  }, null, 2));
+  if (!result.log) throw new Error("Nested runner did not report a diagnostic directory");
+  // Retain report bytes before afterEach deletes the synthetic checkout. Do not
+  // traverse retained projects, dependencies, or links as diagnostic evidence.
+  const copy = (source: string, destination: string) => {
+    mkdirSync(destination, { recursive: true });
+    for (const name of readdirSync(source)) {
+      const from = join(source, name);
+      const stat = lstatSync(from);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        if (!["retained-fixtures", "node_modules", ".git"].includes(name)) copy(from, join(destination, name));
+      } else if (stat.isFile() && /\.(log|json|ndjson|xml|txt|meta)$/.test(name)) {
+        copyFileSync(from, join(destination, name));
+      }
+    }
+  };
+  copy(result.log, join(evidence, "nested-logs"));
+}
+
+function finishRunnerDiagnostics(
+  result: ReturnType<typeof run>, evidence: string, observations: unknown, assertionFailed: boolean,
+): void {
+  console.log(`Initial log-write cancellation evidence: ${evidence}`);
+  const failures: Array<{ operation: string; error: unknown }> = [];
+  for (const [operation, write] of [
+    ["observations", () => writeFileSync(join(evidence, "observations.json"), JSON.stringify(observations, null, 2))],
+    ["nested-logs", () => retainRunnerDiagnostics(result, evidence)],
+  ] as const) {
+    try { write(); } catch (error) { failures.push({ operation, error }); }
+  }
+  if (!failures.length) return;
+  const details = failures.map(({ operation, error }) => {
+    const detail = error as NodeJS.ErrnoException;
+    return { operation, name: detail.name, code: detail.code, message: detail.message ?? String(error) };
+  });
+  console.error(`Nested runner diagnostic retention failed: ${JSON.stringify(details)}`);
+  try { writeFileSync(join(evidence, "retention-errors.json"), JSON.stringify(details, null, 2)); }
+  catch (error) { console.error(`Could not write retention error report: ${String(error)}`); }
+  // Keep a failing assertion authoritative. Successful assertions still require
+  // complete retention; a report-copy failure must not turn that case green.
+  if (!assertionFailed) throw failures[0].error;
 }
 
 function json<T = Record<string, unknown>>(path: string): T {
@@ -539,8 +590,50 @@ test("capture failure",async()=>{
     expect(existsSync(join(result.log!, "e2e-artifacts", "t-fail", "junit.xml"))).toBe(true);
   }, 60_000);
 
+  test("nested assertion diagnostics survive deletion of their synthetic checkout", () => {
+    const root = fixture({
+      "t-original-failure.test.ts": 'import {test,expect} from "bun:test"; test("ORIGINAL_NESTED_ASSERTION",()=>expect(1).toBe(2));',
+    });
+    const result = run(root);
+    const outerLogs = process.env.AIDLC_TEST_LOG_DIR ?? join(SOURCE, "tmp");
+    mkdirSync(outerLogs, { recursive: true });
+    const evidence = mkdtempSync(join(outerLogs, "nested-failure-retention-"));
+    retainRunnerDiagnostics(result, evidence);
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    expect(existsSync(root)).toBe(false);
+    expect(json<{ code: number }>(join(evidence, "exit.json")).code).toBe(1);
+    expect(readFileSync(join(evidence, "stdout.log"), "utf8")).toContain("ORIGINAL_NESTED_ASSERTION");
+    expect(readFileSync(join(evidence, "nested-logs/t-original-failure.log"), "utf8")).toContain("Received: 1");
+    expect(readFileSync(join(evidence, "nested-logs/t-original-failure.junit.xml"), "utf8")).toContain("<failure");
+    expect(readFileSync(join(evidence, "nested-logs/summary.txt"), "utf8")).toContain("Result: FAIL");
+    expect(readFileSync(join(evidence, "nested-logs/failures.txt"), "utf8")).toContain("ORIGINAL_NESTED_ASSERTION");
+  }, 60_000);
+
+  test("a nested log-copy error preserves observations and the original assertion", () => {
+    const root = fixture({ "t-original-failure.test.ts": pass });
+    const result = run(root);
+    expect(result.code, result.output).toBe(0);
+    // A real file where the recursive copier expects a directory causes ENOTDIR.
+    const invalid = { ...result, log: join(result.log!, "t-original-failure.log") };
+    const outerLogs = process.env.AIDLC_TEST_LOG_DIR ?? join(SOURCE, "tmp");
+    mkdirSync(outerLogs, { recursive: true });
+    const evidence = mkdtempSync(join(outerLogs, "nested-retention-error-"));
+    const observations = { probes: [{ pid: 123, error: { code: "ESRCH" } }] };
+    const original = new Error("ORIGINAL_ASSERTION_MUST_SURVIVE");
+    expect(() => {
+      try { throw original; }
+      finally { finishRunnerDiagnostics(invalid, evidence, observations, true); }
+    }).toThrow(original);
+    expect(json<typeof observations>(join(evidence, "observations.json"))).toEqual(observations);
+    expect(json<Array<{ operation: string; code: string }>>(join(evidence, "retention-errors.json")))
+      .toMatchObject([{ operation: "nested-logs", code: "ENOTDIR" }]);
+    expect(readFileSync(join(evidence, "stdout.log"), "utf8")).toBe(result.stdout);
+    expect(() => finishRunnerDiagnostics(invalid, evidence, observations, false)).toThrow();
+  }, 60_000);
+
   test("an initial log-write failure cancels admitted siblings and stops the queue", () => {
     const witnesses = scratch();
+    const queuedWitness = join(scratch(), "queued");
     const files: Record<string, string> = {};
     for (let i = 1; i <= 7; i++) {
       files[`t0${i}-waiting.test.ts`] = `
@@ -553,7 +646,8 @@ test("waits",async()=>{
 `;
     }
     files["t08-write-error.test.ts"] = pass;
-    files["t09-queued.test.ts"] = 'import {test} from "bun:test"; test("queued",()=>console.log("QUEUED_SENTINEL_RAN"));';
+    files["t09-queued.test.ts"] = `import {test} from "bun:test"; import {writeFileSync} from "node:fs";
+test("queued",()=>{writeFileSync(${JSON.stringify(queuedWitness)},"executed");console.log("QUEUED_SENTINEL_RAN");});`;
     const root = fixture(files);
     const path = join(root, "tests", "run-tests.ts");
     const source = readFileSync(path, "utf8");
@@ -566,16 +660,45 @@ if (streamPath && base === "t08-write-error.test.ts") {
   mkdirSync(streamPath);
 }
 ${needle}`));
+    const outerLogs = process.env.AIDLC_TEST_LOG_DIR ?? join(SOURCE, "tmp");
+    mkdirSync(outerLogs, { recursive: true });
+    const evidence = mkdtempSync(join(outerLogs, "initial-log-write-"));
     const started = Date.now();
     const result = run(root);
-    expect(Date.now() - started).toBeLessThan(15_000);
-    expect(result.code, result.output).not.toBe(0);
-    expect(result.output).not.toContain("QUEUED_SENTINEL_RAN");
-    const records = readdirSync(witnesses);
-    expect(records.length).toBeGreaterThan(0);
-    for (const file of records) {
-      const pid = Number(readFileSync(join(witnesses, file), "utf8"));
-      expect(() => process.kill(pid, 0)).toThrow();
+    const elapsedMs = Date.now() - started;
+    const probes: Array<{ pid: number; returned?: boolean; error?: { name: string; message: string; code?: string } }> = [];
+    let assertionFailed = false;
+    try {
+      expect(elapsedMs, result.output).toBeLessThan(15_000);
+      expect(result.code, result.output).not.toBe(0);
+      expect(result.output).not.toContain("QUEUED_SENTINEL_RAN");
+      const files = readdirSync(witnesses);
+      expect(files.length, result.output).toBeGreaterThan(0);
+      for (const file of files) {
+        // Preserve the original immediate read/probe ordering. Archive I/O and
+        // the additional queued-file assertion happen after these observations.
+        const pid = Number(readFileSync(join(witnesses, file), "utf8"));
+        expect(() => {
+          try { process.kill(pid, 0); probes.push({ pid, returned: true }); }
+          catch (error) {
+            const detail = error as NodeJS.ErrnoException;
+            probes.push({ pid, error: { name: detail.name, message: detail.message, code: detail.code } });
+            throw error;
+          }
+        }, `Sibling ${file}, pid=${pid}; evidence: ${evidence}`).toThrow();
+      }
+      expect(existsSync(queuedWitness), result.output).toBe(false);
+    } catch (error) {
+      assertionFailed = true;
+      throw error;
+    } finally {
+      let records: Array<{ file: string; value: string }> = [];
+      let witnessReadError: string | undefined;
+      try { records = readdirSync(witnesses).map(file => ({ file, value: readFileSync(join(witnesses, file), "utf8") })); }
+      catch (error) { witnessReadError = String(error); }
+      finishRunnerDiagnostics(result, evidence, {
+        elapsedMs, records, probes, queuedExecuted: existsSync(queuedWitness), witnessReadError,
+      }, assertionFailed);
     }
   }, 60_000);
 
