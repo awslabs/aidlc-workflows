@@ -165,6 +165,21 @@ const TOOL_PREFIX_TOKEN = /\{\{TOOL_PREFIX\}\}/g;
 // channel's invocation, which no other token can compose: the copy channel's
 // pattern ends in `.ts` and the native channel's must not mention it at all.
 const TOOL_COMMAND_PATTERN_TOKEN = /\{\{TOOL_COMMAND_PATTERN\}\}/g;
+// The engine's own shipped tool FILENAMES, comma-joined, for a harness whose
+// adapter enforces the tool set rather than pattern-matching it.
+//
+// Measured on Kiro IDE 1.x: a 3.0 shell glob's `*` crosses a path separator and
+// the matcher does not canonicalize `..` first, so a single grant of
+// `bun <harness>/tools/*.ts` pre-approved `bun <harness>/tools/../../probe.ts` -
+// a file at the PROJECT ROOT - with no approval prompt. The 2.x regex it replaces
+// used `[A-Za-z0-9._-]+`, whose class excludes `/` and so could not be traversed.
+// A glob cannot express "not a slash", so the containment moves to the adapter,
+// which can compare against a real list.
+//
+// Baked at PACKAGE time on purpose. Read at runtime it would enumerate the
+// user's own project directory, so a planted file would be in its own allowlist -
+// which is the hole the enumeration exists to close.
+const SHIPPED_TOOL_NAMES_TOKEN = /\{\{SHIPPED_TOOL_NAMES\}\}/g;
 const TRUSTED_NAMESPACE_TOKEN = /\{\{TRUSTED_NAMESPACE\}\}/g;
 // Matched by PREFIX (mirroring aidlc-init.ts's marker scan): the begin marker
 // embeds the harness-projected invocation, so its tail varies per channel.
@@ -232,7 +247,31 @@ function substituteInvocationTokens(
     .replace(INVOKE_TOKEN, invoke)
     .replace(TOOL_PREFIX_TOKEN, toolPrefix)
     .replace(TOOL_COMMAND_PATTERN_TOKEN, toolCommandPattern)
+    .replace(SHIPPED_TOOL_NAMES_TOKEN, shippedToolNames())
     .replace(TRUSTED_NAMESPACE_TOKEN, TRUSTED_ROUTE_NAMESPACE);
+}
+
+// The tool filenames this build ships, read from the engine's own source tree at
+// package time. Sorted so the substituted value is byte-stable across builds -
+// readdir order is not - which keeps a distribution checksum meaningful.
+let shippedToolNamesCache: string | null = null;
+function shippedToolNames(): string {
+  if (shippedToolNamesCache !== null) return shippedToolNamesCache;
+  const names = readdirSync(join(CORE_ROOT, "tools"))
+    .filter((n) => n.endsWith(".ts"))
+    .sort();
+  if (names.length === 0) {
+    throw new Error(
+      "packaging: core/tools holds no .ts files, so the shipped-tool enumeration would " +
+        "be empty and the adapter would refuse every tool invocation",
+    );
+  }
+  // A comma is safe as the separator because it cannot occur in a filename this
+  // filter admits, and the adapter splits on it rather than parsing JSON - which
+  // keeps the token a plain string literal in the unsubstituted source, so the
+  // adapter still typechecks and still runs from a source tree.
+  shippedToolNamesCache = names.join(",");
+  return shippedToolNamesCache;
 }
 
 function substituteToken(

@@ -4137,6 +4137,36 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     ["an empty substitution", "date -u +%s$(:)"],
   ];
 
+  // Refused for a different reason, and with a different message: these are single
+  // simple commands, so the composition lexer has nothing to say about them. What is
+  // wrong is WHICH FILE they name.
+  //
+  // Measured on Kiro IDE 1.x: a 3.0 shell glob's `*` crosses `/` and the matcher does
+  // not canonicalize `..` first, so one grant of `bun .kiro/tools/*.ts` ran
+  // `bun .kiro/tools/../../slash-probe.ts` - a file at the PROJECT ROOT - silently, and
+  // `bun .kiro/tools/data/sub-probe.ts` too. The 2.x regex this replaces used
+  // `[A-Za-z0-9._-]+`, a class that excludes `/`; no glob can express that, so the
+  // containment has to live in the adapter, which can compare against a real list.
+  const REFUSED_TOOL_PATHS: Array<[string, string]> = [
+    ["a path traversing out of the tools directory", "bun .kiro/tools/../../slash-probe.ts"],
+    ["a path into a subdirectory of tools", "bun .kiro/tools/data/sub-probe.ts"],
+    ["traversal through bun run", "bun run .kiro/tools/../../slash-probe.ts"],
+    ["traversal with a quoted path", 'bun ".kiro/tools/../../slash-probe.ts"'],
+    // A planted script whose name merely looks like a tool's. The name must be one the
+    // BUILD shipped, and that list is baked at PACKAGE time - read at runtime it would
+    // enumerate the user's own project directory, so a planted file would appear in its
+    // own allowlist, which is the hole the enumeration exists to close.
+    ["a filename this build did not ship", "bun .kiro/tools/planted.ts"],
+    ["a planted name wearing the engine's prefix", "bun .kiro/tools/aidlc-evil.ts"],
+    // This one used to sit in the list of commands left to the platform, on the reading
+    // that a traversing path was not recognised as an AI-DLC invocation at all. That
+    // reading was wrong in the direction that matters: the platform's glob DOES cover
+    // it - measured - so leaving it alone meant pre-approving it. It is refused now by
+    // the path tier, which is why it belongs here rather than beside its redirection in
+    // the carrier list.
+    ["a traversing path carrying a redirection", "bun .kiro/tools/../../evil.ts > out.txt"],
+  ];
+
   // Forms that must still pass. A boundary refusing these would break the workflow it
   // exists to protect: `2>&1` merges a descriptor rather than naming a file and the
   // model appends it routinely, and a metacharacter inside quotes is literal text the
@@ -4151,6 +4181,16 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     ["an ampersand inside double quotes", 'bun .kiro/tools/aidlc.ts engine status --text "a & b"'],
     ["a literal 2>&1 inside quotes is an argument, not a redirection", 'bun .kiro/tools/aidlc.ts engine status --text "2>&1"'],
     ["a compiled-dispatcher invocation", "aidlc engine status"],
+    // Real shipped tools, through each invocation form the personas use. These are the
+    // false-refusal guard on the enumeration: a refusal here has no consent prompt
+    // behind it, so an enumeration that lost a name would stall a stage with no way
+    // forward. The five below are t252's MUST_ALLOW floor.
+    ["a shipped tool", "bun .kiro/tools/aidlc-state.ts get"],
+    ["a shipped tool with arguments", "bun .kiro/tools/aidlc-orchestrate.ts next --status"],
+    ["a shipped tool through bun run", "bun run .kiro/tools/aidlc-version.ts"],
+    ["a shipped tool with a quoted path", 'bun ".kiro/tools/aidlc-version.ts"'],
+    ["the utility tool", "bun .kiro/tools/aidlc-utility.ts status"],
+    ["the log tool", 'bun .kiro/tools/aidlc-log.ts decision --text "safe words"'],
     ["collapsed whitespace", "bun  .kiro/tools/aidlc.ts   engine   status"],
     ["a quoted script path", 'bun ".kiro/tools/aidlc.ts" engine status'],
     // Expansion is deliberately NOT refused. It changes a command's arguments, not how
@@ -4172,7 +4212,6 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     ["an unrelated chain", "echo hi && curl -s https://example.com"],
     ["a script outside the harness tools directory", "bun scripts/other.ts > out.txt"],
     ["an absolute path into another project", "bun /elsewhere/.kiro/tools/aidlc.ts engine status > out.txt"],
-    ["a traversing path", "bun .kiro/tools/../../evil.ts > out.txt"],
     // A brace group's first word is `{`, so no AI-DLC pre-approval recognises it - and
     // neither does the platform, whose patterns are literal outside their own `*`. It
     // therefore reaches the ordinary consent prompt, which is the correct outcome:
@@ -4204,6 +4243,25 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
         expect(`${label}:code=${r.code}`).toBe(`${label}:code=2`);
         expect(r.stderr).toContain("one simple command");
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a tool path that escapes the directory or names an unshipped file is refused", () => {
+    const dir = scratchProject(true);
+    try {
+      for (const [label, command] of REFUSED_TOOL_PATHS) {
+        const r = boundary(dir, command);
+        expect(`${label}:code=${r.code}`).toBe(`${label}:code=2`);
+        expect(r.stderr).toContain("shipped tools directly");
+      }
+      // The enumeration is baked at package time, and the tests run the PACKAGED tree,
+      // so the membership tier must actually be live here rather than skipped. If the
+      // token were unsubstituted only the shape tier would apply and the two planted
+      // names below would pass - so this asserts the packaging step really ran.
+      const plantedOnly = boundary(dir, "bun .kiro/tools/planted.ts");
+      expect(plantedOnly.code).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

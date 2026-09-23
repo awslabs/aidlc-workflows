@@ -852,6 +852,48 @@ function nativePreloadError(projectDir: string, agents: string[]): string | null
 // an errored hook and lets the tool call through). Declared inside `run` it typechecked
 // in the source and broke only in the packaged projection, where the entry point is
 // compiled against the same file.
+// The tool filenames this build shipped, baked in at package time.
+//
+// A plain comma-joined string rather than a JSON array so the unsubstituted token is
+// a legal string literal: the source tree still typechecks and still runs. When it IS
+// unsubstituted the set holds one bogus entry and no real name is a member, which
+// `shippedToolNameCheckAvailable` detects - see the two-tier check below.
+const SHIPPED_TOOL_NAMES = new Set(
+  "{{SHIPPED_TOOL_NAMES}}".split(",").map((n) => n.trim()).filter((n) => n.length > 0),
+);
+
+function shippedToolNameCheckAvailable(): boolean {
+  for (const name of SHIPPED_TOOL_NAMES) {
+    if (name.includes("{{")) return false;
+  }
+  return SHIPPED_TOOL_NAMES.size > 0;
+}
+
+// Does this command invoke a script THROUGH the harness tools directory?
+//
+// Deliberately broader than the shape we accept: it asks whether the platform's own
+// grant could cover this command, not whether the command is well formed. Measured on
+// Kiro IDE 1.x, a 3.0 shell glob's `*` crosses `/` and the matcher does not
+// canonicalize `..` first, so one grant of `bun <harness>/tools/*.ts` pre-approved
+// `bun <harness>/tools/../../probe.ts`, a file at the PROJECT ROOT, with no prompt.
+// So anything starting down that path has to be judged here rather than left to a
+// pattern that cannot express "not a slash".
+function toolsDirectoryScript(prefix: string[]): string | null {
+  let cursor = 0;
+  const first = prefix[cursor++] ?? "";
+  const leaf = first.replace(/\\/g, "/").split("/").pop() ?? first;
+  if (!/^bun(\.exe)?$/i.test(leaf)) return null;
+  if (prefix[cursor] === "run") cursor++;
+  const script = (prefix[cursor] ?? "").replace(/\\/g, "/");
+  return /^\.[\w-]+\/tools\//.test(script) ? script : null;
+}
+
+const SHELL_BOUNDARY_TOOL_REFUSAL =
+  "AI-DLC refused this command: a pre-approved AI-DLC tool call must name one of the " +
+  "engine's own shipped tools directly, as `<harness>/tools/<tool>.ts`. A path that " +
+  "traverses out of the tools directory, or a filename this build did not ship, is " +
+  "not pre-approved even when the configured pattern appears to cover it.";
+
 const SHELL_BOUNDARY_REFUSAL =
   "AI-DLC refused this command: a pre-approved AI-DLC command must be one simple " +
   "command. Chaining, backgrounding, command substitution, redirection, and " +
@@ -1824,7 +1866,34 @@ if (target === "shell-boundary") {
       process.stderr.write(SHELL_BOUNDARY_REFUSAL);
       return 2;
     }
-    if (!isAidlcPreApprovedPrefix(shellBoundaryPrefix(raw))) return 0;
+    const prefix = shellBoundaryPrefix(raw);
+    // Two tiers, because they close different holes and only one of them depends on
+    // packaging having happened.
+    //
+    // Tier 1 - PATH SHAPE. Needs no enumeration and therefore holds in every tree: the
+    // script must sit directly in the tools directory, one segment, no traversal. This
+    // is what closes the measured hole, where a glob's `*` crossed `/` and pre-approved
+    // a file at the project root.
+    //
+    // Tier 2 - NAME MEMBERSHIP. The filename must be one this build shipped, which
+    // closes a planted script whose name merely looks like a tool's. It needs the
+    // package-time list, so when the token is unsubstituted (a source tree, not an
+    // install) it is skipped rather than refusing every tool call - and tier 1 still
+    // applies, so the traversal hole never reopens.
+    const toolScript = toolsDirectoryScript(prefix);
+    if (toolScript !== null) {
+      const tail = toolScript.replace(/^\.[\w-]+\/tools\//, "");
+      const shapeOk = /^[\w.-]+\.ts$/.test(tail) && tail !== "." && tail !== "..";
+      if (!shapeOk) {
+        process.stderr.write(SHELL_BOUNDARY_TOOL_REFUSAL);
+        return 2;
+      }
+      if (shippedToolNameCheckAvailable() && !SHIPPED_TOOL_NAMES.has(tail)) {
+        process.stderr.write(SHELL_BOUNDARY_TOOL_REFUSAL);
+        return 2;
+      }
+    }
+    if (!isAidlcPreApprovedPrefix(prefix)) return 0;
     const body = stripTerminalStderrMerge(raw) ?? raw;
     if (shellBoundaryWords(body) === null) {
       process.stderr.write(SHELL_BOUNDARY_REFUSAL);
