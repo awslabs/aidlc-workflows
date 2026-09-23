@@ -1016,7 +1016,7 @@ state (`in-progress`, `awaiting-approval`, `revising`, `completed`, `pending`,
 `skipped`; for a team Unit, the Unit's own gate status). Every remedy carries a
 closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `request-review`, `start-recovery-review`, `apply-repairs-then-request`,
-`record-verdict`, `retry-pending`, `request-changes`, `redo-jump`,
+`record-verdict`, `retry-pending`, `request-changes`, `finish-revision`, `redo-jump`,
 `restore-or-jump`, `restart-stage`, `change-scope`, `restore-scope`,
 `abort-bolt`, `repair-source-boundary`, `reconfirm-summary`,
 `unset-unattended`). Routing decisions compare `op` and never the remedy

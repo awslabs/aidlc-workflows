@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1074,
+    "total": 1075,
     "enumeratedByClass": {
-      "function": 754,
+      "function": 755,
       "audit": 102,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 450,
+      "function": 451,
       "audit": 63,
       "scope": 11,
       "stage": 11,
@@ -6391,6 +6391,18 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:renderReviewVerdictCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

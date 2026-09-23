@@ -576,11 +576,12 @@ describe("bounded guard-remedy liveness", () => {
   // summary re-confirmation they did not owe; and the jump's own cost was
   // understated, because a new attempt unauthorizes every output document still
   // stamped with the old confirmation.
-  test("the mid-revision remedy leads with finishing the revision and prices the jump honestly", () => {
+  test("finishing a revision is separate from the priced restart command", () => {
     const refusal = evaluateGuardRefusal({
       code: "REVISION_TEST",
       blockedAction: "review",
       stage: "functional-design",
+      projectDir: "/workspace",
       stateContent: state("R"),
       invariant: "A revising stage reopens its gate before it completes.",
       userMessage: "blocked",
@@ -593,17 +594,29 @@ describe("bounded guard-remedy liveness", () => {
       humanAuthority: { freshTurn: false, unattended: false },
     });
     expect(refusal.state).toBe("revising");
-    const guidance = refusal.remedies.find((remedy) => remedy.executableNow);
-    expect(guidance?.action).toContain("mid-revision");
-    expect(guidance?.action).toContain(
-      "aidlc-orchestrate.ts report --stage functional-design --result revised",
+    const finish = refusal.remedies.find((remedy) =>
+      remedy.op === "finish-revision"
     );
-    // The cheap route comes first; the jump is still offered, with the re-save
-    // it actually costs.
-    expect(guidance!.action.indexOf("--result revised")).toBeLessThan(
-      guidance!.action.indexOf("/aidlc --stage functional-design"),
+    expect(finish).toMatchObject({
+      interaction: "external-work",
+      requiresHuman: false,
+      executableNow: true,
+    });
+    expect(finish?.operation).toBeUndefined();
+    expect(finish?.action).toContain(
+      "bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design " +
+        "--result revised --project-dir /workspace",
     );
-    expect(guidance?.action).toContain("save every output document again");
+
+    const restart = refusal.remedies.find((remedy) => remedy.op === "redo-jump");
+    expect(restart).toMatchObject({
+      interaction: "command",
+      requiresHuman: true,
+      executableNow: true,
+      operation: { kind: "restart-stage", stage: "functional-design" },
+    });
+    expect(restart?.action).toContain("save every output document again");
+    expect(restart?.action).not.toContain("--result revised");
   });
 
   // "Record the verdict" is not a command. Closing a review is the request
@@ -620,7 +633,14 @@ describe("bounded guard-remedy liveness", () => {
       userMessage: "blocked",
       attempt: {
         recovery: "available",
-        pendingReview: { iteration: 2, retryable: false },
+        pendingReview: {
+          iteration: 2,
+          retryable: false,
+          recordVerdict:
+            "bun .claude/tools/aidlc-log.ts review --stage functional-design " +
+            "--reviewer aidlc-product-lead-agent --unit alpha --iteration 2 " +
+            "--verdict '<READY|NOT-READY>' --project-dir /workspace",
+        },
         summaryCoverage: "current",
         reviewCoverage: "missing",
         sourceCoverage: "current",
@@ -632,8 +652,9 @@ describe("bounded guard-remedy liveness", () => {
       "Record the verdict for pending review iteration 2",
     );
     expect(record?.action).toContain(
-      "aidlc-log.ts review --stage functional-design --unit alpha " +
-        "--reviewer <reviewer> --iteration 2 --verdict <READY|NOT-READY>",
+      "bun .claude/tools/aidlc-log.ts review --stage functional-design " +
+        "--reviewer aidlc-product-lead-agent --unit alpha --iteration 2 " +
+        "--verdict '<READY|NOT-READY>' --project-dir /workspace",
     );
   });
 

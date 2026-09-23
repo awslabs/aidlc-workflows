@@ -5922,6 +5922,7 @@ function summaryRefusalForRouting(
     blockedAction: "review-request",
     stage: stage.slug,
     unit,
+    projectDir,
     stateContent,
     invariant: attached.invariant,
     userMessage: attached.userMessage,
@@ -6157,6 +6158,7 @@ function activePerUnitWave(
               blockedAction: "review-request",
               stage: node.slug,
               unit,
+              projectDir,
               stateContent: stateContent ?? "",
               invariant:
                 "The stale-receipt recovery slot is single-use within an attempt.",
@@ -9071,7 +9073,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           ? undefined
           : flags.userInput?.trim();
         const rejectArgs = ["reject", slug, "--unit", unit];
-        if (feedback) rejectArgs.push("--feedback", feedback);
+        if (feedback) rejectArgs.push(`--feedback=${feedback}`);
         if (flags.userInput) {
           rejectArgs.push("--user-input", flags.userInput);
         }
@@ -9286,7 +9288,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ? undefined
         : flags.userInput?.trim();
       subArgs = ["reject", slug];
-      if (feedback) subArgs.push("--feedback", feedback);
+      if (feedback) subArgs.push(`--feedback=${feedback}`);
       if (flags.userInput) subArgs.push("--user-input", flags.userInput);
       for (const finding of flags.rejectFindings ?? []) {
         subArgs.push("--reject-finding", finding);

@@ -3789,6 +3789,7 @@ function refuseStateGuard(
     blockedAction: input.blockedAction,
     stage: stage.slug,
     ...(input.unit ? { unit: input.unit } : {}),
+    projectDir: pd,
     stateContent: content,
     invariant: input.invariant,
     userMessage: input.userMessage,
@@ -5916,6 +5917,22 @@ function getFlagValue(args: string[], flag: string): string | undefined {
   return val;
 }
 
+// Free-form rejection feedback can legitimately begin with "--". The
+// orchestrator transports it as one unambiguous --feedback=<text> argv entry,
+// while direct state callers may continue to use the separated form for
+// ordinary values.
+function getTextFlagValue(args: string[], flag: string): string | undefined {
+  const prefix = `${flag}=`;
+  const inline = args.find((arg) => arg.startsWith(prefix));
+  if (inline !== undefined) {
+    if (args.includes(flag)) {
+      error(`${flag} may be specified only once.`);
+    }
+    return inline.slice(prefix.length);
+  }
+  return getFlagValue(args, flag);
+}
+
 function getFlagValues(args: string[], flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -5961,8 +5978,8 @@ function handleReject(args: string[]): void {
   const slug = args[0];
   const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
   const feedback =
-    (getFlagValue(args.slice(1), "--feedback") ??
-      getFlagValue(args.slice(1), "--reason"))?.trim();
+    (getTextFlagValue(args.slice(1), "--feedback") ??
+      getTextFlagValue(args.slice(1), "--reason"))?.trim();
   const rejectedFindings = getFlagValues(
     args.slice(1),
     "--reject-finding",

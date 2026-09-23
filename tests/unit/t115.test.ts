@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint, function:pendingReviewRequestStatus
+// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint, function:pendingReviewRequestStatus, function:renderReviewVerdictCommand
 //
 // CLI-contract port of tests/unit/t115-orchestrate-report.sh (TAP plan 22),
 // mechanism = cli. The .sh drives `aidlc-orchestrate.ts report` — the
@@ -89,6 +89,7 @@ import {
   auditLockDir,
   readAllAuditShards,
   reviewArtifactFingerprint,
+  renderReviewVerdictCommand,
   resolveStage,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -346,9 +347,20 @@ describe("t115 report refuses arguments it cannot act on", () => {
     const r = orchestrate(
       ["report", "--result", "rejected", "--reason", "--feedback was ignored"],
       p,
+      { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
     );
+    expect(r.status).toBe(0);
     expect(r.out).not.toContain("report does not accept");
     expect(r.out).not.toContain("requires the reason text");
+    expect(r.out).toContain('"kind":"print"');
+    expect(readFileSync(statePath(p), "utf-8")).toContain(
+      "- [R] feasibility — EXECUTE",
+    );
+    expect(countEvent(p, "GATE_REJECTED")).toBe(1);
+    expect(countEvent(p, "STAGE_REVISING")).toBe(1);
+    expect(auditBlocksFor(p, "GATE_REJECTED")[0]).toContain(
+      "**Feedback**: --feedback was ignored",
+    );
   });
 });
 
@@ -1155,9 +1167,14 @@ describe("t115 report-path gate backfill carries Recovered", () => {
 
 const LOG_TOOL = join(TOOLS_DIR, "aidlc-log.ts");
 
-function log(args: string[], p: string): CliResult {
+function log(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [LOG_TOOL, ...args, "--project-dir", p], {
     encoding: "utf-8",
+    env: { ...process.env, ...extraEnv },
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
@@ -1261,6 +1278,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     );
     mkdirSync(join(artifact, ".."), { recursive: true });
     writeFileSync(artifact, "# Requirements\n", "utf-8");
+    writeFileSync(
+      join(artifact, "..", "requirements-analysis-questions.md"),
+      "# Requirements Questions\n",
+      "utf-8",
+    );
     const req = log(
       [
         "review",
@@ -1272,14 +1294,27 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         "1",
       ],
       p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
     );
     expect(req.status).toBe(0);
     const emitted = JSON.parse(req.stdout.trim().split("\n").pop()!);
     expect(emitted.emitted).toBe("REVIEW_REQUESTED");
     expect(emitted.recordVerdict).toBe(
-      'aidlc-log.ts review --stage "requirements-analysis" ' +
-        '--reviewer "aidlc-product-lead-agent" --iteration 1 ' +
-        "--verdict <READY|NOT-READY>",
+      "bun .claude/tools/aidlc-log.ts review --stage requirements-analysis " +
+        "--reviewer aidlc-product-lead-agent --iteration 1 " +
+        `--verdict '<READY|NOT-READY>' --project-dir ${p}`,
+    );
+    expect(renderReviewVerdictCommand({
+      projectDir: p,
+      stage: "code-generation",
+      reviewer: "aidlc-architecture-reviewer-agent",
+      unit: "alpha",
+      single: true,
+      iteration: 2,
+    })).toBe(
+      "bun .claude/tools/aidlc-log.ts review --stage code-generation " +
+        "--reviewer aidlc-architecture-reviewer-agent --unit alpha --single " +
+        `--iteration 2 --verdict '<READY|NOT-READY>' --project-dir ${p}`,
     );
   }, 30000);
 
