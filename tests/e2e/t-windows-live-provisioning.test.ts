@@ -63,6 +63,172 @@ public static class NativeOutputFixture {
   [System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError=true)]
   private static extern bool CreateRestrictedToken(IntPtr token, uint flags, uint count, ref SidAttributes disabled,
     uint privilegeCount, IntPtr privileges, uint restrictedCount, IntPtr restrictedSids, out IntPtr restricted);
+  [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+  private struct Startup {
+    public uint Size; public string Reserved, Desktop, Title;
+    public uint X, Y, Width, Height, XChars, YChars, Fill, Flags;
+    public ushort Show, ReservedSize;
+    public IntPtr ReservedData, Input, Output, Error;
+  }
+  [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+  private struct ProcessInfo { public IntPtr Process, Thread; public uint Pid, Tid; }
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+  private static extern bool CreateProcessW(string application, StringBuilder command, IntPtr processSecurity,
+    IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string cwd, ref Startup startup, out ProcessInfo process);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+  private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool GetProcessTimes(IntPtr process, out long created, out long exited, out long kernel, out long user);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern IntPtr GetStdHandle(int kind);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref Attributes attributes, uint size);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool TerminateProcess(IntPtr process, uint code);
+  private static string Arg(string value) {
+    var quoted = new StringBuilder("\\""); int slashes = 0;
+    foreach (char c in value) {
+      if (c == '\\\\') { slashes++; continue; }
+      if (c == '"') quoted.Append('\\\\', slashes * 2 + 1).Append(c);
+      else quoted.Append('\\\\', slashes).Append(c);
+      slashes = 0;
+    }
+    return quoted.Append('\\\\', slashes * 2).Append('"').ToString();
+  }
+  private static long Created(IntPtr process) {
+    long created, exited, kernel, user;
+    Check(GetProcessTimes(process, out created, out exited, out kernel, out user), "Process creation identity unavailable.");
+    return created;
+  }
+  private static IntPtr Retain(uint pid, long created) {
+    IntPtr process = OpenProcess(0x101001, false, pid); // synchronize, query-limited, terminate
+    Check(process != IntPtr.Zero, "Could not retain the live fixture process.");
+    try {
+      Check(Created(process) == created && WaitForSingleObject(process, 0) == 258, "Fixture process identity changed.");
+      return process;
+    } catch { CloseHandle(process); throw; }
+  }
+  private static void Retire(IntPtr process) {
+    if (process == IntPtr.Zero) return;
+    if (WaitForSingleObject(process, 0) == 258) Check(TerminateProcess(process, 99), "Owned fixture termination failed.");
+    Check(WaitForSingleObject(process, 5000) == 0, "Owned fixture retirement unconfirmed.");
+  }
+  private static void AwaitFile(string path) {
+    var deadline = DateTime.UtcNow.AddSeconds(10);
+    while (!System.IO.File.Exists(path)) {
+      if (DateTime.UtcNow >= deadline) throw new TimeoutException("Fixture handshake missing: " + path);
+      System.Threading.Thread.Sleep(10);
+    }
+  }
+  private static ProcessInfo StartInherited(string[] args) {
+    string executable = System.Reflection.Assembly.GetExecutingAssembly().Location;
+    var attributes = new Attributes { Size = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Attributes)), Inherit = 1 };
+    IntPtr input, writer;
+    Check(CreatePipe(out input, out writer, ref attributes, 0), "Fixture stdin pipe unavailable.");
+    CloseHandle(writer); // inert children receive EOF
+    try {
+      var startup = new Startup {
+        Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(Startup)), Flags = 0x100,
+        Desktop = Name(GetProcessWindowStation()) + "\\\\" + Name(GetThreadDesktop(GetCurrentThreadId())),
+        Input = input, Output = GetStdHandle(-11), Error = GetStdHandle(-12)
+      };
+      foreach (IntPtr handle in new IntPtr[] { startup.Input, startup.Output, startup.Error })
+        Check(SetHandleInformation(handle, 1, 1), "Fixture stdio inheritance unavailable.");
+      ProcessInfo child;
+      // No breakaway: the descendant must remain inside the leader's invocation job.
+      Check(CreateProcessW(executable, new StringBuilder(Arg(executable) + " " + String.Join(" ", Array.ConvertAll(args, Arg))),
+        IntPtr.Zero, IntPtr.Zero, true, 0x08000000, IntPtr.Zero, Environment.CurrentDirectory, ref startup, out child),
+        "Could not start owned stdio fixture.");
+      CloseHandle(child.Thread); child.Thread = IntPtr.Zero;
+      return child;
+    } finally { CloseHandle(input); }
+  }
+  private static int StdioLeader(string path, bool timeout) {
+    ProcessInfo descendant = StartInherited(new string[] { "--held-stdio-descendant", path });
+    bool handedOff = false;
+    try {
+      // Keep both original processes alive until the observer has validated and
+      // retained their HANDLEs. Cleanup never reopens a PID after this handoff.
+      System.IO.File.WriteAllText(path + ".record-writing",
+        System.Diagnostics.Process.GetCurrentProcess().Id + "," + Created(GetCurrentProcess()) + "," +
+        descendant.Pid + "," + Created(descendant.Process));
+      System.IO.File.Move(path + ".record-writing", path + ".record");
+      AwaitFile(path + ".ack"); handedOff = true;
+      AwaitFile(path + ".ready"); // both large output writes have completed
+      Check(WaitForSingleObject(descendant.Process, 0) == 258, "Descendant ended before its leader.");
+      Console.Out.WriteLine("\\nleader-tail"); Console.Out.Flush();
+      Console.Error.WriteLine("\\nleader-error-tail"); Console.Error.Flush();
+      // Deliberately held until explicit HANDLE/job retirement; no natural exit.
+      if (timeout) System.Threading.Thread.Sleep(System.Threading.Timeout.Infinite);
+      return 7;
+    } finally {
+      if (!handedOff) Retire(descendant.Process);
+      CloseHandle(descendant.Process);
+    }
+  }
+  private static int StdioTree(System.Reflection.MethodInfo method, string desktop, string managed, bool timeout) {
+    string path = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(managed), "stdio-tree-" + Guid.NewGuid().ToString("N"));
+    ProcessInfo unrelated = StartInherited(new string[] { "--unrelated-control", path });
+    IntPtr leader = IntPtr.Zero, descendant = IntPtr.Zero;
+    System.Threading.Tasks.Task run = null;
+    int exit = -1; Exception failure = null;
+    try {
+      AwaitFile(path + ".control");
+      run = System.Threading.Tasks.Task.Run(() => {
+        try {
+          exit = (int)method.Invoke(null, new object[] {
+            System.Reflection.Assembly.GetExecutingAssembly().Location,
+            new string[] { "--held-stdio-leader", path, timeout ? "timeout" : "exit" },
+            timeout ? 5000 : 10000, desktop, false
+          });
+        } catch (System.Reflection.TargetInvocationException error) { failure = error.InnerException; }
+        catch (Exception error) { failure = error; }
+      });
+      AwaitFile(path + ".record");
+      string[] identity = System.IO.File.ReadAllText(path + ".record").Split(',');
+      Check(identity.Length == 4, "Incomplete fixture identity handoff.");
+      leader = Retain(uint.Parse(identity[0]), long.Parse(identity[1]));
+      descendant = Retain(uint.Parse(identity[2]), long.Parse(identity[3]));
+      System.IO.File.WriteAllText(path + ".ack", "retained");
+      Check(run.Wait(20000), "Explicit launcher did not settle.");
+      uint descendantInitialWait = WaitForSingleObject(descendant, 0);
+      // Job termination is asynchronous. Observe completion on the HANDLE
+      // retained before leader exit, within the existing retirement backstop
+      // and strictly before fixture cleanup can terminate anything.
+      var retirementWatch = System.Diagnostics.Stopwatch.StartNew();
+      uint descendantWait = WaitForSingleObject(descendant, 5000);
+      retirementWatch.Stop();
+      bool retired = descendantWait == 0;
+      bool unrelatedAlive = WaitForSingleObject(unrelated.Process, 0) == 258;
+      uint leaderExit = 0;
+      Check(WaitForSingleObject(leader, 0) == 0 && GetExitCodeProcess(leader, out leaderExit), "Leader retirement unconfirmed.");
+      Console.Out.WriteLine("{\\"tree\\":true,\\"timeout\\":" + timeout.ToString().ToLowerInvariant() +
+        ",\\"leaderExit\\":" + leaderExit + ",\\"descendantRetired\\":" + retired.ToString().ToLowerInvariant() +
+        ",\\"descendantInitialWait\\":" + descendantInitialWait + ",\\"descendantWait\\":" + descendantWait +
+        ",\\"descendantWaitMs\\":" + retirementWatch.Elapsed.TotalMilliseconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture) +
+        ",\\"unrelatedAlive\\":" + unrelatedAlive.ToString().ToLowerInvariant() + "}");
+      if (failure != null && !(timeout && failure is TimeoutException))
+        Console.Error.WriteLine("launcher-error: " + failure.Message);
+      Check(retired, "Stdio descendant survived invocation retirement.");
+      Check(unrelatedAlive, "Invocation retirement affected an unrelated process.");
+      if (timeout) Check(failure is TimeoutException, "Expected the original execution timeout.");
+      else {
+        if (failure != null) throw failure;
+        Check(exit == 7 && leaderExit == 7, "Leader exit code was not preserved.");
+      }
+      return timeout ? 0 : exit;
+    } finally {
+      Retire(descendant); Retire(leader); Retire(unrelated.Process);
+      if (run != null) Check(run.Wait(10000), "Fixture launcher task did not retire.");
+      if (descendant != IntPtr.Zero) CloseHandle(descendant);
+      if (leader != IntPtr.Zero) CloseHandle(leader);
+      CloseHandle(unrelated.Process);
+      foreach (string suffix in new string[] { ".record-writing", ".record", ".ack", ".ready", ".control" })
+        if (System.IO.File.Exists(path + suffix)) System.IO.File.Delete(path + suffix);
+    }
+  }
   private static int CapabilityFixture(string scenario) {
     string cwd = Environment.CurrentDirectory;
     string expected = scenario == "wrong-cwd" ? System.IO.Directory.GetParent(cwd).FullName : cwd;
@@ -145,6 +311,8 @@ public static class NativeOutputFixture {
         var method = assembly.GetType("AidlcCodexLauncher").GetMethod("RunExplicit",
           System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
         try {
+          if (args[0] == "--explicit-stdio-tree" || args[0] == "--explicit-stdio-tree-timeout")
+            return StdioTree(method, station + "\\\\" + desktopName, args[1], args[0].EndsWith("-timeout"));
           if (args[0] == "--explicit-powershell-cwd") {
             return (int)method.Invoke(null, new object[] {
               args[3], new string[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-File", args[2] },
@@ -210,8 +378,22 @@ public static class NativeOutputFixture {
   }
   public static int Main(string[] args) {
     Console.OutputEncoding = new UTF8Encoding(false);
+    // These controls remain alive until the observer retires their HANDLEs.
+    // The outer test runner's owned job is the final backstop if the fixture aborts.
+    if (args.Length == 2 && args[0] == "--unrelated-control") {
+      System.IO.File.WriteAllText(args[1] + ".control", "ready");
+      System.Threading.Thread.Sleep(System.Threading.Timeout.Infinite); return 0;
+    }
+    if (args.Length == 2 && args[0] == "--held-stdio-descendant") {
+      Console.Out.Write(new string('D', 131072)); Console.Out.Flush();
+      Console.Error.Write(new string('F', 131072)); Console.Error.Flush();
+      System.IO.File.WriteAllText(args[1] + ".ready", "all output queued");
+      System.Threading.Thread.Sleep(System.Threading.Timeout.Infinite); return 0;
+    }
+    if (args.Length == 3 && args[0] == "--held-stdio-leader") return StdioLeader(args[1], args[2] == "timeout");
     if (args.Length == 2 && args[0] == "--capability-fixture") return CapabilityFixture(args[1]);
-    if (args.Length >= 2 && (args[0] == "--explicit-desktop" || args[0] == "--explicit-timeout" || args[0] == "--explicit-powershell-cwd")) return ExplicitDesktop(args);
+    if (args.Length >= 2 && (args[0] == "--explicit-desktop" || args[0] == "--explicit-timeout" || args[0] == "--explicit-powershell-cwd" ||
+      args[0] == "--explicit-stdio-tree" || args[0] == "--explicit-stdio-tree-timeout")) return ExplicitDesktop(args);
     if (args.Length >= 7 && (args[0] == "--desktop-child" || args[0] == "--desktop-timeout-child")) {
       Check(Name(GetProcessWindowStation()) == args[1] &&
         Name(GetThreadDesktop(GetCurrentThreadId())) == args[2], "Explicit desktop was not used.");
@@ -352,6 +534,29 @@ public static class NativeOutputFixture {
         if (child.exitCode === null && child.signalCode === null) child.kill();
       }
     }, 20_000);
+    for (const timeout of [false, true]) {
+      test(timeout
+        ? "explicit desktop timeout retires stdio descendants and preserves unrelated processes"
+        : "explicit desktop leader exit drains queued output after retiring stdio descendants", () => {
+        const result = spawnSync(native, [timeout ? "--explicit-stdio-tree-timeout" : "--explicit-stdio-tree", executable], {
+          cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 40_000,
+        });
+        const output = result.stdout.replaceAll("\r\n", "\n");
+        const errors = result.stderr.replaceAll("\r\n", "\n");
+        const summaryOffset = output.lastIndexOf('{"tree":');
+        const diagnostic = `${result.error ?? ""}\n${output.slice(-2000)}\n${errors.slice(-2000)}`;
+        expect(result.error, diagnostic).toBeUndefined();
+        expect(result.status, diagnostic).toBe(timeout ? 0 : 7);
+        expect(summaryOffset, diagnostic).toBeGreaterThan(0);
+        expect(output.slice(0, summaryOffset)).toBe(`${"D".repeat(131072)}\nleader-tail\n`);
+        expect(errors).toBe(`${"F".repeat(131072)}\nleader-error-tail\n`);
+        expect(JSON.parse(output.slice(summaryOffset))).toMatchObject({
+          tree: true, timeout, descendantRetired: true, descendantWait: 0, unrelatedAlive: true,
+          ...(!timeout ? { leaderExit: 7 } : {}),
+        });
+        console.log(output.slice(summaryOffset).trim());
+      }, 45_000);
+    }
     test("PowerShell provider location and OS cwd survive explicit desktop launch", () => {
       const report = join(root!, "cwd-report.ps1");
       const cwdCheck = `$providerCwd = (Get-Location).Path

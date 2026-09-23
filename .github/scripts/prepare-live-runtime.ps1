@@ -998,6 +998,18 @@ public static class AidlcCodexDesktopProcess {
     private static extern bool GetExitCodeProcess(IntPtr process, out uint code);
     [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
     private static extern bool TerminateProcess(IntPtr process, uint code);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+    private static extern IntPtr CreateJobObjectW(IntPtr security, string name);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool SetInformationJobObject(IntPtr job, int kind, byte[] info, uint length);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool QueryInformationJobObject(IntPtr job, int kind, byte[] info, uint length, IntPtr returned);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool TerminateJobObject(IntPtr job, uint code);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+    private static extern uint ResumeThread(IntPtr thread);
     [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
     private static Exception Error(string operation) {
         return new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error(), operation);
@@ -1012,6 +1024,23 @@ public static class AidlcCodexDesktopProcess {
             !DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), out result, 0, false, 2))
             throw Error("Duplicate owned I/O handle");
         return result;
+    }
+    private static uint ActiveProcesses(IntPtr job) {
+        // Win64 JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, as in e2e-process.ts.
+        byte[] accounting = new byte[48];
+        if (!QueryInformationJobObject(job, 1, accounting, (uint)accounting.Length, IntPtr.Zero))
+            throw Error("Query owned native job");
+        return BitConverter.ToUInt32(accounting, 40);
+    }
+    private static void RetireJob(IntPtr job) {
+        if (ActiveProcesses(job) != 0 && !TerminateJobObject(job, 137))
+            throw Error("Retire owned native descendants");
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        while (ActiveProcesses(job) != 0) {
+            if (watch.ElapsedMilliseconds >= 5000)
+                throw new System.IO.IOException("Owned native descendants did not retire.");
+            System.Threading.Thread.Sleep(10);
+        }
     }
     // Each synchronous pump owns its handles. Cancellation targets its retained
     // thread HANDLE and retries across the check/read race; no PID lookup occurs.
@@ -1079,12 +1108,22 @@ public static class AidlcCodexDesktopProcess {
             throw new ArgumentException("Invalid explicit desktop launch.");
         IntPtr childIn = IntPtr.Zero, parentIn = IntPtr.Zero, parentOut = IntPtr.Zero, childOut = IntPtr.Zero;
         IntPtr parentError = IntPtr.Zero, childError = IntPtr.Zero, attributes = IntPtr.Zero, handles = IntPtr.Zero, environment = IntPtr.Zero;
-        bool attributesReady = false, created = false, exited = false;
+        IntPtr job = IntPtr.Zero;
+        bool attributesReady = false, created = false, exited = false, assigned = false, retired = false;
         var process = new ProcessInfo();
         var pumps = new System.Collections.Generic.List<Pump>();
         Exception failure = null;
         int exitCode = 1;
         try {
+            if (IntPtr.Size != 8) throw new InvalidOperationException("Native jobs require a 64-bit launcher.");
+            // An unnamed, non-inheritable nested job owns only this invocation.
+            // No breakaway rights: descendants must retire before pipe EOF.
+            job = CreateJobObjectW(IntPtr.Zero, null);
+            if (job == IntPtr.Zero) throw Error("Create owned native job");
+            byte[] limits = new byte[144]; // JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+            Buffer.BlockCopy(BitConverter.GetBytes((uint)0x2000), 0, limits, 16, 4); // KILL_ON_JOB_CLOSE
+            if (!SetInformationJobObject(job, 9, limits, (uint)limits.Length))
+                throw Error("Configure owned native job");
             var security = new Security { Size = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Security)), Inherit = 1 };
             if (!CreatePipe(out childIn, out parentIn, ref security, 0) ||
                 !CreatePipe(out parentOut, out childOut, ref security, 0) ||
@@ -1119,8 +1158,12 @@ public static class AidlcCodexDesktopProcess {
                 Console.WriteLine("Codex native cwd: executable=" + System.IO.Path.GetFileName(info.FileName) +
                     "; expected=" + Environment.GetEnvironmentVariable("AIDLC_CODEX_EXPECTED_CWD") + "; actual=" + cwd);
             if (!CreateProcessW(info.FileName, command, IntPtr.Zero, IntPtr.Zero, true,
-                0x08000000 | 0x400 | 0x80000, environment, cwd, ref startup, out process)) throw Error("CreateProcessW on private desktop");
+                0x08000000 | 0x400 | 0x80000 | 0x4, environment, cwd, ref startup, out process)) throw Error("CreateProcessW on private desktop");
             created = true;
+            // Assign while suspended so no descendant can start before ownership.
+            if (!AssignProcessToJobObject(job, process.Process)) throw Error("Assign owned native job");
+            assigned = true;
+            if (ResumeThread(process.Thread) == UInt32.MaxValue) throw Error("Resume owned native process");
             Close(ref process.Thread);
             Close(ref childIn); Close(ref childOut); Close(ref childError);
             IntPtr outputTarget = Duplicate(GetStdHandle(-11));
@@ -1141,9 +1184,17 @@ public static class AidlcCodexDesktopProcess {
             if (!GetExitCodeProcess(process.Process, out code)) throw Error("Read owned native exit status");
             exitCode = unchecked((int)code);
             if (relayInput) pumps[2].Cancel();
+            // The CLI can exit while a helper still owns inherited pipe writers.
+            // Retire those owned helpers, then drain all queued bytes to EOF.
+            uint remainingProcesses = ActiveProcesses(job);
+            RetireJob(job);
+            retired = true;
             DateTime drainDeadline = DateTime.UtcNow.AddSeconds(5);
             while ((!pumps[0].Done || !pumps[1].Done) && DateTime.UtcNow < drainDeadline) System.Threading.Thread.Sleep(10);
-            if (!pumps[0].Done || !pumps[1].Done) throw new System.IO.IOException("Native output did not finish after process exit.");
+            if (!pumps[0].Done || !pumps[1].Done) throw new System.IO.IOException(
+                "Native output did not finish after process-tree retirement (exit=" + exitCode +
+                "; jobProcessesAtExit=" + remainingProcesses + "; stdoutDone=" + pumps[0].Done +
+                "; stderrDone=" + pumps[1].Done + ").");
             foreach (Pump pump in pumps) if (pump.Failure != null) throw pump.Failure;
         } catch (Exception error) { failure = error; }
         finally {
@@ -1152,11 +1203,16 @@ public static class AidlcCodexDesktopProcess {
                 if (WaitForSingleObject(process.Process, 5000) != 0)
                     failure = new AggregateException(failure ?? new Exception("Native child failed"), new Exception("Owned native retirement was not confirmed."));
             }
+            if (assigned && !retired) {
+                try { RetireJob(job); retired = true; }
+                catch (Exception error) { failure = new AggregateException(failure ?? new Exception("Native child failed"), error); }
+            }
             foreach (Pump pump in pumps) pump.Cancel();
             DateTime deadline = DateTime.UtcNow.AddSeconds(5);
             foreach (Pump pump in pumps) if (!pump.Finish(deadline))
                 failure = new AggregateException(failure ?? new Exception("Native I/O failed"), new Exception("Native pipe pump retirement was not confirmed."));
             Close(ref process.Thread); Close(ref process.Process);
+            Close(ref job);
             Close(ref childIn); Close(ref parentIn); Close(ref parentOut); Close(ref childOut); Close(ref parentError); Close(ref childError);
             if (attributesReady) DeleteProcThreadAttributeList(attributes);
             if (attributes != IntPtr.Zero) System.Runtime.InteropServices.Marshal.FreeHGlobal(attributes);

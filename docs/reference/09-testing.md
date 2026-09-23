@@ -1457,6 +1457,9 @@ canonicalize its path, and credential reads and writes outside the workspace
 must remain denied. The sandbox identities receive directory metadata and
 traversal access on the three private containers above the fixtures, with no
 inherited permission to list their contents or read their files.
+Each native CLI process is assigned to its own Windows job before being resumed.
+After the CLI exits, the launcher retires that job's descendants before draining
+stdout and stderr, so inherited pipe handles cannot hold the invocation open.
 
 POSIX collection stops the dedicated account's processes before administrator
 copying. On macOS it first retires that account's launchd user/GUI domains to

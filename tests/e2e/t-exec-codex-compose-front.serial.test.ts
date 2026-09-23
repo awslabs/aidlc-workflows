@@ -22,7 +22,7 @@
 //            in the same session and expects the gate on the next turn.
 //            Either way: gate before write, nothing on disk.
 //   beat 2:  codex exec resume --last "Approve" - same session (asserted via
-//            the stderr session id), the conductor completes the write +
+//            the JSON thread id), the conductor completes the write +
 //            creation arc: the intent record, aidlc-state.md, WORKFLOW_STARTED
 //            audited, and the created intent's scope resolving through the on-disk
 //            registry (`.codex/scopes/aidlc-<name>.md` + scope-grid entry) -
@@ -67,6 +67,7 @@ import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { gateText, turnEvidence, type CodexTurn } from "../harness/codex-turn-evidence.ts";
 
 // The ten shipped stock scopes. A composed scope whose name is NOT one of
 // these is a CUSTOM grid: the composer authors it fresh on the sanctioned path,
@@ -187,15 +188,15 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
 
 // One codex turn. `resume: true` continues the newest recorded session for
 // this cwd (`codex exec resume --last "<prompt>"`) instead of starting fresh.
-// stderr is kept separate: the `session id:` line lives there and is the
-// deterministic same-session proof.
+// JSONL preserves every root assistant message, not only the last stdout text.
+// thread.started carries the deterministic same-session proof.
 function codexTurn(
   proj: string,
   home: string,
   prompt: string,
   opts: { resume?: boolean } = {},
-): { rc: number; stdout: string; stderr: string } {
-  const argv = opts.resume ? ["exec", "resume", "--last", prompt] : ["exec", prompt];
+): CodexTurn {
+  const argv = opts.resume ? ["exec", "resume", "--last", "--json", prompt] : ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
   const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
@@ -206,11 +207,8 @@ function codexTurn(
   });
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", signal: r.signal, error: r.error?.message };
   recordCodexExec("compose-front", proj, [CODEX_BIN, ...commandArgs], result);
-  return result;
+  return { ...result, ...(result.rc === 0 ? turnEvidence(result.stdout) : { agentMessages: [] }) };
 }
-
-const sessionIdOf = (stderr: string): string | undefined =>
-  /session id:\s*([0-9a-f-]{36})/i.exec(stderr)?.[1];
 
 function intentRecords(proj: string): string[] {
   const dir = join(proj, "aidlc", "spaces", "default", "intents");
@@ -249,7 +247,7 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
           'Use the $aidlc skill to run: /aidlc compose "add a rate limiter middleware to an existing Express API"',
         );
         expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
-        const b1Session = sessionIdOf(b1.stderr);
+        const b1Session = b1.sessionId;
         expect(b1Session).toBeDefined();
         expect(intentRecords(proj)).toEqual([]);
 
@@ -260,18 +258,18 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         // choices when it speaks of approving OR of choosing among the plan
         // options (a third live phrasing observed on this head: "Please
         // choose one of the plan options above to continue.").
-        let gateOut = b1.stdout;
+        let gateOut = gateText(b1);
         let gateDiagnostic = codexExecDiagnostic(b1);
         if (!/approv|choose/i.test(gateOut)) {
           expect(/compose/i.test(gateOut), gateDiagnostic).toBe(true);
           const offerTurn = codexTurn(proj, home, "compose", { resume: true });
           expect(offerTurn.rc, codexExecDiagnostic(offerTurn)).toBe(0);
-          expect(sessionIdOf(offerTurn.stderr)).toBe(b1Session);
-          gateOut = offerTurn.stdout;
+          expect(offerTurn.sessionId).toBe(b1Session);
+          gateOut = gateText(offerTurn);
           gateDiagnostic = codexExecDiagnostic(offerTurn);
         }
-        // The approve/edit/reject gate reached the final message (same
-        // phrasing family as the detection probe above).
+        // The conductor rendered the approve/edit/reject gate in a completed
+        // root assistant message, even if its final message was just a reminder.
         expect(/approv|choose/i.test(gateOut), gateDiagnostic).toBe(true);
         expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
         // Nothing written before approval: no state file, no intent record.
@@ -284,7 +282,7 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         const b2 = codexTurn(proj, home, "Approve", { resume: true });
         expect(b2.rc, codexExecDiagnostic(b2)).toBe(0);
         // Same-session proof: resume continued beat 1's conversation.
-        expect(sessionIdOf(b2.stderr)).toBe(b1Session);
+        expect(b2.sessionId).toBe(b1Session);
 
         // The approve completed the write + creation arc on disk.
         const records = intentRecords(proj);
