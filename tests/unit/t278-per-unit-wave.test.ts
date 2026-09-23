@@ -509,7 +509,7 @@ function approveIteration(proj: string, stage: string, value: "stage-major" | "u
     ], { encoding: "utf-8", env });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     if (action === "decision") {
-      const human = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+      const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
         encoding: "utf-8", cwd: proj, env,
         input: JSON.stringify({
           hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve",

@@ -52,7 +52,7 @@ import {
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const POSTURE = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
-const HUMAN_TURN = join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts");
+const HUMAN_TURN = join(AIDLC_SRC, "tools", "aidlc.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const projects: string[] = [];
 
@@ -205,7 +205,7 @@ function decide(project: string, questions: string, session: string): Spawned {
 
 function humanTurn(project: string, session: string): void {
   const human = spawn(
-    [BUN, HUMAN_TURN],
+    [BUN, HUMAN_TURN, "engine", "hook", "record-human-turn"],
     project,
     JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan" }),
   );

@@ -69,7 +69,7 @@ reopen it, or be recorded and continue. The value decides two things: what
 happens when an input changes after the human approved or confirmed something,
 and how far the automatic checks stand aside for the agents. `strict` lowers
 no fences and reopens that approval; `relaxed` records the change once, tells
-the human in one line, continues, and stands the reviewer-scope check aside;
+the human in one line, continues, and stands the reviewer read-scope check aside;
 `off` does that and stands the state-transition check aside as well. Plan
 approval and terminal review freeze remain mandatory under every policy word,
 and no value touches human presence. The conductor still asks every

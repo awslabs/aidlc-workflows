@@ -97,7 +97,7 @@ function run(cmd: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): RunR
 }
 
 function recordHumanPrompt(project: string, prompt: string): void {
-  const result = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+  const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: project,
     env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: project },
     input: JSON.stringify({

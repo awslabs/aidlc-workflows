@@ -68,7 +68,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
-const MINT_HOOK = join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts");
+const MINT_HOOK = join(AIDLC_SRC, "tools", "aidlc.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 
 // Drive a state subcommand with the PRESENCE guard ENABLED (clear the suite's
@@ -520,7 +520,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       env.AIDLC_PROJECT_DIR = p;
       if (unattended) env.AIDLC_UNATTENDED = "1";
       else delete env.AIDLC_UNATTENDED;
-      const r = spawnSync(BUN, [MINT_HOOK], { encoding: "utf-8", env, input: "{}" });
+      const r = spawnSync(BUN, [MINT_HOOK, "engine", "hook", "record-human-turn"], { encoding: "utf-8", env, input: "{}" });
       return r.status ?? -1;
     }
 

@@ -547,7 +547,7 @@ function publishRestartRecovery(
 function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
   const result = spawnSync(
     BUN,
-    [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+    [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
       cwd: proj,
       input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt }),
@@ -1706,7 +1706,7 @@ describe("t265b hook lifecycle", () => {
 
       const newerSessionAnswer = spawnSync(
         BUN,
-        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
@@ -1729,7 +1729,7 @@ describe("t265b hook lifecycle", () => {
 
       const unrelated = spawnSync(
         BUN,
-        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
@@ -1761,7 +1761,7 @@ describe("t265b hook lifecycle", () => {
 
       const human = spawnSync(
         BUN,
-        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
@@ -1849,7 +1849,7 @@ describe("t265b hook lifecycle", () => {
       // get there: JSON-parsing it turned it into a number and reported no text.
       const numeric = spawnSync(
         BUN,
-        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
@@ -1931,7 +1931,7 @@ describe("t265b hook lifecycle", () => {
       // wrapped in quotes, or it would match no offered choice.
       const quoted = spawnSync(
         BUN,
-        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",

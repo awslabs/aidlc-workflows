@@ -189,7 +189,7 @@ function cli(project: string, tool: string, args: string[], env = process.env) {
 }
 
 function submitCommandChoice(project: string, session: string, prompt: string, env = process.env): void {
-  const submitted = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+  const submitted = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
     encoding: "utf-8", cwd: project,
     env: { ...env, AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project },
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
@@ -1468,7 +1468,7 @@ describe("t341 protected question interleaving", () => {
   test("rendered question text binds picker replies; absent text falls back to the exclusive question", () => {
     const pd = project();
     const submit = (toolInput?: unknown) => {
-      const result = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+      const result = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
         cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
         input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: session,
           tool_input: toolInput, tool_response: { answers: { choice: "Approve" } } }),

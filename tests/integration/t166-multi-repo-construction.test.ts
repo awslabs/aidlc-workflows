@@ -346,7 +346,7 @@ function approvePlan(proj: string, unit: string): void {
     encoding: "utf-8", cwd: proj,
   });
   if (decision.status !== 0) throw new Error(`${decision.stdout}${decision.stderr}`);
-  const human = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+  const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     encoding: "utf-8", cwd: proj,
     env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan" }),

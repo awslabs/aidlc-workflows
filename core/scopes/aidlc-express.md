@@ -20,7 +20,7 @@ summary_confirmation: off
 straight line from requirements to code, test, and deploy without a design
 pass or reviewer dispatch.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; reviewer scope is lowered for undirected work, while plan approval and terminal review freeze remain mandatory.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; reviewer read scope is lowered for undirected work, while plan approval and terminal review freeze remain mandatory.
 
 Sensors, learnings, and summary confirmation are off too; override them per intent
 with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or

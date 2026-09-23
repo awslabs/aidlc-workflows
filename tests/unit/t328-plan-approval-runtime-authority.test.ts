@@ -191,7 +191,7 @@ function approve(project: string, questions: string, session: string): void {
     ]).exitCode,
   ).toBe(0);
   const human = Bun.spawnSync(
-    [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+    [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project },
@@ -234,7 +234,7 @@ function humanPrompt(
   env: Record<string, string> = {},
 ): ReturnType<typeof Bun.spawnSync> {
   return Bun.spawnSync(
-    [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+    [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
@@ -392,7 +392,7 @@ describe("t328 Plan Approval runtime authority", () => {
     ).toBe(epochBefore);
 
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
@@ -484,7 +484,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
@@ -783,7 +783,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
@@ -920,7 +920,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
@@ -1006,7 +1006,7 @@ describe("t328 human-only break-glass override", () => {
 
     // A picked option carrying the same text is not a typed instruction.
     const picked = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },

@@ -135,7 +135,7 @@ function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv 
 
 function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv = {}): string {
   const result = Bun.spawnSync({
-    cmd: [BUN, join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")],
+    cmd: [BUN, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     cwd: proj,
     env: { ...process.env, ...FENCE_ENV_CLEAR, ...env, CLAUDE_PROJECT_DIR: proj },
     stdin: Buffer.from(JSON.stringify({

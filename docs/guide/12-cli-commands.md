@@ -1126,7 +1126,7 @@ which of the five fences hold against an action no step of the running workflow 
 with a plain sentence naming what changed and asks for the approval again.
 `relaxed` and `off` record the change once as a `CHANGE_ACCEPTED` audit row, tell
 you in one line, and continue. On the fences, `strict` leaves all five up,
-`relaxed` lowers `reviewer-scope`, and `off` lowers `state-transition` and
+`relaxed` lowers the reviewer read-scope fence (`reviewer-scope`), and `off` lowers `state-transition` and
 `reviewer-scope`. `plan-approval` and `review-freeze` remain mandatory under
 every policy word, and `human-presence` is never lowered by the policy word.
 

@@ -23,7 +23,7 @@ import {
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
-const RECORD_HUMAN_TURN = join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts");
+const RECORD_HUMAN_TURN = join(AIDLC_SRC, "tools", "aidlc.ts");
 const tempDirs: string[] = [];
 const CEREMONY_FIELDS = ["Sensors", "Learnings", "Summary Confirmation"];
 const SETTING_EVENTS = [
@@ -91,7 +91,7 @@ function directive(stdout: string): { kind: string; message: string } {
 
 function recordHumanPrompt(proj: string, prompt: string): void {
   const result = Bun.spawnSync({
-    cmd: [process.execPath, RECORD_HUMAN_TURN],
+    cmd: [process.execPath, RECORD_HUMAN_TURN, "engine", "hook", "record-human-turn"],
     cwd: proj,
     env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: proj },
     stdin: Buffer.from(JSON.stringify({

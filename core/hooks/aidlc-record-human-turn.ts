@@ -261,12 +261,12 @@ try {
 return 0;
 }
 
+// There is intentionally no import.meta.main fallback. The dispatcher is the
+// only process allowed to activate this authority-bearing hook; executing the
+// script path directly consumes no payload and mints nothing.
 if (
-  import.meta.main ||
-  (
-    process.argv.includes("--internal-aidlc-record-human-turn") &&
-    (process.env.AIDLC_INTERNAL_HUMAN_TURN_TOKEN ?? "") !== ""
-  )
+  process.argv.includes("--internal-aidlc-record-human-turn") &&
+  (process.env.AIDLC_INTERNAL_HUMAN_TURN_TOKEN ?? "") !== ""
 ) {
   process.exit(await run(await Bun.stdin.text()));
 }

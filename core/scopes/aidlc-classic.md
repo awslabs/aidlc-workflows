@@ -19,7 +19,7 @@ Inception and Construction, with one human approval per stage. Ideation is
 skipped and Operation remains a placeholder. Stage-declared execution modes
 and support agents are unchanged.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced in one line, and reviewer scope is lowered for undirected work. Plan approval and terminal review freeze remain mandatory.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced in one line, and reviewer read scope is lowered for undirected work. Plan approval and terminal review freeze remain mandatory.
 
 Reviews are advisory: one pass per stage whose findings reach the human at
 the approval gate, with no refute-and-repair loop; explicit autonomy keeps the

@@ -33,15 +33,15 @@
 // docs/reference/kiro-ide-hook-payload.md), and its payloads carry no
 // agent_type, so no stable identity/target contract exists there.
 //
-// Fail-open everywhere: no record, a stale record (mtime beyond
+// Reviewer read-scope enforcement fails open when its dispatch evidence is
+// unavailable: no record, a stale record (mtime beyond
 // REVIEWER_DISPATCH_TTL_MS - janitored like the compose marker), malformed
 // stdin or record JSON, an unknown tool, a non-reviewer agent, or any throw
-// allows the call. The deterministic off-switch
-// AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 disables enforcement entirely (the
-// documented escape hatch for false-positive storms, mirroring the
-// human-presence guard's off-switch). Every genuine block emits a
-// REVIEWER_SCOPE_BLOCKED audit event so the run's record shows when the
-// bound bit; audit failures never change the decision.
+// allows the call. AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 disables that read-scope
+// check. Claimed-checkout Unit ownership is evaluated first and remains
+// mandatory. Every genuine block emits a REVIEWER_SCOPE_BLOCKED audit event so
+// the run's record shows when the bound bit; audit failures never change the
+// decision.
 
 import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -813,10 +813,9 @@ export function blockReason(target: string, dispatch: ReviewerDispatch, defaulte
 }
 
 /**
- * Whether this fence stands aside instead of refusing. Containment fence: a
- * human's newer instruction is NOT a key here (decideGuard knows that), so this
- * only ever returns true when `guard_policy: off` or the per-run switch lowered
- * it. Then the cross-unit write proceeds with one line and one audit row.
+ * Whether the reviewer read-scope fence stands aside instead of refusing.
+ * Claimed-checkout write ownership never calls this function: Unit ownership
+ * is a mandatory isolation boundary, not a policy-lowerable reviewer fence.
  */
 function reviewerScopeStandsAside(
   projectDir: string,
@@ -920,9 +919,6 @@ function perUnitReviewOwed(projectDir: string, stateContent: string | null): boo
  *  stderr) instead of process.exit so the compiled-binary route can relay the
  *  block; the CLI entry below preserves the direct-run contract unchanged. */
 export async function run(input: string): Promise<number> {
-  // Deterministic off-switch: enforcement disabled entirely.
-  if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
-
   const projectDir = resolveProjectDirFromHook(import.meta.url);
 
   try {
@@ -981,13 +977,10 @@ export async function run(input: string): Promise<number> {
       return 0;
     }
     if (scopedVerdict.block) {
-      // This fence CONTAINS an agent: it never blocks a person, so a human's
-      // newer instruction is not a key for it (asking for a review is not asking
-      // for edits in another unit). Only `guard_policy: off` or the per-run
-      // switch lowers it, and then the write is logged rather than refused.
-      if (reviewerScopeStandsAside(projectDir, parsed, toolName, unitScope.unit, scopedVerdict.target ?? "")) {
-        return 0;
-      }
+      // A claimed checkout owns exactly one Unit. Guard Policy, per-work fence
+      // switches, and the reviewer-scope environment escape hatch govern the
+      // reviewer's read boundary only; none authorizes writes into a sibling
+      // Unit's construction subtree.
       emitReviewerScopeBlocked(
         projectDir,
         toolName,
@@ -1004,6 +997,10 @@ export async function run(input: string): Promise<number> {
       return 2;
     }
   }
+
+  // The deterministic off-switch applies only to reviewer read-scope
+  // enforcement. Mandatory claimed-checkout ownership was handled above.
+  if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
 
   const recordPath = reviewerDispatchPath(projectDir);
   if (!existsSync(recordPath)) {

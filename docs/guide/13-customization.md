@@ -236,7 +236,7 @@ Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. I
 - `strict` reopens the approval. The run stops with one plain sentence naming what changed (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Look them over and approve the plan again to continue.`) and asks you again.
 - `relaxed` and `off` keep going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it (`... Continuing (Guard Policy: relaxed or off). Say 'review the plan again' to reopen approval.`), and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
 
-**How hard the fences hold.** `strict` leaves all five fences up. `relaxed` lowers reviewer scope. `off` lowers state transition and reviewer scope. Plan approval and terminal review freeze remain mandatory under every policy word, and no value lowers human presence. A lowered fence still writes an audit row every time it lets something through.
+**How hard the fences hold.** `strict` leaves all five fences up. `relaxed` lowers reviewer read scope. `off` lowers state transition and reviewer read scope. Plan approval, terminal review freeze, human presence, and claimed-checkout Unit write ownership remain mandatory under every policy word. A lowered fence still writes an audit row every time it lets something through.
 
 No value removes a gate. Every approval question is still asked, a reviewer's verdict is never changed, no evidence is deleted, an agent can never answer for you, and editing the approved plan itself (or its test instructions or Testing Contract) reopens approval under all three values. Guard Policy decides the consequence of a change or an undirected action, not whether the framework notices it.
 
@@ -287,7 +287,7 @@ A fence is a guard that refuses an action nothing asked for: no step the workflo
 | Plan approval | code before an approved plan | `guard.plan-approval` | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` |
 | Review freeze | edits to reviewed content after a review receipt | `guard.review-freeze` | `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` |
 | State transition | direct lifecycle commands in place of the workflow's own | `guard.state-transition` | none |
-| Reviewer scope | a reviewer agent writing outside the Unit it was given | `guard.reviewer-scope` | `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` |
+| Reviewer read scope | a dispatched reviewer reading or searching sibling Unit content | `guard.reviewer-scope` | `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` |
 | Human presence | an approval or an answer with no real human turn behind it | none: the key holder has no in-band switch | `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` |
 
 ```
@@ -312,6 +312,8 @@ If a memory file holds Guard Policy strict, `/aidlc config set guard.<fence> off
 Memory-held strict also overrides a fence you lowered earlier. The persisted `Guards Off` entry stays in the intent, but `/aidlc --status` then shows `on (guard policy strict (from <layer>.md))` for that fence; the entry takes effect again only after the memory line no longer holds strict. A machine-wide kill switch still takes precedence.
 
 Switching one off writes `- **Guards Off**: plan-approval (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on removes it from that list and writes `GUARD_RESTORED`. Setting `on` also raises a policy-lowered fence, records `- **Guards On**: plan-approval (set by you)`, and writes `GUARD_RESTORED`. The lines name only the four switchable fences; a persisted human-presence entry is ignored. `/aidlc --status` prints a `Fences:` line with all five and where each setting came from. Precedence is the machine-wide kill switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on by default.
+
+The reviewer-scope setting governs the dispatched reviewer's read/search bound. A checkout stamped as owning one team Unit still cannot write another Unit's `construction/` subtree; that ownership boundary is not switchable by Guard Policy, a per-work fence setting, or `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK`.
 
 The human-turn hook applies only the switch you type; it does not infer one from a general request or from the fact that you replied. A switchable fence's main-session refusal names its switch, so opening it is one deliberate move rather than a guess about your intent. A CLI setter that would turn Plan Approval off says:
 

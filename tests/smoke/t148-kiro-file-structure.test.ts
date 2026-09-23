@@ -496,7 +496,7 @@ describe("t148 dist/kiro file structure", () => {
       readFileSync(join(hooks, "aidlc-plan-approval-guard.kiro.hook"), "utf-8"),
     ) as { when: { type: string; toolTypes: string[] }; then: { command: string } };
     expect(human.when.type).toBe("promptSubmit");
-    expect(human.then.command).toContain("aidlc-record-human-turn.ts");
+    expect(human.then.command).toContain("tools/aidlc.ts engine hook record-human-turn");
     expect(plan.when.type).toBe("preToolUse");
     expect(plan.when.toolTypes).toEqual([
       "write",

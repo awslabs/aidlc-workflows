@@ -20889,9 +20889,9 @@ function workflowIsCreated(projectDir: string, intent?: string, space?: string):
   }
 }
 
-// Record that a human just submitted a prompt. Called from the UserPromptSubmit
-// seam of every harness: the core aidlc-record-human-turn.ts hook (Claude,
-// opencode) and both Kiro adapters' inlined `record-human-turn` targets.
+// Record that a human just submitted a prompt. Every harness's
+// UserPromptSubmit seam reaches the core hook through the dispatcher or its
+// adapter; direct execution of the authority-bearing hook file is inert.
 export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
   if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));
@@ -30053,8 +30053,9 @@ export function emitError(
 // confirmed something is asked about once, naming what changed, and the
 // authority fences hold against work nobody directed. `relaxed`: a changed
 // input is recorded as a CHANGE_ACCEPTED row, told to the human in one line,
-// and the work continues; the reviewer-scope fence stands aside and logs.
-// `off`: state-transition and reviewer-scope stand aside and log. Plan
+// and the work continues; the dispatched-reviewer read-scope fence stands
+// aside and logs. `off`: state-transition and reviewer read scope stand aside
+// and log. Claimed-checkout Unit ownership remains mandatory. Plan
 // approval and terminal review freeze remain mandatory under every policy
 // word; only the person's explicit per-work switch or the documented machine
 // escape hatch can lower them. No value removes a gate, alters a reviewer's
@@ -30598,7 +30599,7 @@ export const GUARD_FENCE_LABELS: Record<GuardFence, string> = {
   "plan-approval": "Plan approval (code before an approved plan)",
   "review-freeze": "Review freeze (edits after a review receipt)",
   "state-transition": "State transition (direct lifecycle commands)",
-  "reviewer-scope": "Reviewer scope (a reviewer outside its unit)",
+  "reviewer-scope": "Reviewer read scope (a dispatched reviewer outside its unit)",
   "human-presence": "Human presence (a real human turn behind approvals and answers)",
 };
 

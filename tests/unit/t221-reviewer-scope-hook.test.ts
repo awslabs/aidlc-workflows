@@ -560,10 +560,14 @@ function seedRecord(proj: string, overrides: Partial<ReviewerDispatch> = {}): vo
   );
 }
 
-function seedUnitScope(proj: string, unit = "U03-scoring"): void {
+function seedUnitScope(
+  proj: string,
+  unit = "U03-scoring",
+  settings = "",
+): void {
   writeFileSync(
     join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"),
-    "# AI-DLC State Tracking\n\n## Runtime State\n- **Unit Ownership**: team\n",
+    `# AI-DLC State Tracking\n\n## Runtime State\n- **Unit Ownership**: team\n${settings}`,
     "utf-8",
   );
   writeFileSync(
@@ -845,7 +849,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(runHook(proj, SIBLING_SWEEP).code).toBe(0);
   });
 
-  test("the deterministic off-switch disables enforcement entirely", () => {
+  test("the deterministic off-switch disables reviewer read-scope enforcement", () => {
     const proj = scratchProject();
     seedRecord(proj);
     const r = runHook(proj, SIBLING_SWEEP, { AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "1" });
@@ -898,6 +902,26 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     });
     expect(current.code).toBe(0);
   });
+
+  test.each([
+    ["relaxed policy", "- **Guard Policy**: relaxed (set by you)\n", {}],
+    ["off policy", "- **Guard Policy**: off (set by you)\n", {}],
+    ["per-work reviewer switch", "- **Guards Off**: reviewer-scope (set by you)\n", {}],
+    ["reviewer environment escape hatch", "", { AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "1" }],
+  ])(
+    "claimed checkout ownership remains enforced under %s",
+    (_label, settings, env) => {
+      const proj = scratchProject();
+      seedUnitScope(proj, "U03-scoring", settings);
+      const r = runHook(proj, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: "construction/U05-api/result.md" },
+      }, env);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('scoped to Unit "U03-scoring"');
+    },
+  );
 
   test("garbage stdin fails open", () => {
     const proj = scratchProject();

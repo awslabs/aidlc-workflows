@@ -659,7 +659,7 @@ will approve. Never return a front/report proposal that would create from only a
 after approval should reopen it, or be recorded and continue. `strict` lowers
 no fences and reopens that approval;
 `relaxed` records the change once, tells the human in one line, continues,
-and stands the reviewer-scope check aside; `off` does that and also stands the
+and stands the reviewer read-scope check aside; `off` does that and also stands the
 state-transition check aside. Plan approval and terminal review freeze remain
 mandatory under every policy word, and no value touches human presence. For `mode: "matched"` copy the stock scope's
 `guard_policy` frontmatter value (read from that one scope `.md`; strict when

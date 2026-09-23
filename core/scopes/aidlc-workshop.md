@@ -24,7 +24,7 @@ construction, and operation arc end to end (so participants see the whole
 lifecycle) while skipping the ideation discovery stages that a facilitator
 front-loads by hand.
 
-Guard Policy defaults to relaxed: moved inputs are reported once and reviewer scope is lowered for undirected work; plan approval and terminal review freeze remain mandatory, and a facilitator who wants approvals reopened and every fence up sets strict.
+Guard Policy defaults to relaxed: moved inputs are reported once and reviewer read scope is lowered for undirected work; plan approval and terminal review freeze remain mandatory, and a facilitator who wants approvals reopened and every fence up sets strict.
 
 ## Why these stages, why skip those
 
