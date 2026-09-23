@@ -516,9 +516,33 @@ exit 0
       const body = sourceText.match(/function Get-CodexHomeInitializer \{[\s\S]*?\$body = @'\r?\n([\s\S]*?)\r?\n'@/);
       expect(body).not.toBeNull();
       const script = join(root!, "initializer-phases.ps1");
-      writeFileSync(script, body![1]
+      const unrelatedModules = join(root!, "unrelated-modules");
+      mkdirSync(unrelatedModules);
+      const initializer = body![1]
         .replaceAll("__SID__", "([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)")
-        .replaceAll("__SEED__", "'UNREAD_PRIVATE_SEED'"));
+        .replaceAll("__SEED__", "'UNREAD_PRIVATE_SEED'");
+      // Exercise the emitted initializer with no implicit dependency resolution.
+      // Resolve commands after its expected refusal to cover all three imports,
+      // including dependencies used only by later owner/ACL validation.
+      writeFileSync(script, `
+$PSModuleAutoLoadingPreference = 'None'
+$env:PSModulePath = '${unrelatedModules.replaceAll("'", "''")}'
+try {
+${initializer}
+} finally {
+    foreach ($dependency in @{
+        'ConvertTo-Json' = 'Microsoft.PowerShell.Utility'
+        'Join-Path' = 'Microsoft.PowerShell.Management'
+        'Get-Acl' = 'Microsoft.PowerShell.Security'
+    }.GetEnumerator()) {
+        $command = Get-Command -Name $dependency.Key -CommandType Cmdlet -ErrorAction Stop
+        $manifest = $PSHOME + '\\Modules\\' + $dependency.Value + '\\' + $dependency.Value + '.psd1'
+        if ($command.Module.Path -ine $manifest) {
+            throw ('Initializer command resolved outside its system module: ' + $dependency.Key)
+        }
+    }
+}
+`);
       const shell = join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe");
       const privateParent = join(root!, "different-private-parent");
       mkdirSync(privateParent);

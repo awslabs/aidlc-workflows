@@ -840,6 +840,12 @@ function Get-CodexHomeInitializer {
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $initializerWatch = [Diagnostics.Stopwatch]::StartNew()
+# Import the initializer's known Windows PowerShell dependencies without
+# command discovery across PSModulePath. Use concatenation: Join-Path itself
+# depends on Microsoft.PowerShell.Management being loaded.
+foreach ($module in @('Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security')) {
+    Import-Module -Name ($PSHOME + '\Modules\' + $module + '\' + $module + '.psd1') -ErrorAction Stop
+}
 function Write-CodexInitializerPhase([string]$Phase, [int]$Entry = -1) {
     if ($env:AIDLC_CODEX_INITIALIZER_DIAGNOSTICS -ne '1') { return }
     # Fixed labels and counts only. Never print paths, ACLs, hashes or secrets.
