@@ -1,34 +1,40 @@
-// core/tools/aidlc-devin-version.ts — Devin CLI version floor check with
-// cross-platform Desktop-aware discovery.
+// core/tools/aidlc-devin-version.ts — Devin host checks for the doctor:
+// the standalone CLI version floor (PATH-only), independent Devin Desktop
+// editor discovery, and the combined host-availability verdict.
 //
-// Used by the doctor (`/aidlc --doctor` on Devin) to verify the installed
-// Devin CLI meets the minimum supported version. Discovery is injectable for
-// testing: the doctor passes discovery/execution functions that tests can
-// override to simulate missing binaries, broken binaries, malformed output,
-// Desktop bundles, etc.
+// Used by the doctor (`/aidlc --doctor` on Devin) to report three rows:
+//   - Devin host availability: passes when the standalone CLI is on PATH or
+//     the Desktop editor application exists; fails when neither is found.
+//   - Standalone devin CLI: PATH discovery (Bun.which) plus a bounded
+//     [binary, "--version"] floor check. A missing CLI is advisory —
+//     Desktop-only use is supported. A discovered binary that times out,
+//     exits nonzero, returns malformed output, or sits below the floor is a
+//     hard failure even when Desktop is also installed.
+//   - Devin Desktop installation: the actual editor application at
+//     OS-appropriate paths — filesystem existence only. It is never inferred
+//     from a bundled CLI binary and does not verify that Desktop launched or
+//     hosted the current session.
+//
+// Discovery is injectable for testing: tests override the discovery/exec
+// functions to simulate missing binaries, broken binaries, malformed output,
+// absent editors, etc.
 //
 // The shared floor is the selected Devin CLI support baseline, not a claim
 // about when required capabilities first appeared. AIDLC relies on
 // hooks.v1.json, triggers frontmatter, run_subagent, and
 // ask_user_question with multi_select.
 //
-// Desktop discovery is cross-platform:
-//   - macOS: /Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin
-//     (the Electron-on-macOS twin of the Windows layout observed below —
-//     plausible, not verified on a real macOS install)
-//   - Linux: ~/.local/share/Devin/, /opt/Devin/ (unverified — no Devin
-//     Desktop install observed on Linux)
-//   - Windows: verified 2026-09-22 against a real install —
-//     %LOCALAPPDATA%\Programs\Devin\resources\app\extensions\windsurf\devin\bin\devin.exe
-//     (the CLI bundled inside Devin Desktop) and
-//     %LOCALAPPDATA%\devin\cli\bin\devin.exe (the standalone Windows CLI).
-//     The earlier candidates %LOCALAPPDATA%\Devin\devin.exe and
-//     %ProgramFiles%\Devin\devin.exe do not exist on that install.
-// PATH lookup is always attempted first; Desktop paths are fallbacks.
+// Desktop editor candidates (the application itself, never an internal CLI):
+//   - macOS: /Applications/Devin.app, then ~/Applications/Devin.app
+//   - Linux: /usr/bin/devin-desktop, then /usr/share/devin-desktop/devin-desktop
+//     (the devin-desktop package's launcher/application paths — best-effort;
+//     no Devin Desktop install observed on Linux)
+//   - Windows: %LOCALAPPDATA%\Programs\Devin\Devin.exe (verified against a
+//     real install), then %ProgramFiles%\Devin\Devin.exe
 // Desktop support remains discovery-only (no Desktop execution is verified).
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 import { homedir, platform } from "node:os";
 
 /** The minimum supported Devin CLI version as a numeric triple. */
@@ -39,16 +45,18 @@ export const DEVIN_MIN_VERSION_STRING = DEVIN_MIN_VERSION.join(".");
 
 /** Result of a version check. */
 export interface DevinVersionResult {
-  /** Whether the check passed (version >= floor, or advisory-only). */
+  /** Whether the check passed (version >= floor). */
   pass: boolean;
+  /** Advisory severity: "warn" when the standalone CLI is simply absent. */
+  severity?: "warn";
   /** Human-readable label for the doctor output. */
   label: string;
   /** Fix hint when the check fails. */
   fix: string;
   /** The discovered binary path (or null if none found). */
   binaryPath: string | null;
-  /** The discovery source ("PATH", "Desktop", or null). */
-  source: "PATH" | "Desktop" | null;
+  /** The discovery source ("PATH" or null — discovery is PATH-only). */
+  source: "PATH" | null;
   /** The parsed version triple (or null if unparseable). */
   parsedVersion: readonly [number, number, number] | null;
   /** Raw version stdout (sanitized — no stderr or secrets). */
@@ -57,8 +65,24 @@ export interface DevinVersionResult {
   advisory: boolean;
 }
 
+export interface DevinDesktopResult {
+  pass: boolean;
+  severity?: "warn";
+  label: string;
+  fix?: string;
+  appPath: string | null;
+}
+
+export interface DevinHostAvailabilityResult {
+  pass: boolean;
+  label: string;
+  fix?: string;
+}
+
 /** Injectable discovery function: returns a binary path or null. */
 export type DiscoveryFn = () => string | null;
+
+export type DesktopAppDiscoveryFn = () => string | null;
 
 /** Injectable execution function: returns { stdout, stderr, exitCode, timedOut }.
  *  Must invoke [binary, "--version"] without shell interpolation. */
@@ -76,50 +100,85 @@ export const defaultPathDiscovery: DiscoveryFn = () => {
   }
 };
 
-/** Cross-platform Desktop bundle discovery.
- *  Returns the first existing Desktop binary path, or null if none found.
- *  Paths are OS-specific:
- *    - macOS: /Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin
- *      (plausible twin of the observed Windows Electron layout — unverified)
- *    - Linux: ~/.local/share/Devin/devin, /opt/Devin/devin (unverified)
- *    - Windows: the Desktop-bundled CLI and the standalone Windows CLI under
- *      %LOCALAPPDATA% — verified against a real install on 2026-09-22
- *  Desktop execution is NOT verified — discovery only. */
-export const defaultDesktopDiscovery: DiscoveryFn = () => {
-  const plat = platform();
-  const candidates: string[] = [];
-  if (plat === "darwin") {
-    candidates.push(
-      "/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin",
-    );
-  } else if (plat === "linux") {
-    candidates.push(join(homedir(), ".local", "share", "Devin", "devin"));
-    candidates.push(join("/opt", "Devin", "devin"));
-  } else if (plat === "win32") {
-    const localAppData = process.env.LOCALAPPDATA;
-    if (localAppData) {
-      candidates.push(
-        join(
-          localAppData,
-          "Programs",
-          "Devin",
-          "resources",
-          "app",
-          "extensions",
-          "windsurf",
-          "devin",
-          "bin",
-          "devin.exe",
-        ),
-      );
-      candidates.push(join(localAppData, "devin", "cli", "bin", "devin.exe"));
+/** Devin Desktop editor candidate paths for a platform, in probe order.
+ *  These are the actual application paths — never an internal/bundled CLI
+ *  binary, which proves nothing about whether the editor is installed.
+ *  Windows candidates come from environment variables so a missing
+ *  LOCALAPPDATA/ProgramFiles simply drops that candidate. */
+export function devinDesktopAppCandidates(
+  targetPlatform: NodeJS.Platform = platform(),
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string[] {
+  if (targetPlatform === "darwin") {
+    return [
+      "/Applications/Devin.app",
+      posix.join(home, "Applications", "Devin.app"),
+    ];
+  }
+  if (targetPlatform === "linux") {
+    return [
+      "/usr/bin/devin-desktop",
+      "/usr/share/devin-desktop/devin-desktop",
+    ];
+  }
+  if (targetPlatform === "win32") {
+    const candidates: string[] = [];
+    if (env.LOCALAPPDATA) {
+      candidates.push(win32.join(env.LOCALAPPDATA, "Programs", "Devin", "Devin.exe"));
     }
+    const programFiles = env.ProgramFiles ?? env.PROGRAMFILES;
+    if (programFiles) {
+      candidates.push(win32.join(programFiles, "Devin", "Devin.exe"));
+    }
+    return candidates;
   }
-  for (const c of candidates) {
-    if (existsSync(c)) return c;
+  return [];
+}
+
+export const defaultDesktopAppDiscovery: DesktopAppDiscoveryFn = () =>
+  devinDesktopAppCandidates().find((candidate) => existsSync(candidate)) ?? null;
+
+export function checkDevinDesktop(
+  discovery: DesktopAppDiscoveryFn = defaultDesktopAppDiscovery,
+): DevinDesktopResult {
+  const appPath = discovery();
+  if (appPath) {
+    return {
+      pass: true,
+      label: `Devin Desktop installation: found at ${appPath} (filesystem discovery only; launch/session execution not verified)`,
+      appPath,
+    };
   }
-  return null;
-};
+  return {
+    pass: false,
+    severity: "warn",
+    label: "Devin Desktop installation: not found (checked OS-appropriate application paths; CLI-only use remains supported)",
+    fix: "Install Devin Desktop if this project is intended for Desktop use; CLI-only Devin projects can ignore this warning.",
+    appPath: null,
+  };
+}
+
+export function checkDevinHostAvailability(
+  standaloneCliPath: string | null,
+  desktopAppPath: string | null,
+): DevinHostAvailabilityResult {
+  if (standaloneCliPath || desktopAppPath) {
+    const hosts = [
+      standaloneCliPath ? "standalone CLI" : null,
+      desktopAppPath ? "Desktop editor" : null,
+    ].filter((host): host is string => host !== null);
+    return {
+      pass: true,
+      label: `Devin host availability: ${hosts.join(" and ")} found`,
+    };
+  }
+  return {
+    pass: false,
+    label: "Devin host availability: neither standalone CLI nor Desktop editor found",
+    fix: "Install Devin Desktop or the standalone Devin CLI, then rerun /aidlc --doctor.",
+  };
+}
 
 /** Default execution: invokes [binary, "--version"] with a 10s timeout,
  *  capturing stdout and stderr separately. No shell interpolation. */
@@ -166,35 +225,35 @@ export function compareTriples(
   return 0;
 }
 
-/** Run the Devin version check with injectable discovery and execution.
+/** Run the standalone Devin CLI version check with injectable discovery and
+ *  execution.
  *
- *  Discovery order: PATH first, then Desktop (cross-platform).
+ *  Discovery: PATH only (the standalone CLI). A missing CLI is advisory
+ *  (severity "warn") — Desktop-only use is supported, and the Devin host
+ *  availability row carries the hard failure when neither host exists.
  *  Execution: [binary, "--version"], no shell, 10s timeout, stdout/stderr separate.
- *  Result: reports source, checked path, parsed version, and comparison result.
- *  Nonzero exit, spawn error, timeout, or malformed output is an error for the
- *  discovered binary, not "missing". Desktop execution is NOT verified. */
+ *  Nonzero exit, spawn error, timeout, or malformed output is an error for
+ *  the discovered binary, not "missing": installed but broken or
+ *  unsupported is never silently accepted. */
 export function checkDevinVersion(
   pathDiscovery: DiscoveryFn = defaultPathDiscovery,
-  desktopDiscovery: DiscoveryFn = defaultDesktopDiscovery,
   exec: ExecFn = defaultExec,
 ): DevinVersionResult {
-  // 1. Discover the binary: PATH first, then Desktop.
-  const pathBin = pathDiscovery();
-  const desktopBin = pathBin ? null : desktopDiscovery();
-  const binary = pathBin ?? desktopBin;
-  const source: "PATH" | "Desktop" | null =
-    binary === null ? null : pathBin ? "PATH" : "Desktop";
+  // 1. Discover the standalone CLI on PATH.
+  const binary = pathDiscovery();
+  const source: "PATH" | null = binary === null ? null : "PATH";
 
   if (binary === null) {
     return {
       pass: false,
-      label: "devin CLI not found on PATH or Desktop",
-      fix: `install Devin CLI >= ${DEVIN_MIN_VERSION_STRING} (https://devin.ai)`,
+      severity: "warn",
+      label: "Standalone devin CLI not found on PATH",
+      fix: `install the standalone Devin CLI >= ${DEVIN_MIN_VERSION_STRING} (https://devin.ai); Devin Desktop-only use is also supported`,
       binaryPath: null,
       source: null,
       parsedVersion: null,
       rawVersion: null,
-      advisory: false,
+      advisory: true,
     };
   }
 
@@ -249,12 +308,11 @@ export function checkDevinVersion(
   const cmp = compareTriples(parsed, DEVIN_MIN_VERSION);
   const ok = cmp >= 0;
   const versionStr = parsed.join(".");
-  const sourceLabel = source === "Desktop" ? " (Desktop)" : "";
   return {
     pass: ok,
     label: ok
-      ? `devin CLI version ${versionStr} >= ${DEVIN_MIN_VERSION_STRING}${sourceLabel}`
-      : `devin CLI version ${versionStr} < ${DEVIN_MIN_VERSION_STRING}${sourceLabel}`,
+      ? `devin CLI version ${versionStr} >= ${DEVIN_MIN_VERSION_STRING}`
+      : `devin CLI version ${versionStr} < ${DEVIN_MIN_VERSION_STRING}`,
     fix: ok
       ? ""
       : `upgrade Devin CLI to ${DEVIN_MIN_VERSION_STRING} or later`,

@@ -188,7 +188,7 @@ defaults. No workflow-record migration is required.
 
 ## Known limitations and upgrade checks
 
-The [Devin engineering findings](../../reference/research/devin/index.md) distinguish implemented behavior from open acceptance gaps. Native dispatch field translation and background terminal bookkeeping were accepted live; reviewer-specific read/search identity was accepted live on 2026-09-20 with four follow-up findings open; a configured hook or completion row does not establish these guarantees. Question-response compatibility does not make an unknown or skipped choice an approval. Desktop binary discovery is not verified Desktop execution, and a version check is not a full workflow certification.
+The [Devin engineering findings](../../reference/research/devin/index.md) distinguish implemented behavior from open acceptance gaps. Native dispatch field translation and background terminal bookkeeping were accepted live; reviewer-specific read/search identity was accepted live on 2026-09-20 with four follow-up findings open; a configured hook or completion row does not establish these guarantees. Question-response compatibility does not make an unknown or skipped choice an approval. Desktop installation discovery proves only that an OS-appropriate application path exists; it does not verify that Desktop launched or that the current workflow ran inside it, and a version check is not a full workflow certification.
 
 Use the [regression and evidence checklist](../../reference/research/devin/14-regression-and-evidence.md) when AI-DLC or Devin changes. Historical runs and synthetic fixtures retain their original scope; this documentation does not claim a fresh interactive acceptance run.
 
@@ -221,6 +221,23 @@ project row warns when `.devin/config.json` leaves a documented source at
 Devin's default, and the user row warns when `~/.config/devin/config.json`
 re-enables one (on tested builds the user layer overrides the project file
 for this setting).
+
+`/aidlc --doctor` reports Devin host health as three separate rows. `Devin
+host availability` passes when either the standalone CLI (PATH) or the Devin
+Desktop editor application is found, and fails when neither exists. The
+standalone CLI row is PATH-only and enforces the version floor: a missing CLI
+is a warning because Desktop-only use is supported, while a discovered CLI
+that is broken, unparseable, or below the floor is a hard failure even when
+Desktop is also installed — installed but unsupported is never silently
+accepted. The `Devin Desktop installation` row checks the actual editor
+application at OS-appropriate paths (`%LOCALAPPDATA%\Programs\Devin\Devin.exe`
+then `%ProgramFiles%\Devin\Devin.exe` on Windows, `/Applications/Devin.app`
+then `~/Applications/Devin.app` on macOS, `/usr/bin/devin-desktop` then
+`/usr/share/devin-desktop/devin-desktop` on Linux — the `devin-desktop`
+package's launcher/application paths); absence is a warning because CLI-only use is
+supported, and a found path is filesystem evidence only — it does not verify
+that Desktop launched or hosted the current session.
+
 Existing installs should update AIDLC, refresh the shipped agent profiles and
 onboarding while preserving intentional local customizations, and restart
 Devin CLI; no workflow-record migration is required.

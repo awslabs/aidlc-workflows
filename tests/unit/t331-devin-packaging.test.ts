@@ -25,9 +25,12 @@
 //       companyAnnouncements/CLAUDE.md references.
 //   (8) harness.json identity: name === "devin", harnessDir === ".devin".
 //   (9) Doctor recognizes a pristine dist/devin install (devin-specific rows
-//       present, Claude fallback absent); the CLI version row is driven by a
-//       PATH shim so the result does not depend on the contributor's Devin
-//       install (tests 9 and 9d; missing/Desktop branches stay in t334).
+//       present, Claude fallback absent); the standalone CLI version row is
+//       driven by a PATH shim so the result does not depend on the
+//       contributor's Devin install, and the separate Devin host
+//       availability / Devin Desktop installation rows are pinned by label
+//       only because found/missing is machine-dependent (tests 9 and 9d;
+//       missing/Desktop branches stay in t334).
 //   (10) SKILL.md freshness: no leftover tokens, triggers in frontmatter,
 //        "Harness notes (Devin CLI)" section present.
 //
@@ -495,10 +498,15 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(output).toContain("mcp_config.json present");
       expect(output).toContain("rules/aidlc.md present");
       // The version row passes at the shimmed floor — exact label, so the row
-      // is asserted as PASS, not merely present, on every machine.
+      // is asserted as PASS, not merely present, on every machine. The
+      // availability and Desktop installation rows are separate doctor rows;
+      // whether Desktop is found depends on the machine, so only the label
+      // prefixes are pinned (absence is advisory either way).
       expect(output).toContain(
         `devin CLI version ${DEVIN_MIN_VERSION_STRING} >= ${DEVIN_MIN_VERSION_STRING}`,
       );
+      expect(output).toContain("Devin host availability:");
+      expect(output).toContain("Devin Desktop installation:");
       expect(output).toContain(
         `Harness CLI: devin devin ${DEVIN_MIN_VERSION_STRING} (t331-shim) at `,
       );
@@ -637,11 +645,12 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(garbageRun.output).toContain("returned unparseable version output");
       expect(garbageRun.status, garbageRun.output).toBe(1);
 
-      // The "missing" and "Desktop" branches are deliberately not asserted
-      // through a spawned run: the macOS Desktop candidate is an absolute
-      // path no env var can redirect, so a spawned "missing" run would only
-      // be hermetic on machines without Devin Desktop — a machine dependence.
-      // t334 covers both branches with injected discovery.
+      // The "CLI missing" and "Desktop editor" branches are deliberately not
+      // asserted through a spawned run: the macOS Desktop editor candidate is
+      // an absolute path no env var can redirect, so a spawned "missing" run
+      // would only be hermetic on machines without Devin Desktop — a machine
+      // dependence. t334 covers all four host-matrix cases with injected
+      // discovery.
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

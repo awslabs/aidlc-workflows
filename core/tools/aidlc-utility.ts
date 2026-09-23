@@ -63,7 +63,11 @@ import {
   trustedCommand,
 } from "./aidlc-command.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
-import { checkDevinVersion } from "./aidlc-devin-version.ts";
+import {
+  checkDevinDesktop,
+  checkDevinHostAvailability,
+  checkDevinVersion,
+} from "./aidlc-devin-version.ts";
 import {
   auditDevinImportConfig,
   userDevinConfigPath,
@@ -3653,18 +3657,44 @@ export async function collectDoctorReport(
         });
       }
     }
-    // Check the shared Devin CLI support baseline for AIDLC's required
-    // capabilities (hooks.v1.json, triggers frontmatter, run_subagent,
-    // ask_user_question with multi_select). Discovery is PATH-first with
-    // cross-platform Desktop fallback (macOS .app, Linux share/opt, Windows
-    // LocalAppData/ProgramFiles). Desktop execution is NOT verified —
-    // discovery only. See core/tools/aidlc-devin-version.ts for the full
-    // discovery/exec/parse logic and the injectable test seams.
+    // Three independent Devin host rows:
+    //   1. Devin host availability — passes when the standalone CLI is on
+    //      PATH or the Desktop editor application exists; fails when
+    //      neither host is found.
+    //   2. Standalone devin CLI — PATH-only discovery plus the shared
+    //      version floor for AIDLC's required capabilities (hooks.v1.json,
+    //      triggers frontmatter, run_subagent, ask_user_question with
+    //      multi_select). A missing CLI is advisory because Desktop-only
+    //      use is supported; a found binary that is broken, unparseable, or
+    //      below the floor is a hard failure even when Desktop is installed.
+    //   3. Devin Desktop installation — the actual editor application at
+    //      OS-appropriate paths, never the bundled CLI. Filesystem
+    //      discovery only; launch/session execution is not verified.
+    //      Absence is advisory because CLI-only use is supported.
+    // See core/tools/aidlc-devin-version.ts for the discovery/exec/parse
+    // logic and the injectable test seams.
     const devinVerResult = checkDevinVersion();
+    const devinDesktopResult = checkDevinDesktop();
+    const hostAvailability = checkDevinHostAvailability(
+      devinVerResult.binaryPath,
+      devinDesktopResult.appPath,
+    );
+    results.push({
+      pass: hostAvailability.pass,
+      label: hostAvailability.label,
+      fix: hostAvailability.fix,
+    });
     results.push({
       pass: devinVerResult.pass,
+      severity: devinVerResult.severity,
       label: devinVerResult.label,
       fix: devinVerResult.fix || undefined,
+    });
+    results.push({
+      pass: devinDesktopResult.pass,
+      severity: devinDesktopResult.severity,
+      label: devinDesktopResult.label,
+      fix: devinDesktopResult.fix,
     });
     results.push({
       pass: false,
@@ -3672,25 +3702,6 @@ export async function collectDoctorReport(
       label: "Devin subagent model: shipped AI-DLC custom profiles omit model: and use the default subagent model, not automatic parent-model inheritance (documented router default: SWE-1.6; effective organization setting/model not inspected)",
       fix: 'Ask an organization/enterprise admin to review "Default subagent model" and select the desired model (select your primary model there to align unpinned profiles); None disables subagents. Custom profile model: overrides follow Devin configuration, not the parent model picker.',
     });
-    // Desktop discovery advisory (advisory pass-with-label): if the Desktop
-    // binary was discovered, note that Desktop execution is separately
-    // unverified. If neither PATH nor Desktop found the binary, the main
-    // check above already failed.
-    if (devinVerResult.source === "Desktop") {
-      results.push({
-        pass: true,
-        label:
-          `Desktop binary discovered at ${devinVerResult.binaryPath} — Desktop execution is separately unverified (discovery only)`,
-      });
-    } else if (!devinVerResult.pass && !devinVerResult.binaryPath) {
-      // Neither PATH nor Desktop found the binary — add a Desktop discovery
-      // advisory so the user knows Desktop was checked.
-      results.push({
-        pass: true,
-        label:
-          `Desktop discovery: no Devin Desktop installation found (checked OS-appropriate paths); PATH lookup also failed`,
-      });
-    }
     // Hook execution evidence is historical: SessionStart writes a local marker.
     // Missing or invalid evidence leaves hook approval/execution unverified.
     let lastHookRun: string | undefined;
