@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.9.1] - 2026-09-19
+
+Fixes a plan-approval source-floor false positive: an incidental OS or editor artifact appearing in the workspace during a stage run (a macOS `.DS_Store`, a Windows `Thumbs.db`/`desktop.ini`, or an editor swap/backup file) no longer counts as unclaimed application-source drift, so it can no longer fail a stage closed and force re-approval (#1099). **Upgrade:** run `aidlc update`, then `aidlc config --yes` in each project to refresh its harness runtime.
+
+* Code Generation stage completion (`report --result awaiting-approval`) no longer refuses with an "unclaimed source changes fail closed (RFC #662)" error caused solely by a stray `.DS_Store` or editor swap file; these never-source artifacts are excluded from the workspace source fingerprint at any depth. Deleting the artifact by hand to get past the gate is no longer required.
+* The exclusion is a small, fixed set of universal OS/editor artifacts only (`.DS_Store`, `Thumbs.db`, `desktop.ini`, and `*.sw[a-p]`/`*~` swap and backup files). It does not consult `.gitignore`: ignored application source is still bound to the fingerprint exactly as before, and an explicitly registered source path is never excluded.
+
 ## [2.9.0] - 2026-09-15
 
 AI-DLC 2.9.0 rolls up the user-visible changes merged since 2.8.2, including the Classic scope v1 ceremony model, commit provenance, intent archiving, on-demand Construction autonomy, review-loop corrections, and the native preview release channel. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.9.0.tar.gz`. Existing in-flight Classic intents keep their recorded stage graph; the new ceremony defaults apply immediately where noted below.
