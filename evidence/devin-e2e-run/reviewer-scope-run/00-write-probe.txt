@@ -1,0 +1,7 @@
+done
+
+The subagent reported: "Error: the `write` tool is unavailable (no write tool is provided in this environment)." — so `scratch/probe.md` was not written.
+
+# environment: devin 3000.10.31 (b98cc431), headless -p, --respect-workspace-trust false --permission-mode accept-edits
+# result: reviewer-profile child ran; the write tool was NOT granted to the custom-profile child on this build
+# (confirms Phase 0 finding — 'write' in allowed-tools resolves to nothing for custom profiles)

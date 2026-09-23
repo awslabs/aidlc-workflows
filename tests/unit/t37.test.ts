@@ -112,6 +112,11 @@ import {
   PRACTICES_STALENESS_DAYS,
 } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
 import {
+  parseTestingContract,
+  renderTestingContract,
+  resolveTestingPostureFromSections,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import {
   cleanupTestProject,
   createTestProject,
   sedReplaceInFile,
@@ -170,6 +175,21 @@ function doctorDefault(p: string): DoctorResult {
     env: { ...process.env },
   });
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+}
+
+function doctorJson(p: string): {
+  status: number;
+  data: {
+    checks: Array<{ pass: boolean; severity?: string; label: string }>;
+    failed: number;
+  };
+} {
+  const res = spawnSync(
+    BUN,
+    [UTIL, "doctor", "--json", "--offline", "--project-dir", p],
+    { encoding: "utf-8", env: { ...process.env } },
+  );
+  return { status: res.status ?? -1, data: JSON.parse(res.stdout).data };
 }
 
 /** Write a fixture JSON to a temp file and register it for cleanup. Mirrors the .sh's `mktemp` + heredoc. */
@@ -697,6 +717,109 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     const r = doctor(p);
     expect(r.out).toContain("run-sensors x2 (last unparseable line)");
     expect(r.out).not.toContain("(last sensor dispatch failed: ENOSP)");
+  });
+
+  function corruptedContractPlan(): string {
+    const contract = resolveTestingPostureFromSections(
+      {
+        org: "- **Methodology**: test-after\n- **Ordering**: impl then test.",
+        team: "- **Methodology**: tdd\n- **Ordering**: tests first.",
+        project: "note\nsecond",
+      },
+      {
+        scope: "feature",
+        testStrategy: "standard",
+        projectType: "greenfield",
+      },
+    );
+    const rendered = renderTestingContract(contract);
+    const start = rendered.indexOf("```json\n") + "```json\n".length;
+    const end = rendered.lastIndexOf("\n```");
+    const corrupted = rendered.slice(start, end).replace(/\\n/g, "\n");
+    return `# Plan\n\n${rendered.slice(0, start)}${corrupted}${rendered.slice(end)}`;
+  }
+
+  test("18e: contract repair read -> historical warn naming the file, exit unchanged", () => {
+    const p = track(createTestProject());
+    const baseline = doctor(p);
+    parseTestingContract(corruptedContractPlan(), {
+      projectDir: p,
+      planPath: join(p, "construction", "code-generation-plan.md"),
+    });
+    const r = doctor(p);
+    expect(r.out).toMatch(
+      /warn\s+Testing-posture contract was read via repair \(historical\): 1 read\(s\)/,
+    );
+    expect(r.out).toContain("construction/code-generation-plan.md");
+    expect(r.out).not.toContain("Hook drops: none recorded");
+    expect(r.status).toBe(baseline.status);
+  });
+
+  test("18f: multiple files and repeated reads -> all named with the total count", () => {
+    const p = track(createTestProject());
+    const plan = corruptedContractPlan();
+    parseTestingContract(plan, {
+      projectDir: p,
+      planPath: join(p, "construction", "a-plan.md"),
+    });
+    parseTestingContract(plan, {
+      projectDir: p,
+      planPath: join(p, "construction", "b-plan.md"),
+    });
+    parseTestingContract(plan, {
+      projectDir: p,
+      planPath: join(p, "construction", "a-plan.md"),
+    });
+    const r = doctor(p);
+    expect(r.out).toContain(
+      "Testing-posture contract was read via repair (historical): 3 read(s)",
+    );
+    expect(r.out).toContain("construction/a-plan.md");
+    expect(r.out).toContain("construction/b-plan.md");
+  });
+
+  test("18g: hostile filename stays one log line and never classifies as degraded", () => {
+    const p = track(createTestProject());
+    const baseline = doctor(p);
+    parseTestingContract(corruptedContractPlan(), {
+      projectDir: p,
+      planPath: join(p, "construction", "weird-[degraded]-\t\nplan.md"),
+    });
+    const dropLines = readFileSync(
+      join(hooksHealthDir(p), "testing-contract-repair.drops"),
+      "utf-8",
+    )
+      .trimEnd()
+      .split("\n");
+    expect(dropLines).toHaveLength(1);
+    expect(dropLines[0]).toContain("\\u005bdegraded]");
+    expect(dropLines[0]).toContain("\\t\\n");
+    expect(dropLines[0]).not.toContain("[degraded]");
+    const r = doctor(p);
+    expect(r.out).toContain(
+      "Testing-posture contract was read via repair (historical)",
+    );
+    expect(r.out).not.toContain("degraded of");
+    expect(r.status).toBe(baseline.status);
+  });
+
+  test("18h: --json reports the repair warning with warn severity and no new failures", () => {
+    const p = track(createTestProject());
+    const baseline = doctorJson(p);
+    parseTestingContract(corruptedContractPlan(), {
+      projectDir: p,
+      planPath: join(p, "construction", "code-generation-plan.md"),
+    });
+    const report = doctorJson(p);
+    const check = report.data.checks.find((c: { label: string }) =>
+      c.label.includes("read via repair"),
+    );
+    expect(check).toBeDefined();
+    expect(check?.pass).toBe(false);
+    expect(check?.severity).toBe("warn");
+    expect(check?.label).toContain("construction/code-generation-plan.md");
+    expect(report.status).toBe(baseline.status);
+    expect(report.data.failed).toBe(baseline.data.failed);
   });
 });
 

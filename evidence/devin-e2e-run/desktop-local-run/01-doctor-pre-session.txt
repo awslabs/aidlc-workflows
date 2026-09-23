@@ -1,0 +1,37 @@
+doctor BEFORE any Devin Desktop session (fixture-prep state, ~08:30 local)
+=========================================================================
+
+Observed output (abridged to the decisive rows):
+
+  Machine
+    ok    9 checks passed
+
+  Project (.devin, devin)
+    fail  Devin hook execution evidence: no valid SessionStart marker;
+          hook approval/execution is unverified
+    ok    40 checks passed
+
+  Framework integrity
+    ok    all 12 checks passed
+
+  1 problem, 3 warnings.
+
+Expected and intentional: the SessionStart execution marker can only be
+written by a real session start; nothing was fabricated. This failure is the
+baseline the Desktop session had to clear.
+
+doctor AFTER the first Desktop session start (~09:14 local / 12:14Z), before
+the workflow intent:
+
+  aidlc/.aidlc-sessions/.current-session written (session id binding files
+  present); doctor rerun: Project checks 40 -> 41 passed, "0 problems".
+  Verbose host rows observed at that point:
+
+    ok    Devin host availability: standalone CLI and Desktop editor found
+    ok    devin CLI version 3000.11.1 >= 3000.10.21
+    ok    Devin Desktop installation: found at
+          C:\Users\<user>\AppData\Local\Programs\Devin\Devin.exe
+          (filesystem discovery only; launch/session execution not verified)
+    ok    Devin hook execution evidence: SessionStart last ran
+          2026-09-23T12:14:00.925Z (historical evidence only; current hook
+          approval is not verified)

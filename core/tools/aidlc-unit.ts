@@ -1562,11 +1562,9 @@ function candidateEvidence(
     `${recordPrefix}/construction/${claim.unit}/code-generation/code-generation-questions.md`;
   let planFingerprint: string | null = null;
   if (stages.includes("code-generation")) {
-    const plan = gitTextAt(
-      projectDir,
-      claim.oid,
-      `${recordPrefix}/construction/${claim.unit}/code-generation/code-generation-plan.md`,
-    );
+    const planPath =
+      `${recordPrefix}/construction/${claim.unit}/code-generation/code-generation-plan.md`;
+    const plan = gitTextAt(projectDir, claim.oid, planPath);
     const instructions = gitTextAt(
       projectDir,
       claim.oid,
@@ -1574,7 +1572,10 @@ function candidateEvidence(
     );
     const questions = gitTextAt(projectDir, claim.oid, questionsPath);
     const fingerprint = recordedApprovalFingerprint(questions);
-    const embedded = parseTestingContract(plan);
+    const embedded = parseTestingContract(plan, {
+      projectDir,
+      planPath: join(projectDir, planPath),
+    });
     const currentContract = resolveTestingPosture(projectDir);
     const approvalEvent = events.findLast((event) =>
       event.event === "PLAN_APPROVAL_RECORDED" &&

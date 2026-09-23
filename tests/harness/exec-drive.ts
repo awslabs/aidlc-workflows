@@ -2,7 +2,7 @@
 // and plugin tests. These preserve the command lines and scratch-project
 // shapes proven by the harness-specific status journeys.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   cpSync,
   mkdirSync,
@@ -21,11 +21,13 @@ const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
+const DEVIN_DIST = join(REPO_ROOT, "dist", "devin");
 
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const COPILOT_BIN = process.env.AIDLC_COPILOT_BIN ?? "copilot";
 const OPENCODE_BIN = process.env.AIDLC_OPENCODE_BIN ?? "opencode";
 const CURSOR_BIN = process.env.AIDLC_CURSOR_BIN ?? "agent";
+const DEVIN_BIN = process.env.AIDLC_DEVIN_BIN ?? "devin";
 
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
@@ -301,4 +303,139 @@ export function runCursor(proj: string, promptText: string): ExecResult {
     rc: result.status ?? -1,
     out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
   };
+}
+
+export interface DevinProject {
+  proj: string;
+  root: string;
+}
+
+// A scratch install: dist/devin copied verbatim (.devin/ engine + aidlc/
+// workspace shell + AGENTS.md), then git-initialized (Devin resolves project
+// context from the git root, same as every harness).
+export function setupDevinProject(): DevinProject {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "devin-exec-")));
+  const proj = join(root, "proj");
+  cpSync(DEVIN_DIST, proj, { recursive: true });
+  initializeGit(proj);
+  return { proj, root };
+}
+
+// `devin -p "<prompt>"` is Devin CLI's headless print mode (confirmed via
+// `devin --help`: no `exec` subcommand exists; -p/--print runs non-interactively,
+// processes the prompt, and exits — the analogue of copilot's `-p` and cursor's
+// `agent -p`). The /aidlc text rides the prompt (slash-skill invocation, same
+// as codex/copilot/cursor). --respect-workspace-trust false skips the trust
+// prompt that non-interactive mode cannot show on a scratch dir (the analogue
+// of cursor's --trust). --permission-mode dangerous is the analogue of
+// copilot's --allow-all-tools: print mode cannot show an approval prompt, so
+// any call outside the project's Exec allow rules auto-rejects — and the model
+// does not always phrase the engine call in the allowed `bun .devin/tools/*`
+// shape (live-verified on 3000.11.1: `auto` and `smart` both reject some
+// exploratory exec calls, which flakes the journey). The read-only contract
+// is still asserted below (status must not scaffold aidlc/spaces/**/intents).
+export function runDevin(
+  proj: string,
+  prompt: string,
+  env?: Record<string, string | undefined>,
+): ExecResult {
+  const result = spawnSync(
+    DEVIN_BIN,
+    [
+      "-p",
+      prompt,
+      "--respect-workspace-trust",
+      "false",
+      "--permission-mode",
+      "dangerous",
+    ],
+    {
+      cwd: proj,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PWD: proj, ...env },
+      timeout: TEST_TIMEOUT_MS,
+    },
+  );
+  return {
+    rc: result.status ?? -1,
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+  };
+}
+
+export interface CliResult {
+  rc: number;
+  stdout: string;
+  stderr: string;
+}
+
+// Non-prompt subcommand runner (`devin skills list`, `devin mcp list`):
+// same binary resolution and trust bypass as runDevin, no -p prompt.
+// `env` is spread over process.env — e.g. XDG_CONFIG_HOME pointed at an
+// empty scratch dir to neutralize the contributor's user-level config.
+export function runDevinCli(
+  proj: string,
+  args: string[],
+  env?: Record<string, string>,
+): CliResult {
+  const result = spawnSync(
+    DEVIN_BIN,
+    ["--respect-workspace-trust", "false", ...args],
+    {
+      cwd: proj,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PWD: proj, ...env },
+      timeout: TEST_TIMEOUT_MS,
+    },
+  );
+  return {
+    rc: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+// Async twin of runDevin for tests that must keep the event loop live while
+// `devin -p` runs — e.g. a Bun.serve MCP fixture in the same process
+// (spawnSync would starve the fixture's fetch handler).
+export function runDevinAsync(
+  proj: string,
+  prompt: string,
+  env?: Record<string, string | undefined>,
+): Promise<ExecResult> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      DEVIN_BIN,
+      [
+        "-p",
+        prompt,
+        "--respect-workspace-trust",
+        "false",
+        "--permission-mode",
+        "dangerous",
+      ],
+      {
+        cwd: proj,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, PWD: proj, ...env },
+      },
+    );
+    let out = "";
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      out += chunk;
+    });
+    const timer = setTimeout(() => child.kill(), TEST_TIMEOUT_MS);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ rc: -1, out: `${out}\n${String(err)}` });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ rc: code ?? -1, out });
+    });
+  });
 }

@@ -1,0 +1,108 @@
+{
+  "$schema": "devin-native-hook-contracts/v1",
+  "cliVersion": "devin 3000.10.31 (b98cc431)",
+  "events": {
+    "backgroundLaunchPost": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "run_subagent",
+      "tool_input": {
+        "title": "Read sentinel first line",
+        "task": "<task>",
+        "profile": "subagent_explore",
+        "is_background": true
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "tool_response": {
+        "success": true,
+        "output": "Background subagent started with agent_id=<agent-id>. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.",
+        "error": null
+      },
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "backgroundTerminalReadPost": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "read_subagent",
+      "tool_input": {
+        "agent_id": "<agent-id>",
+        "block": true
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "tool_response": {
+        "success": true,
+        "output": "Subagent <agent-id> completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.",
+        "error": null
+      },
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "repeatedTerminalReadPost": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "read_subagent",
+      "tool_input": {
+        "agent_id": "<agent-id>"
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "tool_response": {
+        "success": true,
+        "output": "Subagent <agent-id> completed successfully:\n\n<report>",
+        "error": null
+      },
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "foregroundCompletionPost": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "run_subagent",
+      "tool_input": {
+        "title": "write a.txt",
+        "task": "<task>",
+        "profile": "subagent_general"
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "tool_response": {
+        "success": true,
+        "output": "Subagent agent_id=<agent-id> completed successfully:\n\n<report>",
+        "error": null
+      },
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "resumedCompletionPost": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "run_subagent",
+      "tool_input": {
+        "title": "write a.txt",
+        "task": "<task>",
+        "profile": "subagent_general",
+        "resume": "<agent-id>"
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "tool_response": {
+        "success": true,
+        "output": "Subagent agent_id=<agent-id> completed successfully:\n\n<report>",
+        "error": null
+      },
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "reviewerForegroundCompletionPost": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "run_subagent",
+      "tool_input": {
+        "title": "Tool calibration exercise",
+        "profile": "aidlc-architecture-reviewer-agent",
+        "task": "<task>",
+        "is_background": false
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "tool_response": {
+        "success": true,
+        "output": "Subagent agent_id=<agent-id> completed successfully:\n\n<report>",
+        "error": null
+      },
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    }
+  }
+}

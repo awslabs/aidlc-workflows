@@ -17,6 +17,7 @@ import { join, sep } from "node:path";
 import {
   classifyRuntimeCompileCommand,
   isEngineToolCall,
+  KNOWN_HARNESS_DIRS,
   parseLiteralShellInvocation,
 } from "../../core/tools/aidlc-lib.ts";
 
@@ -1390,6 +1391,7 @@ describe("detector corpus", () => {
       "bun .codex/tools/aidlc.ts",
       "bun .aidlc/tools/aidlc.ts",
       "bun .cursor/tools/aidlc.ts",
+      "bun .devin/tools/aidlc.ts",
     ]) {
       for (const prefix of ["", "cd app && ", "env MODE=test ", "command "]) {
         const report = `${prefix}${entry} engine orchestrate report --result approved`;
@@ -1399,6 +1401,29 @@ describe("detector corpus", () => {
         expect(d1(status), status).toBe(false);
         expect(classifyRuntimeCompileCommand(status), status).toBe("pass");
       }
+    }
+  });
+
+  // DEVIN-07 / PR #996 review 5248693673 finding 3: the classifier's harness
+  // pattern is built from KNOWN_HARNESS_DIRS, so a dir missing from that list
+  // silently classifies every one of its engine commands `pass` (`.devin` did —
+  // runtime-graph.json never compiled on Devin). Iterate the list itself so a
+  // future harness joins the coverage automatically instead of drifting again.
+  test("every shipped harness dir classifies transition, read-only, and recursion commands identically", () => {
+    for (const dir of KNOWN_HARNESS_DIRS) {
+      const report = `bun ${dir}/tools/aidlc-orchestrate.ts report --result approved`;
+      expect(d1(report), report).toBe(true);
+      expect(classifyRuntimeCompileCommand(report), report).toBe("fire");
+      const approve = `bun ${dir}/tools/aidlc-state.ts approve units-generation --result approved`;
+      expect(classifyRuntimeCompileCommand(approve), approve).toBe("fire");
+      const status = `bun ${dir}/tools/aidlc-orchestrate.ts next --status`;
+      expect(d1(status), status).toBe(false);
+      expect(classifyRuntimeCompileCommand(status), status).toBe("pass");
+      const recurse = `bun ${dir}/tools/aidlc-runtime.ts compile`;
+      expect(classifyRuntimeCompileCommand(recurse), recurse).toBe("reject");
+      const dispatched = `bun ${dir}/tools/aidlc.ts engine orchestrate report --result approved`;
+      expect(d1(dispatched), dispatched).toBe(true);
+      expect(classifyRuntimeCompileCommand(dispatched), dispatched).toBe("fire");
     }
   });
 

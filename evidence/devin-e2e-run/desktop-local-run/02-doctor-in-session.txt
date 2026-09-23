@@ -1,0 +1,85 @@
+/aidlc --doctor --verbose INSIDE the Devin Desktop session (pre-workflow)
+=========================================================================
+
+Captured verbatim from the attended session; only the OS username is redacted
+(C:\Users\<user>).
+
+AI-DLC doctor
+
+Machine
+  ok    Runtime hook PATH: bun -> C:\Users\<user>\.bun\bin\bun.exe (non-interactive baseline)
+  ok    Runtime hook PATH: aidlc is not required by the selected projection
+  ok    Harness CLI: devin devin 3000.11.1 (cc4e349ca55e) at C:\Users\<user>\AppData\Local\devin\cli\bin\devin.exe
+  ok    Transaction staging: no abandoned directories
+  ok    Transaction recovery: no quarantined directories
+  ok    Devin host availability: standalone CLI and Desktop editor found
+  ok    devin CLI version 3000.11.1 >= 3000.10.21
+  ok    Devin Desktop installation: found at C:\Users\<user>\AppData\Local\Programs\Devin\Devin.exe (filesystem discovery only; launch/session execution not verified)
+  ok    Windows uninstall recovery: no pending continuations
+  warn  Update: update cache is absent
+
+Project (.devin, devin)
+  ok    Instruction file: framework-owned file intact
+  ok    Execution mode: source checkout (no machine runtime expected)
+  ok    Project runtime stamp: 2.9.0 (devin)
+  ok    aidlc-write-audit-log.ts present
+  ok    aidlc-sync-workflow-state.ts present
+  ok    aidlc-validate-state.ts present
+  ok    aidlc-log-subagent.ts present
+  ok    aidlc-session-start.ts present
+  ok    aidlc-session-end.ts present
+  ok    aidlc-statusline.ts present
+  ok    aidlc-devin-adapter.ts present
+  ok    hooks.v1.json present (hook wiring)
+  ok    config.json present (permissions + read_config_from)
+  ok    mcp_config.json present (MCP servers)
+  ok    rules/aidlc.md present (standing method rule (auto-loaded pointer))
+  ok    Devin compatibility imports: all 7 documented sources explicitly decided in .devin/config.json
+  ok    Devin compatibility imports: no user-level read_config_from override
+  warn  Devin subagent model: shipped AI-DLC custom profiles omit model: and use the default subagent model, not automatic parent-model inheritance (documented router default: SWE-1.6; effective organization setting/model not inspected)
+  ok    Devin hook execution evidence: SessionStart last ran 2026-09-23T12:14:00.925Z (historical evidence only; current hook approval is not verified)
+  ok    AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)
+  ok    Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=30, bootstrap=3
+  ok    Plugin selection flags: harness.json agrees with stage-graph.json
+  ok    Composed plugin surface: all enabled plugin stages and recorded contributions are present
+  ok    workspace shell ready (.devin/ + aidlc/spaces/default/memory/)
+  ok    Submodules: no .gitmodules at workspace root
+  ok    Hooks last fired: continue-workflow 2026-09-23T12:23:58Z, plan-approval-guard 2026-09-23T12:25:09Z, review-freeze 2026-09-23T12:25:09Z, reviewer-scope 2026-09-23T12:25:09Z
+  ok    Hook drops: none recorded
+  ok    Runtime locks: none leaked
+  ok    Orphan worktrees: 0 observed
+  ok    Stale branches: 0 (0 bolt-* observed)
+  ok    Orphan state files: 0 observed
+  ok    Orphan audit: 0 observed
+  ok    Practices staleness: state file absent (informational)
+  ok    MERGE_DISPATCH: 0 orphan INVOKED (0 bracketed)
+  ok    Composed scope durability: no composed scopes
+  ok    Duplicate producers: every consumed artifact has a single producer
+  ok    Intent registry: all rows match their record dirs
+  ok    Workspace records: no uncommitted changes under aidlc/
+  warn  Plugins: 1 need attention - host:inventory-unavailable
+  ok    Models: recorded policy is expressible
+  ok    Flags: no recorded project answers
+  ok    Providers: using shipped fallback; no recorded answers
+  ok    Workspace siblings: complete projection is present
+
+Framework integrity
+  ok    Enabled stage compile coverage: every enabled stage file is in the full graph
+  ok    Agent filename/name consistency: all agent files match declared names
+  ok    Scope filename/name consistency: all scope files match declared names
+  ok    Cycle detection: 0 cycles
+  ok    Orphan stage files: 33 graph entries all have files
+  ok    Uncompiled stage files: 0 stage files missing from the compiled graph
+  ok    Scope validation: 11 scopes valid (47 advisories)
+  ok    Schema validation: 33/33 stages validated
+  ok    Graph references: 122 artifacts + edges resolved
+  ok    Keyword overlap: no conflicts
+  ok    Rule drift: no team/project rule overlaps org policy
+  ok    Paired sensor coverage: no sensor-bound rules (0 feedforward-only)
+
+0 problems, 3 warnings.
+
+Key rows for this run: the three Devin host rows (availability / standalone
+CLI version / Desktop editor application) all pass; the SessionStart
+execution marker exists (12:14:00.925Z = the first Desktop session start);
+"Hooks last fired" shows hooks already intercepting during the session.

@@ -16,6 +16,7 @@ import {
   isSafeOnboardingPath,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
+import { DEVIN_MIN_VERSION_STRING } from "./aidlc-devin-version.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
@@ -80,6 +81,8 @@ export function providerMenuCopy(
       return { bedrock: "record the manual Copilot BYOK provider setup" };
     case "cursor":
       return { bedrock: "record the manual Cursor provider setup" };
+    case "devin":
+      return { bedrock: "record the manual Devin CLI provider setup" };
   }
 }
 export type ProviderPendingStatus = "pending" | "done";
@@ -486,6 +489,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
     distribution !== "codex" &&
     distribution !== "copilot" &&
     distribution !== "cursor" &&
+    distribution !== "devin" &&
     distribution !== "kiro" &&
     distribution !== "kiro-ide" &&
     distribution !== "opencode"
@@ -839,6 +843,12 @@ const HARNESS_CLI: Record<
     command: "opencode",
     required: true,
     install: "Install opencode and ensure `opencode --version` works.",
+  },
+  devin: {
+    command: "devin",
+    required: true,
+    minimumVersion: DEVIN_MIN_VERSION_STRING,
+    install: `Install Devin CLI ${DEVIN_MIN_VERSION_STRING} or later and ensure \`devin --version\` works.`,
   },
 };
 

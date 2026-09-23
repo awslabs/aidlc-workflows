@@ -1,0 +1,99 @@
+=== ls -la ===
+total 52
+drwxr-xr-x  6 wiley wiley  4096 Sep 17 22:45 .
+drwxr-x--- 18 wiley wiley  4096 Sep 18 08:45 ..
+drwxr-xr-x 11 wiley wiley  4096 Sep 17 22:18 .devin
+drwxr-xr-x  8 wiley wiley  4096 Sep 18 08:36 .git
+-rw-r--r--  1 wiley wiley  3628 Sep 17 22:14 .gitignore
+-rw-r--r--  1 wiley wiley 16222 Sep 17 22:14 AGENTS.md
+drwxr-xr-x  2 wiley wiley  4096 Sep 17 22:45 __pycache__
+drwxr-xr-x  4 wiley wiley  4096 Sep 18 08:03 aidlc
+-rw-r--r--  1 wiley wiley    12 Sep 17 22:44 hello.py
+-rw-r--r--  1 wiley wiley  1599 Sep 17 22:45 test_hello.py
+
+=== cat hello.py ===
+print("ok")
+
+=== python3 hello.py ===
+ok
+exit=0
+
+=== cat test_hello.py ===
+"""Unit tests for hello.py (Minimal strategy, express scope).
+
+One verifiable test per requirement; tests invoke the script as a
+subprocess (`python3 hello.py`) and assert on stdout, stderr, and exit
+code — the narrowest level that verifies each requirement.
+"""
+
+import subprocess
+import unittest
+from pathlib import Path
+
+WORKSPACE_ROOT = Path(__file__).resolve().parent
+HELLO = WORKSPACE_ROOT / "hello.py"
+
+
+def run_hello() -> subprocess.CompletedProcess:
+    """Run `python3 hello.py` at the workspace root, capturing output."""
+    return subprocess.run(
+        ["python3", "hello.py"],
+        cwd=WORKSPACE_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+
+class TestHello(unittest.TestCase):
+    def test_hello_file_exists(self):
+        """FR1: hello.py exists at the workspace root and is a regular file."""
+        self.assertTrue(HELLO.exists(), "hello.py must exist at workspace root")
+        self.assertTrue(HELLO.is_file(), "hello.py must be a regular file")
+
+    def test_prints_ok(self):
+        """FR1.1 (happy path): stdout is exactly 'ok\\n'."""
+        result = run_hello()
+        self.assertEqual("ok\n", result.stdout)
+
+    def test_clean_exit(self):
+        """FR1.2: stderr is empty and exit code is 0."""
+        result = run_hello()
+        self.assertEqual("", result.stderr)
+        self.assertEqual(0, result.returncode)
+
+    def test_file_is_single_print(self):
+        """FR1.3: file content is exactly the single statement print("ok")."""
+        self.assertEqual('print("ok")\n', HELLO.read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+=== python3 -m pytest -q test_hello.py ===
+/usr/bin/python3: No module named pytest
+pytest-exit=1
+
+=== python3 -m unittest -v test_hello ===
+test_clean_exit (test_hello.TestHello)
+FR1.2: stderr is empty and exit code is 0. ... ok
+test_file_is_single_print (test_hello.TestHello)
+FR1.3: file content is exactly the single statement print("ok"). ... ok
+test_hello_file_exists (test_hello.TestHello)
+FR1: hello.py exists at the workspace root and is a regular file. ... ok
+test_prints_ok (test_hello.TestHello)
+FR1.1 (happy path): stdout is exactly 'ok\n'. ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.027s
+
+OK
+unittest-exit=0
+
+=== git status --short ===
+?? __pycache__/
+?? aidlc/spaces/default/intents/
+?? hello.py
+?? test_hello.py
+
+=== git log --oneline ===
+fc6c870 install aidlc devin tree (3baf4d54 + Item 2 fix)

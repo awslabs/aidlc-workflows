@@ -798,6 +798,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   // a new spawning test still cannot land without a human edit here.
   const EXPECTED_NONE_TO_CLI = [
     "unit/t341-orchestrate-wait.test.ts",
+    "unit/t345-doctor-devin-import-isolation.test.ts",
     "unit/t343-intent-create-positionals.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
@@ -910,6 +911,15 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t328 drives the shipped log, human-turn, and begin CLIs so protected
     // challenge/response receipts and cross-process lock ordering are genuine.
     "unit/t328-plan-approval-runtime-authority.test.ts",
+    // t331 spawns the shipped packager (`bun scripts/package.ts devin --check`)
+    // and the compiled dispatcher to prove the Devin CLI dist is byte-parity and
+    // the harness routes through the adapter — observable only across a real
+    // process boundary.
+    "unit/t331-devin-packaging.test.ts",
+    // t332 spawns the shipped Devin adapter to prove hook payload conversion,
+    // guard enforcement, and session lifecycle routing across a real process
+    // boundary — in-process calls would catch the throws that mask the contract.
+    "unit/t332-devin-adapter.test.ts",
     // t337 spawns the shipped doctor to pin the "Workspace source boundary
     // binds" row, which reads a real source walk against a real workspace.
     "unit/t337-source-boundary-reason.test.ts",

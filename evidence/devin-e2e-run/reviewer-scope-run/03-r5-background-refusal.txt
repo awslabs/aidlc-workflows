@@ -1,0 +1,64 @@
+# 03-r5-background-refusal — user-stories stage, 2026-09-19
+# The conductor dispatched three "US mob" background subagents, read two of them, then
+# attempted the per-stage reviewer dispatch while the third was still pending.
+# Source: sessions.db message_nodes (stylish-jester), deduped by tool_call id.
+
+## 1. The three background "US mob" run_subagent calls @ 2026-09-19T21:32:12.444586736Z
+
+Title: US mob: design
+Profile: aidlc-design-agent
+is_background: true
+Task (first 200 chars): You are a mob participant (designer lens) for the AI-DLC User Stories stage, intent `260919-challenge-scorer`. Conversation language: English. Project: greenfield Python CLI coding-challenge scorer (s
+Result: Background subagent started with agent_id=c24076c4. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.
+
+Title: US mob: developer
+Profile: aidlc-developer-agent
+is_background: true
+Task (first 200 chars): You are a mob participant (developer lens) for the AI-DLC User Stories stage, intent `260919-challenge-scorer`. Conversation language: English. Project: greenfield Python CLI coding-challenge scorer (
+Result: Background subagent started with agent_id=01c46010. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.
+
+Title: US mob: quality
+Profile: aidlc-quality-agent
+is_background: true
+Task (first 200 chars): You are a mob participant (quality engineer lens) for the AI-DLC User Stories stage, intent `260919-challenge-scorer`. Conversation language: English. Project: greenfield Python CLI coding-challenge s
+Result: Background subagent started with agent_id=1798a4bb. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.
+
+## 2. read_subagent calls issued before the reviewer dispatch (two of three read)
+
+2026-09-19T21:32:17.867995405Z  read_subagent {"agent_id":"c24076c4","block":true,"timeout":300}
+Result: Subagent c24076c4 completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.
+
+2026-09-19T21:32:54.479699874Z  read_subagent {"agent_id":"01c46010","block":true,"timeout":300}
+Result: Subagent 01c46010 completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.
+
+## 3. The refused reviewer dispatch @ 2026-09-19T21:34:11.326420684Z
+
+run_subagent call:
+{
+ "profile": "aidlc-product-lead-agent",
+ "title": "Review: user-stories"
+}
+Task (first 300 chars): You are the reviewer for the AI-DLC User Stories stage, intent `260919-challenge-scorer`, space `default`. Conversation language: English. ADVISORY review — a single normal-flow pass whose findings go to the human at the approval gate; report only findings the human should weigh, ranked by severity.
+
+Tool result (verbatim):
+Tool rejected: Read every pending background subagent with read_subagent before dispatching a reviewer; their tool calls share this session and could not be told apart from the reviewer's.
+
+## 4. The following read_subagent — agent 1798a4bb (the still-pending US mob: quality agent)
+
+2026-09-19T21:34:17.944643855Z  read_subagent {"agent_id":"1798a4bb"}
+Result: Subagent 1798a4bb completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.
+
+## 5. Successful retry @ 2026-09-19T21:34:27.955148135Z
+
+run_subagent { profile: aidlc-product-lead-agent, title: "Review: user-stories" }
+Result:
+Subagent agent_id=321963ac completed successfully:
+
+**Reviewer:** aidlc-product-lead-agent
+
+Verdict: **READY** (advisory). Review written to `1.review.md`.
+
+
+## 6. Drop line recorded by the adapter (reviewer-scope.drops, verbatim)
+
+2026-09-19T21:34:11Z	refused a reviewer dispatch while background subagents are pending

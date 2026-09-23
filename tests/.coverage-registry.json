@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1075,
+    "total": 1077,
     "enumeratedByClass": {
-      "function": 755,
+      "function": 757,
       "audit": 102,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 451,
+      "function": 453,
       "audit": 63,
       "scope": 11,
       "stage": 11,
@@ -1424,6 +1424,18 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:annotateSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3215,6 +3227,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:findSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:firstInScopeStageOfPhase",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3614,6 +3638,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hasSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6391,18 +6427,6 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:renderReviewVerdictCommand",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t115.test.ts",
-          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9226,6 +9250,10 @@
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9285,6 +9313,10 @@
         },
         {
           "file": "tests/unit/t276-cursor-adapter.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9514,6 +9546,10 @@
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9582,6 +9618,10 @@
         {
           "file": "tests/unit/t29.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9637,6 +9677,10 @@
         },
         {
           "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-devin-adapter.test.ts",
           "mechanism": "cli"
         },
         {
@@ -12428,6 +12472,10 @@
         },
         {
           "file": "tests/unit/t340-default-scope-resolver.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t345-doctor-devin-import-isolation.test.ts",
           "mechanism": "cli"
         },
         {

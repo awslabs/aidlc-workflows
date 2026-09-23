@@ -213,7 +213,7 @@ function humanReport(
   const frameworkPattern =
     /^(?:Agent filename|Scope filename|Cycle detection|Orphan stage|Uncompiled stage|Enabled stage compile coverage|Scope validation|Schema validation|Graph references|Keyword overlap|Rule drift|Paired sensor coverage|Stage graph|Scope grid|Sensor |Required sections|Upstream coverage|Traceability|Linter|Type check)/i;
   const machinePattern =
-    /^(?:Update:|Windows uninstall|Runtime hook PATH|Harness CLI|Installed runtime|Command pointer|Rollback target|Project pin registry|Transaction staging|Transaction recovery|Settings global)/i;
+    /^(?:Update:|Windows uninstall|Runtime hook PATH|Harness CLI|Installed runtime|Command pointer|Rollback target|Project pin registry|Transaction staging|Transaction recovery|Settings global|Devin host availability|Standalone devin CLI|devin CLI|Devin Desktop)/i;
   const machine = report.checks.filter((check) => machinePattern.test(check.label));
   const framework = report.checks.filter((check) => frameworkPattern.test(check.label));
   const project = report.checks.filter((check) =>

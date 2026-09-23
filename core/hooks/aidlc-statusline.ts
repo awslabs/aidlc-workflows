@@ -18,6 +18,7 @@ const KNOWN_HARNESS_DIRS = [
   ".codex",
   ".cursor",
   ".aidlc",
+  ".devin",
 ] as const;
 
 type IntentRow = {

@@ -448,6 +448,10 @@ describe("t266 conversation-language rule layer", () => {
           surface = join(harness.distRoot, "opencode.json");
           required = `${MEMORY_DIR}/**/*.md`;
           break;
+        case "devin-rules":
+          surface = join(harness.engineRoot, "rules", "aidlc.md");
+          required = `aidlc/spaces/default/memory/`;
+          break;
         default:
           throw new Error(
             `${harness.name} declares memoryInclude "${include}" with no assertion here — ` +

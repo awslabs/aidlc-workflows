@@ -1,0 +1,38 @@
+=== node 266: emitted tool call (as recorded; pre-merge) ===
+keys: ["profile", "task", "title"]
+profile: aidlc-developer-agent
+task contains AIDLC_DISPATCH_RULES_BEGIN: False
+
+=== node 367: emitted tool call (as recorded; pre-merge) ===
+keys: ["profile", "task", "title"]
+profile: aidlc-developer-agent
+task contains AIDLC_DISPATCH_RULES_BEGIN: False
+
+=== node 267: child-received prompt (role=user) ===
+task tail before bundle:
+y this shape:
+
+## Subagent Summary: Code Generation
+
+### Produced
+- [file path]: [brief description]
+
+### Key Decisions
+- [decision]: [rationale]
+
+### Issues / Concerns
+- [problems, edge cases, risks] or "None"
+
+### Next Steps
+- [what the orchestrator should do next]
+
+Include the exact list of every workspace file you created, modified, or
+deleted under "Produced" — it feeds the source manifest.
+
+
+bundle header:
+<!-- AIDLC_DISPATCH_RULES_BEGIN sha256:20bba9dd4af460be122f02f3090dae83acb8d8466820de984c19f0a5c85fbb77 stage:code-generation -->
+## Active AI-DLC Rule Bundle
+These are the required rules for this stage. Apply the conten
+
+AIDLC_DISPATCH_RULES_BEGIN count in delivered prompt: 1
