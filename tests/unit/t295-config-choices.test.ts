@@ -1,5 +1,5 @@
 // covers: function:normalizeProjectFlagsRecord, function:projectFlags, function:resolveProjectFlag, function:availableScopeNames, function:flagFiles, function:flagIssues, function:discoverInstalledPluginNames, function:readPluginSelection, function:completionInstruction, function:projectChoiceFiles, function:projectChoiceIssues, function:normalizeProjectChoicesRecord, function:flagsDoctorCheck
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -14,6 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import {
   applyConfigDiagnosticRecords,
   availableScopeNames,
   completionInstruction,
@@ -27,6 +32,10 @@ import {
   invalidateSettingsCache,
   resolveAidlcSettings,
 } from "../../core/tools/aidlc-settings.ts";
+
+// Cases install and refresh multiple harness projections. Their aggregate
+// workload needs the shared fixture backstop, separate from each subprocess.
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -60,11 +69,19 @@ function run(
       ...env,
     },
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+      phase: "config choice command",
+    }),
   });
-  if (result.error) throw result.error;
+  if (result.error || result.status === null) {
+    throw new Error(
+      `Config choice subprocess did not exit normally: status=${result.status}, signal=${result.signal}\n` +
+        (result.stdout ?? "") + (result.stderr ?? ""),
+      { cause: result.error },
+    );
+  }
   return {
-    status: result.status ?? -1,
+    status: result.status,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
@@ -122,7 +139,9 @@ function runScopeConsumer(
       cwd: project,
       env,
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+        phase: "config scope consumer",
+      }),
     },
   );
   return {
@@ -301,6 +320,9 @@ describe("t295 flags section", () => {
         cwd: REPO_ROOT,
         env: targetEnv,
         encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+          phase: "config flags from another cwd",
+        }),
       },
     );
     expect(fromOtherCwd.status).toBe(0);
@@ -324,6 +346,9 @@ describe("t295 flags section", () => {
         cwd: REPO_ROOT,
         env: targetEnv,
         encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+          phase: "config flags from another cwd with env override",
+        }),
       },
     );
     expect(envFromOtherCwd.status).toBe(0);
@@ -376,7 +401,7 @@ describe("t295 flags section", () => {
     ], project, runtimeEnv()).status).toBe(0);
     expect(resolvedFlags(project))
       .toEqual(flags);
-  }, 60_000);
+  });
 
   test("bypasses require explicit opt-in and reset restores shipped bytes", () => {
     const project = install();
@@ -431,7 +456,7 @@ describe("t295 flags section", () => {
     expect(current.env.AWS_AIDLC_DEFAULT_SCOPE).toBe(
       shipped.env.AWS_AIDLC_DEFAULT_SCOPE,
     );
-  }, 60_000);
+  });
 });
 
 describe("t295 project section", () => {
@@ -505,7 +530,7 @@ describe("t295 project section", () => {
     expect(completionInstruction(copy, ".claude", "bash")).toBe(
       'eval "$(bun .claude/tools/aidlc.ts system completions bash)"',
     );
-  }, 60_000);
+  });
 
   test("MCP consent is rerunnable and --yes never adds defaults", () => {
     const project = install("claude", "none");
@@ -567,7 +592,7 @@ describe("t295 project section", () => {
     expect(readConfigDiagnosticRecords(join(project, ".claude")).project)
       .toBeNull();
     expect(harnessData(project).plugins).toBeUndefined();
-  }, 60_000);
+  });
 
   test("MCP checks use the selected harness surface", () => {
     const kiro = install("kiro", "defaults");
@@ -658,7 +683,7 @@ describe("t295 project section", () => {
       "--json",
     ], codex, env).stdout) as { data: { mcpNote: string } };
     expect(codexShow.data.mcpNote).toContain("no shipped MCP surface");
-  }, 60_000);
+  });
 
   test("plugin changes inherit the active workflow refresh refusal", () => {
     const project = install();
@@ -692,7 +717,7 @@ describe("t295 project section", () => {
     expect(result.stdout).toContain(
       "refusing to refresh while 1 workflow(s) are active",
     );
-  }, 60_000);
+  });
 });
 
 describe("t295 invariants", () => {
