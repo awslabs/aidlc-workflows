@@ -247,7 +247,7 @@ the Stop hook allows the stop and records a drop, and `unit start` surfaces the
 error rather than starting the Unit. A silent no-op was rejected deliberately,
 because it would hide the defect the barrier exists to expose.
 
-**`next` is idempotent, not merely side-effect-light.** When the active-directive
+**Workflow routing through `next` is idempotent.** When the active-directive
 marker already records this exact directive for this state (same stage, same
 Unit, same rule bundle, same directive body, and for a partial rule delivery a
 receipt that still matches the marker's payload), `next` returns the issued
@@ -263,7 +263,10 @@ CURRENT part with its receipt, so the end-of-turn re-feed names the receipt the
 conductor already holds. Routing is always recomputed, so a paused Unit, a moved
 gate, or a completed Unit produces its own directive and stale work can never be
 re-issued. Asking the engine what to do twice therefore answers the same thing
-twice and changes nothing, which is what makes it safe to ask from a hook.
+twice and changes nothing, which is what makes that query safe to ask from a hook.
+Explicit typed `next config set|get|list` requests are terminal operations: the
+canonical config command executes before its output is returned. Stop-hook and
+route-check probes only describe those commands and never execute them.
 
 This is the mechanical half of the two authority rules in
 [`12-state-machine.md`](12-state-machine.md#authority-invariants): a query never

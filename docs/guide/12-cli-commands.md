@@ -1224,7 +1224,7 @@ the retired one. A record carrying only a retired relaxed or off line is
 announced on every `/aidlc` run; re-affirm with
 `/aidlc config set guard-policy relaxed` to keep it or
 `/aidlc config set guard-policy strict` to raise the fences and stop the notice.
-`next` writes nothing, and a retired strict line alone gets no notice. The value is
+Displaying this notice does not rewrite the line, and a retired strict line alone gets no notice. The value is
 committed with the intent, survives sessions, and is visible to teammates. The
 same setter repairs an invalid line and records the old text. A plain-chat request
 for strict runs directly. A request to lower the policy, such as "stop asking me
