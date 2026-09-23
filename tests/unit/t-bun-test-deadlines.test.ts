@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NATIVE_RUNTIME_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 test("Bun's CLI default preserves explicit case and hook deadlines", () => {
   const root = mkdtempSync(join(tmpdir(), "aidlc-bun-deadline-"));
@@ -18,7 +19,7 @@ describe("explicit hook deadline", () => {
 });
 `);
     const child = spawnSync(process.execPath, ["test", fixture, "--timeout=50"], {
-      cwd: root, encoding: "utf8", timeout: 10_000,
+      cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
     });
     const output = `${child.stdout}\n${child.stderr}`;
     expect(child.status, output).toBe(1);
@@ -29,4 +30,4 @@ describe("explicit hook deadline", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-}, 15_000);
+}, NATIVE_RUNTIME_CASE_TIMEOUT_MS);

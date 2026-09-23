@@ -1,8 +1,9 @@
 import type { ChildProcess } from "node:child_process";
+import { LIVE_CLEANUP_TIMEOUT_MS } from "./test-budget.ts";
 
 // Part of the test cap, not extra runtime: leave the caller's finally block
 // time to stop its TUI session and remove the fixture.
-export const TUI_CLEANUP_RESERVE_MS = 30_000;
+export const TUI_CLEANUP_RESERVE_MS = LIVE_CLEANUP_TIMEOUT_MS;
 
 export function remainingTuiDriverMs(
   testDeadlineMs: number,

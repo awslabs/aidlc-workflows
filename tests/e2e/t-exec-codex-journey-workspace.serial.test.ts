@@ -37,6 +37,7 @@ import { join } from "node:path";
 import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { codexExecDiagnostic, type CodexExecution, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { createCodexWorkspaceFailureCapture, turnEvidence } from "../harness/codex-turn-evidence.ts";
+import { LIVE_COMMAND_TIMEOUT_MS, LIVE_LONG_OPERATION_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   expectCliSuccess, expectCreatedIntent, expectSpaceInclude, workflowStartedCount,
 } from "../harness/codex-workspace-evidence.ts";
@@ -57,16 +58,12 @@ const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
-// A multi-spawn live journey. codex exec is the slowest harness — even a "cheap"
-// verb spawn can run several minutes when the model reasons before invoking the
-// tool (a 240s cap turned that variance into a false red), and the per-repo
-// reverse-engineering codekb spawn (9 artifacts × 2 repos) is the heaviest single
-// beat in the suite. Budget the whole journey at 4200s, give each verb spawn a
-// generous cap, and the codekb spawn the lion's share. Flaky-LLM-tier (watched).
+// A multi-spawn live journey. Use shared generous operation backstops; the
+// existing case/file deadlines bound actual elapsed work across all spawns.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "4200", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 4200) * 1000;
-const VERB_EXEC_MS = 420_000;
-const CODEKB_EXEC_MS = Math.max(1_500_000, TEST_TIMEOUT_MS - 6 * VERB_EXEC_MS);
+const VERB_EXEC_MS = LIVE_COMMAND_TIMEOUT_MS;
+const CODEKB_EXEC_MS = LIVE_LONG_OPERATION_TIMEOUT_MS;
 
 // The user types "teamB"; the engine slugifies it on disk (slugify lowercases —
 // aidlc-lib.ts:463), so the SPACE DIR + cursor + registry key are "teamb".

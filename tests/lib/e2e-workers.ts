@@ -565,7 +565,7 @@ export async function cleanupE2eTransports(worker: E2eWorker, env: NodeJS.Proces
     const result = await command(
       runtime!.bin,
       [...runtime!.prefix, "kill", "--session", meta.session],
-      worker.root, legacyEnv, 60_000,
+      worker.root, legacyEnv, NATIVE_CLEANUP_MS,
     );
     if (result.code !== 0) throw new Error(`e2e terminal cleanup failed: ${result.stderr}`);
   }

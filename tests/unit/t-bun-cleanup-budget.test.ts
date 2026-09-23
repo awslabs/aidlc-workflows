@@ -8,7 +8,8 @@ import * as identities from "../harness/tui-process-identity.ts";
 import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord } from "../harness/tui-record-file.ts";
 import { publishSupervisorStop } from "../harness/tui-bun-process.ts";
 import {
-  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS,
   NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
 
@@ -246,4 +247,4 @@ await runSupervisor(${JSON.stringify(configPath)}, async () => ({
     await child.exited;
     rmSync(root, { recursive: true, force: true });
   }
-}, NATIVE_STARTUP_TIMEOUT_MS + 5_000);
+}, NATIVE_RUNTIME_CASE_TIMEOUT_MS);

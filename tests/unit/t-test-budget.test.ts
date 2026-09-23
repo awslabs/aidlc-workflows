@@ -8,9 +8,13 @@ import {
   LIVE_SETUP_TIMEOUT_MS,
   LIVE_STARTUP_TIMEOUT_MS,
   LIVE_CLEANUP_TIMEOUT_MS,
+  LIVE_COMMAND_TIMEOUT_MS,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
   NATIVE_COMPILE_TIMEOUT_MS,
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
   NATIVE_PROCESS_QUERY_TIMEOUT_MS,
   NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
@@ -30,6 +34,13 @@ const fileEnv = (workAndCleanupMs: number, cleanupMs = 0): NodeJS.ProcessEnv => 
 
 describe("test workload budgets", () => {
   test("infrastructure deadlines leave room for child work, output drain and confirmation", () => {
+    expect(NATIVE_PROCESS_IDENTITY_TIMEOUT_MS).toBe(120_000);
+    expect(NATIVE_PROCESS_QUERY_TIMEOUT_MS).toBe(60_000);
+    expect(NATIVE_PROCESS_TERMINATE_TIMEOUT_MS).toBe(60_000);
+    expect(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS).toBe(180_000);
+    expect(NATIVE_OUTPUT_DRAIN_TIMEOUT_MS).toBe(30_000);
+    expect(NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS).toBe(210_000);
+    expect(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS).toBe(270_000);
     expect(NATIVE_PROCESS_IDENTITY_TIMEOUT_MS).toBeGreaterThan(NATIVE_PROCESS_QUERY_TIMEOUT_MS);
     expect(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS).toBeGreaterThan(
       NATIVE_PROCESS_QUERY_TIMEOUT_MS + NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
@@ -45,24 +56,29 @@ describe("test workload budgets", () => {
     })).toBe(3_000);
   });
 
-  test("deterministic defaults and cleanup reserve stay bounded", () => {
-    expect(NATIVE_STARTUP_TIMEOUT_MS).toBe(30_000);
-    expect(NATIVE_COMPILE_TIMEOUT_MS).toBe(30_000);
-    expect(NATIVE_FIXTURE_SETUP_TIMEOUT_MS).toBe(120_000);
-    expect(deterministicCaseTimeoutMs("win32")).toBe(60_000);
-    expect(deterministicCaseTimeoutMs("linux")).toBe(15_000);
-    expect(deterministicCaseTimeoutMs("darwin")).toBe(15_000);
+  test("deterministic backstops are generous across platforms and cleanup reserve stays bounded", () => {
+    expect(NATIVE_STARTUP_TIMEOUT_MS).toBe(120_000);
+    expect(NATIVE_RUNTIME_CASE_TIMEOUT_MS).toBe(360_000);
+    expect(NATIVE_COMPILE_TIMEOUT_MS).toBe(300_000);
+    expect(NATIVE_FIXTURE_SETUP_TIMEOUT_MS).toBe(600_000);
+    expect(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS).toBe(900_000);
+    expect(deterministicCaseTimeoutMs("win32")).toBe(120_000);
+    expect(deterministicCaseTimeoutMs("linux")).toBe(120_000);
+    expect(deterministicCaseTimeoutMs("darwin")).toBe(120_000);
     expect(fileCleanupReserveMs(19)).toBe(4);
-    expect(fileCleanupReserveMs(40 * 60_000)).toBe(120_000);
+    expect(fileCleanupReserveMs(40 * 60_000)).toBe(300_000);
     expect(fileCleanupReserveMs(0)).toBe(0);
   });
 
   test("live cases add independently configurable reservations without multiplying work", () => {
-    expect(LIVE_STARTUP_TIMEOUT_MS).toBe(120_000);
-    expect(LIVE_SETUP_TIMEOUT_MS).toBe(180_000);
-    expect(LIVE_CLEANUP_TIMEOUT_MS).toBe(60_000);
-    expect(liveCaseTimeoutMs(600_000)).toBe(840_000);
-    expect(liveCaseTimeoutMs(0)).toBe(240_000);
+    expect(LIVE_STARTUP_TIMEOUT_MS).toBe(300_000);
+    expect(LIVE_SETUP_TIMEOUT_MS).toBe(420_000);
+    expect(LIVE_CLEANUP_TIMEOUT_MS).toBe(300_000);
+    expect(LIVE_COMMAND_TIMEOUT_MS).toBe(600_000);
+    expect(LIVE_LONG_OPERATION_TIMEOUT_MS).toBe(1_800_000);
+    expect(liveCaseTimeoutMs(LIVE_COMMAND_TIMEOUT_MS)).toBe(1_320_000);
+    expect(liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS)).toBe(2_520_000);
+    expect(liveCaseTimeoutMs(0)).toBe(720_000);
     expect(liveCaseTimeoutMs(200, { fixtureMs: 11, startupMs: 13, cleanupMs: 17 })).toBe(241);
     expect(liveCaseTimeoutMs(1, { fixtureMs: 0, startupMs: 0, cleanupMs: 0 })).toBe(1);
   });

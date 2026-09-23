@@ -105,6 +105,22 @@ has `complete: false` and is never release evidence, even when run on `main`.
 Normal Full Suite runs keep both verification flags false, the main-source gate,
 all required jobs, and the ordinary `full-suite-result` artifact.
 
+To reproduce a deterministic failure on one fresh runner, dispatch the shared
+deterministic workflow directly:
+
+```bash
+gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-source-sha>' -f runner=windows-latest -f tier=unit \
+  -f unit-shard=1/1 -f 'diagnostic_filter=^t-tui-runtime$'
+```
+
+The manual-only `diagnostic_filter` is a filename regex. Use `unit-shard=7/8`
+without a filter to repeat a whole unit shard. For smoke, integration or e2e,
+clear the shard input with `-f 'unit-shard='`. Each dispatch uses one runner,
+closes model gates, checks out the immutable source and retains sanitized logs
+under `ci-deterministic-probe-<OS>`. These diagnostics do not qualify a full
+suite or a release. Existing CI and Full Suite callers cannot pass this filter.
+
 ## 3. Let the nightly preview run
 
 [Preview Release](.github/workflows/preview-release.yml) runs daily at

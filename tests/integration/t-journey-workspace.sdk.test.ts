@@ -65,6 +65,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertResultOk, assertToolResultContains } from "../harness/assert.ts";
+import { LIVE_COMMAND_TIMEOUT_MS, LIVE_LONG_OPERATION_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   cleanupWorkspaceJourney,
   setupWorkspaceJourney,
@@ -84,15 +85,12 @@ import {
 // This is the suite's heaviest live test: seven SDK turns across one journey, one
 // of which (the per-repo reverse-engineering codekb beat) writes many artifacts
 // over two repos. Budget it like the other multi-stage live journeys (2400s
-// default), and split the budget so the cheap deterministic-verb beats get a
-// modest cap while the heavy codekb beat gets the lion's share.
+// default). Individual ceilings are backstops; the shared parent deadline bounds
+// actual elapsed work without pre-reserving every other operation's worst case.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
-// Per-beat caps (a fresh SDK session each): the verb beats finish in one or two
-// tool round-trips; the reverse-engineering codekb beat fans 9 artifacts × 2
-// repos and needs far longer.
-const VERB_DRIVE_MS = 300_000;
-const CODEKB_DRIVE_MS = Math.max(600_000, TEST_TIMEOUT_MS - 6 * VERB_DRIVE_MS);
+const VERB_DRIVE_MS = LIVE_COMMAND_TIMEOUT_MS;
+const CODEKB_DRIVE_MS = LIVE_LONG_OPERATION_TIMEOUT_MS;
 
 const INIT_STATE_SUMMARY = "State initialized:";
 const STOP_AFTER_CREATION = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;

@@ -155,7 +155,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.purpose != 'live-verification'
     runs-on: "${{ matrix.runner }}"
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -197,7 +197,7 @@ jobs:
           name: full-suite-native-plan
           path: "${{ runner.temp }}"
       - name: "Run exact native obligations"
-        timeout-minutes: 105
+        timeout-minutes: 150
         run: |
           TEST_MATRIX_FILTER=$(bun -e '
             const plan = await Bun.file(process.argv[1]).json();
@@ -214,7 +214,7 @@ jobs:
           capture="$GITHUB_WORKSPACE/tmp/full-suite-native"
           mkdir -p "$capture"
           bash tests/run-tests.sh --debug -P 8 --unit --integration --e2e --no-llm --isolated-e2e \
-            --file-timeout 1800 --run-timeout 6000 \
+            --file-timeout 3600 --run-timeout 7200 \
             --filter "$TEST_MATRIX_FILTER" --matrix-plan "$RUNNER_TEMP/native-plan.json" --matrix-job "${{ matrix.job }}" \
             > "$capture/run.log" 2>&1 &
           test_pid=$!

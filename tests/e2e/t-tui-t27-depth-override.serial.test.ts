@@ -92,6 +92,9 @@ import {
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+import {
+  LIVE_COMMAND_TIMEOUT_MS, LIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -137,7 +140,7 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
 // on the tool's structured emission (the DEPTH_CHANGED audit event / the Depth
 // state field), never the screen text.
 async function waitForDisk(pred: () => boolean, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + remainingOperationTimeoutMs(timeoutMs, { phase: "TUI workflow state" })!;
   while (Date.now() < deadline) {
     if (pred()) return true;
     await new Promise((r) => setTimeout(r, 500));
@@ -281,11 +284,11 @@ function bootSeededWorkflow(tag: string, sessionId?: string): { session: string;
     ]).rc,
   ).toBe(0);
   // clear the two startup modals (idempotent — only act if present)
-  // Share the original 60s trust + 15s permission + 45s readiness budget.
-  const startupDeadlineMs = Date.now() + 120_000;
+  // One generous startup backstop, shared by modal handling and readiness.
+  const startupDeadlineMs = Date.now() + LIVE_STARTUP_TIMEOUT_MS;
   const startup = drive([
     "startup", "--session", session,
-    "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", "120000",
+    "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", String(LIVE_STARTUP_TIMEOUT_MS),
   ]);
   expect(startup.rc).toBe(0);
   // The seeded mid-ideation state paints the WORKFLOW line (IDEATION), not the
@@ -328,7 +331,7 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         // is the LLM's to reword.
         const landed = await waitForDisk(
           () => auditHasEvent(auditDir, "DEPTH_CHANGED"),
-          120000,
+          LIVE_COMMAND_TIMEOUT_MS,
         );
         const pane = drive(["capture", "--session", session]).stdout;
         if (!landed) {
@@ -393,7 +396,7 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
           () => nativeTurn(sessionId)?.rows.some(
             (row) => row.type === "system" && row.subtype === "turn_duration",
           ) ?? false,
-          120_000,
+          LIVE_COMMAND_TIMEOUT_MS,
         )).toBe(true);
         expect(waitFor(session, completedClaudeTurnPattern("extreme"), 10_000, 1_000)).toBe(true);
 

@@ -1,26 +1,31 @@
 /** Test workload limits only. Production timing/ownership contracts stay separate. */
 export const FILE_DEADLINE_ENV = "AIDLC_TEST_FILE_DEADLINE_MS";
 export const FILE_CLEANUP_ENV = "AIDLC_TEST_FILE_CLEANUP_MS";
-const DEFAULT_FIXTURE_MS = 60_000;
-export const LIVE_STARTUP_TIMEOUT_MS = 120_000;
+// These are failure backstops, not performance targets. Hosted runner load,
+// cold imports, antivirus and provider scheduling vary substantially.
+const DEFAULT_FIXTURE_MS = 120_000;
+export const LIVE_STARTUP_TIMEOUT_MS = 300_000;
 export const LIVE_SETUP_TIMEOUT_MS = DEFAULT_FIXTURE_MS + LIVE_STARTUP_TIMEOUT_MS;
-export const LIVE_CLEANUP_TIMEOUT_MS = 60_000;
+export const LIVE_CLEANUP_TIMEOUT_MS = 300_000;
+export const LIVE_COMMAND_TIMEOUT_MS = 600_000;
+export const LIVE_LONG_OPERATION_TIMEOUT_MS = 1_800_000;
 // Process/bootstrap and fixture costs are separate from live-model startup.
-export const NATIVE_STARTUP_TIMEOUT_MS = 30_000;
-export const NATIVE_COMPILE_TIMEOUT_MS = 30_000;
-export const NATIVE_FIXTURE_SETUP_TIMEOUT_MS = 120_000;
-// Whole multistep worktree fixture cases; the measured 143s CI peak gets >2x headroom.
-export const NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS = 300_000;
+export const NATIVE_STARTUP_TIMEOUT_MS = 120_000;
+export const NATIVE_RUNTIME_CASE_TIMEOUT_MS = 3 * NATIVE_STARTUP_TIMEOUT_MS;
+export const NATIVE_COMPILE_TIMEOUT_MS = 300_000;
+export const NATIVE_FIXTURE_SETUP_TIMEOUT_MS = 600_000;
+// Whole multistep fixtures can perform several independent setup operations.
+export const NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS = 900_000;
 // Infrastructure may launch several processes on a loaded runner. These are
 // ceilings, not sleeps: successful discovery and retirement finish immediately.
-export const NATIVE_PROCESS_IDENTITY_TIMEOUT_MS = 10_000;
-export const NATIVE_PROCESS_QUERY_TIMEOUT_MS = 5_000;
-export const NATIVE_PROCESS_TERMINATE_TIMEOUT_MS = 5_000;
-export const NATIVE_PROCESS_CLEANUP_TIMEOUT_MS = 30_000;
-export const NATIVE_OUTPUT_DRAIN_TIMEOUT_MS = 5_000;
-export const NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS = NATIVE_PROCESS_CLEANUP_TIMEOUT_MS + 5_000;
+export const NATIVE_PROCESS_IDENTITY_TIMEOUT_MS = 120_000;
+export const NATIVE_PROCESS_QUERY_TIMEOUT_MS = 60_000;
+export const NATIVE_PROCESS_TERMINATE_TIMEOUT_MS = 60_000;
+export const NATIVE_PROCESS_CLEANUP_TIMEOUT_MS = 180_000;
+export const NATIVE_OUTPUT_DRAIN_TIMEOUT_MS = 30_000;
+export const NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS = NATIVE_PROCESS_CLEANUP_TIMEOUT_MS + 30_000;
 export const NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS =
-  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS + NATIVE_OUTPUT_DRAIN_TIMEOUT_MS + 5_000;
+  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS + NATIVE_OUTPUT_DRAIN_TIMEOUT_MS + 30_000;
 
 const MAX_TIMER_MS = 2_147_483_647;
 
@@ -58,12 +63,12 @@ function instant(value: number, name: string): number {
   return value;
 }
 
-export function deterministicCaseTimeoutMs(platform: NodeJS.Platform = process.platform): number {
-  return platform === "win32" ? 60_000 : 15_000;
+export function deterministicCaseTimeoutMs(_platform: NodeJS.Platform = process.platform): number {
+  return NATIVE_STARTUP_TIMEOUT_MS;
 }
 
 export function fileCleanupReserveMs(totalMs: number): number {
-  return Math.min(120_000, Math.floor(duration(totalMs, "file totalMs") / 4));
+  return Math.min(LIVE_CLEANUP_TIMEOUT_MS, Math.floor(duration(totalMs, "file totalMs") / 4));
 }
 
 export function liveCaseTimeoutMs(

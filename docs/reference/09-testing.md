@@ -30,27 +30,30 @@ integration** (so the integration level rides along on every local
 shows where each level sits conceptually — the profile flags below are how you
 actually select them.
 
-The shared policy in `tests/harness/test-budget.ts` gives unspecified test cases
-a 15-second default on Linux/macOS and 60 seconds on Windows. The Windows
-allowance includes approximately three times the observed 19-second fixture
-copy plus a sub-second CLI call. Files dominated by fixture setup and CLI calls
-use `setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS)` for a shared 120-second
-case envelope. Whole multistep worktree journeys use
-`NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS` (300 seconds, over twice the observed
-143-second CI peak). Select one profile per file and remove smaller fixture-case
-overrides, preserving larger existing ceilings and intentional performance
-calibration case budgets. These are ceilings, so a completed test exits
-immediately. Explicit tests of deadline behavior retain their operation limits
-and clock assertions; the profiles do not change production timing.
+The shared policy in `tests/harness/test-budget.ts` treats timeouts as failure
+backstops. Cold imports, antivirus, process creation and provider scheduling vary
+widely between runners; a fast run does not define a suitable timeout.
+Unspecified deterministic cases get two minutes on every OS. Files dominated by
+fixture setup and CLI calls use
+`setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS)` for ten minutes.
+Whole multistep worktree journeys use
+`NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS` for fifteen minutes. Native runtime
+handoff cases use six minutes around their two-minute subprocess backstops.
+Select shared profiles and remove smaller operational overrides, preserving
+larger existing ceilings and explicit deadline/performance calibration cases.
+These are ceilings, so a completed operation returns immediately. Correctness,
+ownership, exit-status and recursion assertions remain enforced; the profiles
+do not change production timing.
 
-Budget measured work once, then add fixture, startup, assertion and cleanup
-allowances. The live-case helper reserves 60 seconds for fixtures, 120 seconds
-for startup and 60 seconds for teardown around the selected work allowance.
+Live commands use a ten-minute work backstop; long artifact-generation operations
+use thirty minutes. The live-case helper reserves two minutes for fixtures, five
+minutes for startup and five minutes for teardown around the selected work allowance.
 Driver operations consume the actual remaining parent budget. A file shares
 that budget across its sequential operations; each operation is not promised
 its maximum allowance after earlier work has consumed the file's time.
-Native process startup and native fixture compilation have separate 30-second
-profiles; multi-compiler fixture setup has a 120-second envelope. The native
+Do not pre-reserve every other operation's worst-case allowance.
+Native process startup and native fixture compilation have separate two-minute
+and five-minute profiles; multi-compiler fixture setup has a ten-minute envelope. The native
 terminal starter and daemon share one absolute startup deadline. These startup
 allowances are separate from process discovery and shutdown.
 
@@ -59,13 +62,13 @@ process startup, OS load and final output collection:
 
 | Operation | Default ceiling |
 | --- | --- |
-| Process identity discovery | 10 seconds |
-| One process query or termination call | 5 seconds |
-| Process-tree cleanup | 30 seconds |
-| Supervisor exit and status publication | 35 seconds |
-| Final terminal output drain | 5 seconds |
-| Terminal client shutdown, including daemon retirement | 45 seconds total |
-| Worker cleanup and confirmation | 60 seconds total |
+| Process identity discovery | 2 minutes |
+| One process query or termination call | 1 minute |
+| Process-tree cleanup | 3 minutes |
+| Supervisor exit and status publication | 3.5 minutes |
+| Final terminal output drain | 30 seconds |
+| Terminal client shutdown, including daemon retirement | 4.5 minutes total |
+| Worker cleanup and confirmation | 5 minutes total |
 
 The terminal client shares one absolute shutdown deadline across its RPC and
 daemon-retirement wait. The worker encloses it with time for launch and final
@@ -77,7 +80,7 @@ Every dispatched file has an independent supervisor deadline, including
 ordinary integration/SDK files. `--file-timeout N` caps it in seconds (40 minutes
 by default outside isolated E2E). `--run-timeout N` shares one work deadline
 across setup and all selected files. Exhausted budgets fail visibly; they do not
-skip required assertions. Drivers leave up to two minutes of the file envelope
+skip required assertions. Drivers leave up to five minutes of the file envelope
 for teardown, while the runner still retires owned processes and records a
 failure if the work does not cooperate. These flags bound dispatched work;
 coordinator retirement, fixture retention and report publication follow it.
@@ -503,6 +506,7 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
+| Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, unit shard and optional manual-only `diagnostic_filter`; one runner executes with model gates closed | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Full candidate verification | Runs every declared matrix job for the selected workflow head, including an unmerged PR; separate evidence is ineligible for release | GitHub Actions |
@@ -532,20 +536,37 @@ regenerates projections, and invokes the Bash wrapper with `--debug -P 8
 each checkout. Sharing the workflow shares the commands and setup, not previous
 test results.
 
-Shared deterministic jobs allow 15 minutes for smoke and 60 minutes for other
-tiers. Test steps stop after 10 and 50 minutes respectively, reserving time to
+Shared deterministic jobs allow 15 minutes for smoke and three hours for other
+tiers. Test steps stop after 10 and 150 minutes respectively, reserving time to
 sanitize and upload partial evidence after a timeout. The runner stops admitting
-work after 8 minutes for smoke and 45 minutes for other tiers, leaving time to
-retire processes and finish its rollups before those step limits. E2E runs also cap each
-isolated file at 900 seconds. Unit work is
+work after 8 minutes for smoke and two hours for other tiers, leaving time to
+retire processes and finish its rollups before those step limits. Non-smoke files,
+including isolated deterministic E2E files, have one-hour backstops. Unit work is
 partitioned into eight weighted shards per OS without duplicating files, and
 compiled producer/consumer affinity remains intact.
 
 PR native-terminal checks use captured `--debug -P 8` wrapper runs with
 15-minute work budgets and publish sanitized `ci-native-<OS>` evidence.
-Full Suite's broader native obligations retain their 120-minute job ceiling,
-with a 100-minute work budget, a 105-minute step limit and 30-minute file caps.
+Full Suite's broader native obligations use the same three-hour job ceiling,
+two-hour work budget, 150-minute step limit and one-hour file caps.
 These outer limits leave time to collect diagnostics after work stops.
+
+For a focused deterministic reproduction, dispatch `deterministic-tests.yml`
+directly on the candidate branch:
+
+```bash
+gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-source-sha>' -f runner=windows-latest -f tier=unit \
+  -f unit-shard=1/1 -f 'diagnostic_filter=^t-tui-runtime$'
+```
+
+`diagnostic_filter` is a manual-only filename regex and is not exposed to
+reusable CI callers. Clear `unit-shard` for non-unit tiers; for example,
+`-f tier=integration -f 'unit-shard='`. Each reproduction uses one fresh runner
+with model gates closed and the same immutable checkout, bounded runner and
+sanitized evidence paths. The default artifact is
+`ci-deterministic-probe-<OS>`. These targeted diagnostics do not qualify a full
+suite or release.
 
 POSIX unit jobs require tmux: the shared setup first checks `command -v`, then
 uses apt on Linux or Homebrew on macOS only when it is missing. Linux unit jobs

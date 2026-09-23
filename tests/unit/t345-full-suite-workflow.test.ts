@@ -11,6 +11,7 @@ import { sandboxEnvironment } from "../../scripts/ci-live-sandbox.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { setupCodexProject } from "../harness/exec-drive.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { parseShardSpec, selectShard, type ShardConfig } from "../lib/test-sharding.ts";
 import { parse } from "smol-toml";
 
@@ -55,7 +56,10 @@ const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/
   jobs: Record<string, Job>;
 };
 const deterministic = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf8")) as {
-  on: { workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string }> } };
+  on: {
+    workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string }>; secrets?: unknown; outputs?: unknown };
+    workflow_dispatch: { inputs: Record<string, { description?: string; type: string; required?: boolean; default?: string; options?: string[] }> };
+  };
   permissions: Record<string, string>;
   jobs: Record<string, Job>;
 };
@@ -150,7 +154,7 @@ describe("t345 complete nightly coverage", () => {
     const aggregate = steps(ci.jobs.test)[0];
     const passed = Object.fromEntries(Object.keys(aggregate.env!).map((key) => [key, "success"]));
     const run = (env: Record<string, string>) => spawnSync("bash", ["-e", "-c", aggregate.run!], {
-      env: { ...process.env, ...env }, encoding: "utf8",
+      env: { ...process.env, ...env }, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
     }).status;
     expect(run(passed)).toBe(0);
     for (const key of Object.keys(passed)) {
@@ -159,18 +163,18 @@ describe("t345 complete nightly coverage", () => {
       }
     }
     expect(aggregate.env?.DETERMINISTIC_RESULT).toBe(`\${{ needs.deterministic.result }}`);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
-    expect(Object.keys(deterministic.on)).toEqual(["workflow_call"]);
+    expect(Object.keys(deterministic.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
     expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "ref", "runner", "tier", "unit-shard"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
-    expect(job["timeout-minutes"]).toBe(`\${{ inputs.tier == 'smoke' && 15 || 60 }}`);
+    expect(job["timeout-minutes"]).toBe(`\${{ inputs.tier == 'smoke' && 15 || 180 }}`);
     const setup = steps(job);
     expect(setup.find((step) => step.name === "Run deterministic tier")?.["timeout-minutes"])
-      .toBe(`\${{ inputs.tier == 'smoke' && 10 || 50 }}`);
+      .toBe(`\${{ inputs.tier == 'smoke' && 10 || 150 }}`);
     const checkout = setup.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
     const bind = setup.findIndex((step) => step.name === "Bind checkout to requested commit");
     const install = setup.findIndex((step) => step.run === "bun install --frozen-lockfile");
@@ -193,23 +197,79 @@ describe("t345 complete nightly coverage", () => {
     expect(job.env).toMatchObject({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.autocrlf", GIT_CONFIG_VALUE_0: "false" });
   });
 
+  test("manual deterministic diagnostics keep filters outside reusable caller inputs", () => {
+    const callable = deterministic.on.workflow_call;
+    expect(callable.inputs).toMatchObject({
+      ref: { type: "string", required: true },
+      runner: { type: "string", required: true },
+      tier: { type: "string", required: true },
+      "unit-shard": { type: "string", default: "" },
+      "artifact-label": { type: "string", required: true },
+    });
+    expect(callable.inputs.diagnostic_filter).toBeUndefined();
+    expect(callable.secrets).toBeUndefined();
+    expect(callable.outputs).toBeUndefined();
+    const manual = deterministic.on.workflow_dispatch.inputs;
+    expect(Object.keys(manual).sort()).toEqual(["artifact-label", "diagnostic_filter", "ref", "runner", "tier", "unit-shard"]);
+    expect(manual.ref).toMatchObject({ type: "string", required: true });
+    expect(manual.ref.default).toBeUndefined();
+    expect(manual.runner).toMatchObject({
+      type: "choice", required: true, default: "ubuntu-latest",
+      options: ["ubuntu-latest", "macos-15", "windows-latest"],
+    });
+    expect(manual.tier).toMatchObject({
+      type: "choice", required: true, default: "unit",
+      options: ["smoke", "unit", "integration", "e2e"],
+    });
+    expect(manual["unit-shard"]).toMatchObject({ type: "string", default: "1/1" });
+    expect(manual["unit-shard"].description).toContain("clear this input for other tiers");
+    expect(manual["artifact-label"]).toMatchObject({ type: "string", required: true, default: "ci-deterministic-probe" });
+    expect(manual.diagnostic_filter).toMatchObject({ type: "string", required: false, default: "" });
+    const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
+    expect(step.env?.TEST_FILTER).toBe(`\${{ inputs.diagnostic_filter || '' }}`);
+    // Exercise the checked-in expression for callers that have no filter input.
+    const expression = step.env!.TEST_FILTER.match(/^\$\{\{([\s\S]+)\}\}$/)![1];
+    const evaluate = new Function("inputs", `return (${expression});`);
+    expect(evaluate({})).toBe("");
+    expect(evaluate({ diagnostic_filter: "" })).toBe("");
+    expect(evaluate({ diagnostic_filter: "^t-tui-runtime$" })).toBe("^t-tui-runtime$");
+    expect(Object.keys(deterministic.jobs)).toEqual(["test"]);
+    expect(deterministic.permissions).toEqual({ contents: "read" });
+    expect(deterministic.jobs.test.permissions).toBeUndefined();
+    expect(deterministic.jobs.test.environment).toBeUndefined();
+    expect(deterministic.jobs.test.outputs).toBeUndefined();
+    expect(JSON.stringify(deterministic)).not.toMatch(/secrets\.|id-token|ci-full-suite-result|full-suite-result\.json/);
+    expect(steps(deterministic.jobs.test).find((entry) => entry.uses?.startsWith("actions/upload-artifact@"))?.with?.name)
+      .toBe(`\${{ inputs.artifact-label }}-\${{ runner.os }}`);
+  });
+
   test("shared selection rejects mutable refs, unknown tiers and misplaced unit shards", () => {
     const selection = steps(deterministic.jobs.test).find((step) => step.name === "Validate test selection")!;
     const run = (extra: NodeJS.ProcessEnv) => spawnSync("bash", ["-c", selection.run!], {
-      encoding: "utf8",
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
       env: { ...process.env, TEST_REF: identity.sha, TEST_TIER: "unit", UNIT_SHARD: "2/8", ARTIFACT_LABEL: "ci-unit-2", ...extra },
     });
     expect(run({}).status).toBe(0);
     expect(run({ UNIT_SHARD: "1/1" }).status).toBe(0);
+    const manual = deterministic.on.workflow_dispatch.inputs;
+    expect(run({
+      TEST_TIER: manual.tier.default,
+      UNIT_SHARD: manual["unit-shard"].default,
+      ARTIFACT_LABEL: manual["artifact-label"].default,
+    }).status).toBe(0);
     for (const tier of ["smoke", "integration", "e2e"]) {
       expect(run({ TEST_TIER: tier, UNIT_SHARD: "" }).status).toBe(0);
       expect(run({ TEST_TIER: tier }).status).not.toBe(0);
+      expect(run({ TEST_TIER: tier, UNIT_SHARD: manual["unit-shard"].default }).status).toBe(2);
+    }
+    for (const ref of ["main", "a".repeat(39), "a".repeat(41), "g".repeat(40)]) {
+      expect(run({ TEST_REF: ref }).status, ref).toBe(2);
     }
     for (const extra of [{ TEST_REF: "main" }, { TEST_TIER: "unknown" }, { TEST_TIER: "deep", UNIT_SHARD: "" }, { UNIT_SHARD: "" }, { UNIT_SHARD: "9/8" }, { ARTIFACT_LABEL: "../outside" }]) {
       const result = run(extra);
       expect(result.status, `${JSON.stringify(extra)}\n${result.stdout}\n${result.stderr}`).toBe(2);
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("manual CI expands the shared matrix instead of repeating a second platform suite", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
@@ -244,7 +304,8 @@ describe("t345 complete nightly coverage", () => {
       expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 33 : 10);
       if (expanded) expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     }
-    expect(steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")?.run).not.toContain("--filter");
+    expect(ci.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
+    expect(workflow.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
     const manual = steps(ci.jobs.test_native_terminal).find((step) => step.name === "Run Windows node-pty compatibility on manual dispatch")!;
     expect(manual.if).toBe("github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'");
     expect(manual.env).toEqual({ AIDLC_TUI_BACKEND: "node-pty" });
@@ -253,13 +314,15 @@ describe("t345 complete nightly coverage", () => {
     expect(steps(ci.jobs.test_native_terminal).some((step) => step.name === "Run platform regressions on manual dispatch")).toBe(false);
   });
 
-  for (const [tier, shard, expected] of [
-    ["smoke", "", ["--smoke"]],
-    ["unit", "3/8", ["--unit", "--shard", "3/8"]],
-    ["integration", "", ["--integration"]],
-    ["e2e", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "900"]],
+  for (const [tier, shard, filter, expected] of [
+    ["smoke", "", "", ["--smoke"]],
+    ["unit", "3/8", "", ["--unit", "--shard", "3/8"]],
+    ["integration", "", "", ["--integration"]],
+    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "3600"]],
+    ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"]],
+    ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"]],
   ] as const) {
-    test(`shared ${tier} execution preserves arguments, captured output and failure status`, () => {
+    test(`shared ${tier} execution${filter ? ` filtered by ${filter}` : ""} preserves arguments, captured output and failure status`, () => {
       const root = mkdtempSync(join(tmpdir(), "t345-shared-tier-"));
       const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
       try {
@@ -273,26 +336,31 @@ describe("t345 complete nightly coverage", () => {
           // polling; only the outer run owns the required summary.
           'printf "Verbose mode: logging to %s\\nVerbose mode: logging to %s/nested\\n" "$stamp" "$stamp"',
           'echo "captured deterministic output"',
+          'echo "captured deterministic error" >&2',
           'if [ "$OMIT_SUMMARY" != 1 ]; then printf "Test files: 1\\n" > "$stamp/summary.txt"; fi',
           'exit "$FIXTURE_EXIT"',
         ].join("\n"));
         for (const [exit, omit, expectedStatus] of [["0", "0", 0], ["7", "0", 7], ["0", "1", 1]] as const) {
           rmSync(join(root, "tests/logs"), { recursive: true, force: true });
           const result = spawnSync("bash", ["-c", step.run!], {
-            cwd: root, encoding: "utf8", timeout: 15_000,
-            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
+            cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
           });
           expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
-            .toEqual(["--debug", "-P", "8", "--no-llm", ...expected, "--run-timeout", tier === "smoke" ? "480" : "2700"]);
+            .toEqual([
+              "--debug", "-P", "8", "--no-llm", ...expected, ...(filter ? ["--filter", filter] : []),
+              ...(tier === "smoke" ? ["--run-timeout", "480"] : ["--file-timeout", "3600", "--run-timeout", "7200"]),
+            ]);
           expect(readFileSync(join(root, "tmp/ci-deterministic/run.log"), "utf8")).toContain("captured deterministic output");
+          expect(readFileSync(join(root, "tmp/ci-deterministic/run.log"), "utf8")).toContain("captured deterministic error");
           expect(readFileSync(join(root, "tmp/ci-deterministic/stamp.txt"), "utf8").trim())
             .toBe(`${root.replaceAll("\\", "/")}/tests/logs/fixture`);
         }
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
-    }, 60_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("native terminal CI selects only executable platform units across every runner alias", () => {
@@ -404,7 +472,7 @@ describe("t345 complete nightly coverage", () => {
       for (const [path, exit, expected] of [["/usr/bin/bwrap", "0", 0], ["/usr/bin/bwrap", "17", 17], ["/bundled/bwrap", "0", 1]] as const) {
         rmSync(argv, { force: true });
         const result = spawnSync("bash", ["-c", script], {
-          encoding: "utf8",
+          encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
           env: {
             ...process.env, PROBE_ROOT: root.replaceAll("\\", "/"), PROBE_ARGS: argv.replaceAll("\\", "/"),
             RUNNER_TEMP: join(root, "runner").replaceAll("\\", "/"), GITHUB_WORKSPACE: root.replaceAll("\\", "/"),
@@ -433,7 +501,7 @@ describe("t345 complete nightly coverage", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("POSIX live preparation transports a complete pinned Node prefix before credentialed startup", () => {
     const prepare = steps(workflow.jobs.live_prepare);
@@ -470,7 +538,9 @@ describe("t345 complete nightly coverage", () => {
       writeFileSync(join(node, "bin/node"), "prepared Node executable\n");
       const archive = join(root, "deps.tar.gz");
       const script = join(REPO_ROOT, "scripts/ci-live-deps.py");
-      const run = (...args: string[]) => spawnSync(process.platform === "win32" ? "python" : "python3", [script, ...args], { encoding: "utf8" });
+      const run = (...args: string[]) => spawnSync(process.platform === "win32" ? "python" : "python3", [script, ...args], {
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      });
       const pack = ["pack", archive, "--workspace", workspace, "--cli", cli];
       const missing = run(...pack);
       expect(missing.status).not.toBe(0);
@@ -496,7 +566,7 @@ describe("t345 complete nightly coverage", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("POSIX collection retires macOS user domains and refuses remaining executable processes", () => {
     const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.sh"), "utf8");
@@ -506,11 +576,12 @@ describe("t345 complete nightly coverage", () => {
     expect(collect.indexOf('remaining="$(active_live_processes)"')).toBeLessThan(collect.indexOf('sudo cp -a "$live_root/tests/logs/."'));
     const filter = source.match(/awk -v uid="\$live_uid" '([^']+)'/)![1];
     const result = spawnSync("bash", ["-c", 'awk -v uid=502 "$1"', "collection-filter", filter], {
-      encoding: "utf8", input: "501 10 S runner\n502 11 Z zombie\n502 12 Z+ zombie-child\n502 13 S worker\n502 14 R child\n",
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      input: "501 10 S runner\n502 11 Z zombie\n502 12 Z+ zombie-child\n502 13 S worker\n502 14 R child\n",
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("502 13 S worker\n502 14 R child\n");
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("credentialed startup is isolated from broker and agent environments", () => {
     const source = {
@@ -618,7 +689,7 @@ describe("t345 complete nightly coverage", () => {
       else process.env.AIDLC_BROKER_URL = previous;
       rmSync(project.root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("live families have every supported platform, opt-ins and strictness, without no-LLM", () => {
     const actual: string[] = [];
@@ -716,7 +787,7 @@ describe("t345 complete nightly coverage", () => {
       }
       const cli = spawnSync(process.execPath, [
         join(REPO_ROOT, "scripts/ci-live-filter.ts"), "--matrix", kind, "--family", "claude-sdk", "--test", file,
-      ], { encoding: "utf8" });
+      ], { encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
       expect(cli.status, cli.stderr).toBe(0);
       expect(JSON.parse(cli.stdout)).toEqual({ include: selected });
       expect(() => liveMatrix(kind, "all", file)).toThrow("requires one verification family");
@@ -728,7 +799,7 @@ describe("t345 complete nightly coverage", () => {
     const windows = liveMatrix("windows", "claude-tui", windowsFile).include;
     expect(windows).toHaveLength(1);
     expect(selectedLiveFiles(windows[0].family, windows[0].platform, windows[0].shard)).toEqual([windowsFile]);
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sandbox env is explicit and excludes runner control-plane and AWS secrets", () => {
     const inherited = {
@@ -901,7 +972,7 @@ describe("t345 complete nightly coverage", () => {
       writeFileSync(join(root, "output"), "");
       writeFileSync(join(root, "git-calls"), "");
       const result = spawnSync("bash", ["--noprofile", "--norc", "-c", `${git}\n${source.run!}`], {
-        cwd: root, encoding: "utf8", timeout: 10_000,
+        cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
         env: {
           ...process.env, LIVE_VERIFICATION: "false", FULL_VERIFICATION: "false",
           VERIFICATION_FAMILY: "all", VERIFICATION_TEST: "", FIXTURE_SHA: identity.sha,
@@ -974,7 +1045,7 @@ describe("t345 complete nightly coverage", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const [family, spec] of Object.entries(FAMILIES)) {
     for (const platform of spec.platforms) {
@@ -995,7 +1066,7 @@ describe("t345 complete nightly coverage", () => {
         expect(liveRunnerCommand(family as LiveFamily, platform, passthrough)).toEqual([join(REPO_ROOT, "tests/run-tests.ts"), ...passthrough, ...args]);
         const result = spawnSync(process.execPath, [
           join(REPO_ROOT, "scripts/ci-live-filter.ts"), family, "--platform", platform, "--run", "--", "--e2e-plan",
-        ], { cwd: tmpdir(), encoding: "utf8", timeout: 15_000 });
+        ], { cwd: tmpdir(), encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
         if (args.includes("--e2e")) {
           expect(args).toContain("--isolated-e2e");
           expect(args[args.indexOf("--bedrock-parallel") + 1]).toBe("2");
@@ -1012,7 +1083,7 @@ describe("t345 complete nightly coverage", () => {
           expect(result.status).toBe(2);
           expect(result.stdout).toBe("");
         }
-      }, 30_000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 
@@ -1130,18 +1201,22 @@ describe("t345 complete nightly coverage", () => {
 
   test("CLI emits executable filters and rejects invalid family/platform arguments", () => {
     const script = join(REPO_ROOT, "scripts/ci-live-filter.ts");
-    const result = spawnSync(process.execPath, [script, "claude-tui", "--platform", "linux"], { encoding: "utf8" });
+    const result = spawnSync(process.execPath, [script, "claude-tui", "--platform", "linux"], {
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+    });
     expect(result.status, result.stderr).toBe(0);
     const regex = new RegExp(result.stdout.trim());
     expect(regex.test("e2e-t-tui-journey-orientation.serial")).toBe(true);
     expect(regex.test("e2e-t-tui-journey-orientation-windows.serial")).toBe(false);
-    const emitted = spawnSync(process.execPath, [script, "release-contract", "--platform", "linux", "--args"], { encoding: "utf8" });
+    const emitted = spawnSync(process.execPath, [script, "release-contract", "--platform", "linux", "--args"], {
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+    });
     expect(emitted.status, emitted.stderr).toBe(0);
     expect(emitted.stdout.trim().split("\n")).toEqual(liveRunnerArgs("release-contract", "linux"));
     for (const args of [["missing"], ["claude-tui", "--platform", "other"], ["copilot", "--run", "--", "--e2e-plan"], ["codex", "--args", "--run"]]) {
-      expect(spawnSync(process.execPath, [script, ...args]).status).toBe(2);
+      expect(spawnSync(process.execPath, [script, ...args], { timeout: NATIVE_STARTUP_TIMEOUT_MS }).status).toBe(2);
     }
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("skipped live lanes block readiness even when every other job passes", () => {
     const needs = { ...allSuccess(), live_prepare: { result: "skipped" as const }, live_hosted: { result: "skipped" as const }, live_windows: { result: "skipped" as const } };
@@ -1213,13 +1288,13 @@ describe("t345 complete nightly coverage", () => {
       expect(report.passed).toBe(true);
       for (const complete of [false, true]) {
         const result = spawnSync("jq", ["-e", "--arg", "sha", identity.sha, "--arg", "run", identity.runId, predicate![1]], {
-          encoding: "utf8", input: JSON.stringify({ ...report, complete }), timeout: 10_000,
+          encoding: "utf8", input: JSON.stringify({ ...report, complete }), timeout: NATIVE_STARTUP_TIMEOUT_MS,
         });
         expect(result.status, `${purpose}/${complete}: ${result.stdout}${result.stderr}`).toBe(purpose === "release" ? 0 : 1);
         expect(result.stdout.trim()).toBe(purpose === "release" ? "true" : "false");
       }
     }
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("verification passes only with successful live jobs and exactly skipped omissions", () => {
     expect(fullSuiteResult(verificationNeeds(), identity, "live-verification")).toMatchObject({
@@ -1292,7 +1367,7 @@ describe("t345 complete nightly coverage", () => {
       };
       const output = join(root, "result.json");
       const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
-      const result = spawnSync(process.execPath, [script, output], { encoding: "utf8", env });
+      const result = spawnSync(process.execPath, [script, output], { encoding: "utf8", env, timeout: NATIVE_STARTUP_TIMEOUT_MS });
       expect(result.status, result.stderr).toBe(1);
       expect(result.stderr).toContain(`::error::Incomplete full suite for ${identity.sha}`);
       expect(result.stderr).toContain("live_hosted=skipped");
@@ -1300,12 +1375,14 @@ describe("t345 complete nightly coverage", () => {
       const report = JSON.parse(readFileSync(output, "utf8"));
       expect(report).toMatchObject({ coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: false, complete: false, disabledLegs: [], excluded: excludedFamilies });
       delete needs.native_reconcile;
-      const missing = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(needs) } });
+      const missing = spawnSync(process.execPath, [script, output], {
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(needs) },
+      });
       expect(missing.status).toBe(1);
       expect(missing.stderr).toContain("native_reconcile=missing");
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ passed: false, complete: false, excluded: excludedFamilies });
       const success = spawnSync(process.execPath, [script, output], {
-        encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(allSuccess()) },
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(allSuccess()) },
       });
       expect(success.status, success.stderr).toBe(0);
       expect(success.stderr).toContain(`::warning::Full suite excluded families: ${excludedFamilies.join(", ")}`);
@@ -1314,33 +1391,35 @@ describe("t345 complete nightly coverage", () => {
         coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: true, complete: false, disabledLegs: [], excluded: excludedFamilies,
       });
       const verification = spawnSync(process.execPath, [script, output], {
-        encoding: "utf8", env: { ...env, FULL_SUITE_PURPOSE: "live-verification", FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds()) },
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: { ...env, FULL_SUITE_PURPOSE: "live-verification", FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds()) },
       });
       expect(verification.status, verification.stderr).toBe(0);
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
         purpose: "live-verification", passed: true, complete: false, omittedLegs: [...LIVE_VERIFICATION_OMITTED_JOBS],
       });
       const scoped = spawnSync(process.execPath, [script, output], {
-        encoding: "utf8", env: { ...env, FULL_SUITE_PURPOSE: "live-verification", FULL_SUITE_VERIFICATION_FAMILY: "codex", FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds("codex")) },
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: { ...env, FULL_SUITE_PURPOSE: "live-verification", FULL_SUITE_VERIFICATION_FAMILY: "codex", FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds("codex")) },
       });
       expect(scoped.status, scoped.stderr).toBe(0);
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ verificationFamily: "codex", passed: true, complete: false });
       for (const family of ["", "unknown"]) {
         const invalidFamily = spawnSync(process.execPath, [script, output], {
-          encoding: "utf8", env: { ...env, FULL_SUITE_VERIFICATION_FAMILY: family },
+          encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...env, FULL_SUITE_VERIFICATION_FAMILY: family },
         });
         expect(invalidFamily.status).toBe(1);
         expect(invalidFamily.stderr).toContain("Invalid verification family");
       }
       const invalid = spawnSync(process.execPath, [script, output], {
-        encoding: "utf8", env: { ...env, FULL_SUITE_PURPOSE: "unknown" },
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...env, FULL_SUITE_PURPOSE: "unknown" },
       });
       expect(invalid.status).toBe(1);
       expect(invalid.stderr).toContain("Invalid full-suite purpose");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("full verification CLI preserves all-leg evidence and rejects omissions, filters and invalid purpose", () => {
     const root = mkdtempSync(join(tmpdir(), "full-suite-verification-result-"));
@@ -1349,7 +1428,7 @@ describe("t345 complete nightly coverage", () => {
     const run = (extra: NodeJS.ProcessEnv = {}) => {
       rmSync(output, { force: true });
       return spawnSync(process.execPath, [script, output], {
-        encoding: "utf8", timeout: 10_000,
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
         env: {
           ...process.env, FULL_SUITE_PURPOSE: "full-verification", FULL_SUITE_VERIFICATION_FAMILY: "all",
           FULL_SUITE_VERIFICATION_TEST: "", FULL_SUITE_NEEDS: JSON.stringify(allSuccess()), FULL_SUITE_SHA: identity.sha,
@@ -1411,5 +1490,5 @@ describe("t345 complete nightly coverage", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

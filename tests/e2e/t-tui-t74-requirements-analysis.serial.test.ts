@@ -221,13 +221,16 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         ).toBe(true);
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
-        // so we catch the waiting menu caret + footer while the gates are up. The
+        // so we catch the waiting menu caret + footer while the gates are up.
         // The highlighted option must preserve the exact `❯` (U+276F) caret on
         // every platform. Anchor it to a numbered option so the ordinary `>`
         // input prompt cannot satisfy the render proof.
+        // Use physical rows, as answer-gate does: the default logical capture
+        // joins wrapped rows and can move a visibly row-leading option caret
+        // into the middle of a line after a native Windows repaint.
         const caretOnOption = /^\s*❯\s+\d+\.\s/m;
         pollTimer = setInterval(() => {
-          const grid = drive(["capture", "--session", session]).stdout;
+          const grid = drive(["capture", "--session", session, "--physical"]).stdout;
           if (caretOnOption.test(grid)) sawMenuCaret = true;
           if (grid.includes("Enter to select") || grid.includes("Submit answers")) {
             sawSelectFooter = true;

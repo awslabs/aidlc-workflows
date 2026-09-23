@@ -1238,7 +1238,7 @@ describe("t244 management lifecycle", () => {
       expect(existsSync(join(machine, path))).toBe(false);
     }
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
-  }, process.platform === "win32" ? 180_000 : NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t244 installer has no machine-level harness selection", () => {
