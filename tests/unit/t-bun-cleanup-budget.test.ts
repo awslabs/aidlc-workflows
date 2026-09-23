@@ -198,7 +198,7 @@ test("supervisor cleanup can progress beyond seven seconds and still finish earl
     statusPath: join(root, "status.json"), releasePath: join(root, "release"), stopPath: join(root, "stop"),
   };
   const configPath = join(root, "config.json");
-  writeFileSync(configPath, JSON.stringify(config));
+  writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
   publishSupervisorStop(config.stopPath, { token: config.token, requestId: randomUUID() });
   const script = join(root, "supervisor-model.ts");
   writeFileSync(script, `
