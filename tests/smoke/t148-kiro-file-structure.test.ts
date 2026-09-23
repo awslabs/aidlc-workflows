@@ -141,10 +141,13 @@ describe("t148 dist/kiro file structure", () => {
   test("conductor: match-scoped shell grant, never blanket trust (findings 0.9b)", () => {
     const fm = frontmatter(join(K, "agents", "aidlc.md"));
     expect(fm).toContain("capability: shell");
-    expect(fm).toContain("bun .kiro/tools/aidlc-*");
-    // The tool glob cannot cover the dispatcher: `aidlc-*` needs a literal `-`,
-    // and the dispatcher is what the orchestrator skill drives its loop with.
+    // ONE entrypoint plus a route namespace, never a directory of scripts. The glob over
+    // the projected tools directory that used to sit beside this line was an execution
+    // authority over a path the PROJECT can write: a repository could add a script whose
+    // name matched and it was pre-approved, so relayed repository text that talked the
+    // model into running it reached execution with no second approval.
     expect(fm).toContain("bun .kiro/tools/aidlc.ts engine *");
+    expect(fm).not.toContain("tools/aidlc-*");
     expect(fm).toContain("date -u *");
     // And the denials that bound it.
     expect(fm).toContain("rm -rf *");

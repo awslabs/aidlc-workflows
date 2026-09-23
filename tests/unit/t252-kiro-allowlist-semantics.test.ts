@@ -394,15 +394,16 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       );
       const matches = (effect: string) =>
         shell.filter((rule) => rule.effect === effect).flatMap((rule) => rule.match ?? []);
-      // The dispatcher entry is not redundant with the tool glob: shell matches
-      // are globs, so `aidlc-*` requires a literal `-` and never covers
-      // `aidlc.ts`, which the orchestrator skill drives its loop with. Scoped to
-      // `engine` so the trusted boundary is the one the native channel draws.
+      // ONE entrypoint plus a route namespace. A glob over the projected tools directory
+      // used to sit beside the dispatcher; it granted execution over a path the PROJECT
+      // can write, so a repository could add a matching script and have it pre-approved -
+      // which is how relayed repository text reached execution without a second approval.
+      // Scoped to `engine` so the trusted boundary is the one the native channel draws.
       expect(matches("allow")).toEqual([
-        "bun .kiro/tools/aidlc-*",
         "bun .kiro/tools/aidlc.ts engine *",
         "date -u *",
       ]);
+      expect(matches("allow").some((m) => m.includes("aidlc-*"))).toBe(false);
       expect(matches("deny")).toEqual(["rm -rf *", "git push *"]);
     });
   }

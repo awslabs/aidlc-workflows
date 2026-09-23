@@ -22,14 +22,24 @@ permissions:
     - capability: shell
       effect: allow
       match:
-        - "bun {{HARNESS_DIR}}/tools/aidlc-*"
-        # The dispatcher, scoped to the trusted route namespace. Shell matches are
-        # globs where `*` is any sequence, so the line above requires a literal
-        # `-` after `aidlc` and never covers the dispatcher itself - which is how
-        # the orchestrator skill drives its loop, 19 of its 22 shell calls. Scoped
-        # to `engine` rather than widened to every route, so the boundary is the one
-        # the native channel already draws: the remaining three calls are `config`
-        # routes, and they keep prompting on both channels.
+        # ONLY the dispatcher, scoped to the trusted route namespace. A second line used to
+        # sit beside it: a glob over the projected tools directory, matching every script
+        # whose name began with the engine prefix. That was an execution authority over a
+        # directory the PROJECT can write - a hostile repository could add a script whose
+        # name matched and it was pre-approved, so relayed repository text that talked the
+        # model into running it reached execution with no second approval.
+        #
+        # Measured cost of removing it: exactly one call in the orchestrator skill, the
+        # utility `config-change` verb, which now prompts - and that is consistent, because
+        # the three other `config` routes already prompt on both channels. Every other call
+        # the skill makes (20 of them) is an `{{INVOKE}} engine <route>` the line below
+        # already covers.
+        #
+        # Pinning the entrypoint is what removes the authority: `{{INVOKE}}` resolves to the
+        # installed command on a native install and to the projected dispatcher on a source
+        # copy, so both channels now grant one entrypoint plus a route namespace rather than
+        # a directory of scripts. That is also the boundary the native channel always drew;
+        # the source channel was the wider of the two.
         - "{{INVOKE}} engine *"
         - "date -u *"
     - capability: shell
