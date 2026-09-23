@@ -148,7 +148,14 @@ describe("t148 dist/kiro file structure", () => {
     // model into running it reached execution with no second approval.
     expect(fm).toContain("bun .kiro/tools/aidlc.ts engine *");
     expect(fm).not.toContain("tools/aidlc-*");
-    expect(fm).toContain("date -u *");
+    // Exact timestamp spellings, asserted on the RULE rather than on prose. A
+    // `toContain("date -u *")` assertion survived the narrowing that removed that
+    // pattern, because the explanatory comment beside the rules still carries the
+    // literal text - a substring assertion over a whole frontmatter block cannot
+    // tell a rule from a sentence about a rule. Anchored to the list item.
+    expect(fm).toContain('- "date -u"');
+    expect(fm).toContain('- \'date -u +"%Y-%m-%dT%H:%M:%SZ"\'');
+    expect(fm).not.toContain('- "date -u *"');
     // And the denials that bound it.
     expect(fm).toContain("rm -rf *");
     expect(fm).toContain("git push *");

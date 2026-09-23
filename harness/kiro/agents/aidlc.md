@@ -46,8 +46,12 @@ permissions:
         # this build, a command-substitution tail and a backtick tail both ran with no
         # approval, and a redirection tail wrote a file the filesystem rules below do not
         # cover. The 2.x binary gated those tails independently of pattern matching, so the
-        # wildcard was safe when it was written; v3 gates none of them, which leaves the
-        # pattern itself as the only place the boundary can live.
+        # wildcard was safe when it was written; v3 gates none of them.
+        #
+        # Removing the tail closes the carrier for THESE commands only. The dispatcher line
+        # above still ends in a wildcard, and `… engine status > file` both matches it and
+        # carries a redirection, so a declarative pattern cannot be the whole boundary: a
+        # PreToolUse shell boundary is what closes the remaining tail.
         #
         # Four spellings because the protocol instructs three of them - bare for batch
         # entries, double-quoted in the stage protocol and the reviewer knowledge,

@@ -407,12 +407,20 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
         "date -u +%Y-%m-%dT%H:%M:%SZ",
       ]);
       expect(matches("allow").some((m) => m.includes("aidlc-*"))).toBe(false);
-      // No allow pattern may end in a wildcard. A trailing `*` matched any tail, and on v3
-      // the platform no longer gates the metacharacters a tail can carry: substitution,
-      // backticks and redirection were each measured running unprompted through
-      // `date -u *`, and the redirection wrote a file outside the filesystem rules. The
-      // dispatcher line is the one exception and is scoped to a route namespace, not a
-      // free tail - `engine ` ends in a space, so a tail cannot begin mid-token.
+      // No allow pattern may end in a wildcard, with ONE audited exception. A trailing `*`
+      // matched any tail, and on v3 the platform no longer gates the metacharacters a tail
+      // can carry: substitution, backticks and redirection were each measured running
+      // unprompted, and the redirection wrote a file outside the filesystem rules.
+      //
+      // The dispatcher line is exempted here because the route namespace is a grant this
+      // row must keep, NOT because it is safe: `engine ` ending in a space only stops a
+      // tail from beginning mid-token, and `… engine status > file` both matches the
+      // pattern and carries a redirection - measured. So this exception is precisely the
+      // hole a PreToolUse shell boundary has to close, and the boundary cannot live in the
+      // patterns alone. `docs/reference/06-hooks-and-tools.md` already states the
+      // underlying reason: a mutation delivered as a shell command is invisible to the
+      // Write/Edit hook path, which is why the review freeze parses redirection targets
+      // out of the command itself.
       for (const pattern of matches("allow")) {
         if (pattern === "bun .kiro/tools/aidlc.ts engine *") continue;
         expect(pattern.endsWith("*")).toBe(false);
