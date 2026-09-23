@@ -66,12 +66,16 @@ function runAdapter(
   return { stdout: r.stdout ?? "", code: r.status ?? -1 };
 }
 
-function fakeCompiledExecutable(projectDir: string): string {
+function fakeCompiledExecutable(projectDir: string, recordNext = false): string {
   const path = join(projectDir, process.platform === "win32" ? "fake-aidlc.cmd" : "fake-aidlc");
   if (process.platform === "win32") {
-    writeFileSync(path, "@echo off\r\necho %*\r\n", "utf-8");
+    writeFileSync(path, "@echo off\r\n" +
+      (recordNext ? 'if "%~1"=="engine" if "%~2"=="orchestrate" if "%~3"=="next" type nul > "%AIDLC_COMPILED_NEXT_MARKER%"\r\n' : "") +
+      "echo %*\r\n", "utf-8");
   } else {
-    writeFileSync(path, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n", "utf-8");
+    writeFileSync(path, "#!/bin/sh\n" +
+      (recordNext ? 'if [ "$1" = engine ] && [ "$2" = orchestrate ] && [ "$3" = next ]; then : > "$AIDLC_COMPILED_NEXT_MARKER"; fi\n' : "") +
+      "printf '%s\\n' \"$*\"\n", "utf-8");
     chmodSync(path, 0o755);
   }
   return path;
@@ -481,7 +485,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3f: explicit stage runner flags are pre-dispatched", () => {
+  test("3f: explicit single-stage flags retain exact tool forwarding", () => {
     const dir = scratchProject();
     try {
       const r = runAdapter(dir, "verb-intercept", {
@@ -491,20 +495,30 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
         cwd: dir,
       });
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      expect(r.stdout).toContain('"kind":"load-steering"');
-      expect(r.stdout).toContain('"stage":"requirements-analysis"');
-      expect(r.stdout).toContain('"continue_token"');
-      expect(existsSync(forwardingPath(dir))).toBe(false);
+      expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
+      expect(r.stdout).toContain("next --scope poc --stage requirements-analysis --single");
+      expect(r.stdout).not.toContain("--- DIRECTIVE ---");
+      const forwarding = JSON.parse(readFileSync(forwardingPath(dir), "utf-8"));
+      expect(forwarding.args).toEqual(["--scope", "poc", "--stage", "requirements-analysis", "--single"]);
+      expect(forwarding.turn).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("3g: raw explicit stage flags are pre-dispatched via the compiled executable", () => {
+  test("3g: raw single-stage flags do not issue through the compiled executable inside the hook", () => {
     const dir = scratchProject();
     try {
-      const executable = fakeCompiledExecutable(dir);
+      const executable = fakeCompiledExecutable(dir, true);
+      const marker = join(dir, "compiled-next-called");
+      const probe = spawnSync(executable, ["engine", "orchestrate", "next"], {
+        cwd: dir,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_COMPILED_NEXT_MARKER: marker },
+      });
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(existsSync(marker)).toBe(true);
+      rmSync(marker);
       const r = runAdapter(
         dir,
         "verb-intercept",
@@ -512,12 +526,15 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
           prompt: "/aidlc --stage reverse-engineering --single",
           cwd: dir,
         },
-        { AIDLC_COMPILED_EXECUTABLE: executable },
+        { AIDLC_COMPILED_EXECUTABLE: executable, AIDLC_COMPILED_NEXT_MARKER: marker },
       );
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
       expect(r.stdout).toContain("next --stage reverse-engineering --single");
-      expect(existsSync(forwardingPath(dir))).toBe(false);
+      expect(existsSync(marker)).toBe(false);
+      const forwarding = JSON.parse(readFileSync(forwardingPath(dir), "utf-8"));
+      expect(forwarding.args).toEqual(["--stage", "reverse-engineering", "--single"]);
+      expect(forwarding.turn).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

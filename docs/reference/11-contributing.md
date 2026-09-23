@@ -91,8 +91,11 @@ uploaded asset inventory. Never rebuild, repackage, or substitute the
 candidate.
 
 Stable releases start from pushed version tags in `.github/workflows/release.yml`.
+Before tagging, obtain exact-SHA passing preview evidence as described in
+[Nightly full-suite matrix and provisioning](09-testing.md#nightly-full-suite-matrix-and-provisioning).
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
-manually dispatches preview builds from `main`, gates them through callable CI,
+manually dispatches preview builds from `main`, gates them through callable CI
+and the full deterministic/live suite,
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
 never "latest". Scheduled and manual runs share `release-preview` workflow
 concurrency; each later run re-reads releases and skips when the newest

@@ -164,6 +164,7 @@ import {
   isPluginEnabled,
   isPerUnitStage,
   isReadOnlyEngineProbe,
+  isRetiredOnlyNextArgv,
   isRegularFile,
   isArchivedIntent,
   isRouteCheckProbe,
@@ -1567,6 +1568,8 @@ interface ParsedFlags {
   claimRhythm?: string;
   projectDir?: string;
   parseError?: string;
+  retiredFlags?: string[];
+  retiredOnly?: boolean;
 }
 
 const CONFIG_SECTIONS = [
@@ -1780,6 +1783,15 @@ function parseNextFlags(args: string[]): ParsedFlags {
       i++;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
+    } else if (a === "--init" || a === "--force") {
+      // RETIRED flags; see the named "Branch 3 — the legacy `--init` flag —
+      // retired in P4" note in routeNext. Record and consume them so they never
+      // become intent DESCRIPTION text (#847). When no supported command or
+      // description remains, routeNext emits replacement guidance instead of
+      // treating the invocation as bare `next`. A task that genuinely needs
+      // the token spells it via the `--` delimiter.
+      flags.retiredFlags ??= [];
+      flags.retiredFlags.push(a);
     } else {
       // Unknown flag-looking tokens are task text, not disposable noise. Use
       // the standard `--` delimiter when a task must contain a token that is
@@ -1813,6 +1825,9 @@ function parseNextFlags(args: string[]): ParsedFlags {
   }
   if (flags.release && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--release does not accept --team or --rhythm.";
+  }
+  if (flags.retiredFlags && isRetiredOnlyNextArgv(args)) {
+    flags.retiredOnly = true;
   }
   return flags;
 }
@@ -4192,8 +4207,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // rather than the ledger (a conductor that ran `next` and then bailed is
   // invisible to the ledger but visible here). Read-only utility flags and the
   // workspace verbs are excluded: they carry no workflow intent, so a status
-  // query stays a conversational turn. So is `team-board`, a read-only board;
-  // `park` is not, because the park it names mutates workflow state.
+  // query stays a conversational turn. Retired-only initialization flags are
+  // also terminal guidance, while the same flags combined with supported work
+  // still engage normally. So is `team-board`, a read-only board; `park` is
+  // not, because the park it names mutates workflow state.
   //
   // DELIBERATELY BEFORE Branch 0 (the roll-forward latch) below, so a `next` the
   // latch swallows as a no-op still counts as engagement. That is the correct
@@ -4205,6 +4222,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (
     !flags.readOnly &&
     !flags.config &&
+    !flags.retiredOnly &&
     !flags.workspaceCommand &&
     flags.orchestratorVerb !== "team-board"
   ) {
@@ -4213,6 +4231,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
 
   if (flags.parseError) {
     emit(errorDirective(flags.parseError));
+    return;
+  }
+
+  if (flags.retiredOnly) {
+    emit(errorDirective(
+      "`--init` and `--force` are retired and no longer initialize or restart a workflow. " +
+        "Start work by invoking the AI-DLC skill with a description of what to build, or with " +
+        "`--scope <scope>`. To start separate work alongside an active intent, invoke the skill with " +
+        "`--new-intent --scope <scope> \"<description>\"`. No workflow stage was run.",
+    ));
     return;
   }
 

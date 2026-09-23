@@ -274,8 +274,8 @@ describe("t231 plugin list and sync handlers", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(pluginRoot);
-    expect(result.stderr).toContain("missing hooks/compose.ts");
+    expect(stderrError(result)).toContain(pluginRoot);
+    expect(stderrError(result)).toContain("missing hooks/compose.ts");
   });
 
   test("plugin sync names and classifies every unusable configured root", () => {
@@ -290,8 +290,8 @@ describe("t231 plugin list and sync handlers", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(`- ${composeLessRoot}: missing hooks/compose.ts`);
-    expect(result.stderr).toContain(`- ${missingRoot}: root directory does not exist`);
+    expect(stderrError(result)).toContain(`- ${composeLessRoot}: missing hooks/compose.ts`);
+    expect(stderrError(result)).toContain(`- ${missingRoot}: root directory does not exist`);
   });
 
   test("plugin sync warns about compose-less roots while composing valid roots", () => {

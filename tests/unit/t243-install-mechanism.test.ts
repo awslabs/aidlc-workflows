@@ -20,6 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -3351,6 +3352,8 @@ describe("t243 release lifecycle", () => {
     expect(() => verifyReleaseDirectory(tampered)).toThrow("version.json: checksum mismatch");
   }, 60_000);
 
+  // Three release fixtures plus provenance verification exceeded 5s in a
+  // quiet Windows run (6.6s). This case checks authentication, not latency.
   test("local release acquisition requires an authenticated provenance bundle", async () => {
     const missing = fixtureReleaseBytes();
     rmSync(join(missing, "aidlc-release.intoto.jsonl"));
@@ -3391,7 +3394,7 @@ describe("t243 release lifecycle", () => {
       },
     });
     expect(swapped.status).toBe(1);
-  });
+  }, process.platform === "win32" ? 20_000 : 5_000);
 
   test("local release acquisition accepts a GitHub CLI without required attestation flags", async () => {
     const release = fixtureReleaseBytes();
@@ -4434,7 +4437,7 @@ describe("t243 release lifecycle", () => {
     expect(dispatched.stdout + dispatched.stderr).not.toContain("AI-DLC workflow");
   }, 120_000);
 
-  test("launcher ownership does not depend on the spelling of the machine roots", () => {
+  test("launcher ownership does not depend on the spelling of the machine roots", async () => {
     const release = fixtureRelease();
     const machine = temp("aidlc-t243-launcher-alias-machine-");
     const alias = join(temp("aidlc-t243-launcher-alias-parent-"), "machine");
@@ -4464,15 +4467,26 @@ describe("t243 release lifecycle", () => {
     expect(reused.status, reused.stdout + reused.stderr).toBe(0);
     const purge = run(LIFECYCLE, ["uninstall", "--purge", "--yes"], project, aliased);
     expect(purge.status, purge.stdout + purge.stderr).toBe(0);
-    expect(existsSync(launcher)).toBe(false);
+    if (process.platform === "win32") {
+      // Windows schedules cleanup after the command process exits. Observe the
+      // real deletion; do not substitute a successful scheduling response for it.
+      const cleanupDeadline = Date.now() + 10_000;
+      while (existsSync(launcher) && Date.now() < cleanupDeadline) await Bun.sleep(50);
+    }
+    expect(existsSync(launcher), purge.stdout + purge.stderr).toBe(false);
   }, 120_000);
 
   test("use refuses to create a native ownership domain beside Homebrew or Nix", () => {
     const release = fixtureReleaseBytes();
-    for (const executable of [
-      "/opt/homebrew/Cellar/aidlc/2.7.0/libexec/aidlc",
-      "/nix/store/hash-aidlc-2.7.0/bin/aidlc",
-    ]) {
+    for (const [manager, executable] of [
+      ["Homebrew", "/opt/homebrew/Cellar/aidlc/2.7.0/libexec/aidlc"],
+      // A rooted /nix/store path becomes C:/nix/store on Windows. Use the
+      // supported profile spelling there so this case reaches the same guard.
+      ["Nix", process.platform === "win32"
+        ? join(temp("aidlc-t243-nix-profile-"), ".nix-profile", "bin", INSTALLED_EXECUTABLE)
+        : "/nix/store/hash-aidlc-2.7.0/bin/aidlc"],
+    ] as const) {
+      expect(packageManagerForExecutable(executable)?.name).toBe(manager);
       const machine = temp("aidlc-t243-managed-use-machine-");
       const project = temp("aidlc-t243-managed-use-project-");
       mkdirSync(join(project, ".git"));
@@ -4483,15 +4497,17 @@ describe("t243 release lifecycle", () => {
         AIDLC_INSTALL_ROOT: machine,
         AIDLC_BIN_DIR: join(machine, "bin"),
       });
-      expect(refused.status).toBe(1);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(1);
       expect(refused.stdout + refused.stderr).toContain("self-version switching is disabled");
       expect(existsSync(join(machine, "versions"))).toBe(false);
     }
   });
 
   test("a dispatched-version reservation protects the runtime until release", () => {
-    const activeRelease = fixtureReleaseBytes();
-    const retainedRelease = fixtureReleaseBytes(NEXT_VERSION);
+    // Activation invokes the installed binary. The bytes-only .exe fixture
+    // cannot satisfy that prerequisite on Windows.
+    const activeRelease = fixtureRelease();
+    const retainedRelease = fixtureRelease(NEXT_VERSION);
     const machine = temp("aidlc-t243-dispatch-reservation-machine-");
     const project = temp("aidlc-t243-dispatch-reservation-project-");
     mkdirSync(join(project, ".git"));
@@ -4499,12 +4515,14 @@ describe("t243 release lifecycle", () => {
       AIDLC_INSTALL_ROOT: machine,
       AIDLC_BIN_DIR: join(machine, "bin"),
     };
-    expect(run(LIFECYCLE, [
+    const activated = run(LIFECYCLE, [
       "update", "--version", AIDLC_VERSION, "--from", activeRelease,
-    ], project, env).status).toBe(0);
-    expect(run(LIFECYCLE, [
+    ], project, env);
+    expect(activated.status, activated.stdout + activated.stderr).toBe(0);
+    const retained = run(LIFECYCLE, [
       "versions", "install", NEXT_VERSION, "--from", retainedRelease,
-    ], project, env).status).toBe(0);
+    ], project, env);
+    expect(retained.status, retained.stdout + retained.stderr).toBe(0);
 
     const saved = {
       root: process.env.AIDLC_INSTALL_ROOT,
@@ -4962,7 +4980,22 @@ describe("t243 release lifecycle", () => {
 });
 
 describe("t243 projection channel", () => {
-  test("copy projections stay Bun-invoked while release projections are native", () => {
+  async function projectionTexts(root: string, files: string[]): Promise<string[]> {
+    const texts: string[] = [];
+    // Generated inputs are immutable in this serial unit checkout. Bound open
+    // files while overlapping independent reads, especially on Windows.
+    for (let index = 0; index < files.length; index += 16) {
+      const batch = await Promise.allSettled(files.slice(index, index + 16)
+        .map((path) => readFile(join(root, path), "utf-8")));
+      for (const result of batch) {
+        if (result.status === "rejected") throw result.reason;
+        texts.push(result.value);
+      }
+    }
+    return texts;
+  }
+
+  test("Claude release stamp and every native source file retain their projection contract", async () => {
     const stamp = JSON.parse(
       readFileSync(join(CLAUDE_RELEASE, ".claude", "tools", "data", "aidlc-stamp.json"), "utf-8"),
     ) as { frameworkVersion: string; distribution: string };
@@ -4970,25 +5003,31 @@ describe("t243 projection channel", () => {
       frameworkVersion: AIDLC_VERSION,
       distribution: "claude",
     }));
-    for (const path of walkFiles(CLAUDE_RELEASE)) {
-      if (!/\.(md|mdc|json|toml|hook|ts)$/.test(path)) continue;
-      const text = readFileSync(join(CLAUDE_RELEASE, path), "utf-8");
+    const files = walkFiles(CLAUDE_RELEASE).filter((path) => /\.(md|mdc|json|toml|hook|ts)$/.test(path));
+    for (const text of await projectionTexts(CLAUDE_RELEASE, files)) {
       expect(text).not.toMatch(/\bbun\s+[^\n]*\.claude\/(?:tools|hooks)\/aidlc/);
       expect(text).not.toContain("{{INVOKE}}");
     }
     expect(sha256Bytes(readFileSync(join(CLAUDE_RELEASE, ".claude", "tools", "aidlc.ts"))))
       .toMatch(/^sha256:[a-f0-9]{64}$/);
-    const distributions = readdirSync(join(REPO_ROOT, "dist-release"), {
-      withFileTypes: true,
-    })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-    for (const harness of distributions) {
+  });
+
+  // Each harness is an independent projection contract. Keeping seven full
+  // filesystem scans inside one default five-second case timed out on Windows.
+  // Retain the same checks and deadline for each actual harness.
+  const distributions = readdirSync(join(REPO_ROOT, "dist-release"), {
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+  for (const harness of distributions) {
+    test(`copy projections stay Bun-invoked while release projections are native (${harness})`, async () => {
       const copy = join(REPO_ROOT, "dist", harness);
       const release = join(REPO_ROOT, "dist-release", harness);
+      const copyFiles = walkFiles(copy);
       const manifest = JSON.parse(
         readFileSync(
-          walkFiles(copy)
+          copyFiles
             .map((path) => join(copy, path))
             .find((path) =>
               path.replaceAll("\\", "/").endsWith("/tools/data/aidlc-stamp.json")
@@ -4996,14 +5035,10 @@ describe("t243 projection channel", () => {
           "utf-8",
         ),
       ) as { harnessDir: string };
-      const copyText = walkFiles(copy)
-        .filter((path) => /\.(md|mdc|json|toml|hook|ts)$/.test(path))
-        .map((path) => readFileSync(join(copy, path), "utf-8"))
-        .join("\n");
-      const releaseText = walkFiles(release)
-        .filter((path) => /\.(md|mdc|json|toml|hook|ts)$/.test(path))
-        .map((path) => readFileSync(join(release, path), "utf-8"))
-        .join("\n");
+      const copyText = (await projectionTexts(copy,
+        copyFiles.filter((path) => /\.(md|mdc|json|toml|hook|ts)$/.test(path)))).join("\n");
+      const releaseText = (await projectionTexts(release,
+        walkFiles(release).filter((path) => /\.(md|mdc|json|toml|hook|ts)$/.test(path)))).join("\n");
       expect(copyText).toContain(`bun ${manifest.harnessDir}/tools/aidlc.ts`);
       expect(releaseText).not.toMatch(
         new RegExp(`\\bbun\\s+[^\\n]*${manifest.harnessDir.replace(".", "\\.")}/(?:tools|hooks)/aidlc`),
@@ -5014,7 +5049,10 @@ describe("t243 projection channel", () => {
         expect(existsSync(join(copy, ".vscode", "settings.json"))).toBe(false);
         expect(existsSync(join(release, ".vscode", "settings.json"))).toBe(true);
       }
-    }
+    });
+  }
+
+  test("native release onboarding retains its runtime contract", () => {
     for (const harness of HARNESS_MATRIX) {
       if (harness.capabilities.onboarding.harnessDist === harness.capabilities.onboarding.dist) continue;
       const onboarding = readFileSync(

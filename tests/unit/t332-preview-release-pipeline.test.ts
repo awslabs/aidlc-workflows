@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -368,6 +368,57 @@ async function runWorkflowStep(
 }
 
 describe("t332 preview publication pipeline", () => {
+  for (const scenario of ["preview", "renewal", "wrong-sha", "incomplete", "non-dispatch"] as const) {
+    test(`stable release evidence: ${scenario}`, async () => {
+      const workflow = Bun.YAML.parse(readFileSync(STABLE_RELEASE_WORKFLOW, "utf8")) as {
+        jobs: { validate: { steps: Array<{ name?: string; run?: string }> } };
+      };
+      const script = workflow.jobs.validate.steps.find((step) => step.name === "Require passing full-suite evidence")!.run!;
+      const root = mkdtempSync(join(tmpdir(), "aidlc-t332-evidence-"));
+      roots.push(root);
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      const shim = join(bin, "gh");
+      writeFileSync(shim, '#!/usr/bin/env bash\nexec bun "$FIXTURE_GH_SCRIPT" "$@"\n');
+      chmodSync(shim, 0o755);
+      const fakeGh = join(root, "gh.ts");
+      writeFileSync(fakeGh, [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'const args = process.argv.slice(2);',
+        'const records = JSON.parse(process.env.FIXTURE_RUNS!);',
+        'const flag = (name: string) => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1]; };',
+        'if (args[0] === "run" && args[1] === "list") {',
+        '  const fields = { "--workflow": "workflow", "--commit": "headSha", "--branch": "branch", "--event": "event", "--status": "status" };',
+        '  const selected = records.filter((row: Record<string, unknown>) => Object.entries(fields).every(([option, field]) => flag(option) === undefined || row[field] === flag(option)));',
+        '  console.log(selected.slice(0, Number(flag("--limit") ?? 20)).map((row: { id: number }) => row.id).join("\\n"));',
+        '} else if (args[0] === "run" && args[1] === "download" && flag("--name") === "full-suite-result") {',
+        '  const record = records.find((row: { id: number }) => String(row.id) === args[2]);',
+        '  if (!record?.artifact) process.exit(1);',
+        '  mkdirSync(flag("--dir")!, { recursive: true });',
+        '  writeFileSync(join(flag("--dir")!, "full-suite-result.json"), JSON.stringify(record.artifact));',
+        '} else process.exit(2);',
+      ].join("\n"));
+      const evidence = {
+        sha: scenario === "wrong-sha" ? "b".repeat(40) : SOURCE_A,
+        passed: scenario !== "incomplete", complete: scenario !== "incomplete",
+        excluded: [], legs: { live_hosted: scenario === "incomplete" ? "failure" : "success" },
+      };
+      const records = [
+        { id: 1, workflow: "preview-release.yml", headSha: SOURCE_A, branch: "main", event: "schedule", status: "success", artifact: scenario === "preview" ? evidence : null },
+        // workflow_dispatch's head is today's main; its artifact binds the older inputs.ref.
+        { id: 2, workflow: "full-suite.yml", headSha: "c".repeat(40), branch: "main", event: scenario === "non-dispatch" ? "workflow_call" : "workflow_dispatch", status: "success", artifact: evidence },
+      ];
+      const result = await runWorkflowStep(script, root, {
+        PATH: `${bin}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
+        FIXTURE_GH_SCRIPT: fakeGh, FIXTURE_RUNS: JSON.stringify(records), TAG_SHA: SOURCE_A, RUNNER_TEMP: root,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(scenario === "preview" || scenario === "renewal" ? 0 : 1);
+      if (scenario === "renewal") expect(result.stdout).toContain("missing or expired full-suite-result");
+      if (scenario !== "preview" && scenario !== "renewal") expect(result.stdout).toContain(`full-suite.yml on main with ref=${SOURCE_A}`);
+    }, 15_000);
+  }
+
   test("the tag message binds a preview to its source commit and parses back", () => {
     const message = previewTagMessage({
       version: PREVIEW_ID,
@@ -1005,7 +1056,12 @@ describe("t332 preview publication pipeline", () => {
         AUTHORIZED_SHA: authorizedSha,
         GITHUB_OUTPUT: planningOutput,
       });
-      const planningRows = readFileSync(planningOutput, "utf-8");
+      const rawPlanningRows = readFileSync(planningOutput, "utf-8");
+      // Native Windows jq ends its JSON row with CRLF; GitHub's environment
+      // file consumes rows with either delimiter. Keep each row exact.
+      const planningRows = process.platform === "win32"
+        ? rawPlanningRows.replaceAll("\r\n", "\n")
+        : rawPlanningRows;
       if (alreadyPublished) {
         expect(planned.status, planned.stdout + planned.stderr).toBe(0);
         expect(planningRows).toBe("skip=true\npreview_version=\ntag=\npreview_plan=null\n");
@@ -1030,6 +1086,8 @@ describe("t332 preview publication pipeline", () => {
       environment?: string;
       permissions?: Record<string, string>;
       uses?: string;
+      with?: Record<string, string>;
+      secrets?: string;
       env?: Record<string, string>;
       outputs?: Record<string, string>;
       steps?: Array<{
@@ -1073,6 +1131,12 @@ describe("t332 preview publication pipeline", () => {
     expect(stableText).not.toContain("plan-preview-release.ts");
     expect(stableText).not.toContain("AIDLC_BUILD_VERSION");
     expect(stableText).not.toContain("./.github/workflows/ci.yml");
+    expect(stable.jobs.validate.permissions).toEqual({ contents: "read", actions: "read" });
+    const evidence = stable.jobs.validate.steps?.find((step) => step.name === "Require passing full-suite evidence");
+    expect(evidence?.run).toContain("full-suite-result");
+    expect(evidence?.run).toContain(".sha == $sha and .passed == true");
+    expect(evidence?.run).toContain("::warning::");
+    expect(evidence?.run).toContain(".excluded // []");
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
     expect(preview.on.schedule).toEqual([{
@@ -1089,15 +1153,15 @@ describe("t332 preview publication pipeline", () => {
     });
     expect(preview.jobs.gate.if).toContain("needs.validate.outputs.skip");
     expect(preview.jobs.verify.needs).toEqual(["validate", "gate"]);
-    expect(preview.jobs.test_smoke.needs).toEqual(["validate", "gate"]);
-    expect(preview.jobs.test_unit.needs).toEqual(["validate", "gate"]);
-    expect(preview.jobs.test_deep.needs).toEqual(["validate", "gate"]);
-    expect(preview.jobs.test.needs).toEqual([
-      "validate",
-      "test_smoke",
-      "test_unit",
-      "test_deep",
-    ]);
+    expect(preview.jobs.full_suite).toMatchObject({
+      needs: ["validate", "gate"],
+      uses: "./.github/workflows/full-suite.yml",
+      with: { ref: `\${{ needs.validate.outputs.sha }}` },
+      secrets: "inherit",
+    });
+    expect(preview.jobs.full_suite.if).toContain("needs.validate.outputs.skip");
+    expect(preview.jobs.test.needs).toEqual(["validate", "full_suite"]);
+    expect(preview.jobs.test.steps?.[0].env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.result }}`);
     expect(preview.jobs.test.if).toContain("needs.validate.outputs.skip");
     expect(preview.jobs.release.environment).toBe("preview");
     expect(preview.jobs.release.permissions).toEqual({ contents: "write" });
@@ -1119,9 +1183,7 @@ describe("t332 preview publication pipeline", () => {
     };
     for (const name of [
       "verify",
-      "test_smoke",
-      "test_unit",
-      "test_deep",
+      "full_suite",
       "test",
       "native-smoke",
       "build",

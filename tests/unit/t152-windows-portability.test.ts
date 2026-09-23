@@ -39,7 +39,9 @@ describe("t152 Windows portability guard", () => {
     expect(ps).toContain('-ArgumentList @("tests/run-tests.ts", "--all", "--debug", "-P", "$Parallel")');
     expect(ps).toContain("$Runner = Start-Process");
     expect(ps).toContain("exit $Runner.ExitCode");
-    expect(ps).toContain("require('node-pty'); require('@xterm/headless')");
+    expect(ps).toContain('$env:AIDLC_BUN_BIN = $BunExe');
+    expect(ps).toContain('from "./tests/harness/tui-runtime.ts"');
+    expect(ps).toContain("const reason = tuiUnavailableReason(); if (reason) throw new Error(reason)");
     expect(ps).not.toContain("run-tests.sh");
   });
 

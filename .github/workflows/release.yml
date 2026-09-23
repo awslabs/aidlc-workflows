@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       tag: ${{ steps.validate.outputs.tag }}
       sha: ${{ steps.validate.outputs.sha }}
@@ -46,6 +47,47 @@ jobs:
           version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
           test "$RELEASE_TAG" = "v$version"
           printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Require passing full-suite evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_SHA: ${{ steps.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          tag_sha="$TAG_SHA"
+          preview_runs="$(gh run list --workflow preview-release.yml --commit "$tag_sha" --status success --limit 100 --json databaseId --jq '.[].databaseId')"
+          # A manual full-suite run tests inputs.ref, not necessarily its workflow head SHA.
+          # Trust only main's workflow_dispatch runs and bind their artifact to tag_sha below.
+          renewal_runs="$(gh run list --workflow full-suite.yml --branch main --event workflow_dispatch --status success --limit 100 --json databaseId --jq '.[].databaseId')"
+          accepted=false
+          for run in $preview_runs $renewal_runs; do
+            evidence="$RUNNER_TEMP/full-suite-evidence-$run"
+            mkdir -p "$evidence"
+            if ! gh run download "$run" --name full-suite-result --dir "$evidence"; then
+              echo "Evidence run $run: missing or expired full-suite-result artifact"
+              continue
+            fi
+            result="$evidence/full-suite-result.json"
+            if jq -e --arg sha "$tag_sha" '.sha == $sha and .passed == true' "$result"; then
+              exclusions="$(jq -c '.excluded // []' "$result")"
+              if [ "$exclusions" != '[]' ]; then
+                echo "::warning::Full-suite evidence for $tag_sha excludes families: $exclusions"
+              fi
+              disabled_legs="$(jq -c '.disabledLegs // []' "$result")"
+              if [ "$disabled_legs" != '[]' ]; then
+                echo "::warning::Full-suite evidence for $tag_sha has disabled live lanes: $disabled_legs"
+              fi
+              accepted=true
+              break
+            fi
+            echo "Evidence run $run: wrong source or failing full-suite legs"
+            jq '{sha, passed, complete, excluded, disabledLegs, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
+          done
+          if [ "$accepted" != true ]; then
+            echo "::error::No successful preview or full-suite dispatch has passing full-suite-result evidence for $tag_sha. Missing/failing legs are listed above; no artifact means every leg is unproven. Renew evidence by dispatching full-suite.yml on main with ref=$tag_sha."
+            exit 1
+          fi
 
   verify:
     needs: validate

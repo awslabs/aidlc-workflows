@@ -1,4 +1,5 @@
 // Pure runner configuration: importing this module never starts a test run.
+import { resolve } from "node:path";
 import { parseShardSpec, type ShardSpec } from "../lib/test-sharding.ts";
 
 export type GuardProfile = "fixture" | "production";
@@ -18,6 +19,17 @@ export interface ParsedArgs {
   noLlm: boolean;
   guardProfile: GuardProfile;
   help: boolean;
+  requireCoverage: boolean;
+  isolatedE2e: boolean;
+  e2ePlan: boolean;
+  bedrockParallel: number;
+  kiroParallel: number;
+  ideParallel: number;
+  e2eFileTimeout: number;
+  e2eTimings: string;
+  e2eCancelFile: string;
+  matrixPlan: string;
+  matrixJob: string;
 }
 
 export class RunnerArgsError extends Error {
@@ -48,8 +60,20 @@ export function parseRunnerArgs(
     noLlm: env.AIDLC_NO_LLM === "1",
     guardProfile: "fixture",
     help: false,
+    requireCoverage: false,
+    isolatedE2e: false,
+    e2ePlan: false,
+    bedrockParallel: 2,
+    kiroParallel: 2,
+    ideParallel: 1,
+    e2eFileTimeout: 10_800,
+    e2eTimings: "",
+    e2eCancelFile: "",
+    matrixPlan: "",
+    matrixJob: "",
   };
   let levelSelected = false;
+  let workerOption = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
@@ -88,6 +112,18 @@ export function parseRunnerArgs(
       case "--no-llm":
         out.noLlm = true;
         break;
+      case "--require-coverage":
+        out.requireCoverage = true;
+        out.verbose = true;
+        break;
+      case "--matrix-plan":
+      case "--matrix-job": {
+        const value = argv[++i];
+        if (!value || value.startsWith("--")) throw new RunnerArgsError(`${arg} requires a value`, 2, true);
+        if (arg === "--matrix-plan") out.matrixPlan = resolve(value);
+        else out.matrixJob = value;
+        break;
+      }
       case "--debug":
         out.debug = out.verbose = true;
         break;
@@ -117,6 +153,41 @@ export function parseRunnerArgs(
           );
         }
         break;
+      case "--isolated-e2e":
+        out.isolatedE2e = true;
+        break;
+      case "--e2e-plan":
+        out.e2ePlan = true;
+        out.isolatedE2e = true;
+        break;
+      case "--bedrock-parallel":
+      case "--kiro-parallel":
+      case "--ide-parallel":
+      case "--e2e-file-timeout": {
+        const value = argv[++i] ?? "";
+        if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+          throw new RunnerArgsError(`${arg} requires a positive safe integer`, 2, true);
+        }
+        const key = {
+          "--bedrock-parallel": "bedrockParallel",
+          "--kiro-parallel": "kiroParallel",
+          "--ide-parallel": "ideParallel",
+          "--e2e-file-timeout": "e2eFileTimeout",
+        }[arg] as "bedrockParallel" | "kiroParallel" | "ideParallel" | "e2eFileTimeout";
+        out[key] = Number(value);
+        workerOption = true;
+        break;
+      }
+      case "--e2e-timings":
+        out.e2eTimings = argv[++i] ?? "";
+        if (!out.e2eTimings || out.e2eTimings.startsWith("--")) throw new RunnerArgsError("--e2e-timings requires a file", 2, true);
+        workerOption = true;
+        break;
+      case "--e2e-cancel-file":
+        out.e2eCancelFile = argv[++i] ?? "";
+        if (!out.e2eCancelFile || out.e2eCancelFile.startsWith("--")) throw new RunnerArgsError("--e2e-cancel-file requires a file", 2, true);
+        workerOption = true;
+        break;
       case "--help":
       case "-h":
         out.help = true;
@@ -132,6 +203,22 @@ export function parseRunnerArgs(
     throw new RunnerArgsError(
       "ERROR: --shard requires --unit with no other level or profile flags",
     );
+  }
+  if ((out.isolatedE2e && !out.runE2e) || (workerOption && !out.isolatedE2e)) {
+    throw new RunnerArgsError("isolated e2e options require --e2e --isolated-e2e or --e2e --e2e-plan; --e2e-plan implies --isolated-e2e, not --e2e", 2, true);
+  }
+  if (out.isolatedE2e && (!Number.isSafeInteger(out.parallel) || out.parallel > 256)) {
+    throw new RunnerArgsError("isolated e2e --parallel must be a safe integer in 1..256", 2, true);
+  }
+  if (out.e2eFileTimeout > 2_147_483) throw new RunnerArgsError("--e2e-file-timeout exceeds the supported timer range", 2, true);
+  if (out.isolatedE2e && !out.e2ePlan) out.verbose = true;
+  if (!!out.matrixPlan !== !!out.matrixJob) {
+    throw new RunnerArgsError("--matrix-plan and --matrix-job must be supplied together", 2, true);
+  }
+  if (out.matrixPlan) {
+    if (out.e2ePlan) throw new RunnerArgsError("--matrix-plan requires an executed test run, not --e2e-plan", 2, true);
+    out.requireCoverage = true;
+    out.verbose = true;
   }
   return out;
 }
@@ -190,4 +277,22 @@ export function guardProfileDescription(profile: GuardProfile): string {
   return profile === "production"
     ? "Guard profile: production (runner bypasses off; inherited off-switches forced to 0)"
     : "Guard profile: fixture (synthetic guard skips and direct audit authority enabled)";
+}
+
+interface PreflightResult {
+  status: "PASS" | "SKIP" | "FAIL";
+  cases: { total: number; skipped: number };
+  evidenceComplete?: boolean;
+  timedOut: boolean;
+  cleanupError?: string;
+}
+
+export function preflightVerdict(
+  result: PreflightResult | undefined,
+  options: { liveRequested: boolean; requireCoverage: boolean },
+): "pass" | "skip" | "fail" {
+  if (!result || result.status === "FAIL" || result.timedOut || result.cleanupError) return "fail";
+  if (result.status === "SKIP" && !options.liveRequested && !options.requireCoverage) return "skip";
+  return result.status === "PASS" && result.evidenceComplete === true &&
+    result.cases.total > 0 && result.cases.skipped === 0 ? "pass" : "fail";
 }

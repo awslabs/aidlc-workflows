@@ -103,17 +103,15 @@
 // custom-stage gates) — gated behind AIDLC_TUI_LIVE=1. The sdk half also spends
 // tokens (driveAidlc runs the orchestrator on Opus/Bedrock). The compile-rule
 // test + the seeded-state statusline capture spend none. Absent
-// tmux/claude/distributable -> SKIP with a reason, never a hollow pass.
+// selected TUI substrate/claude/distributable -> SKIP with a reason, never a hollow pass.
 //
-// SPAWN, not import (D-TUI-7): tui-drive.ts runs as a subprocess (node on
-// Windows so node-pty never loads under bun #748; bun elsewhere). The
-// tui-drive.ts spawn is what DERIVES the tui mechanism; the driveAidlc() call is
-// what derives sdk — together {sdk, tui}.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import * as os from "node:os";
 import { join } from "node:path";
 import { assertAuditEvent, assertToolResultContains } from "../harness/assert.ts";
 import {
@@ -133,19 +131,16 @@ import {
 } from "../harness/custom-harness.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { driveAidlc, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
-import { resolveWinNode } from "../harness/tui-drive.ts";
 import {
   cleanupTuiProject,
   cleanupTuiProjectAfterKill,
   compileTuiRuntimeGraph,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
-const IS_WIN = os.platform() === "win32";
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Wedge-ceiling, never a budget (the timer lesson): one generous cap; pass on
 // the on-disk signal, not the clock. Matches the suite convention.
@@ -184,15 +179,8 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live harness-engineer journey (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
   if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
     return "claude CLI not found";
   }
@@ -298,16 +286,17 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
             "--dangerously-skip-permissions",
           ]).rc,
         ).toBe(0);
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
+        // Share the original 60s trust + 15s permission + 45s readiness budget.
+        const startupDeadlineMs = Date.now() + 120_000;
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*INCEPTION", "--timeout-ms", "120000",
+        ]);
+        expect(startup.rc).toBe(0);
         // The custom stage is in INCEPTION — wait for the workflow statusline.
         // P9: the orientation prefix ("<intent-slug> · ") sits between [AIDLC] and
         // the phase, so match with .* rather than a contiguous gap.
-        const sawMarker = waitFor(session, "\\[AIDLC\\].*INCEPTION", 45000, 1000);
+        const sawMarker = waitFor(session, "\\[AIDLC\\].*INCEPTION", Math.max(0, startupDeadlineMs - Date.now()), 1000);
         const pane = drive(["capture", "--session", session]).stdout;
         if (!sawMarker) {
           throw new Error(
@@ -486,13 +475,14 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
             "--dangerously-skip-permissions",
           ]).rc,
         ).toBe(0);
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
-        expect(waitFor(session, "\\[AIDLC\\].*(ready|INCEPTION)", 45000, 800)).toBe(true);
+        // Share the original 60s trust + 15s permission + 45s readiness budget.
+        const startupDeadlineMs = Date.now() + 120_000;
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*(ready|INCEPTION)", "--timeout-ms", "120000",
+        ]);
+        expect(startup.rc).toBe(0);
+        expect(waitFor(session, "\\[AIDLC\\].*(ready|INCEPTION)", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
 
         // Resume the pre-initialized custom-scope workflow. answer-gate below
         // handles any custom-stage approval gates by keystroke.

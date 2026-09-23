@@ -41,6 +41,8 @@
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { parseLiteralShellInvocation } from "../../core/tools/aidlc-lib.ts";
 
 // --- Debug trace (parity with sdk-drive.ts) ---------------------------------
 //
@@ -71,6 +73,40 @@ function writeAcpTrace(
   appendFileSync(tracePath, `${JSON.stringify({ ts: new Date().toISOString(), event, ...data })}\n`);
 }
 
+
+// Opt-in diagnostic sidecar for one reviewed synthetic workspace run.
+// No agent-prose events, prompt/request bodies, RPC auth responses or process
+// environment are copied. Tool-input payloads remain private diagnostic data.
+const ACP_DIAGNOSTIC = process.env.AIDLC_ACP_DIAGNOSTIC_TRACE === "1";
+const ACP_DIAGNOSTIC_MAX_EVENT = 1_048_576;
+const ACP_DIAGNOSTIC_MAX_FILE = 67_108_864;
+let diagnosticInstance = 0;
+const diagnosticFiles = new Map<string, { bytes: number; sequence: number; capped: boolean }>();
+
+function diagnosticInputShape(value: unknown): Record<string, unknown> {
+  const object = value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+  const command = object?.command;
+  return {
+    type: value === null ? "null" : Array.isArray(value) ? "array" : typeof value,
+    keys: object ? Object.keys(object).sort() : [],
+    commandPresent: object ? Object.hasOwn(object, "command") : false,
+    commandType: typeof command,
+    commandBytes: typeof command === "string" ? Buffer.byteLength(command) : undefined,
+    commandSha256: typeof command === "string"
+      ? createHash("sha256").update(command).digest("hex") : undefined,
+  };
+}
+
+function diagnosticToolUpdate(update: Record<string, unknown>): Record<string, unknown> {
+  // The vendor chunk's schema is the missing evidence: preserve that update
+  // losslessly under this event-kind allowlist instead of guessing its fields.
+  if (update.sessionUpdate === "tool_call_chunk") return update;
+  const keys = ["sessionUpdate", "toolCallId", "title", "kind", "status", "rawInput"];
+  if (update.status === "failed") keys.push("content", "rawOutput");
+  return Object.fromEntries(keys.filter(key => Object.hasOwn(update, key)).map(key => [key, update[key]]));
+}
+
 export interface AcpToolCall {
   toolCallId: string;
   /** e.g. "Running: bun .kiro/tools/aidlc-utility.ts status" */
@@ -80,6 +116,45 @@ export interface AcpToolCall {
   /** Verbatim tool output text chunks, in arrival order (byte-stable). */
   output: string[];
   status: string;
+}
+
+/** Decode a literal invocation regardless of outcome, so refused attempts remain visible. */
+export function decodeKiroOrchestrateInvocation(
+  call: AcpToolCall,
+): { verb: string; args: string[] } | null {
+  if (call.kind !== "execute") return null;
+  const input = call.rawInput;
+  if (input != null && (typeof input !== "object" || Array.isArray(input))) return null;
+  const object = input as Record<string, unknown> | null | undefined;
+  const command = object && Object.hasOwn(object, "command")
+    ? object.command
+    : call.title.startsWith("Running: ") && !call.title.endsWith("...")
+      ? call.title.slice("Running: ".length)
+      : undefined;
+  if (typeof command !== "string") return null;
+  const parsed = parseLiteralShellInvocation(command);
+  // Without a project-path argument, a CD prefix cannot prove the same workspace.
+  if (!parsed || parsed.directory !== null) return null;
+  const [runtime, script, ...args] = parsed.argv;
+  if (runtime !== "bun" && runtime !== "bun.exe") return null;
+  const path = script?.replaceAll("\\", "/").replace(/^\.\//, "");
+  const invocation = path === ".kiro/tools/aidlc.ts" && args[0] === "engine" && args[1] === "orchestrate"
+    ? args.slice(2)
+    : path === ".kiro/tools/aidlc-orchestrate.ts" ? args : [];
+  const [verb, ...forwarded] = invocation;
+  return verb ? { verb, args: forwarded } : null;
+}
+
+/** Locate a completed next invocation and its own matching output, never a prose mention. */
+export function findKiroOrchestrateNextCall(
+  calls: readonly AcpToolCall[],
+  outputNeedle: string,
+): number {
+  return calls.findIndex((call) =>
+    call.status === "completed" &&
+    decodeKiroOrchestrateInvocation(call)?.verb === "next" &&
+    call.output.join("").includes(outputNeedle)
+  );
 }
 
 export interface AcpPermissionRequest {
@@ -145,6 +220,39 @@ interface Pending {
 export class AcpSession {
   proc: ReturnType<typeof Bun.spawn>;
   sessionId = "";
+  private readonly diagnosticInstance = ++diagnosticInstance;
+  private diagnosticTurn = 0;
+
+  beginDiagnosticTurn(): void {
+    this.diagnosticTurn++;
+  }
+
+  traceDiagnostic(event: string, data: Record<string, unknown>): void {
+    if (!ACP_DIAGNOSTIC || !this.tracePath) return;
+    const path = `${this.tracePath}.protocol.ndjson`;
+    const state = diagnosticFiles.get(path) ?? { bytes: 0, sequence: 0, capped: false };
+    diagnosticFiles.set(path, state);
+    if (state.capped) return;
+    const envelope = {
+      ts: new Date().toISOString(), sequence: ++state.sequence,
+      clientPid: process.pid, cliPid: this.proc.pid, instance: this.diagnosticInstance,
+      turn: this.diagnosticTurn, sessionId: this.sessionId, event, ...data,
+    };
+    let line = JSON.stringify(envelope) + "\n";
+    const bytes = Buffer.byteLength(line);
+    if (bytes > ACP_DIAGNOSTIC_MAX_EVENT || state.bytes + bytes > ACP_DIAGNOSTIC_MAX_FILE) {
+      line = JSON.stringify({
+        ts: envelope.ts, sequence: envelope.sequence, instance: this.diagnosticInstance,
+        event: "diagnostic_incomplete", reason: "capture budget exceeded",
+        omittedBytes: bytes, omittedSha256: createHash("sha256").update(line).digest("hex"),
+      }) + "\n";
+      state.capped = true; // The diagnostic is inconclusive; never silently truncate.
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, line, { mode: 0o600 });
+    state.bytes += Buffer.byteLength(line);
+  }
+
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private buf = "";
@@ -176,6 +284,7 @@ export class AcpSession {
       // old stderr:"ignore" is why an ACP timeout was previously undiagnosable).
       stderr: this.tracePath ? "pipe" : "ignore",
     });
+    this.traceDiagnostic("spawn", { agent, trustAllTools });
     void this.readLoop();
     if (this.tracePath) void this.stderrLoop();
   }
@@ -214,7 +323,11 @@ export class AcpSession {
         try {
           msg = JSON.parse(line) as Record<string, unknown>;
         } catch {
-          continue; // non-JSON noise: ignore (none observed in the spike)
+          if (ACP_DIAGNOSTIC) this.traceDiagnostic("json_parse_error", {
+            bytes: Buffer.byteLength(line),
+            sha256: createHash("sha256").update(line).digest("hex"),
+          });
+          continue; // Preserve existing behavior; diagnostic coverage is incomplete.
         }
         this.dispatch(msg);
       }
@@ -248,6 +361,12 @@ export class AcpSession {
     // (_kiro.dev/session/update) carry update objects of the same shape.
     if (method === "session/update" || method === "_kiro.dev/session/update") {
       const update = (params.update ?? {}) as Record<string, unknown>;
+      if (ACP_DIAGNOSTIC && ["tool_call", "tool_call_update", "tool_call_chunk"].includes(String(update.sessionUpdate))) {
+        this.traceDiagnostic("wire_tool_update", {
+          channel: method, wireSessionId: params.sessionId,
+          update: diagnosticToolUpdate(update),
+        });
+      }
       this.traceUpdate(update);
       this.onUpdate(update);
     }
@@ -300,11 +419,17 @@ export class AcpSession {
 
   /** Fire-and-forget JSON-RPC notification (no id, no reply expected). */
   notify(method: string, params: unknown): void {
+    if (method === "session/cancel") {
+      this.traceDiagnostic("outbound_cancel", {
+        wireSessionId: (params as { sessionId?: unknown } | null)?.sessionId,
+      });
+    }
     this.send({ jsonrpc: "2.0", method, params });
   }
 
   request(method: string, params: unknown, timeoutMs: number): Promise<{ result?: unknown; error?: unknown }> {
     const id = this.nextId++;
+    this.traceDiagnostic("outbound_request", { id, method }); // No prompt/body.
     this.send({ jsonrpc: "2.0", id, method, params });
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => {
@@ -314,6 +439,16 @@ export class AcpSession {
       this.pending.set(id, {
         resolve: (m) => {
           clearTimeout(t);
+          if (method === "initialize") {
+            const result = m.result as { protocolVersion?: unknown; agentInfo?: Record<string, unknown> } | undefined;
+            this.traceDiagnostic("initialize_metadata", {
+              protocolVersion: result?.protocolVersion,
+              agentInfo: result?.agentInfo ? Object.fromEntries(
+                ["name", "title", "version"].filter(key => Object.hasOwn(result.agentInfo!, key))
+                  .map(key => [key, result.agentInfo![key]]),
+              ) : undefined,
+            });
+          }
           resolve(m);
         },
       });
@@ -391,6 +526,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
   const session =
     opts.session ?? new AcpSession(opts.projectDir, opts.agent ?? "aidlc", opts.trustAllTools ?? true);
 
+  session.beginDiagnosticTurn();
   const trace = session.tracePath;
   writeAcpTrace(trace, "start", {
     prompt: opts.prompt,
@@ -520,6 +656,17 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
     // them a beat before snapshotting.
     if (cancelled) await new Promise((r) => setTimeout(r, 1500));
 
+    if (ACP_DIAGNOSTIC) session.traceDiagnostic("aggregate_at_return", {
+      stopReason, internalTitleCancel: cancelled,
+      calls: toolCalls.map(call => ({
+        toolCallId: call.toolCallId, status: call.status,
+        input: diagnosticInputShape(call.rawInput), outputChunks: call.output.length,
+      })),
+      issues: toolCallIssues.map(issue => ({
+        toolCallId: issue.toolCallId, status: issue.status, orphan: issue.orphan,
+        outputBytes: Buffer.byteLength(issue.output.join("")),
+      })),
+    });
     const statePath = stateFilePathOf(opts.projectDir);
     return {
       sessionId: session.sessionId,

@@ -52,8 +52,8 @@ jobs:
           && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
-      group: ai-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
-      cancel-in-progress: true
+      group: aida-pr-${{ github.event.pull_request.number || inputs.pr_number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ai-pr-review
     timeout-minutes: 110
@@ -136,6 +136,7 @@ jobs:
             case "$path" in
               .github/workflows/ai-pr-review.yml|\
               .github/scripts/ai-pr-review.ts|\
+              .github/scripts/ai-pr-ledger.ts|\
               .github/scripts/prepare-ai-review-runtime.sh|\
               .github/prompts/ai-pr-review-*.md|\
               .github/prompts/ai-pr-review-*.json)
@@ -160,7 +161,8 @@ jobs:
           fi
           mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts
           cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/
-          cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh \
+          cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts \
+            .github/scripts/prepare-ai-review-runtime.sh \
             .ai-review-controls/scripts/
           echo "::notice::AI review controls from $controls_sha"
 
@@ -179,6 +181,23 @@ jobs:
             --base "$base" \
             --head "$head" \
             --output .ai-review-context
+          # The findings ledger is live maintainer state, not review input identity:
+          # it is read after the context digest so a /aida decision never forces a
+          # new full review of an unchanged head.
+          bun .ai-review-controls/scripts/ai-pr-ledger.ts fetch \
+            --repo "$REPO" \
+            --pr "$REQUESTED_PR" \
+            --output .ai-review-context/ledger.json
+          # Review scope: incremental (lines changed since the head AIDA last
+          # reviewed, from the ledger) or full (first review, rewritten history,
+          # or /aida full). Derived from state, so also outside the context digest.
+          # The security lenses always review the full head regardless.
+          scope="$(bun .ai-review-controls/scripts/ai-pr-review.ts build-scope \
+            --head "$head" \
+            --manifest .ai-review-context/changed-files.json \
+            --ledger .ai-review-context/ledger.json \
+            --output .ai-review-context/review-scope.json)"
+          echo "::notice::Review scope — $scope"
 
           context_id="$(cat .ai-review-context/context-id.txt)"
           existing_record="$(gh api "repos/$REPO/pulls/$REQUESTED_PR/reviews" --paginate \
@@ -262,7 +281,27 @@ jobs:
           elif [ "$EXISTING_DECISION" = "maintainer/merge" ]; then
             label_outcome="reviewed-merge"
           fi
-          if [ -n "$label_outcome" ]; then
+          # The serialized ledger verdict is authoritative for every review
+          # surface associated with this head.
+          ledger_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+            --repo "$REPO" --pr "$PR_NUMBER")"
+          if [ "$(jq -r '.head // empty' <<<"$ledger_verdict")" = "$HEAD_SHA" ]; then
+            refresh="$(bun .ai-review-controls/scripts/ai-pr-review.ts converge-verdict \
+              --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+              --reason "existing SHA-bound review")"
+            if [ "$refresh" != "applied" ]; then
+              echo "::error::The existing review verdict could not be converged ($refresh)"
+              exit 1
+            fi
+            ledger_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+              --repo "$REPO" --pr "$PR_NUMBER")"
+            case "$(jq -r .decision <<<"$ledger_verdict")" in
+              merge) label_outcome="reviewed-merge"; EXISTING_STATE="COMMENTED" ;;
+              change) label_outcome="reviewed-change"; EXISTING_STATE="CHANGES_REQUESTED" ;;
+            esac
+          fi
+          if [ -n "$label_outcome" ] \
+            && [ "$(jq -r '.head // empty' <<<"$ledger_verdict")" != "$HEAD_SHA" ]; then
             bun .ai-review-controls/scripts/ai-pr-review.ts labels \
               --repo "$REPO" \
               --pr "$PR_NUMBER" \
@@ -449,12 +488,17 @@ jobs:
             echo "$name complete."
           }
 
+          # The two security lenses emit structured JSON (same evidence shapes as
+          # the final review) so the publisher can read exactly which lines and
+          # files they cited: that provenance, not the judge's category, exempts a
+          # finding from the incremental scope.
+          lens_schema="$(jq -c . .ai-review-controls/prompts/ai-pr-review-lens-schema.json)"
           prompt_injection_prompt="$(
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
-              .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-lens-json.md \
               .ai-review-controls/prompts/ai-pr-review-prompt-injection.md
-            printf '\nRead the review context and trusted base tree. End with exactly:\n'
+            printf '\nRead the review context and trusted base tree. Set marker to exactly:\n'
             printf '[LENS-REVIEWED] prompt-injection %s\n' "$HEAD_SHA"
           )"
           run_model \
@@ -462,18 +506,19 @@ jobs:
             "Prompt-injection review" \
             "medium" \
             50000 \
-            ".ai-review-lenses/prompt-injection.md" \
-            "$prompt_injection_prompt"
-          grep -Fqx \
-            "[LENS-REVIEWED] prompt-injection $HEAD_SHA" \
-            .ai-review-lenses/prompt-injection.md
+            ".ai-review-lenses/prompt-injection.json" \
+            "$prompt_injection_prompt" \
+            "$lens_schema"
+          jq -e --arg marker "[LENS-REVIEWED] prompt-injection $HEAD_SHA" \
+            '.marker == $marker and .status == "complete"' .ai-review-lenses/prompt-injection.json >/dev/null \
+            || { echo "::error::prompt-injection lens did not complete its inspection"; exit 1; }
 
           security_prompt="$(
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
-              .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-lens-json.md \
               .ai-review-controls/prompts/ai-pr-review-security.md
-            printf '\nRead the review context and trusted base tree. End with exactly:\n'
+            printf '\nRead the review context and trusted base tree. Set marker to exactly:\n'
             printf '[LENS-REVIEWED] security %s\n' "$HEAD_SHA"
           )"
           run_model \
@@ -481,16 +526,18 @@ jobs:
             "Security review" \
             "medium" \
             50000 \
-            ".ai-review-lenses/security.md" \
-            "$security_prompt"
-          grep -Fqx \
-            "[LENS-REVIEWED] security $HEAD_SHA" \
-            .ai-review-lenses/security.md
+            ".ai-review-lenses/security.json" \
+            "$security_prompt" \
+            "$lens_schema"
+          jq -e --arg marker "[LENS-REVIEWED] security $HEAD_SHA" \
+            '.marker == $marker and .status == "complete"' .ai-review-lenses/security.json >/dev/null \
+            || { echo "::error::security lens did not complete its inspection"; exit 1; }
 
           aidlc_prompt="$(
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
               .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-scope.md \
               .ai-review-controls/prompts/ai-pr-review-aidlc.md
             printf '\nRead the review context and trusted base tree. End with exactly:\n'
             printf '[LENS-REVIEWED] aidlc %s\n' "$HEAD_SHA"
@@ -510,12 +557,13 @@ jobs:
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
               .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-scope.md \
               .ai-review-controls/prompts/ai-pr-review-user-experience.md
             printf '\nRead the review context and trusted base tree. End with exactly:\n'
             printf '[LENS-REVIEWED] user-experience %s\n' "$HEAD_SHA"
           )"
           run_model \
-            "fable" \
+            "sol" \
             "User-experience review" \
             "high" \
             50000 \
@@ -529,12 +577,13 @@ jobs:
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
               .ai-review-controls/prompts/ai-pr-review-candidates.md \
+              .ai-review-controls/prompts/ai-pr-review-scope.md \
               .ai-review-controls/prompts/ai-pr-review-direction.md
             printf '\nRead the review context and trusted base tree. End with exactly:\n'
             printf '[LENS-REVIEWED] direction %s\n' "$HEAD_SHA"
           )"
           run_model \
-            "fable" \
+            "sol" \
             "Direction review" \
             "high" \
             50000 \
@@ -570,7 +619,13 @@ jobs:
             --manifest .ai-review-context/changed-files.json \
             --metadata .ai-review-context/pr.json \
             --output .ai-pr-review-final/review.json \
-            --decision-output .ai-pr-review-final/decision.json)"
+            --decision-output .ai-pr-review-final/decision.json \
+            --ledger .ai-review-context/ledger.json \
+            --ledger-output .ai-pr-review-final/ledger.json \
+            --scope .ai-review-context/review-scope.json \
+            --lens-dir .ai-review-lenses \
+            --context-dir .ai-review-context \
+            --repo-dir .)"
           echo "event=$event" >> "$GITHUB_OUTPUT"
           decision="$(jq -r '"\(.actor)/\(.action)"' \
             .ai-pr-review-final/decision.json)"
@@ -580,6 +635,7 @@ jobs:
         id: publish
         if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
         env:
+          BASE_SHA: ${{ steps.context.outputs.base }}
           CONTEXT_ID: ${{ steps.context.outputs.context_id }}
           EVENT: ${{ steps.model.outputs.event }}
           GH_TOKEN: ${{ github.token }}
@@ -609,6 +665,54 @@ jobs:
             .ai-review-context/discussion-identity.json \
             /tmp/current-discussion-identity.json; then
             echo "::error::Authoritative PR conversation changed during review"
+            exit 1
+          fi
+
+          # Compare-and-swap on the findings ledger. A maintainer may have applied
+          # /aida decisions while the models ran, or between our read and our write.
+          # Each attempt merges the live ledger into the pre-review snapshot,
+          # re-derives the verdict deterministically (no model rerun) and publishes
+          # the ledger only if the comment still carries the digest that was read.
+          # The ledger is written BEFORE the review so a command landing afterwards
+          # always builds on this head's state.
+          ledger_published=""
+          for attempt in 1 2 3; do
+            bun .ai-review-controls/scripts/ai-pr-ledger.ts merge \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --input .ai-review-context/ledger.json \
+              --output .ai-pr-review-final/ledger.live.json >/dev/null
+            EVENT="$(bun .ai-review-controls/scripts/ai-pr-review.ts validate \
+              --base "$BASE_SHA" \
+              --head "$HEAD_SHA" \
+              --context-id "$CONTEXT_ID" \
+              --input .ai-pr-review-final/review.md \
+              --manifest .ai-review-context/changed-files.json \
+              --metadata .ai-review-context/pr.json \
+              --output .ai-pr-review-final/review.json \
+              --decision-output .ai-pr-review-final/decision.json \
+              --ledger .ai-pr-review-final/ledger.live.json \
+              --ledger-output .ai-pr-review-final/ledger.json \
+              --scope .ai-review-context/review-scope.json \
+              --lens-dir .ai-review-lenses \
+              --context-dir .ai-review-context \
+              --repo-dir .)"
+            publish_status=0
+            ledger_published_record="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts publish \
+              --repo "$REPO" \
+              --pr "$PR_NUMBER" \
+              --input .ai-pr-review-final/ledger.json)" || publish_status=$?
+            if [ "$publish_status" -eq 0 ]; then
+              ledger_published=true
+              break
+            elif [ "$publish_status" -eq 3 ]; then
+              echo "::notice::The findings ledger changed during publication (attempt $attempt); re-deriving the verdict"
+            else
+              exit "$publish_status"
+            fi
+          done
+          if [ -z "$ledger_published" ]; then
+            echo "::error::The findings ledger kept changing during publication"
             exit 1
           fi
 
@@ -672,6 +776,27 @@ jobs:
           echo "published=true" >> "$GITHUB_OUTPUT"
           : > .ai-pr-review-final/published
 
+          # The live ledger is the final authority. Converge the review gate first
+          # and labels second, retrying if a /aida command changes the ledger while
+          # publication is finishing.
+          refresh="$(bun .ai-review-controls/scripts/ai-pr-review.ts converge-verdict \
+            --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+            --reason "review publication")"
+          if [ "$refresh" != "applied" ]; then
+            echo "::error::The live ledger verdict could not be converged ($refresh)"
+            exit 1
+          fi
+          live_verdict="$(bun .ai-review-controls/scripts/ai-pr-ledger.ts verdict \
+            --repo "$REPO" --pr "$PR_NUMBER")"
+          case "$(jq -r .decision <<<"$live_verdict")" in
+            change) EVENT="REQUEST_CHANGES" ;;
+            merge) EVENT="COMMENT" ;;
+            *)
+              echo "::error::The live ledger has no verdict for $HEAD_SHA"
+              exit 1
+              ;;
+          esac
+
           if [ "$EVENT" = "REQUEST_CHANGES" ]; then
             echo "::error::AI review found a P0 or P1 issue"
             exit 1
@@ -723,29 +848,21 @@ jobs:
             exit 0
           fi
 
-          outcome="review-error"
           if [ -f .ai-pr-review-final/published ]; then
-            decision="$(jq -r '"\(.actor)/\(.action)"' \
-              .ai-pr-review-final/decision.json)"
-            case "$decision" in
-              author/change)
-                outcome="reviewed-change"
-                ;;
-              maintainer/merge)
-                outcome="reviewed-merge"
-                ;;
-              *)
-                echo "::error::Published AIDA review has no valid decision"
-                exit 1
-                ;;
-            esac
+            refresh="$(bun "$review_script" converge-verdict \
+              --repo "${{ github.repository }}" \
+              --pr "$pr_number" \
+              --head "$expected_head" \
+              --reason "final workflow reconciliation")"
+            echo "::notice::Final verdict convergence: $refresh"
+            exit 0
           fi
 
           args=(
             labels
             --repo "${{ github.repository }}"
             --pr "$pr_number"
-            --outcome "$outcome"
+            --outcome review-error
           )
           if [ -n "$expected_head" ]; then
             args+=(--expected-head "$expected_head")

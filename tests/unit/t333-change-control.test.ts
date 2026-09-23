@@ -65,6 +65,19 @@ function run(tool: string, args: string[], proj: string, env: Record<string, str
   };
 }
 
+function utilityError(stderr: string): string {
+  const parsed: unknown = JSON.parse(stderr);
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    !("error" in parsed) ||
+    typeof parsed.error !== "string"
+  ) {
+    throw new Error(`Expected a utility error envelope: ${stderr}`);
+  }
+  return parsed.error;
+}
+
 async function waitForPath(path: string): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (!existsSync(path)) {
@@ -531,7 +544,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
       proj,
     );
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(
+    expect(utilityError(refused.stderr)).toContain(
       `Change Control is set to strict in ${memoryFile(proj, "org")} (section: Change Control)`,
     );
     const created = run(
@@ -645,7 +658,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const before = readFileSync(invalid.state, "utf-8");
     const refused = run(UTILITY, ["scope-change", "--scope", "classic"], invalid.proj);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(`Invalid Change Control \\"stricct (set by you)\\" in ${invalid.state}`);
+    expect(utilityError(refused.stderr)).toContain(`Invalid Change Control "stricct (set by you)" in ${invalid.state}`);
     expect(readFileSync(invalid.state, "utf-8")).toBe(before);
     expect(readAuditShardEvents(invalid.proj).filter((row) => row.event === "SCOPE_CHANGED")).toHaveLength(0);
     expect(changeControlRows(invalid.proj)).toHaveLength(0);
@@ -671,7 +684,7 @@ describe("t333 (5) an explicit workflow selection governs Change Control end to 
     );
 
     expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain(altMemoryFile(selected.proj));
+    expect(utilityError(refused.stderr)).toContain(altMemoryFile(selected.proj));
     expect(readFileSync(selected.targetState, "utf-8")).toBe(beforeState);
     expect(readAuditShardEvents(selected.proj, selected.defaultIntent, "default")).toEqual(
       beforeDefault,
@@ -680,7 +693,7 @@ describe("t333 (5) an explicit workflow selection governs Change Control end to 
     expect(targetAfter).toHaveLength(beforeTarget.length + 1);
     const refusalRow = targetAfter[targetAfter.length - 1];
     expect(refusalRow.event).toBe("ERROR_LOGGED");
-    expect(auditBlockField(refusalRow.block, "Error")).toContain(
+    expect(auditBlockField(refusalRow.block, "Error")?.replaceAll("\\", "/")).toContain(
       "<project-dir>/aidlc/spaces/alt/memory/project.md",
     );
     expect(targetAfter.filter((row) => row.event === "CHANGE_CONTROL_SET")).toHaveLength(0);
@@ -1011,7 +1024,7 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
     );
 
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(
+    expect(utilityError(refused.stderr)).toContain(
       `Change Control is set to strict in ${altMemoryFile(selected.proj)} (section: Change Control)`,
     );
     expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);

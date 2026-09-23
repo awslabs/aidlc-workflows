@@ -150,8 +150,7 @@ describe("t161 keying invariants", () => {
     }
   });
 
-  test("Windows case aliases share release identity and nested depth", () => {
-    if (process.platform !== "win32") return;
+  test.skipIf(process.platform !== "win32")("Windows case aliases share release identity and nested depth", () => {
     const projectDir = mkdtempSync(join(tmpdir(), "Aidlc-T161-Case-"));
     const caseAlias = projectDir.toUpperCase();
     try {
@@ -171,8 +170,7 @@ describe("t161 keying invariants", () => {
     }
   });
 
-  test("POSIX native gate loader falls through missing candidates to the platform libc", () => {
-    if (process.platform === "win32") return;
+  test.skipIf(process.platform === "win32")("POSIX native gate loader falls through missing candidates to the platform libc", () => {
     const defaults = _posixGateLibraryCandidatesForTests();
     expect(
       process.platform === "linux"

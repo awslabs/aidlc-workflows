@@ -274,7 +274,7 @@ process.stdout.write(JSON.stringify(value));
     expect(payload.body).toContain("Inspection: 1 changed file.");
     expect(payload.body).toContain("## Final Assessment");
     expect(payload.body).toContain(
-      "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores do not approve or merge the PR.",
+      "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores inform the maintainer; the next action below follows finding severity (any open P0/P1 → author/change) and does not approve or merge the PR.",
     );
     expect(payload.body).not.toContain("Readiness: higher is better");
     expect(payload.body).not.toContain("Risk: lower is better");
@@ -319,21 +319,31 @@ process.stdout.write(JSON.stringify(value));
     );
   });
 
-  test("validator binds the PR decision to findings and assessment scores", () => {
+  test("validator derives the PR decision from finding severity; scores never decide", () => {
+    // A surviving P1 is author/change whatever pair the judge wrote.
     const blockingMerge = review("P1");
     blockingMerge.decision = {
       actor: "maintainer",
       action: "merge",
       rationale: "Merge despite the blocker.",
     };
-    expect(() => validate(JSON.stringify(blockingMerge))).toThrow(
-      "invalid while P0 or P1 findings remain",
-    );
+    expect(validate(JSON.stringify(blockingMerge)).decision).toEqual({
+      actor: "author",
+      action: "change",
+      rationale: "A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above. Judge's note, superseded by finding severity: Merge despite the blocker.",
+    });
 
+    // Low readiness or high risk never turns a clean or P2/P3-only review into author/change.
     const lowReadiness = review();
-    lowReadiness.assessment.readiness.score = 3;
-    expect(() => validate(JSON.stringify(lowReadiness))).toThrow(
-      "requires readiness at least 4 and risk at most 2",
+    lowReadiness.assessment.readiness.score = 1;
+    lowReadiness.assessment.risk.score = 5;
+    expect(validate(JSON.stringify(lowReadiness)).decision.action).toBe("merge");
+    const advisoryOnly = review("P3");
+    advisoryOnly.decision = { actor: "author", action: "change", rationale: "Please polish this." };
+    const derived = validate(JSON.stringify(advisoryOnly)).decision;
+    expect(derived.action).toBe("merge");
+    expect(derived.rationale).toBe(
+      "No P0 or P1 finding survives, so the next action is the maintainer's merge decision; readiness and risk above inform it. Judge's note, superseded by finding severity: Please polish this.",
     );
 
     const wrongPair = review() as unknown as {
@@ -354,9 +364,7 @@ process.stdout.write(JSON.stringify(value));
       action: "change",
       rationale: "Request changes without a material reason.",
     };
-    expect(() => validate(JSON.stringify(unjustifiedChange))).toThrow(
-      "requires a finding, readiness below 4, or risk above 2",
-    );
+    expect(validate(JSON.stringify(unjustifiedChange)).decision.action).toBe("merge");
   });
 
   test("validator requires a grounded user-experience summary before assessment", () => {
@@ -1251,6 +1259,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW.indexOf("    concurrency:")).toBeGreaterThan(
       WORKFLOW.indexOf("  review:"),
     );
+    expect(WORKFLOW).toContain(`group: aida-pr-\${{ github.event.pull_request.number || inputs.pr_number }}`);
+    expect(WORKFLOW).toContain("cancel-in-progress: false");
     expect(WORKFLOW).toContain("persist-credentials: false");
     expect(WORKFLOW).toContain("id-token: write");
     expect(WORKFLOW).toContain("AWS_AI_PR_REVIEW_ROLE_ARN");
@@ -1322,7 +1332,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/",
     );
     const scriptSnapshot = WORKFLOW.indexOf(
-      "cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh",
+      "cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts",
     );
     expect(controlsSha).toBeGreaterThan(-1);
     expect(selfReviewCheckout).toBeGreaterThan(controlsSha);
@@ -1409,14 +1419,14 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(modelStep).toContain('"sol" \\\n            "Prompt-injection review"');
     expect(modelStep).toContain('"sol" \\\n            "Security review"');
     expect(modelStep).toContain('"sol" \\\n            "AIDLC technical review"');
-    expect(modelStep).toContain('"fable" \\\n            "User-experience review"');
-    expect(modelStep).toContain('"fable" \\\n            "Direction review"');
+    expect(modelStep).toContain('"sol" \\\n            "User-experience review"');
+    expect(modelStep).toContain('"sol" \\\n            "Direction review"');
     expect(modelStep).toContain('"sol" \\\n            "Final review judge"');
     expect(modelStep).toContain(
-      '"fable" \\\n            "User-experience review" \\\n            "high"',
+      '"sol" \\\n            "User-experience review" \\\n            "high"',
     );
     expect(modelStep).toContain(
-      '"fable" \\\n            "Direction review" \\\n            "high"',
+      '"sol" \\\n            "Direction review" \\\n            "high"',
     );
     expect(modelStep).toContain(
       '"sol" \\\n            "Final review judge" \\\n            "high"',
@@ -1542,8 +1552,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(direction).not.toContain("scope that is silently broadened");
     expect(direction).not.toContain("can no longer be traced");
     expect(direction).not.toContain("free-form chatbot");
-    expect(judge).toContain(".ai-review-lenses/prompt-injection.md");
-    expect(judge).toContain(".ai-review-lenses/security.md");
+    expect(judge).toContain(".ai-review-lenses/prompt-injection.json");
+    expect(judge).toContain(".ai-review-lenses/security.json");
     expect(judge).toContain(".ai-review-lenses/aidlc.md");
     expect(judge).toContain(".ai-review-lenses/user-experience.md");
     expect(judge).toContain(".ai-review-lenses/direction.md");
@@ -1563,8 +1573,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(judge).toContain('"decision"');
     expect(judge).toContain("author/change");
     expect(judge).toContain("maintainer/merge");
-    expect(judge).toContain("readiness is at least 4");
-    expect(judge).toContain("risk is at most 2");
+    expect(judge).toContain("The next action follows finding\nseverity and nothing else");
+    expect(judge).toContain("never turn a\nP2/P3-only review into `author/change`");
     expect(judge).toMatch(/integer score\s+from 1 through 5/);
     expect(judge).toContain("human merge decision");
     expect(judge).toContain("Readiness 5/5 is the best readiness result");
@@ -1578,6 +1588,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "userExperience",
       "decision",
       "findings",
+      "ledger",
       "residualRisk",
     ]);
     expect(judgeSchema.properties.assessment.required).toEqual(["readiness", "risk"]);
