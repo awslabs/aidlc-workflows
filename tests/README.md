@@ -196,9 +196,10 @@ distinct Windows node-pty backend is added as a manual extra.
 
 For a single deterministic reproduction, manually dispatch
 `deterministic-tests.yml` with an immutable `ref`, selected `runner` and `tier`,
-and optional `diagnostic_filter` filename regex. Unit uses an N/M shard
-(`1/1` plus a filter selects from all unit files); clear `unit-shard` for other
-tiers. The filter exists only for manual dispatch, not reusable CI callers.
+and optional `diagnostic_filter` filename regex. The unit tier requires
+`unit-shard=N/M`; `1/1` selects all unit files before filtering. For smoke,
+integration or e2e, omit `unit-shard`; its default is empty. The filter exists
+only for manual dispatch, not reusable CI callers.
 One fresh runner produces `ci-deterministic-probe-<OS>` diagnostics with all
 model gates closed; it cannot qualify full-suite or release coverage.
 
@@ -295,8 +296,9 @@ that boundary with the same setup scripts and a credential-free t01 smoke run.
 Bedrock families use an allowlisted signing proxy; no real AWS credentials reach
 their agent environments. Full-suite log uploads sanitize UTF-8 text, delete
 all invalid UTF-8/NUL/binary files with reasons in `sanitizer-report.json`, and
-drop raw driver traces by default (`AIDLC_NIGHTLY_UPLOAD_TRACES=1` retains only
-eligible text, with residual disclosure risk).
+retain eligible sanitized text traces by default. Set repository variable
+`AIDLC_NIGHTLY_UPLOAD_TRACES=0` to opt out of trace retention. Sanitization
+reduces but does not eliminate disclosure risk.
 
 `bun scripts/ci-live-filter.ts --list` shows the discovered partition;
 `--matrix hosted` and `--matrix windows` emit the workflow matrices. Append

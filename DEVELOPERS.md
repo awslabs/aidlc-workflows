@@ -114,12 +114,13 @@ gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
   -f unit-shard=1/1 -f 'diagnostic_filter=^t-tui-runtime$'
 ```
 
-The manual-only `diagnostic_filter` is a filename regex. Use `unit-shard=7/8`
+The manual-only `diagnostic_filter` is a filename regex. The unit tier requires
+`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/8`
 without a filter to repeat a whole unit shard. For smoke, integration or e2e,
-clear the shard input with `-f 'unit-shard='`. Each dispatch uses one runner,
-closes model gates, checks out the immutable source and retains sanitized logs
-under `ci-deterministic-probe-<OS>`. These diagnostics do not qualify a full
-suite or a release. Existing CI and Full Suite callers cannot pass this filter.
+omit `unit-shard`; its default is empty. Each dispatch uses one runner, closes
+model gates, checks out the immutable source and retains sanitized logs under
+`ci-deterministic-probe-<OS>`. These diagnostics do not qualify a full suite or
+a release. Existing CI and Full Suite callers cannot pass this filter.
 
 ## 3. Let the nightly preview run
 

@@ -221,8 +221,8 @@ describe("t345 complete nightly coverage", () => {
       type: "choice", required: true, default: "unit",
       options: ["smoke", "unit", "integration", "e2e"],
     });
-    expect(manual["unit-shard"]).toMatchObject({ type: "string", default: "1/1" });
-    expect(manual["unit-shard"].description).toContain("clear this input for other tiers");
+    expect(manual["unit-shard"]).toMatchObject({ type: "string", default: "" });
+    expect(manual["unit-shard"].description).toContain("omit for other tiers");
     expect(manual["artifact-label"]).toMatchObject({ type: "string", required: true, default: "ci-deterministic-probe" });
     expect(manual.diagnostic_filter).toMatchObject({ type: "string", required: false, default: "" });
     const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
@@ -252,15 +252,19 @@ describe("t345 complete nightly coverage", () => {
     expect(run({}).status).toBe(0);
     expect(run({ UNIT_SHARD: "1/1" }).status).toBe(0);
     const manual = deterministic.on.workflow_dispatch.inputs;
-    expect(run({
-      TEST_TIER: manual.tier.default,
-      UNIT_SHARD: manual["unit-shard"].default,
+    // GitHub fills the configured default for both omitted and explicitly empty
+    // dispatch inputs. A nonempty unit default would make other tiers unusable.
+    const runManual = (tier: string | undefined, shard?: string) => run({
+      TEST_TIER: tier,
+      UNIT_SHARD: shard || manual["unit-shard"].default,
       ARTIFACT_LABEL: manual["artifact-label"].default,
-    }).status).toBe(0);
+    });
+    expect(runManual(manual.tier.default, "1/1").status).toBe(0);
+    expect(runManual(manual.tier.default).status).toBe(2);
     for (const tier of ["smoke", "integration", "e2e"]) {
-      expect(run({ TEST_TIER: tier, UNIT_SHARD: "" }).status).toBe(0);
-      expect(run({ TEST_TIER: tier }).status).not.toBe(0);
-      expect(run({ TEST_TIER: tier, UNIT_SHARD: manual["unit-shard"].default }).status).toBe(2);
+      expect(runManual(tier).status, `${tier}: omitted shard`).toBe(0);
+      expect(runManual(tier, "").status, `${tier}: empty shard`).toBe(0);
+      expect(runManual(tier, "1/1").status, `${tier}: misplaced shard`).toBe(2);
     }
     for (const ref of ["main", "a".repeat(39), "a".repeat(41), "g".repeat(40)]) {
       expect(run({ TEST_REF: ref }).status, ref).toBe(2);

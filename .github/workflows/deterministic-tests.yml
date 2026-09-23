@@ -49,9 +49,10 @@ on:
           - integration
           - e2e
       unit-shard:
-        description: N/M for unit (1/1 selects all units); clear this input for other tiers
+        description: Required N/M for unit (1/1 selects all units); omit for other tiers
         type: string
-        default: "1/1"
+        # GitHub applies defaults even to an explicitly empty dispatch input.
+        default: ""
       artifact-label:
         description: Diagnostic artifact prefix; the actual runner OS is appended
         required: true

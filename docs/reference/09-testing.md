@@ -506,7 +506,7 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
-| Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, unit shard and optional manual-only `diagnostic_filter`; one runner executes with model gates closed | GitHub Actions |
+| Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Full candidate verification | Runs every declared matrix job for the selected workflow head, including an unmerged PR; separate evidence is ineligible for release | GitHub Actions |
@@ -561,10 +561,12 @@ gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
 ```
 
 `diagnostic_filter` is a manual-only filename regex and is not exposed to
-reusable CI callers. Clear `unit-shard` for non-unit tiers; for example,
-`-f tier=integration -f 'unit-shard='`. Each reproduction uses one fresh runner
-with model gates closed and the same immutable checkout, bounded runner and
-sanitized evidence paths. The default artifact is
+reusable CI callers. The unit tier requires `unit-shard=N/M`; `1/1` selects all
+unit files before filtering. For smoke, integration or e2e, omit `unit-shard`;
+its default is empty. For example, use `-f tier=integration` without a shard
+input. Each reproduction uses one fresh runner with model gates closed and
+the same immutable checkout, bounded runner and sanitized evidence paths.
+The default artifact is
 `ci-deterministic-probe-<OS>`. These targeted diagnostics do not qualify a full
 suite or release.
 
